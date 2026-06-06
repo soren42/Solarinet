@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>solarinet_mcp — MCP Server for SolariNet</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--accent2:#7c5cff;--ok:#5dd39e;--warn:#e0794f;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;font-size:16px}
+  .wrap{max-width:940px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(32px,5.5vw,52px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:25px;margin:40px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-size:18px;margin:22px 0 8px;color:#eaf1f8}
+  p{margin:0 0 13px}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(63,182,211,.3)}
+  code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:15px 17px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 11px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);background:var(--panel2);color:var(--ink-dim);margin:1px 3px 1px 0}
+  .pill.ro{color:var(--ok);border-color:rgba(93,211,158,.4)}
+  .pill.rw{color:var(--warn);border-color:rgba(224,121,79,.4)}
+  .note{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  ul{padding-left:22px} li{margin:5px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>solarinet_mcp</h1>
+  <p class="sub">An MCP server that gives an LLM agent eyes — and a careful set of hands — on a SolariNet deployment.</p>
+
+  <p>This server exposes three surfaces of the SolariNet monitoring system to an
+  agent: the read-only dashboard API (§11.2), the operator control plane
+  (survey / config push), and read-only SQL over the MariaDB schema (§10). It is
+  written in <strong>Python with FastMCP</strong> — no Node, per project policy —
+  and ships with unit tests and a verifiable evaluation suite.</p>
+
+  <div class="note">
+    <strong>Status.</strong> The SolariNet REST API (Phase 6) and live MariaDB
+    aren't built yet, so this server targets the <em>documented</em> §11.2 contract
+    and §10 schema and is validated against an in-memory mock of both. Point it at
+    the real dashboard/DB by setting the environment variables below — no code
+    changes needed.
+  </div>
+
+  <h2>Install</h2>
+  <pre>cd integrations/mcp
+pip install -r requirements.txt        # or: pip install -e .
+python -m solarinet_mcp --check        # prints config + the 14 tools, no server start</pre>
+
+  <h2>Configure (environment only — no secrets in files)</h2>
+  <table>
+    <thead><tr><th>Variable</th><th>Purpose</th><th>Default</th></tr></thead>
+    <tbody>
+      <tr><td><code>SOLARINET_API_BASE</code></td><td>Dashboard API base URL, e.g. <code>https://c2.akoria.net</code></td><td>(unset)</td></tr>
+      <tr><td><code>SOLARINET_API_TOKEN</code></td><td>Bearer token; required for control POSTs (operator role)</td><td>(unset)</td></tr>
+      <tr><td><code>SOLARINET_API_TIMEOUT</code></td><td>Per-request timeout (seconds)</td><td>30</td></tr>
+      <tr><td><code>SOLARINET_API_VERIFY_TLS</code></td><td><code>0</code> disables TLS verify (lab only)</td><td>1</td></tr>
+      <tr><td><code>SOLARINET_DB_HOST/PORT/NAME</code></td><td>MariaDB coordinates</td><td>127.0.0.1 / 3306 / solarinet</td></tr>
+      <tr><td><code>SOLARINET_DB_USER</code></td><td>DB user — <strong>use a GRANT SELECT-only account</strong></td><td>(unset)</td></tr>
+      <tr><td><code>SOLARINET_DB_PASS</code></td><td>DB password</td><td>(unset)</td></tr>
+      <tr><td><code>SOLARINET_MCP_TRANSPORT</code></td><td><code>stdio</code> or <code>streamable_http</code></td><td>stdio</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Tools (14)</h2>
+  <h3>Read — REST <span class="pill ro">read-only</span></h3>
+  <table>
+    <thead><tr><th>Tool</th><th>Maps to</th></tr></thead>
+    <tbody>
+      <tr><td><code>solarinet_list_nodes</code></td><td>GET /api/nodes</td></tr>
+      <tr><td><code>solarinet_get_node</code></td><td>GET /api/nodes/{id}</td></tr>
+      <tr><td><code>solarinet_get_node_history</code></td><td>GET /api/nodes/{id}/history</td></tr>
+      <tr><td><code>solarinet_list_probes</code></td><td>GET /api/probes</td></tr>
+      <tr><td><code>solarinet_get_probe_history</code></td><td>GET /api/probes/{targetId}/history</td></tr>
+      <tr><td><code>solarinet_list_alerts</code></td><td>GET /api/alerts</td></tr>
+      <tr><td><code>solarinet_get_topology</code></td><td>GET /api/topology</td></tr>
+      <tr><td><code>solarinet_server_status</code></td><td>GET /api/server/status</td></tr>
+    </tbody>
+  </table>
+  <h3>Control — REST <span class="pill rw">side-effecting</span></h3>
+  <table>
+    <thead><tr><th>Tool</th><th>Maps to</th></tr></thead>
+    <tbody>
+      <tr><td><code>solarinet_trigger_survey</code></td><td>POST /api/control/survey</td></tr>
+      <tr><td><code>solarinet_push_config</code></td><td>POST /api/control/config</td></tr>
+    </tbody>
+  </table>
+  <h3>DB direct <span class="pill ro">read-only</span></h3>
+  <table>
+    <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>solarinet_db_query</code></td><td>Run one validated read-only SELECT/WITH query</td></tr>
+      <tr><td><code>solarinet_db_node_summary</code></td><td>Fleet roster from the <code>node</code> table</td></tr>
+      <tr><td><code>solarinet_db_active_alerts</code></td><td>Firing alerts joined to their rule</td></tr>
+      <tr><td><code>solarinet_db_host_history</code></td><td>hostHistory rows for one node</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Safety model</h2>
+  <ul>
+    <li><strong>Read vs. write are clearly separated</strong> and annotated (<code>readOnlyHint</code>/<code>destructiveHint</code>) so clients can gate the two control tools.</li>
+    <li><strong>The DB layer never writes.</strong> A guard rejects anything but a single <code>SELECT</code>/<code>WITH</code> statement — no DML/DDL, no stacked statements, no <code>INTO OUTFILE/DUMPFILE</code> — strips comments before analysis, and caps returned rows. Pair it with a SELECT-only DB grant for defense in depth.</li>
+    <li><strong>No secrets in source.</strong> All credentials come from the environment, matching SolariNet's own §13 convention.</li>
+  </ul>
+
+  <h2>Test &amp; verify</h2>
+  <pre>cd integrations/mcp
+python -m pytest -q              # 43 unit tests (REST via mock transport, SQL guard, DB, formatting)
+python evals/check_answers.py    # verifies all 10 evaluation answers via the tools</pre>
+  <p>The evaluation questions live in <code>evals/evaluation.xml</code>; they're
+  read-only, independent, and verify to stable answers against the fixture in
+  <code>evals/fixture.py</code>.</p>
+
+  <h2>Register with a client</h2>
+  <p>Example stdio entry for an MCP client config:</p>
+  <pre>{
+  "mcpServers": {
+    "solarinet": {
+      "command": "python",
+      "args": ["-m", "solarinet_mcp"],
+      "env": {
+        "SOLARINET_API_BASE": "https://c2.akoria.net",
+        "SOLARINET_API_TOKEN": "…",
+        "SOLARINET_DB_USER": "solari_ro",
+        "SOLARINET_DB_PASS": "…"
+      }
+    }
+  }
+}</pre>
+
+  <p class="footer">Part of the SolariNet Monitoring project · auxiliary tooling (Python/FastMCP).
+  The C application and PHP dashboard remain the core deliverables;
+  this server is a convenience integration over their published contracts.</p>
+</div>
+</body>
+</html>

@@ -27,6 +27,13 @@ Testing/
 *.crt
 *.csr
 
+# Python (integrations/mcp)
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+
 # Editor noise
 .vscode/
 .idea/

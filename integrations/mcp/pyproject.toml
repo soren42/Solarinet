@@ -1,0 +1,31 @@
+[project]
+name = "solarinet-mcp"
+version = "0.1.0"
+description = "MCP server exposing SolariNet's read API, control plane, and read-only DB to LLM agents"
+readme = "README.html"
+requires-python = ">=3.10"
+authors = [{ name = "Jason C. Kay" }]
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.2.0",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "PyMySQL>=1.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+solarinet-mcp = "solarinet_mcp.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["solarinet_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

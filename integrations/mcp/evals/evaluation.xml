@@ -1,0 +1,42 @@
+<evaluation>
+  <qa_pair>
+    <question>Using the SolariNet monitoring tools, how many nodes in the fleet have the role 'client'?</question>
+    <answer>4</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The SolariNet server cluster runs an active primary and a standby failover. What is the fully-qualified hostname of the node currently designated as the failover server?</question>
+    <answer>neon.akoria.net</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many nodes in the SolariNet fleet are currently in the 'degraded' state?</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Exactly one node in the SolariNet fleet is in the 'down' state. What is its fully-qualified hostname?</question>
+    <answer>helium.akoria.net</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Among the currently active SolariNet alerts, how many have severity 'crit'?</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the probe reachability matrix, one probe target reports the outcome 'refused' from every monitor vantage point. What is that target's id?</question>
+    <answer>tcp:helium:22</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>For the gateway ICMP probe with target id 'icmp:10.42.0.1', what outcome is reported from the vantage-2 monitor (node 0x11)?</question>
+    <answer>timeout</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Across all client nodes' host history, which client has the lowest recorded diskMinFreePct? Give its fully-qualified hostname.</question>
+    <answer>beryllium.akoria.net</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What CPU architecture does the monitor running on host vantage1.akoria.net report?</question>
+    <answer>arm64</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the current failover lease epoch reported by the SolariNet server status?</question>
+    <answer>5</answer>
+  </qa_pair>
+</evaluation>
