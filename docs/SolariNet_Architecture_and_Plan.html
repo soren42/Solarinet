@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet Monitoring — Architecture &amp; Implementation Plan</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#11161e; --panel2:#161c26; --ink:#d7dee8; --ink-dim:#9aa7b8;
+    --line:#222c39; --accent:#3fb6d3; --accent2:#7c5cff; --warm:#e0a458; --ok:#5dd39e;
+    --warn:#e0794f; --code-bg:#0a0e14; --code-ink:#c8d3e0; --kw:#7c9eff; --str:#8fd6a0;
+    --com:#5f6e82; --num:#e0a458; --ty:#5dd3c8;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.62;font-size:16px;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+  /* ---- cover ---- */
+  .cover{
+    min-height:62vh;display:flex;flex-direction:column;justify-content:center;
+    padding:90px 0 50px;border-bottom:1px solid var(--line);
+    background:
+      radial-gradient(900px 400px at 80% -10%, rgba(124,92,255,.16), transparent 60%),
+      radial-gradient(700px 360px at 10% 10%, rgba(63,182,211,.12), transparent 55%);
+  }
+  .kicker{font-family:var(--mono);font-size:12.5px;letter-spacing:.32em;text-transform:uppercase;color:var(--accent);margin-bottom:22px}
+  h1.title{font-family:var(--serif);font-weight:600;font-size:clamp(40px,7vw,76px);line-height:1.02;margin:0 0 18px;letter-spacing:-.01em}
+  h1.title .sub{display:block;font-size:.42em;color:var(--ink-dim);font-style:italic;font-weight:400;margin-top:14px;letter-spacing:0}
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin-top:40px;border-radius:8px;overflow:hidden}
+  .meta-grid div{background:var(--panel);padding:14px 18px}
+  .meta-grid .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-dim)}
+  .meta-grid .v{font-size:15px;margin-top:4px}
+  /* ---- typography ---- */
+  section{padding:54px 0;border-bottom:1px solid var(--line)}
+  h2{font-family:var(--serif);font-size:clamp(26px,3.6vw,38px);font-weight:600;letter-spacing:-.01em;margin:0 0 6px;scroll-margin-top:20px}
+  .h2num{font-family:var(--mono);color:var(--accent);font-size:.6em;letter-spacing:.1em;display:block;margin-bottom:6px}
+  h3{font-family:var(--sans);font-size:21px;font-weight:650;margin:36px 0 10px;color:#eaf1f8}
+  h4{font-family:var(--mono);font-size:14px;letter-spacing:.04em;font-weight:600;margin:26px 0 8px;color:var(--accent)}
+  p{margin:0 0 14px}
+  .lead{font-size:18.5px;color:#e7eef6}
+  strong{color:#f0f5fb;font-weight:650}
+  em{color:var(--ink-dim)}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(63,182,211,.3)}
+  a:hover{border-color:var(--accent)}
+  ul,ol{margin:0 0 16px;padding-left:22px}
+  li{margin:5px 0}
+  code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  /* ---- callouts ---- */
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:14px 18px;border-radius:0 8px 8px 0;margin:18px 0}
+  .note.warn{border-color:var(--warn)}
+  .note.pick{border-color:var(--ok)}
+  .note .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:4px}
+  .note.warn .lbl{color:var(--warn)} .note.pick .lbl{color:var(--ok)}
+  /* ---- code blocks ---- */
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:18px 20px;overflow-x:auto;margin:18px 0;font-family:var(--mono);font-size:13px;line-height:1.55;color:var(--code-ink)}
+  pre .c{color:var(--com);font-style:italic}
+  pre .k{color:var(--kw)} pre .s{color:var(--str)} pre .n{color:var(--num)} pre .t{color:var(--ty)} pre .f{color:#e6c07b}
+  .filename{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);letter-spacing:.05em;margin:20px 0 -8px;padding-left:4px}
+  .filename::before{content:"▸ ";color:var(--accent)}
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 13px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  td code{font-size:.9em}
+  /* ---- diagram ---- */
+  .diagram{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:22px;overflow-x:auto;margin:20px 0}
+  .diagram pre{border:none;background:none;padding:0;margin:0;font-size:12.5px;color:#aebfd4}
+  /* ---- TOC ---- */
+  nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px 28px;margin:30px 0}
+  nav.toc h3{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase}
+  nav.toc ol{column-count:2;column-gap:36px;padding-left:18px;font-size:14.5px}
+  @media(max-width:640px){nav.toc ol{column-count:1}}
+  nav.toc a{border:none;color:var(--ink)}
+  nav.toc a:hover{color:var(--accent)}
+  /* ---- pills / badges ---- */
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 9px;border-radius:20px;border:1px solid var(--line);background:var(--panel2);color:var(--ink-dim);margin:2px 4px 2px 0}
+  .pill.c{color:var(--accent);border-color:rgba(63,182,211,.4)}
+  .pill.ok{color:var(--ok);border-color:rgba(93,211,158,.4)}
+  /* ---- phase cards ---- */
+  .phase{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px;margin:14px 0;position:relative}
+  .phase .pnum{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--accent2);text-transform:uppercase}
+  .phase h3{margin:4px 0 8px}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:5px;background:rgba(124,92,255,.14);color:#b3a0ff;margin-left:8px}
+  hr.soft{border:none;border-top:1px dashed var(--line);margin:28px 0}
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  @media(max-width:760px){.twocol{grid-template-columns:1fr}}
+  .footnote{font-size:13.5px;color:var(--ink-dim)}
+  ::selection{background:rgba(124,92,255,.35)}
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="wrap">
+    <div class="kicker">Distributed Systems · Architecture &amp; Build Specification</div>
+    <h1 class="title">SolariNet Monitoring
+      <span class="sub">A three-tier, fault-tolerant network &amp; service monitoring system in portable C99</span>
+    </h1>
+    <div class="meta-grid">
+      <div><div class="k">Document</div><div class="v">Architecture &amp; Implementation Plan</div></div>
+      <div><div class="k">Version</div><div class="v">1.0 · Build Spec</div></div>
+      <div><div class="k">Author</div><div class="v">Jason C. Kay (N4JCK)</div></div>
+      <div><div class="k">Language</div><div class="v">ANSI/ISO C99, K&amp;R-style, functions only</div></div>
+      <div><div class="k">Audience</div><div class="v">Autonomous coding agent (Claude Code / Codex)</div></div>
+      <div><div class="k">Status</div><div class="v">Ready for implementation</div></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<section id="howto">
+  <h2><span class="h2num">§ 0</span>How to use this document</h2>
+  <p class="lead">This is a complete, self-contained build specification. An autonomous coding agent should be able to implement the entire system from this document with no further design input.</p>
+  <p>The document proceeds from <strong>strategy</strong> (why) to <strong>architecture</strong> (shape) to <strong>scaffolding</strong> (exact headers, signatures, schema, build files) to a <strong>phased task plan</strong> (the worklist). Read it in order once; thereafter §§5–12 are the implementation reference and §16 is the execution checklist.</p>
+  <div class="note pick">
+    <span class="lbl">Agent instructions</span>
+    Implement strictly in <strong>C99</strong> using only functions and plain <code>struct</code>s — no C++, no object orientation, no opaque OOP emulation beyond the documented handle pattern. Honor the coding standards in §17 (camelCase identifiers, K&amp;R brace style, doc-comment headers). Build each module behind its published header (§§6–9) so components remain independently testable. Where a function body is not given, the signature plus its doc-comment is the contract — implement to it. Do not introduce Node.js, server-side JavaScript, or any npm-based tooling anywhere in the toolchain. The only non-C runtime is PHP 8.x for the dashboard (§11), reading the same MariaDB the server writes (§10).
+  </div>
+  <p>The dashboard's <em>visual</em> design is intentionally out of scope here — it is produced separately in Claude Design. §11 specifies only the data contract (REST/JSON endpoints, auth, payload shapes) the dashboard binds to, so the two efforts compose cleanly.</p>
+
+  <nav class="toc">
+    <h3>Contents</h3>
+    <ol>
+      <li><a href="#strategy">Strategy &amp; design tenets</a></li>
+      <li><a href="#arch">System architecture</a></li>
+      <li><a href="#tech">Technology decisions</a></li>
+      <li><a href="#repo">Repository layout</a></li>
+      <li><a href="#proto">The SolariNet Control Protocol (SCP)</a></li>
+      <li><a href="#libsolari">Shared library — libsolari</a></li>
+      <li><a href="#client">Component: Client</a></li>
+      <li><a href="#monitor">Component: Remote Monitor</a></li>
+      <li><a href="#server">Component: Server</a></li>
+      <li><a href="#schema">Database schema</a></li>
+      <li><a href="#dashboard">Dashboard data contract</a></li>
+      <li><a href="#build">Build system &amp; cross-compilation</a></li>
+      <li><a href="#config">Configuration formats</a></li>
+      <li><a href="#testing">Testing strategy</a></li>
+      <li><a href="#deploy">Deployment &amp; operations</a></li>
+      <li><a href="#plan">Phased project plan &amp; task breakdown</a></li>
+      <li><a href="#standards">Coding standards</a></li>
+      <li><a href="#appendix">Appendices</a></li>
+    </ol>
+  </nav>
+</section>
+
+<section id="strategy">
+  <h2><span class="h2num">§ 1</span>Strategy &amp; design tenets</h2>
+  <p class="lead">SolariNet observes a private network (an intranet of roughly 60 devices) from three vantage points and fuses their views into one authoritative, continuously-published picture of health.</p>
+
+  <h3>The three vantage points</h3>
+  <p>Each tier answers a different question, and no single tier can answer all three — which is precisely why the system is distributed:</p>
+  <table>
+    <thead><tr><th>Tier</th><th>Vantage</th><th>Answers</th><th>Volume</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Client</strong> <code>solariClient</code></td><td>Inside the host, looking down</td><td>"Is <em>this machine</em> healthy? CPU, RAM, swap, disk, NIC/USB throughput, key processes, their open files &amp; sockets, log files."</td><td>One per host, plus a watchdog</td></tr>
+      <tr><td><strong>Remote Monitor</strong> <code>solariMonitor</code></td><td>On the wire, looking across</td><td>"Are services <em>reachable and fast</em> from where I stand? TCP/UDP/ICMP probes, latency, transit time, dropped packets, throughput vs. capacity, link characteristics, peer-to-peer reachability."</td><td>~10% of nodes, at varied vantage points</td></tr>
+      <tr><td><strong>Server</strong> <code>solariServer</code></td><td>Above all, fusing</td><td>"What is the <em>whole-network</em> state, historically and now? Collects client + monitor data, owns master records, publishes the C2 dashboard, manages config &amp; deployment of every node."</td><td>One primary, one failover</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Design tenets</h3>
+  <ol>
+    <li><strong>Portability is a first-class requirement, not a retrofit.</strong> The client must build for Windows, macOS, and Linux across ARM32/ARM64/x86/x86_64. All OS-specific code lives behind a single platform-abstraction header (<code>platOS.h</code>); the core never calls a syscall directly.</li>
+    <li><strong>Fault tolerance by construction.</strong> Monitors are interchangeable and redundant — losing one degrades coverage, never correctness. The server runs primary/failover with a database-mediated lease, so a primary failure is a sub-30-second promotion, not an outage.</li>
+    <li><strong>One wire protocol, versioned from day one.</strong> Every tier-to-tier message rides the SolariNet Control Protocol (§5): a versioned, length-prefixed frame with a binary header and TLV payload. New fields never break old peers.</li>
+    <li><strong>The C backend never renders HTML.</strong> The server writes MariaDB; PHP-on-Apache reads it. This keeps the C strictly to measurement, transport, and persistence, and lets the dashboard evolve independently.</li>
+    <li><strong>Local control, no cloud dependency.</strong> Every component runs on-prem. No telemetry leaves the intranet. TLS and node enrollment are self-managed.</li>
+    <li><strong>Functions, not objects.</strong> Plain C, K&amp;R lineage. State travels in explicit context structs passed by pointer (the "handle" pattern, §17) — never hidden in globals, never wrapped in pseudo-classes.</li>
+  </ol>
+
+  <h3>Non-goals</h3>
+  <ul>
+    <li><strong>Not</strong> a public-internet, multi-tenant SaaS. Single-tenant, single intranet, trusted-ish LAN with TLS for defense in depth.</li>
+    <li><strong>Not</strong> a metrics time-series database competitor (Prometheus et al. already exist in the environment). SolariNet's edge is the <em>fused three-vantage view</em> and the C2 control plane, not raw TSDB throughput.</li>
+    <li><strong>Not</strong> a config-management replacement. The server's "manage config/deployment" role pushes <em>SolariNet's own</em> node config and binaries, not general-purpose CM.</li>
+  </ul>
+</section>
+
+<section id="arch">
+  <h2><span class="h2num">§ 2</span>System architecture</h2>
+  <p class="lead">Three C programs, one shared library, one relational store, one PHP dashboard. Data flows up; control flows down.</p>
+
+  <div class="diagram"><pre>
+                         ┌─────────────────────────────────────────────┐
+                         │                INTRANET (LAN)                 │
+                         │                                               │
+   ┌──────────┐          │   ┌──────────┐   ┌──────────┐   ┌──────────┐ │
+   │  HOST A  │          │   │  HOST B  │   │  HOST C  │   │  HOST …  │ │
+   │ ┌──────┐ │          │   │ ┌──────┐ │   │ ┌──────┐ │   │ ┌──────┐ │ │
+   │ │client│ │          │   │ │client│ │   │ │client│ │   │ │client│ │ │
+   │ └──┬───┘ │          │   │ └──┬───┘ │   │ └──┬───┘ │   │ └──┬───┘ │ │
+   │ ┌──┴───┐ │          │   │    │     │   │    │     │   │    │     │ │
+   │ │w-dog │ │          │   │    │     │   │    │     │   │    │     │ │
+   │ └──────┘ │          │   │    │     │   │    │     │   │    │     │ │
+   └────┬─────┘          │   └────┼─────┘   └────┼─────┘   └────┼─────┘ │
+        │   client telemetry (SCP/TLS, PUSH)     │              │       │
+        └───────────────┬───────────────┬────────┴──────────────┘       │
+                        │               │                               │
+              ┌─────────▼──────┐ ┌──────▼─────────┐   probes (TCP/UDP/  │
+              │ remote monitor │ │ remote monitor │   ICMP) fan out to  │
+              │  (vantage 1)   │ │  (vantage N)   │◀─ services &amp; peers  │
+              └─────────┬──────┘ └──────┬─────────┘   across the LAN    │
+                        │ monitor reports (SCP/TLS)   │                 │
+                        └───────────────┬─────────────┘                 │
+                                        │                               │
+                      ┌─────────────────▼──────────────────┐            │
+                      │   SERVER  (SCP/TLS ingest, SURVEY)  │            │
+                      │  ┌────────────┐    ┌─────────────┐  │            │
+                      │  │  PRIMARY   │◀──▶│  FAILOVER   │  │            │
+                      │  │ solariServer│lease│ solariServer│  │           │
+                      │  └─────┬──────┘    └──────┬──────┘  │            │
+                      └────────┼──────────────────┼─────────┘            │
+                               │  SQL writes      │ (read-only standby)  │
+                               ▼                  ▼                      │
+                      ┌─────────────────────────────────────┐           │
+                      │       MariaDB  (master records,       │          │
+                      │       history, config, lease)         │          │
+                      └─────────────────┬─────────────────────┘          │
+                                        │ SQL reads (PDO)                 │
+                      ┌─────────────────▼─────────────────────┐          │
+                      │   Apache + PHP 8.x   →  C2 Dashboard   │          │
+                      │   REST/JSON API  +  server-rendered UI │          │
+                      └─────────────────┬─────────────────────┘          │
+                                        │ HTTPS                           │
+                                        ▼                                 │
+                                 operator browser                         │
+                         └─────────────────────────────────────────────┘
+  </pre></div>
+
+  <h3>Data flow</h3>
+  <ol>
+    <li><strong>Client → Server (push).</strong> Each client samples local metrics on a schedule (default 15&nbsp;s) and pushes an <code>SCP_MSG_CLIENT_REPORT</code> frame to the server's ingest endpoint. Watchdog supervises the client process and emits <code>SCP_MSG_WATCHDOG</code> heartbeats independently.</li>
+    <li><strong>Monitor → Server (push + survey).</strong> Monitors run their probe schedule autonomously and push <code>SCP_MSG_MONITOR_REPORT</code> frames. The server can also actively <em>survey</em> the monitor fleet (nng SURVEYOR/RESPONDENT) to demand an immediate round, e.g. on operator request from the dashboard.</li>
+    <li><strong>Server → MariaDB.</strong> The active server validates, deduplicates, upserts master records, appends history rows, and evaluates alert rules.</li>
+    <li><strong>Dashboard → MariaDB.</strong> PHP reads via PDO. The C server and PHP never talk directly; the database is the contract boundary.</li>
+    <li><strong>Server → nodes (control, down).</strong> Config changes and binary/deploy directives flow as <code>SCP_MSG_CONTROL</code> frames addressed to specific nodes.</li>
+  </ol>
+
+  <h3>Failover model</h3>
+  <p>Two server instances, exactly one active. Coordination is database-mediated to avoid pulling in a consensus library for a two-node problem:</p>
+  <ul>
+    <li>A single row in the <code>serverLease</code> table holds <code>(leaseHolder, leaseEpoch, expiresAt)</code>.</li>
+    <li>The active server renews the lease every <code>leaseRenewSec</code> (default 5&nbsp;s) via a conditional <code>UPDATE … WHERE expiresAt &lt; NOW() OR leaseHolder = me</code> inside a transaction. The atomicity of that single-row update <em>is</em> the election.</li>
+    <li>The standby polls the lease. If it observes <code>expiresAt &lt; NOW()</code>, it attempts to claim it with an incremented <code>leaseEpoch</code>. Winner becomes active and begins binding ingest sockets; loser backs off.</li>
+    <li>Nodes always know both server addresses (from config); they connect to whichever currently holds the lease, discovered via a tiny <code>SCP_MSG_WHO_IS_PRIMARY</code> query answered by either instance.</li>
+  </ul>
+  <div class="note">
+    <span class="lbl">Why DB-lease, not Raft</span>
+    For N=2 servers sharing a MariaDB they already depend on, a leased single-row mutex gives correct single-writer semantics with zero extra dependencies and trivial debuggability. Raft/etcd would add an operational component to babysit for no benefit at this cardinality. Split-brain is bounded by lease TTL and made harmless because all writes funnel through the same row's conditional update. <em>If</em> the fleet ever needs ≥3 active coordinators, revisit — but that is explicitly a non-goal (§1).
+  </div>
+
+  <h3>Security model</h3>
+  <ul>
+    <li><strong>Transport:</strong> All SCP traffic is TLS 1.2+ via nng's TLS transport backed by <strong>mbedTLS</strong>. Plaintext SCP is permitted only on loopback (client ↔ its own watchdog) and only when explicitly configured.</li>
+    <li><strong>Node identity &amp; enrollment:</strong> Each node carries a long-lived X.509 client certificate issued at enrollment. Enrollment is a one-time operator-approved exchange: a node presents a pre-shared enrollment token (out-of-band), the server signs its CSR, and the node thereafter authenticates by cert. This dovetails with the operator's existing internal CA (step-ca) — the server's trust store is simply the internal CA root.</li>
+    <li><strong>Authorization:</strong> A node's certificate CN encodes its role (<code>client</code> / <code>monitor</code> / <code>server</code>); the server rejects frames whose type is illegal for the presenting role (a client may not send <code>SCP_MSG_MONITOR_REPORT</code>, etc.).</li>
+    <li><strong>Dashboard:</strong> Operator auth at the PHP layer (session + RBAC). The dashboard is read-mostly; any control action (trigger survey, push config) is POSTed to the REST API, authenticated, and translated by a small privileged helper into an <code>SCP_MSG_CONTROL</code> to the server. The PHP layer never holds a server certificate directly — it calls a local <code>solariCtl</code> Unix-socket helper that does.</li>
+  </ul>
+</section>
+
+<section id="tech">
+  <h2><span class="h2num">§ 3</span>Technology decisions</h2>
+  <p class="lead">Every dependency is justified, license-checked for linkage, and chosen for portability across the full architecture matrix. Rejected alternatives are recorded so the agent doesn't re-litigate them.</p>
+
+  <table>
+    <thead><tr><th>Concern</th><th>Choice</th><th>License</th><th>Rationale &amp; rejected alternatives</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Core language</td><td>ISO C99</td><td>—</td>
+        <td>Mandated. C99 (not C89) for <code>&lt;stdint.h&gt;</code>, <code>&lt;stdbool.h&gt;</code>, designated initializers, and mixed declarations — all portable across every target compiler (GCC, Clang, MSVC in C mode). K&amp;R brace style, functions only.</td>
+      </tr>
+      <tr>
+        <td>Tier-to-tier messaging</td><td><strong>nng</strong> (nanomsg-next-gen)</td><td class="pill ok">MPL-2.0</td>
+        <td>Single, portable C library implementing the exact scalability patterns we need: <code>PUSH/PULL</code> (client/monitor → server ingest), <code>SURVEYOR/RESPONDENT</code> (server polls monitor fleet), <code>PUB/SUB</code> (server → dashboards/notifications). Handles reconnect, backpressure, and message framing so we don't hand-roll it badly. MPL-2.0 is file-level copyleft — links cleanly into our C without infecting our source. <em>Rejected:</em> ZeroMQ (LGPL + C++ core, heavier), raw sockets for the control plane (we'd reinvent nng's reconnection/poll logic), gRPC (drags in C++/protobuf, violates the no-heavy-runtime tenet).</td>
+      </tr>
+      <tr>
+        <td>TLS</td><td><strong>mbedTLS</strong></td><td class="pill ok">Apache-2.0</td>
+        <td>Small, portable, builds cleanly for embedded ARM through x86_64; integrates as nng's TLS engine. Apache-2.0 links freely. <em>Rejected:</em> OpenSSL (heavier, thornier cross-builds on Windows/macOS for our needs), though it remains a documented fallback if a target platform ships it more readily.</td>
+      </tr>
+      <tr>
+        <td>Raw service probing</td><td>Hand-rolled BSD sockets + raw ICMP</td><td>—</td>
+        <td>The monitor's <em>measurement surface</em> (latency, packet loss, TCP connect timing) needs direct socket control nng can't give. Kept in portable C behind <code>probeNet.h</code>; ICMP's raw-socket / privilege quirks are isolated per-platform (see Appendix C).</td>
+      </tr>
+      <tr>
+        <td>Persistence</td><td><strong>MariaDB</strong> 10.6+</td><td class="pill ok">GPL-2 (server) / LGPL (connector-c)</td>
+        <td>Operator standard; the C server links <strong>MariaDB Connector/C</strong> (LGPL-2.1, links fine). The DB is the contract boundary between C and PHP. <em>Rejected:</em> embedding SQLite + serving the dashboard from C (couples measurement to presentation, contradicts tenet 4; SQLite stays as the optional local spool only — see below).</td>
+      </tr>
+      <tr>
+        <td>Local spool / store-and-forward</td><td><strong>SQLite</strong> (amalgamation)</td><td class="pill ok">Public domain</td>
+        <td>Single-file amalgamation compiled directly in. Each client/monitor spools reports locally when the server is unreachable, then drains on reconnect — this is what makes monitors "fully fault tolerant." Public domain, zero license friction.</td>
+      </tr>
+      <tr>
+        <td>Dashboard runtime</td><td><strong>PHP 8.x on Apache</strong></td><td>—</td>
+        <td>Operator standard; reads MariaDB via PDO. Server-rendered UI + JSON REST API. <em>Explicitly no Node/SSR-JS.</em> Browser-side JS is fine and expected for the live dashboard.</td>
+      </tr>
+      <tr>
+        <td>Build system</td><td><strong>CMake</strong> ≥3.16 + thin Makefile wrapper</td><td class="pill ok">BSD</td>
+        <td>The only practical cross-platform/cross-arch C build orchestrator (toolchain files per target, §12). A top-level <code>Makefile</code> wraps common invocations for muscle-memory (<code>make client</code>, <code>make monitor</code>, <code>make cross-arm64</code>). <em>Rejected:</em> Autotools (painful on Windows/MSVC), bare Make (no clean cross-toolchain story).</td>
+      </tr>
+      <tr>
+        <td>Unit testing</td><td><strong>Unity</strong> + CMock</td><td class="pill ok">MIT</td>
+        <td>Tiny pure-C test framework (single .c/.h), perfect for embedded-grade portability. Drives §14's unit suites. <em>Rejected:</em> heavier C++-based frameworks (Catch2/GoogleTest) — wrong language, wrong weight.</td>
+      </tr>
+      <tr>
+        <td>JSON (where C must emit/parse)</td><td><strong>cJSON</strong></td><td class="pill ok">MIT</td>
+        <td>The server emits a JSON projection of SCP for any path the dashboard/API consumes directly, and parses JSON config overlays. Single-file, MIT, trivially portable. <em>Rejected:</em> Jansson (fine but heavier), hand-rolled (error-prone).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note pick">
+    <span class="lbl">Dependency vendoring</span>
+    All third-party C deps (nng, mbedTLS, SQLite amalgamation, cJSON, Unity) are vendored under <code>third_party/</code> as pinned source or git submodules and built from source by CMake. No system-package assumptions, no package manager at build time. This is what makes the cross-architecture matrix tractable and the build hermetic. MariaDB Connector/C is the one exception: linked against the platform's dev package on server targets (x86_64/ARM64 Linux only), since the server is not cross-compiled to exotic targets.
+  </div>
+</section>
+
+<section id="repo">
+  <h2><span class="h2num">§ 4</span>Repository layout</h2>
+  <p>A single git monorepo. Shared code is real, versioned, and built once into <code>libsolari</code>; each component links it.</p>
+  <pre>
+solarinet/
+├── CMakeLists.txt              <span class="c"># top-level build (§12)</span>
+├── Makefile                    <span class="c"># convenience wrapper over CMake</span>
+├── README.html                 <span class="c"># self-contained project README (not .md)</span>
+├── LICENSE
+├── cmake/
+│   ├── toolchains/             <span class="c"># cross-compile toolchain files</span>
+│   │   ├── linux-arm32.cmake
+│   │   ├── linux-arm64.cmake
+│   │   ├── linux-x86_64.cmake
+│   │   ├── windows-x86_64.cmake   <span class="c"># mingw-w64</span>
+│   │   └── macos-universal.cmake
+│   └── modules/                <span class="c"># Find*.cmake helpers</span>
+├── include/solari/             <span class="c"># PUBLIC headers for libsolari (§6)</span>
+│   ├── solariCommon.h
+│   ├── solariFrame.h           <span class="c"># SCP framing</span>
+│   ├── solariTlv.h             <span class="c"># TLV encode/decode</span>
+│   ├── solariMsg.h             <span class="c"># message type defs &amp; structs</span>
+│   ├── solariConfig.h
+│   ├── solariLog.h
+│   ├── solariTime.h
+│   ├── solariNet.h             <span class="c"># nng transport helpers</span>
+│   ├── solariCrypto.h          <span class="c"># hashing, cert helpers</span>
+│   ├── solariSpool.h           <span class="c"># SQLite store-and-forward</span>
+│   └── solariError.h
+├── lib/solari/                 <span class="c"># libsolari implementation</span>
+│   └── *.c
+├── src/
+│   ├── client/                 <span class="c"># solariClient (§7)</span>
+│   │   ├── main.c
+│   │   ├── clientCollect.c
+│   │   ├── clientReport.c
+│   │   ├── clientWatchdog.c
+│   │   ├── platOS.h            <span class="c"># platform abstraction (the portability seam)</span>
+│   │   └── plat/
+│   │       ├── platLinux.c
+│   │       ├── platMacos.c
+│   │       └── platWindows.c
+│   ├── monitor/                <span class="c"># solariMonitor (§8)</span>
+│   │   ├── main.c
+│   │   ├── probeNet.c          <span class="c"># tcp/udp/icmp probes</span>
+│   │   ├── probeNet.h
+│   │   ├── monitorSched.c
+│   │   ├── monitorPeer.c       <span class="c"># peer mesh / redundancy</span>
+│   │   └── monitorReport.c
+│   └── server/                 <span class="c"># solariServer (§9)</span>
+│       ├── main.c
+│       ├── serverIngest.c
+│       ├── serverLease.c       <span class="c"># failover election</span>
+│       ├── serverDb.c          <span class="c"># MariaDB writer</span>
+│       ├── serverMaster.c      <span class="c"># master-record reconciliation</span>
+│       ├── serverControl.c     <span class="c"># config/deploy push</span>
+│       ├── serverAlert.c       <span class="c"># rule evaluation</span>
+│       └── solariCtl.c         <span class="c"># privileged unix-socket helper for PHP</span>
+├── dashboard/                  <span class="c"># PHP 8.x + Apache (§11) — contract only here</span>
+│   ├── public/                 <span class="c"># docroot</span>
+│   ├── api/                    <span class="c"># REST/JSON endpoints</span>
+│   ├── lib/                    <span class="c"># PDO data-access layer</span>
+│   └── config/
+├── db/
+│   ├── schema.sql              <span class="c"># MariaDB DDL (§10)</span>
+│   ├── seed.sql
+│   └── migrations/
+├── config/                     <span class="c"># sample .conf files (§13)</span>
+│   ├── client.conf.sample
+│   ├── monitor.conf.sample
+│   └── server.conf.sample
+├── deploy/
+│   ├── systemd/                <span class="c"># unit files (§15)</span>
+│   └── enrollment/             <span class="c"># enrollment scripts</span>
+├── tests/
+│   ├── unit/                   <span class="c"># Unity suites (§14)</span>
+│   ├── integration/
+│   └── fault/                  <span class="c"># fault-injection harnesses</span>
+├── third_party/                <span class="c"># vendored deps (pinned)</span>
+│   ├── nng/  mbedtls/  sqlite/  cJSON/  unity/
+└── docs/                       <span class="c"># self-contained HTML docs</span>
+  </pre>
+</section>
+
+<section id="proto">
+  <h2><span class="h2num">§ 5</span>The SolariNet Control Protocol (SCP)</h2>
+  <p class="lead">One versioned, length-prefixed binary protocol carries every tier-to-tier message. A canonical JSON projection exists for any consumer that reads SCP data without speaking it natively (the dashboard, debugging tools).</p>
+
+  <h3>5.1 Framing</h3>
+  <p>Every SCP message on the wire is a single frame. nng delivers messages atomically, so the outer length prefix is redundant <em>over nng</em> but is retained so the format is self-delimiting over raw streams (spool files, loopback plaintext, packet captures).</p>
+  <pre>
+  <span class="c">/* All multi-byte integers are big-endian (network byte order). */</span>
+
+  <span class="c">+----------------+----------------------+--------------------------+--------+</span>
+  <span class="c">| uint32 frameLen| FrameHeader (32 bytes)| TLV payload (frameLen-32)| uint32 |</span>
+  <span class="c">| (payload bytes)|                       |                          |  crc32 |</span>
+  <span class="c">+----------------+----------------------+--------------------------+--------+</span>
+
+  frameLen   = byte count of [FrameHeader + TLV payload]  (excludes itself &amp; trailing crc32)
+  crc32      = CRC-32 (IEEE) over [FrameHeader + TLV payload], integrity check only
+  </pre>
+
+  <h3>5.2 Frame header (fixed 32 bytes)</h3>
+  <div class="filename">include/solari/solariFrame.h — wire header</div>
+  <pre>
+<span class="k">typedef struct</span> {
+    <span class="t">uint8_t</span>  magic[<span class="n">2</span>];      <span class="c">/* {'S','N'} — SolariNet sentinel              */</span>
+    <span class="t">uint8_t</span>  protoVersion;   <span class="c">/* SCP_PROTO_VERSION; bump only on breaking chg */</span>
+    <span class="t">uint8_t</span>  msgType;        <span class="c">/* enum solariMsgType (5.4)                     */</span>
+    <span class="t">uint8_t</span>  flags;          <span class="c">/* SCP_FLAG_* bitfield (5.3)                    */</span>
+    <span class="t">uint8_t</span>  reserved;       <span class="c">/* 0; keeps following fields aligned            */</span>
+    <span class="t">uint16_t</span> tlvCount;       <span class="c">/* number of TLV elements in payload            */</span>
+    <span class="t">uint64_t</span> sourceNodeId;   <span class="c">/* stable 64-bit node id (5.5)                  */</span>
+    <span class="t">uint64_t</span> sendTimeUnixMs; <span class="c">/* sender clock, ms since epoch                 */</span>
+    <span class="t">uint32_t</span> seqNo;          <span class="c">/* per-source monotonic; dedup &amp; ordering        */</span>
+    <span class="t">uint32_t</span> correlationId;  <span class="c">/* echoes a request's seqNo in its reply; 0 if  */</span>
+                              <span class="c">/* unsolicited                                  */</span>
+} solariFrameHeader;          <span class="c">/* sizeof == 32, statically asserted            */</span>
+  </pre>
+  <div class="note">
+    <span class="lbl">Implementation note</span>
+    Do not <code>memcpy</code> the struct onto the wire — pack/unpack field-by-field through the accessor functions in §6 so endianness and alignment are correct on every architecture. A <code>SOLARI_STATIC_ASSERT(sizeof(solariFrameHeader)==32)</code> guards the layout, but the wire form is defined by the pack functions, not the struct memory image.
+  </div>
+
+  <h3>5.3 Flags</h3>
+  <table>
+    <thead><tr><th>Flag</th><th>Value</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>SCP_FLAG_NONE</code></td><td>0x00</td><td>No flags.</td></tr>
+      <tr><td><code>SCP_FLAG_ACK_REQ</code></td><td>0x01</td><td>Sender wants an <code>SCP_MSG_ACK</code> with matching <code>correlationId</code>.</td></tr>
+      <tr><td><code>SCP_FLAG_COMPRESSED</code></td><td>0x02</td><td>TLV payload is DEFLATE-compressed (large batched reports).</td></tr>
+      <tr><td><code>SCP_FLAG_SPOOL_REPLAY</code></td><td>0x04</td><td>Frame is a store-and-forward replay; server should dedup by <code>(sourceNodeId, seqNo)</code>.</td></tr>
+      <tr><td><code>SCP_FLAG_URGENT</code></td><td>0x08</td><td>Bypass normal batching; evaluate alert rules immediately.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5.4 Message types</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Code</th><th>Direction</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>SCP_MSG_HELLO</code></td><td>0x01</td><td>node → server</td><td>Session open; declares role, version, capabilities.</td></tr>
+      <tr><td><code>SCP_MSG_WELCOME</code></td><td>0x02</td><td>server → node</td><td>Accepts session; returns assigned schedule &amp; config epoch.</td></tr>
+      <tr><td><code>SCP_MSG_CLIENT_REPORT</code></td><td>0x10</td><td>client → server</td><td>Local host metrics snapshot (5.6).</td></tr>
+      <tr><td><code>SCP_MSG_MONITOR_REPORT</code></td><td>0x11</td><td>monitor → server</td><td>Probe results batch (5.7).</td></tr>
+      <tr><td><code>SCP_MSG_WATCHDOG</code></td><td>0x12</td><td>watchdog → server</td><td>Liveness heartbeat for a supervised client.</td></tr>
+      <tr><td><code>SCP_MSG_SURVEY</code></td><td>0x20</td><td>server → fleet</td><td>SURVEYOR: demand an immediate report round.</td></tr>
+      <tr><td><code>SCP_MSG_SURVEY_RESP</code></td><td>0x21</td><td>node → server</td><td>RESPONDENT: report produced in answer to a survey.</td></tr>
+      <tr><td><code>SCP_MSG_CONTROL</code></td><td>0x30</td><td>server → node</td><td>Config change / deploy directive (5.8).</td></tr>
+      <tr><td><code>SCP_MSG_CONTROL_RESULT</code></td><td>0x31</td><td>node → server</td><td>Outcome of a control directive.</td></tr>
+      <tr><td><code>SCP_MSG_WHO_IS_PRIMARY</code></td><td>0x40</td><td>node → server</td><td>Failover discovery query.</td></tr>
+      <tr><td><code>SCP_MSG_PRIMARY_IS</code></td><td>0x41</td><td>server → node</td><td>Names the current lease holder.</td></tr>
+      <tr><td><code>SCP_MSG_ACK</code></td><td>0x50</td><td>any → any</td><td>Acknowledgement (when <code>ACK_REQ</code> set).</td></tr>
+      <tr><td><code>SCP_MSG_ERROR</code></td><td>0x51</td><td>any → any</td><td>Structured error (code in TLV, see Appendix A).</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5.5 Node identity</h3>
+  <p><code>sourceNodeId</code> is a stable 64-bit id derived once at enrollment: <code>FNV-1a-64(hostFqdn || roleByte || enrollmentNonce)</code>, persisted in the node's config. It is independent of IP/MAC so it survives re-addressing. The mapping <code>nodeId ↔ (fqdn, role, cert CN)</code> lives in the server's <code>node</code> table (§10).</p>
+
+  <h3>5.6 TLV payload</h3>
+  <p>Payloads are sequences of Type-Length-Value triples. This is what lets the protocol evolve without version bumps: unknown TLV types are skipped, not fatal.</p>
+  <div class="filename">include/solari/solariTlv.h — element layout</div>
+  <pre>
+  <span class="c">+----------+----------+------------------+</span>
+  <span class="c">| uint16   | uint16   | value            |</span>
+  <span class="c">| tlvType  | tlvLen   | (tlvLen bytes)   |</span>
+  <span class="c">+----------+----------+------------------+</span>
+
+<span class="c">/* TLV type ranges (high byte = category):                       */</span>
+<span class="c">/*   0x01xx  identity &amp; session   0x10xx  host metrics            */</span>
+<span class="c">/*   0x11xx  probe results        0x30xx  control directives       */</span>
+<span class="c">/*   0xFFxx  error / diagnostic                                    */</span>
+
+<span class="k">enum</span> solariTlvType {
+    <span class="c">/* --- identity / session (0x01xx) --- */</span>
+    TLV_ROLE                = <span class="n">0x0101</span>,  <span class="c">/* uint8: 1=client 2=monitor 3=server   */</span>
+    TLV_AGENT_VERSION       = <span class="n">0x0102</span>,  <span class="c">/* utf8 string                          */</span>
+    TLV_HOST_FQDN           = <span class="n">0x0103</span>,  <span class="c">/* utf8 string                          */</span>
+    TLV_CONFIG_EPOCH        = <span class="n">0x0104</span>,  <span class="c">/* uint64                               */</span>
+    <span class="c">/* --- host metrics (0x10xx) --- */</span>
+    TLV_OS_NAME             = <span class="n">0x1001</span>,  <span class="c">/* utf8: "Linux 6.1.0", "macOS 14.5"…   */</span>
+    TLV_ARCH                = <span class="n">0x1002</span>,  <span class="c">/* utf8: "arm64","x86_64","armv7","ppc" */</span>
+    TLV_CPU_LOAD_MILLI      = <span class="n">0x1003</span>,  <span class="c">/* uint32: load%*1000, per-core array   */</span>
+    TLV_RAM_USED_KB         = <span class="n">0x1004</span>,  <span class="c">/* uint64                               */</span>
+    TLV_RAM_TOTAL_KB        = <span class="n">0x1005</span>,  <span class="c">/* uint64                               */</span>
+    TLV_SWAP_USED_KB        = <span class="n">0x1006</span>,  <span class="c">/* uint64                               */</span>
+    TLV_SWAP_TOTAL_KB       = <span class="n">0x1007</span>,  <span class="c">/* uint64                               */</span>
+    TLV_DISK_FREE_KB        = <span class="n">0x1008</span>,  <span class="c">/* repeated: {mountStr, uint64 free}    */</span>
+    TLV_NET_IFACE           = <span class="n">0x1009</span>,  <span class="c">/* repeated: iface throughput vs cap    */</span>
+    TLV_USB_THROUGHPUT      = <span class="n">0x100A</span>,  <span class="c">/* repeated: bus throughput vs capacity */</span>
+    TLV_PROC_WATCH          = <span class="n">0x100B</span>,  <span class="c">/* repeated: {name, pid, state, nFiles, */</span>
+                                          <span class="c">/*            nSockets, rssKb}          */</span>
+    TLV_LOGFILE_STAT        = <span class="n">0x100C</span>,  <span class="c">/* repeated: {path, sizeDelta, matchCt} */</span>
+    TLV_NET_ADDR            = <span class="n">0x100D</span>,  <span class="c">/* repeated: interface IP/MAC           */</span>
+    <span class="c">/* --- probe results (0x11xx) --- */</span>
+    TLV_PROBE_RESULT        = <span class="n">0x1101</span>,  <span class="c">/* repeated, struct in 5.7              */</span>
+    TLV_LINK_STAT           = <span class="n">0x1102</span>,  <span class="c">/* repeated: latency/loss/jitter per pr */</span>
+    TLV_SERVICE_META        = <span class="n">0x1103</span>,  <span class="c">/* repeated: version/vendor/config kv   */</span>
+    <span class="c">/* --- control (0x30xx) --- */</span>
+    TLV_CTRL_VERB           = <span class="n">0x3001</span>,  <span class="c">/* uint8: setConfig|deploy|restart|...  */</span>
+    TLV_CTRL_PAYLOAD        = <span class="n">0x3002</span>,  <span class="c">/* opaque blob (e.g. new config, hash)  */</span>
+    TLV_CTRL_TARGET_EPOCH   = <span class="n">0x3003</span>,  <span class="c">/* uint64 config epoch to converge to   */</span>
+    <span class="c">/* --- error (0xFFxx) --- */</span>
+    TLV_ERROR_CODE          = <span class="n">0xFF01</span>,  <span class="c">/* uint16, Appendix A                   */</span>
+    TLV_ERROR_DETAIL        = <span class="n">0xFF02</span>   <span class="c">/* utf8 string                          */</span>
+};
+  </pre>
+
+  <h3>5.7 Probe-result value layout (TLV_PROBE_RESULT)</h3>
+  <pre>
+<span class="k">typedef struct</span> {
+    <span class="t">uint8_t</span>  proto;        <span class="c">/* 1=ICMP 2=TCP 3=UDP                      */</span>
+    <span class="t">uint8_t</span>  outcome;      <span class="c">/* enum probeOutcome: ok/timeout/refused/… */</span>
+    <span class="t">uint16_t</span> dstPort;      <span class="c">/* 0 for ICMP                              */</span>
+    <span class="t">uint8_t</span>  dstAddr[<span class="n">16</span>];  <span class="c">/* IPv4-mapped or IPv6                     */</span>
+    <span class="t">uint32_t</span> rttMicros;    <span class="c">/* round-trip time, microseconds           */</span>
+    <span class="t">uint32_t</span> jitterMicros; <span class="c">/* inter-probe variance                    */</span>
+    <span class="t">uint16_t</span> lossPermille; <span class="c">/* packets lost per thousand               */</span>
+    <span class="t">uint32_t</span> throughputKbps;
+    <span class="t">uint64_t</span> probeTimeUnixMs;
+} solariProbeResult;     <span class="c">/* packed/unpacked via accessors, never raw memcpy */</span>
+  </pre>
+
+  <h3>5.8 Control directives (TLV_CTRL_VERB)</h3>
+  <table>
+    <thead><tr><th>Verb</th><th>Value</th><th>Effect on node</th></tr></thead>
+    <tbody>
+      <tr><td><code>CTRL_SET_CONFIG</code></td><td>1</td><td>Apply config blob in <code>TLV_CTRL_PAYLOAD</code>, converge to <code>TARGET_EPOCH</code>, reply with result.</td></tr>
+      <tr><td><code>CTRL_DEPLOY</code></td><td>2</td><td>Fetch/verify (by hash in payload) and stage a new agent binary; await <code>CTRL_RESTART</code>.</td></tr>
+      <tr><td><code>CTRL_RESTART</code></td><td>3</td><td>Graceful self-restart (watchdog re-execs).</td></tr>
+      <tr><td><code>CTRL_PROBE_NOW</code></td><td>4</td><td>(Monitor) run probe round immediately, out of schedule.</td></tr>
+      <tr><td><code>CTRL_SET_SCHEDULE</code></td><td>5</td><td>Change sampling/probe interval.</td></tr>
+      <tr><td><code>CTRL_DRAIN_SPOOL</code></td><td>6</td><td>Flush local store-and-forward spool now.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5.9 Versioning rules</h3>
+  <ul>
+    <li><strong>Adding a TLV type</strong> → no version bump. Old peers skip unknown TLVs.</li>
+    <li><strong>Adding a message type</strong> → no version bump if unsolicited and ignorable; receivers reply <code>SCP_MSG_ERROR/ERR_UNKNOWN_MSG</code> for types they must understand.</li>
+    <li><strong>Changing header layout or an existing TLV's semantics</strong> → bump <code>SCP_PROTO_VERSION</code>. The server supports the current and previous major version during rollout.</li>
+  </ul>
+
+  <h3>5.10 Canonical JSON projection</h3>
+  <p>The server can serialize any SCP message to a stable JSON form (via cJSON) for the dashboard/API and for debugging. Field names mirror TLV names in camelCase. This projection is <em>read-only</em>: nothing parses JSON back into SCP frames except test fixtures.</p>
+  <pre>
+{
+  <span class="s">"header"</span>: {
+    <span class="s">"protoVersion"</span>: <span class="n">1</span>, <span class="s">"msgType"</span>: <span class="s">"CLIENT_REPORT"</span>,
+    <span class="s">"sourceNodeId"</span>: <span class="s">"0x9f3a…"</span>, <span class="s">"sendTimeUnixMs"</span>: <span class="n">1733500000123</span>,
+    <span class="s">"seqNo"</span>: <span class="n">4412</span>, <span class="s">"flags"</span>: [<span class="s">"URGENT"</span>]
+  },
+  <span class="s">"hostFqdn"</span>: <span class="s">"hydrogen.akoria.net"</span>,
+  <span class="s">"osName"</span>: <span class="s">"Linux 6.1.0"</span>, <span class="s">"arch"</span>: <span class="s">"arm64"</span>,
+  <span class="s">"cpuLoadMilli"</span>: [<span class="n">320</span>,<span class="n">410</span>,<span class="n">290</span>,<span class="n">380</span>],
+  <span class="s">"ramUsedKb"</span>: <span class="n">5242880</span>, <span class="s">"ramTotalKb"</span>: <span class="n">16777216</span>,
+  <span class="s">"procWatch"</span>: [
+    { <span class="s">"name"</span>: <span class="s">"apache2"</span>, <span class="s">"pid"</span>: <span class="n">812</span>, <span class="s">"state"</span>: <span class="s">"R"</span>,
+      <span class="s">"nFiles"</span>: <span class="n">142</span>, <span class="s">"nSockets"</span>: <span class="n">38</span>, <span class="s">"rssKb"</span>: <span class="n">88210</span> }
+  ]
+}
+  </pre>
+</section>
+
+<section id="libsolari">
+  <h2><span class="h2num">§ 6</span>Shared library — <code>libsolari</code></h2>
+  <p class="lead">Everything common to all three components lives here, built once. The signatures below <em>are the contract</em>: where no body is shown, the doc-comment defines correct behavior and the agent implements to it.</p>
+
+  <h3>6.1 Common types &amp; conventions</h3>
+  <div class="filename">include/solari/solariCommon.h</div>
+  <pre>
+<span class="c">/*
+ * solariCommon.h — shared types, return conventions, static-assert macro.
+ * All libsolari functions return solariStatus; SOLARI_OK (0) is success,
+ * negative values are errors enumerated in solariError.h. Out-params are
+ * written only on success unless documented otherwise.
+ */</span>
+<span class="k">#ifndef</span> SOLARI_COMMON_H
+<span class="k">#define</span> SOLARI_COMMON_H
+<span class="k">#include</span> <span class="s">&lt;stdint.h&gt;</span>
+<span class="k">#include</span> <span class="s">&lt;stddef.h&gt;</span>
+<span class="k">#include</span> <span class="s">&lt;stdbool.h&gt;</span>
+
+<span class="k">typedef</span> <span class="t">int32_t</span> solariStatus;   <span class="c">/* SOLARI_OK or negative solariError code */</span>
+
+<span class="k">#define</span> SOLARI_OK <span class="n">0</span>
+<span class="k">#define</span> SCP_PROTO_VERSION <span class="n">1</span>
+<span class="k">#define</span> SOLARI_MAX_FRAME (<span class="n">1u</span> &lt;&lt; <span class="n">20</span>)   <span class="c">/* 1 MiB hard cap on a single frame */</span>
+
+<span class="c">/* Compile-time assertion usable in C99 (no _Static_assert dependency). */</span>
+<span class="k">#define</span> SOLARI_STATIC_ASSERT(cond, tag) \
+    <span class="k">typedef char</span> solariStaticAssert_##tag[(cond) ? <span class="n">1</span> : -<span class="n">1</span>]
+
+<span class="k">typedef enum</span> { ROLE_CLIENT = <span class="n">1</span>, ROLE_MONITOR = <span class="n">2</span>, ROLE_SERVER = <span class="n">3</span> } solariRole;
+
+<span class="k">#endif</span>
+  </pre>
+
+  <h3>6.2 Frame pack / unpack</h3>
+  <div class="filename">include/solari/solariFrame.h</div>
+  <pre>
+<span class="c">/* Pack a header into buf (must be &gt;= 32 bytes), big-endian, field by field.
+ * Returns SOLARI_OK; never touches endianness of the caller's struct.      */</span>
+solariStatus solariFramePackHeader(<span class="k">const</span> solariFrameHeader *hdr,
+                                   <span class="t">uint8_t</span> *buf, <span class="t">size_t</span> bufLen);
+
+<span class="c">/* Inverse of the above. Validates magic and protoVersion; on version
+ * mismatch returns ERR_PROTO_VERSION but still fills hdr for diagnostics.   */</span>
+solariStatus solariFrameUnpackHeader(<span class="k">const</span> <span class="t">uint8_t</span> *buf, <span class="t">size_t</span> bufLen,
+                                     solariFrameHeader *hdr);
+
+<span class="c">/* Assemble a complete frame (len prefix + header + payload + crc32) into
+ * out. *outLen is set to bytes written. Computes crc32 internally.          */</span>
+solariStatus solariFrameBuild(<span class="k">const</span> solariFrameHeader *hdr,
+                              <span class="k">const</span> <span class="t">uint8_t</span> *payload, <span class="t">size_t</span> payloadLen,
+                              <span class="t">uint8_t</span> *out, <span class="t">size_t</span> outCap, <span class="t">size_t</span> *outLen);
+
+<span class="c">/* Parse one frame from a byte stream. Verifies crc32. On success, sets
+ * hdr and points *payload into buf (no copy) with *payloadLen. Returns
+ * ERR_FRAME_INCOMPLETE if buf holds less than one full frame.              */</span>
+solariStatus solariFrameParse(<span class="k">const</span> <span class="t">uint8_t</span> *buf, <span class="t">size_t</span> bufLen,
+                              solariFrameHeader *hdr,
+                              <span class="k">const</span> <span class="t">uint8_t</span> **payload, <span class="t">size_t</span> *payloadLen,
+                              <span class="t">size_t</span> *frameTotalLen);
+  </pre>
+
+  <h3>6.3 TLV encode / decode</h3>
+  <div class="filename">include/solari/solariTlv.h</div>
+  <pre>
+<span class="c">/* A growable write cursor over a caller-owned buffer. Functions style
+ * is fluent-by-status: each append returns SOLARI_OK or ERR_BUFFER_FULL. */</span>
+<span class="k">typedef struct</span> {
+    <span class="t">uint8_t</span> *buf; <span class="t">size_t</span> cap; <span class="t">size_t</span> len; <span class="t">uint16_t</span> count;
+} solariTlvWriter;
+
+<span class="k">void</span> solariTlvWriterInit(solariTlvWriter *w, <span class="t">uint8_t</span> *buf, <span class="t">size_t</span> cap);
+
+solariStatus solariTlvAppend(solariTlvWriter *w, <span class="t">uint16_t</span> type,
+                             <span class="k">const</span> <span class="t">void</span> *val, <span class="t">uint16_t</span> len);
+solariStatus solariTlvAppendU8 (solariTlvWriter *w, <span class="t">uint16_t</span> type, <span class="t">uint8_t</span>  v);
+solariStatus solariTlvAppendU16(solariTlvWriter *w, <span class="t">uint16_t</span> type, <span class="t">uint16_t</span> v);
+solariStatus solariTlvAppendU32(solariTlvWriter *w, <span class="t">uint16_t</span> type, <span class="t">uint32_t</span> v);
+solariStatus solariTlvAppendU64(solariTlvWriter *w, <span class="t">uint16_t</span> type, <span class="t">uint64_t</span> v);
+solariStatus solariTlvAppendStr(solariTlvWriter *w, <span class="t">uint16_t</span> type, <span class="k">const char</span> *s);
+
+<span class="c">/* Read cursor. Iterate with solariTlvNext until ERR_TLV_END. The returned
+ * val pointer aliases the source buffer (zero-copy); do not free it.      */</span>
+<span class="k">typedef struct</span> { <span class="k">const</span> <span class="t">uint8_t</span> *buf; <span class="t">size_t</span> len; <span class="t">size_t</span> pos; } solariTlvReader;
+
+<span class="k">void</span> solariTlvReaderInit(solariTlvReader *r, <span class="k">const</span> <span class="t">uint8_t</span> *buf, <span class="t">size_t</span> len);
+solariStatus solariTlvNext(solariTlvReader *r, <span class="t">uint16_t</span> *type,
+                           <span class="k">const</span> <span class="t">uint8_t</span> **val, <span class="t">uint16_t</span> *len);
+<span class="c">/* Convenience typed reads that also validate length. */</span>
+solariStatus solariTlvReadU32(<span class="k">const</span> <span class="t">uint8_t</span> *val, <span class="t">uint16_t</span> len, <span class="t">uint32_t</span> *out);
+solariStatus solariTlvReadU64(<span class="k">const</span> <span class="t">uint8_t</span> *val, <span class="t">uint16_t</span> len, <span class="t">uint64_t</span> *out);
+  </pre>
+
+  <h3>6.4 Typed message builders</h3>
+  <p>Above the raw TLV layer, each message type gets a builder/parser pair so components never touch TLV codes directly. One representative pair shown; the rest follow the identical pattern.</p>
+  <div class="filename">include/solari/solariMsg.h (excerpt)</div>
+  <pre>
+<span class="k">typedef struct</span> {                <span class="c">/* in-memory form of a client report */</span>
+    <span class="k">char</span>     hostFqdn[<span class="n">256</span>];
+    <span class="k">char</span>     osName[<span class="n">64</span>];
+    <span class="k">char</span>     arch[<span class="n">16</span>];
+    <span class="t">uint32_t</span> cpuLoadMilli[SOLARI_MAX_CORES];
+    <span class="t">uint8_t</span>  coreCount;
+    <span class="t">uint64_t</span> ramUsedKb, ramTotalKb, swapUsedKb, swapTotalKb;
+    solariDiskEntry  disks[SOLARI_MAX_DISKS];   <span class="t">uint8_t</span> diskCount;
+    solariIfaceEntry ifaces[SOLARI_MAX_IFACES]; <span class="t">uint8_t</span> ifaceCount;
+    solariProcEntry  procs[SOLARI_MAX_PROCS];   <span class="t">uint8_t</span> procCount;
+    solariLogEntry   logs[SOLARI_MAX_LOGS];     <span class="t">uint8_t</span> logCount;
+} solariClientReport;
+
+<span class="c">/* Serialize report into a frame payload (TLV). */</span>
+solariStatus solariMsgBuildClientReport(<span class="k">const</span> solariClientReport *rep,
+                                        <span class="t">uint8_t</span> *payload, <span class="t">size_t</span> cap,
+                                        <span class="t">size_t</span> *outLen, <span class="t">uint16_t</span> *tlvCount);
+<span class="c">/* Parse a frame payload back into a report (server side). */</span>
+solariStatus solariMsgParseClientReport(<span class="k">const</span> <span class="t">uint8_t</span> *payload, <span class="t">size_t</span> len,
+                                        solariClientReport *rep);
+  </pre>
+
+  <h3>6.5 Transport (nng wrapper)</h3>
+  <div class="filename">include/solari/solariNet.h</div>
+  <pre>
+<span class="c">/* Opaque transport handle. Wraps an nng socket + TLS config. The "handle
+ * pattern": state lives in a heap struct the caller threads through calls;
+ * there are no globals and no hidden statics. */</span>
+<span class="k">typedef struct</span> solariConn solariConn;
+
+<span class="k">typedef enum</span> {
+    SOLARI_PATTERN_PUSH,    <span class="c">/* client/monitor -> server ingest      */</span>
+    SOLARI_PATTERN_PULL,    <span class="c">/* server ingest sink                    */</span>
+    SOLARI_PATTERN_SURVEYOR,<span class="c">/* server -> fleet demand                */</span>
+    SOLARI_PATTERN_RESPOND, <span class="c">/* node answers surveys                  */</span>
+    SOLARI_PATTERN_PUB,     <span class="c">/* server -> dashboards/notifiers        */</span>
+    SOLARI_PATTERN_SUB,
+    SOLARI_PATTERN_REQ,     <span class="c">/* who-is-primary, control acks          */</span>
+    SOLARI_PATTERN_REP
+} solariPattern;
+
+<span class="k">typedef struct</span> {
+    <span class="k">const char</span> *url;          <span class="c">/* "tls+tcp://host:port" or "tcp://…"   */</span>
+    solariPattern pattern;
+    <span class="k">bool</span>        useTls;
+    <span class="k">const char</span> *caFile;       <span class="c">/* internal CA root                      */</span>
+    <span class="k">const char</span> *certFile;     <span class="c">/* this node's cert                      */</span>
+    <span class="k">const char</span> *keyFile;
+    <span class="t">int</span>         dialTimeoutMs;
+    <span class="t">int</span>         sendTimeoutMs;
+} solariConnOpts;
+
+solariStatus solariConnOpen (<span class="k">const</span> solariConnOpts *opts, solariConn **out);
+solariStatus solariConnListen(<span class="k">const</span> solariConnOpts *opts, solariConn **out);
+<span class="c">/* Send one fully-built frame. Honors send timeout; on transient failure
+ * returns ERR_CONN_RETRY so callers know to spool. */</span>
+solariStatus solariConnSend (solariConn *c, <span class="k">const</span> <span class="t">uint8_t</span> *frame, <span class="t">size_t</span> len);
+<span class="c">/* Receive one frame into a library-managed buffer; *frame valid until next
+ * recv on the same conn. Blocks up to recvTimeoutMs. */</span>
+solariStatus solariConnRecv (solariConn *c, <span class="k">const</span> <span class="t">uint8_t</span> **frame, <span class="t">size_t</span> *len);
+<span class="k">void</span>         solariConnClose(solariConn *c);
+  </pre>
+
+  <h3>6.6 Store-and-forward spool</h3>
+  <div class="filename">include/solari/solariSpool.h</div>
+  <pre>
+<span class="c">/* SQLite-backed durable queue. When solariConnSend returns ERR_CONN_RETRY,
+ * the caller enqueues the frame here; a drain thread retries on reconnect.
+ * This is the mechanism behind monitor/client fault tolerance. */</span>
+<span class="k">typedef struct</span> solariSpool solariSpool;
+
+solariStatus solariSpoolOpen  (<span class="k">const char</span> *dbPath, solariSpool **out);
+solariStatus solariSpoolPush  (solariSpool *s, <span class="k">const</span> <span class="t">uint8_t</span> *frame, <span class="t">size_t</span> len);
+<span class="c">/* Pull the oldest undelivered frame; caller sends, then calls Ack on success
+ * or Nack (increments attempt count, applies backoff) on failure. */</span>
+solariStatus solariSpoolPeek  (solariSpool *s, <span class="t">uint64_t</span> *rowId,
+                               <span class="k">const</span> <span class="t">uint8_t</span> **frame, <span class="t">size_t</span> *len);
+solariStatus solariSpoolAck   (solariSpool *s, <span class="t">uint64_t</span> rowId);
+solariStatus solariSpoolNack  (solariSpool *s, <span class="t">uint64_t</span> rowId);
+<span class="t">size_t</span>       solariSpoolDepth (solariSpool *s);
+<span class="k">void</span>         solariSpoolClose(solariSpool *s);
+  </pre>
+
+  <h3>6.7 Config, logging, time, crypto</h3>
+  <p>These follow the same handle/return-status conventions. Headers in full in the repo; signatures summarized:</p>
+  <table>
+    <thead><tr><th>Header</th><th>Key functions</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>solariConfig.h</code></td><td><code>solariConfigLoad()</code>, <code>solariConfigGetStr/Int/Bool()</code>, <code>solariConfigEpoch()</code></td><td>Parses the <code>key = value</code> .conf format (§13); supports a JSON overlay merged on top. Returns a config handle.</td></tr>
+      <tr><td><code>solariLog.h</code></td><td><code>solariLogInit()</code>, <code>solariLogf(level, fmt, …)</code>, <code>solariLogSetLevel()</code></td><td>Five levels (TRACE→FATAL), syslog + file sinks, ISO-8601 UTC timestamps. Thread-safe.</td></tr>
+      <tr><td><code>solariTime.h</code></td><td><code>solariNowUnixMs()</code>, <code>solariMonotonicMicros()</code>, <code>solariSleepMs()</code></td><td>Monotonic clock for RTT (never wall clock); wall clock only for timestamps.</td></tr>
+      <tr><td><code>solariCrypto.h</code></td><td><code>solariFnv1a64()</code>, <code>solariCrc32()</code>, <code>solariSha256()</code>, <code>solariCertCn()</code></td><td>Node-id hashing, frame CRC, deploy-blob verification, cert CN extraction for role auth.</td></tr>
+      <tr><td><code>solariError.h</code></td><td><code>solariStrError(solariStatus)</code></td><td>Central error enum (Appendix A) + human strings.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="client">
+  <h2><span class="h2num">§ 7</span>Component: Client <code>solariClient</code></h2>
+  <p class="lead">One per host, plus a watchdog. Inspects, catalogues, and reports local system attributes and the health of key software. This is the only component that must build for the full OS × architecture matrix, so its design is dominated by the platform-abstraction seam.</p>
+
+  <h3>7.1 Responsibilities</h3>
+  <ul>
+    <li><strong>Catalogue (slow-changing):</strong> hostname/FQDN, OS &amp; version, hardware, architecture (armv7/arm64/x86/x86_64/ppc/…), network addresses, total RAM/swap/disk. Sent on HELLO and when changed.</li>
+    <li><strong>Sample (fast-changing):</strong> per-core CPU load, RAM/swap used, free disk per mount, NIC throughput vs. capacity, USB-bus throughput vs. capacity.</li>
+    <li><strong>Watch key software:</strong> for a configured set of processes — running state, count of open files (incl. network sockets), RSS; plus log-file monitoring (size deltas + regex match counts).</li>
+    <li><strong>Report:</strong> assemble an <code>SCP_MSG_CLIENT_REPORT</code> and push to the active server; spool locally on failure.</li>
+    <li><strong>Watchdog:</strong> a tiny sibling process that supervises the client, emits independent <code>SCP_MSG_WATCHDOG</code> heartbeats, and re-execs the client if it dies.</li>
+  </ul>
+
+  <h3>7.2 The portability seam — <code>platOS.h</code></h3>
+  <p>This is the entire portability strategy in one header. The client core calls <em>only</em> these functions; every OS-specific syscall lives in one of the three <code>plat/*.c</code> implementations selected at build time by CMake. Adding an OS means adding one <code>.c</code> file, nothing else.</p>
+  <div class="filename">src/client/platOS.h</div>
+  <pre>
+<span class="c">/*
+ * platOS.h — platform abstraction layer (PAL).
+ * Exactly one of plat/platLinux.c, platMacos.c, platWindows.c is compiled,
+ * chosen by CMake from the target. Every function returns solariStatus and
+ * writes its out-param only on success. The client core includes this header
+ * and nothing platform-specific; this is the seam that keeps the core ANSI-clean.
+ */</span>
+<span class="k">#ifndef</span> PLAT_OS_H
+<span class="k">#define</span> PLAT_OS_H
+<span class="k">#include</span> <span class="s">"solari/solariCommon.h"</span>
+<span class="k">#include</span> <span class="s">"solari/solariMsg.h"</span>
+
+<span class="c">/* ---- identity &amp; catalogue ---- */</span>
+solariStatus platHostFqdn  (<span class="k">char</span> *out, <span class="t">size_t</span> cap);
+solariStatus platOsName    (<span class="k">char</span> *out, <span class="t">size_t</span> cap);   <span class="c">/* "Linux 6.1.0", "macOS 14.5", "Windows 11" */</span>
+solariStatus platArch      (<span class="k">char</span> *out, <span class="t">size_t</span> cap);   <span class="c">/* uname-style normalized token              */</span>
+solariStatus platCpuCount  (<span class="t">uint8_t</span> *out);
+
+<span class="c">/* ---- fast samples ---- */</span>
+<span class="c">/* Per-core load as permille (0..1000+). Caller passes array + capacity;
+ * function writes coreCount entries. Linux: /proc/stat deltas; macOS:
+ * host_processor_info; Windows: PDH counters. */</span>
+solariStatus platCpuLoad   (<span class="t">uint32_t</span> *loadMilli, <span class="t">uint8_t</span> cap, <span class="t">uint8_t</span> *coreCount);
+solariStatus platMemInfo   (<span class="t">uint64_t</span> *ramUsedKb, <span class="t">uint64_t</span> *ramTotalKb,
+                            <span class="t">uint64_t</span> *swapUsedKb, <span class="t">uint64_t</span> *swapTotalKb);
+solariStatus platDiskFree  (solariDiskEntry *disks, <span class="t">uint8_t</span> cap, <span class="t">uint8_t</span> *count);
+solariStatus platNetIfaces (solariIfaceEntry *ifaces, <span class="t">uint8_t</span> cap, <span class="t">uint8_t</span> *count);
+solariStatus platUsbThroughput(solariUsbEntry *bus, <span class="t">uint8_t</span> cap, <span class="t">uint8_t</span> *count);
+
+<span class="c">/* ---- process &amp; log watch ---- */</span>
+<span class="c">/* Resolve a watched process by name to pid+state+open-file/socket counts+RSS.
+ * Linux: /proc/&lt;pid&gt;/{stat,fd}; macOS: libproc; Windows: ToolHelp + handles. */</span>
+solariStatus platProcInspect(<span class="k">const char</span> *procName, solariProcEntry *out);
+<span class="c">/* Stat a log file: current size (for delta vs last sample) + count lines
+ * since last offset matching an optional POSIX regex. */</span>
+solariStatus platLogStat   (<span class="k">const char</span> *path, <span class="k">const char</span> *regex,
+                            <span class="t">uint64_t</span> *sizeNow, <span class="t">uint32_t</span> *matchCount,
+                            <span class="t">uint64_t</span> *lastOffsetInOut);
+
+<span class="c">/* ---- watchdog support ---- */</span>
+solariStatus platSpawnSelf (<span class="k">const char</span> *argv0, <span class="k">int</span> argc, <span class="k">char</span> *<span class="k">const</span> argv[]);
+solariStatus platProcessAlive(<span class="t">int64_t</span> pid, <span class="k">bool</span> *alive);
+
+<span class="k">#endif</span>
+  </pre>
+  <div class="note">
+    <span class="lbl">Per-platform source map</span>
+    <strong>Linux</strong> (<code>platLinux.c</code>): <code>/proc</code> + <code>getifaddrs</code> + <code>statvfs</code>; covers ARM32/ARM64/x86/x86_64/ppc uniformly. <strong>macOS</strong> (<code>platMacos.c</code>): <code>sysctl</code>, Mach <code>host_*</code> calls, <code>libproc</code>, <code>getfsstat</code>; universal (arm64 + x86_64). <strong>Windows</strong> (<code>platWindows.c</code>): Winsock for addresses, PDH for CPU/net counters, ToolHelp32 + <code>GetProcessHandleCount</code> for process inspection, <code>GetDiskFreeSpaceEx</code>. Built with mingw-w64 for x86_64.
+  </div>
+
+  <h3>7.3 Client core files &amp; signatures</h3>
+  <div class="filename">src/client/clientCollect.c (header view)</div>
+  <pre>
+<span class="c">/* Gather one full client report by calling the PAL. Returns a populated
+ * solariClientReport. catalogueOnly=true skips fast samples (used on HELLO). */</span>
+solariStatus clientCollectReport(<span class="k">const</span> clientConfig *cfg,
+                                 <span class="k">bool</span> catalogueOnly,
+                                 solariClientReport *out);
+  </pre>
+  <div class="filename">src/client/clientReport.c</div>
+  <pre>
+<span class="c">/* Build the SCP frame from a report and either send it (active server,
+ * discovered via who-is-primary) or spool it. Drains spool opportunistically. */</span>
+solariStatus clientReportSend(clientContext *ctx, <span class="k">const</span> solariClientReport *rep);
+solariStatus clientReportDrainSpool(clientContext *ctx);
+  </pre>
+  <div class="filename">src/client/clientWatchdog.c</div>
+  <pre>
+<span class="c">/* Watchdog entry point (separate process). Supervises the client pid, emits
+ * SCP_MSG_WATCHDOG heartbeats every cfg-&gt;watchdogIntervalSec, and re-execs the
+ * client via platSpawnSelf if platProcessAlive reports it gone. */</span>
+<span class="t">int</span> clientWatchdogMain(<span class="k">const</span> clientConfig *cfg, <span class="t">int64_t</span> supervisedPid);
+  </pre>
+  <div class="filename">src/client/main.c (control flow)</div>
+  <pre>
+<span class="c">/* 1. parse args/config            5. loop:                              */</span>
+<span class="c">/* 2. solariLogInit                  - collect (fast)                     */</span>
+<span class="c">/* 3. fork watchdog sibling          - send/spool                        */</span>
+<span class="c">/* 4. HELLO -&gt; WELCOME (schedule)     - honor any CONTROL on the back-chan */</span>
+<span class="c">/*                                    - sleep(scheduleInterval)           */</span>
+  </pre>
+</section>
+
+<section id="monitor">
+  <h2><span class="h2num">§ 8</span>Component: Remote Monitor <code>solariMonitor</code></h2>
+  <p class="lead">Distributed, interchangeable, fully redundant. Each monitor connects to TCP/UDP/ICMP endpoints of services and peers across the intranet, measuring reachability, response time, and link characteristics — then reports to the server. Targets Linux across the full architecture array; redundancy is by replication, not coordination.</p>
+
+  <h3>8.1 Responsibilities</h3>
+  <ul>
+    <li><strong>Service probing:</strong> for each configured target, run TCP connect / UDP echo / ICMP echo probes, recording RTT, jitter, packet loss permille, throughput vs. capacity, and outcome (ok/timeout/refused/unreachable).</li>
+    <li><strong>Stationary service metadata:</strong> where a probe can cheaply learn it, capture service version/vendor/config banners (the "stationary" metadata in the brief).</li>
+    <li><strong>Peer &amp; network-wide metrics:</strong> peer-to-peer reachability among monitors, transit time, bandwidth vs. capacity, connection speed, overhead, dropped packets.</li>
+    <li><strong>Report &amp; survive:</strong> push <code>SCP_MSG_MONITOR_REPORT</code>; spool on failure; answer server <code>SCP_MSG_SURVEY</code> on demand.</li>
+  </ul>
+
+  <h3>8.2 Redundancy &amp; fault tolerance model</h3>
+  <p>Monitors are stateless w.r.t. each other except for a lightweight peer registry. The design goal — "interchangeable, fully redundant" — is met by <em>overlapping assignment</em>, not by leader election:</p>
+  <ul>
+    <li>The server assigns each probe target a <strong>replication factor</strong> (default 2). Targets are distributed across the monitor fleet by rendezvous (HRW) hashing of <code>(targetId, monitorNodeId)</code>, so each target is independently probed by its top-<em>k</em> monitors.</li>
+    <li>If a monitor drops out, the HRW ranking simply re-selects the next monitor for affected targets on the next schedule tick — no failover handshake, no split-brain.</li>
+    <li>The server deduplicates overlapping reports and treats divergence between vantage points as signal (e.g., target reachable from monitor A but not B localizes a network partition).</li>
+    <li>Monitors exchange a tiny <code>peerAlive</code> gossip so each knows the live fleet membership for HRW; the server is the source of truth and corrects drift via <code>WELCOME</code>/<code>CONTROL</code>.</li>
+  </ul>
+  <div class="note pick">
+    <span class="lbl">Why HRW (rendezvous) hashing</span>
+    It gives consistent, low-churn target→monitor assignment with no coordinator and trivial recomputation when membership changes — exactly the property needed for "interchangeable and redundant." A monitor leaving reassigns only <em>its</em> targets; everyone else is untouched. This is materially simpler and more robust than consistent-hash rings or an elected scheduler for a fleet this size.
+  </div>
+
+  <h3>8.3 Probe engine &amp; signatures</h3>
+  <div class="filename">src/monitor/probeNet.h</div>
+  <pre>
+<span class="k">typedef enum</span> { PROBE_ICMP = <span class="n">1</span>, PROBE_TCP = <span class="n">2</span>, PROBE_UDP = <span class="n">3</span> } probeProto;
+<span class="k">typedef enum</span> {
+    PROBE_OK = <span class="n">0</span>, PROBE_TIMEOUT, PROBE_REFUSED, PROBE_UNREACHABLE,
+    PROBE_DNS_FAIL, PROBE_TLS_FAIL, PROBE_PROTO_ERR
+} probeOutcome;
+
+<span class="k">typedef struct</span> {
+    <span class="k">char</span>       targetHost[<span class="n">256</span>];
+    <span class="t">uint16_t</span>   dstPort;            <span class="c">/* 0 for ICMP                       */</span>
+    probeProto proto;
+    <span class="t">uint16_t</span>   count;              <span class="c">/* probes per round (for loss/jitter) */</span>
+    <span class="t">uint32_t</span>   timeoutMs;
+    <span class="k">const char</span> *expectBanner;      <span class="c">/* optional substring match          */</span>
+} probeSpec;
+
+<span class="c">/* Run one probe round per spec. Fills solariProbeResult (see 5.7). Uses the
+ * monotonic clock for RTT. ICMP raw-socket privilege handling is isolated
+ * here (Appendix C): tries raw socket, falls back to SOCK_DGRAM ICMP on
+ * Linux where permitted, else marks PROBE_UNREACHABLE with detail. */</span>
+solariStatus probeRun(<span class="k">const</span> probeSpec *spec, solariProbeResult *out);
+
+<span class="c">/* Measure link characteristics to a peer monitor: transit time, one-way-ish
+ * delay estimate, throughput vs. configured capacity, overhead. */</span>
+solariStatus probeLinkToPeer(<span class="t">uint64_t</span> peerNodeId, <span class="k">const char</span> *peerUrl,
+                             solariLinkStat *out);
+  </pre>
+  <div class="filename">src/monitor/monitorPeer.c &amp; monitorSched.c</div>
+  <pre>
+<span class="c">/* HRW: does THIS monitor own this target at replication factor k? */</span>
+<span class="k">bool</span> monitorOwnsTarget(<span class="t">uint64_t</span> selfNodeId, <span class="k">const</span> <span class="t">uint64_t</span> *liveFleet,
+                       <span class="t">size_t</span> fleetLen, <span class="k">const char</span> *targetId, <span class="t">uint8_t</span> k);
+<span class="c">/* Recompute the local probe schedule from config + current fleet membership. */</span>
+solariStatus monitorRebuildSchedule(monitorContext *ctx);
+<span class="c">/* Gossip tick: send peerAlive, prune peers not heard from within TTL. */</span>
+solariStatus monitorPeerGossip(monitorContext *ctx);
+  </pre>
+</section>
+
+<section id="server">
+  <h2><span class="h2num">§ 9</span>Component: Server <code>solariServer</code></h2>
+  <p class="lead">One primary, one failover. Collects client + monitor data, owns the master records, writes MariaDB, evaluates alerts, manages node config/deployment, and exposes the control surface the dashboard drives. Targets x86_64 and ARM64 only.</p>
+
+  <h3>9.1 Subsystems</h3>
+  <table>
+    <thead><tr><th>File</th><th>Subsystem</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><code>serverIngest.c</code></td><td>Ingest</td><td>Binds PULL + RESPONDENT sockets, validates frames (role auth via cert CN), dedups <code>(nodeId,seqNo)</code>, hands parsed reports to the DB writer.</td></tr>
+      <tr><td><code>serverLease.c</code></td><td>Failover</td><td>Renews/claims the <code>serverLease</code> row; transitions active↔standby; answers <code>WHO_IS_PRIMARY</code>.</td></tr>
+      <tr><td><code>serverDb.c</code></td><td>Persistence</td><td>MariaDB Connector/C; prepared-statement upserts for master records, append-only history, lease ops. Connection pool.</td></tr>
+      <tr><td><code>serverMaster.c</code></td><td>Reconciliation</td><td>Merges overlapping monitor reports, maintains authoritative per-node/per-target current state, computes derived health.</td></tr>
+      <tr><td><code>serverAlert.c</code></td><td>Alerting</td><td>Evaluates threshold/transition rules; emits notifications (publishes to PUB socket → ntfy bridge).</td></tr>
+      <tr><td><code>serverControl.c</code></td><td>Control plane</td><td>Builds/sends <code>SCP_MSG_CONTROL</code>; tracks config epochs and deploy convergence per node.</td></tr>
+      <tr><td><code>solariCtl.c</code></td><td>Operator bridge</td><td>Listens on a local Unix socket; the PHP dashboard sends authenticated control requests here, and this helper (holding the server cert) translates them into SCP. Keeps cert material out of the web tier.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.2 Failover signatures</h3>
+  <div class="filename">src/server/serverLease.c</div>
+  <pre>
+<span class="k">typedef enum</span> { SRV_STANDBY, SRV_ACTIVE } serverRoleState;
+
+<span class="c">/* Attempt to acquire/renew the lease. On success sets *state=SRV_ACTIVE and
+ * advances epoch if it was a fresh claim. Single conditional UPDATE inside a
+ * txn IS the election (see §2). Called every cfg-&gt;leaseRenewSec. */</span>
+solariStatus serverLeaseTick(serverContext *ctx, serverRoleState *state,
+                             <span class="t">uint64_t</span> *epoch);
+<span class="c">/* Called on STANDBY-&gt;ACTIVE: bind ingest sockets, resume DB writes.
+ * On ACTIVE-&gt;STANDBY: unbind, flush, go read-only. Idempotent. */</span>
+solariStatus serverApplyRole(serverContext *ctx, serverRoleState newState);
+  </pre>
+  <div class="filename">src/server/serverIngest.c</div>
+  <pre>
+<span class="c">/* Validate a received frame: header sanity, proto version, crc already
+ * checked by parse; here enforce that msgType is legal for the presenting
+ * cert role, and dedup. Returns ERR_AUTH_ROLE on violation. */</span>
+solariStatus serverIngestValidate(serverContext *ctx,
+                                  <span class="k">const</span> solariFrameHeader *hdr,
+                                  <span class="k">const char</span> *peerCertCn);
+<span class="c">/* Dispatch one validated frame to the right handler (report->db, survey
+ * response->reconcile, control-result->convergence tracker, etc.). */</span>
+solariStatus serverIngestDispatch(serverContext *ctx,
+                                  <span class="k">const</span> solariFrameHeader *hdr,
+                                  <span class="k">const</span> <span class="t">uint8_t</span> *payload, <span class="t">size_t</span> len);
+  </pre>
+  <div class="filename">src/server/serverDb.c (representative writer)</div>
+  <pre>
+<span class="c">/* Upsert current state + append history in one transaction. Uses prepared
+ * statements bound from the parsed report. All time stored UTC. */</span>
+solariStatus serverDbWriteClientReport(serverContext *ctx, <span class="t">uint64_t</span> nodeId,
+                                       <span class="k">const</span> solariClientReport *rep);
+solariStatus serverDbWriteMonitorReport(serverContext *ctx, <span class="t">uint64_t</span> nodeId,
+                                        <span class="k">const</span> solariMonitorReport *rep);
+  </pre>
+</section>
+
+<section id="schema">
+  <h2><span class="h2num">§ 10</span>Database schema (MariaDB)</h2>
+  <p class="lead">The contract boundary between the C server and the PHP dashboard. Current-state tables are upserted; history tables are append-only and partitioned by time for retention pruning.</p>
+  <div class="filename">db/schema.sql</div>
+  <pre>
+<span class="k">CREATE TABLE</span> node (
+  nodeId        <span class="t">BIGINT UNSIGNED</span> <span class="k">PRIMARY KEY</span>,   <span class="c">-- FNV-1a-64 (§5.5)</span>
+  role          <span class="t">ENUM</span>(<span class="s">'client'</span>,<span class="s">'monitor'</span>,<span class="s">'server'</span>) <span class="k">NOT NULL</span>,
+  hostFqdn      <span class="t">VARCHAR</span>(<span class="n">255</span>) <span class="k">NOT NULL</span>,
+  certCn        <span class="t">VARCHAR</span>(<span class="n">255</span>) <span class="k">NOT NULL</span>,
+  osName        <span class="t">VARCHAR</span>(<span class="n">64</span>),
+  arch          <span class="t">VARCHAR</span>(<span class="n">16</span>),
+  enrolledAt    <span class="t">DATETIME</span> <span class="k">NOT NULL</span>,
+  lastSeenAt    <span class="t">DATETIME</span>,
+  configEpoch   <span class="t">BIGINT UNSIGNED</span> <span class="k">NOT NULL DEFAULT</span> <span class="n">0</span>,
+  state         <span class="t">ENUM</span>(<span class="s">'up'</span>,<span class="s">'degraded'</span>,<span class="s">'down'</span>,<span class="s">'unknown'</span>) <span class="k">NOT NULL DEFAULT</span> <span class="s">'unknown'</span>,
+  <span class="k">INDEX</span>(role), <span class="k">INDEX</span>(lastSeenAt)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- current host metrics (one row per client node, upserted)</span>
+<span class="k">CREATE TABLE</span> hostCurrent (
+  nodeId        <span class="t">BIGINT UNSIGNED</span> <span class="k">PRIMARY KEY</span>,
+  sampledAt     <span class="t">DATETIME</span> <span class="k">NOT NULL</span>,
+  cpuLoadMilli  <span class="t">JSON</span>,                  <span class="c">-- per-core array</span>
+  ramUsedKb     <span class="t">BIGINT UNSIGNED</span>, ramTotalKb <span class="t">BIGINT UNSIGNED</span>,
+  swapUsedKb    <span class="t">BIGINT UNSIGNED</span>, swapTotalKb <span class="t">BIGINT UNSIGNED</span>,
+  disks         <span class="t">JSON</span>, ifaces <span class="t">JSON</span>, usbBuses <span class="t">JSON</span>,
+  <span class="k">CONSTRAINT FK</span>_hc_node <span class="k">FOREIGN KEY</span>(nodeId) <span class="k">REFERENCES</span> node(nodeId) <span class="k">ON DELETE CASCADE</span>
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- append-only host history (partitioned monthly for retention)</span>
+<span class="k">CREATE TABLE</span> hostHistory (
+  id            <span class="t">BIGINT UNSIGNED AUTO_INCREMENT</span>,
+  nodeId        <span class="t">BIGINT UNSIGNED</span> <span class="k">NOT NULL</span>,
+  sampledAt     <span class="t">DATETIME</span> <span class="k">NOT NULL</span>,
+  cpuAvgMilli   <span class="t">INT UNSIGNED</span>, ramUsedKb <span class="t">BIGINT UNSIGNED</span>,
+  swapUsedKb    <span class="t">BIGINT UNSIGNED</span>, diskMinFreePct <span class="t">SMALLINT</span>,
+  <span class="k">PRIMARY KEY</span>(id, sampledAt), <span class="k">INDEX</span>(nodeId, sampledAt)
+) <span class="k">ENGINE</span>=InnoDB
+  <span class="k">PARTITION BY RANGE</span> (<span class="k">TO_DAYS</span>(sampledAt)) ( <span class="c">/* monthly partitions, auto-managed */</span> );
+
+<span class="c">-- watched processes (current), keyed per node+process</span>
+<span class="k">CREATE TABLE</span> procCurrent (
+  nodeId   <span class="t">BIGINT UNSIGNED</span> <span class="k">NOT NULL</span>, procName <span class="t">VARCHAR</span>(<span class="n">128</span>) <span class="k">NOT NULL</span>,
+  pid <span class="t">INT</span>, runState <span class="t">CHAR</span>(<span class="n">1</span>), nFiles <span class="t">INT</span>, nSockets <span class="t">INT</span>, rssKb <span class="t">BIGINT UNSIGNED</span>,
+  sampledAt <span class="t">DATETIME</span> <span class="k">NOT NULL</span>,
+  <span class="k">PRIMARY KEY</span>(nodeId, procName)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- probe targets &amp; their current measured state (from monitors)</span>
+<span class="k">CREATE TABLE</span> probeTarget (
+  targetId   <span class="t">VARCHAR</span>(<span class="n">128</span>) <span class="k">PRIMARY KEY</span>,    <span class="c">-- stable id, e.g. "tcp:hydrogen:443"</span>
+  host       <span class="t">VARCHAR</span>(<span class="n">255</span>), port <span class="t">SMALLINT UNSIGNED</span>,
+  proto      <span class="t">ENUM</span>(<span class="s">'icmp'</span>,<span class="s">'tcp'</span>,<span class="s">'udp'</span>) <span class="k">NOT NULL</span>,
+  replFactor <span class="t">TINYINT</span> <span class="k">NOT NULL DEFAULT</span> <span class="n">2</span>,
+  label      <span class="t">VARCHAR</span>(<span class="n">128</span>)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="k">CREATE TABLE</span> probeCurrent (
+  targetId    <span class="t">VARCHAR</span>(<span class="n">128</span>) <span class="k">NOT NULL</span>,
+  monitorNode <span class="t">BIGINT UNSIGNED</span> <span class="k">NOT NULL</span>,     <span class="c">-- which vantage reported</span>
+  outcome     <span class="t">ENUM</span>(<span class="s">'ok'</span>,<span class="s">'timeout'</span>,<span class="s">'refused'</span>,<span class="s">'unreachable'</span>,<span class="s">'dns_fail'</span>,<span class="s">'tls_fail'</span>,<span class="s">'proto_err'</span>),
+  rttMicros   <span class="t">INT UNSIGNED</span>, jitterMicros <span class="t">INT UNSIGNED</span>,
+  lossPermille <span class="t">SMALLINT UNSIGNED</span>, throughputKbps <span class="t">INT UNSIGNED</span>,
+  serviceMeta <span class="t">JSON</span>, sampledAt <span class="t">DATETIME</span> <span class="k">NOT NULL</span>,
+  <span class="k">PRIMARY KEY</span>(targetId, monitorNode)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="k">CREATE TABLE</span> probeHistory ( <span class="c">/* append-only, partitioned monthly, same cols + id */</span>
+  id <span class="t">BIGINT UNSIGNED AUTO_INCREMENT</span>, targetId <span class="t">VARCHAR</span>(<span class="n">128</span>),
+  monitorNode <span class="t">BIGINT UNSIGNED</span>, outcome <span class="t">VARCHAR</span>(<span class="n">16</span>),
+  rttMicros <span class="t">INT UNSIGNED</span>, lossPermille <span class="t">SMALLINT UNSIGNED</span>, sampledAt <span class="t">DATETIME</span>,
+  <span class="k">PRIMARY KEY</span>(id, sampledAt), <span class="k">INDEX</span>(targetId, sampledAt)
+) <span class="k">ENGINE</span>=InnoDB <span class="k">PARTITION BY RANGE</span>(<span class="k">TO_DAYS</span>(sampledAt)) ();
+
+<span class="c">-- failover coordination: exactly one row (id=1)</span>
+<span class="k">CREATE TABLE</span> serverLease (
+  id          <span class="t">TINYINT</span> <span class="k">PRIMARY KEY DEFAULT</span> <span class="n">1</span>,
+  leaseHolder <span class="t">BIGINT UNSIGNED</span>,           <span class="c">-- server nodeId</span>
+  leaseEpoch  <span class="t">BIGINT UNSIGNED</span> <span class="k">NOT NULL DEFAULT</span> <span class="n">0</span>,
+  expiresAt   <span class="t">DATETIME</span>(<span class="n">3</span>) <span class="k">NOT NULL</span>,
+  <span class="k">CHECK</span> (id = <span class="n">1</span>)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- alert rules &amp; firing log</span>
+<span class="k">CREATE TABLE</span> alertRule (
+  ruleId   <span class="t">INT AUTO_INCREMENT PRIMARY KEY</span>,
+  scope    <span class="t">ENUM</span>(<span class="s">'host'</span>,<span class="s">'probe'</span>) <span class="k">NOT NULL</span>,
+  metric   <span class="t">VARCHAR</span>(<span class="n">64</span>) <span class="k">NOT NULL</span>,        <span class="c">-- e.g. "cpuAvgMilli","lossPermille"</span>
+  op       <span class="t">ENUM</span>(<span class="s">'gt'</span>,<span class="s">'lt'</span>,<span class="s">'eq'</span>,<span class="s">'transition'</span>) <span class="k">NOT NULL</span>,
+  threshold <span class="t">DOUBLE</span>, forSeconds <span class="t">INT</span>, severity <span class="t">ENUM</span>(<span class="s">'info'</span>,<span class="s">'warn'</span>,<span class="s">'crit'</span>),
+  enabled  <span class="t">BOOLEAN NOT NULL DEFAULT TRUE</span>
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="k">CREATE TABLE</span> alertEvent (
+  eventId  <span class="t">BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY</span>,
+  ruleId   <span class="t">INT</span>, nodeId <span class="t">BIGINT UNSIGNED</span>, targetId <span class="t">VARCHAR</span>(<span class="n">128</span>),
+  firedAt  <span class="t">DATETIME</span> <span class="k">NOT NULL</span>, clearedAt <span class="t">DATETIME</span>,
+  severity <span class="t">ENUM</span>(<span class="s">'info'</span>,<span class="s">'warn'</span>,<span class="s">'crit'</span>), detail <span class="t">VARCHAR</span>(<span class="n">512</span>),
+  <span class="k">INDEX</span>(firedAt), <span class="k">INDEX</span>(nodeId)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- per-node config &amp; deploy convergence tracking</span>
+<span class="k">CREATE TABLE</span> nodeConfig (
+  nodeId      <span class="t">BIGINT UNSIGNED PRIMARY KEY</span>,
+  targetEpoch <span class="t">BIGINT UNSIGNED NOT NULL</span>, appliedEpoch <span class="t">BIGINT UNSIGNED</span>,
+  configBlob  <span class="t">JSON</span>, lastDirectiveAt <span class="t">DATETIME</span>, lastResult <span class="t">VARCHAR</span>(<span class="n">128</span>)
+) <span class="k">ENGINE</span>=InnoDB;
+  </pre>
+</section>
+
+<section id="dashboard">
+  <h2><span class="h2num">§ 11</span>Dashboard data contract (PHP / Apache)</h2>
+  <p class="lead">The visual design is produced separately in Claude Design. This section fixes only what the C system guarantees and what the dashboard may rely on, so the two compose without renegotiation. PHP reads MariaDB via PDO; control actions round-trip through <code>solariCtl</code>.</p>
+
+  <h3>11.1 Architecture</h3>
+  <ul>
+    <li><strong>Read path:</strong> PHP 8.x reads current/history tables via PDO (prepared statements only). No PHP writes to monitoring tables — those are the C server's exclusively.</li>
+    <li><strong>Live updates:</strong> browser polls the JSON API (default 5&nbsp;s) <em>or</em> subscribes to a Server-Sent Events endpoint (<code>/api/stream</code>) that the PHP layer feeds from the server's PUB socket via the <code>solariCtl</code> bridge. (SSE, not WebSockets — no Node, no long-lived PHP worker beyond a simple bridge.)</li>
+    <li><strong>Control path:</strong> operator POSTs (e.g. "survey now", "push config") authenticate at PHP, then PHP calls <code>solariCtl</code> over its Unix socket; the helper emits the SCP control frame. Cert material never enters the web tier.</li>
+  </ul>
+
+  <h3>11.2 REST/JSON API (the contract Claude Design binds to)</h3>
+  <table>
+    <thead><tr><th>Method &amp; path</th><th>Returns / accepts</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /api/nodes</code></td><td>Array of node summaries: <code>{nodeId, role, hostFqdn, state, lastSeenAt, arch, osName}</code></td><td>The fleet roster + rollup state.</td></tr>
+      <tr><td><code>GET /api/nodes/{id}</code></td><td>Full current host metrics + watched procs + recent alerts for one node.</td><td>Node detail view.</td></tr>
+      <tr><td><code>GET /api/nodes/{id}/history?metric=&amp;from=&amp;to=</code></td><td>Time series for one metric (downsampled server-side).</td><td>Charts.</td></tr>
+      <tr><td><code>GET /api/probes</code></td><td>Probe targets with per-vantage current state (the multi-monitor view).</td><td>Reachability matrix.</td></tr>
+      <tr><td><code>GET /api/probes/{targetId}/history?…</code></td><td>RTT/loss time series per vantage.</td><td>Latency charts.</td></tr>
+      <tr><td><code>GET /api/alerts?status=active|all</code></td><td>Alert events with rule + node context.</td><td>Alert panel.</td></tr>
+      <tr><td><code>GET /api/topology</code></td><td>Nodes + monitor→target assignment edges (HRW result) for a live map.</td><td>Feeds the C2 map view.</td></tr>
+      <tr><td><code>GET /api/stream</code></td><td>SSE: pushes <code>nodeStateChange</code>, <code>alertFired</code>, <code>probeUpdate</code> events.</td><td>Live tiles without polling.</td></tr>
+      <tr><td><code>POST /api/control/survey</code></td><td>Body <code>{scope:"all"|nodeId}</code>; triggers immediate survey.</td><td>Auth required → solariCtl.</td></tr>
+      <tr><td><code>POST /api/control/config</code></td><td>Body <code>{nodeId, configBlob}</code>; stages config push.</td><td>Auth + RBAC (operator role).</td></tr>
+      <tr><td><code>GET /api/server/status</code></td><td><code>{primary:nodeId, failover:nodeId, leaseEpoch, expiresAt}</code></td><td>Failover state banner.</td></tr>
+    </tbody>
+  </table>
+  <p class="footnote">All responses are JSON with a stable envelope <code>{ "ok": true, "data": …, "ts": "ISO-8601" }</code> or <code>{ "ok": false, "error": {code, message} }</code>. All timestamps ISO-8601 UTC. Pagination via <code>?limit=&amp;cursor=</code>. These shapes mirror the JSON projection in §5.10 so a single mental model spans wire → DB → API.</p>
+
+  <h3>11.3 Auth &amp; RBAC</h3>
+  <ul>
+    <li>Session-based login (PHP sessions, Argon2id password hashing). Optional reverse-proxy SSO if the operator fronts it.</li>
+    <li>Two roles: <strong>viewer</strong> (all GET) and <strong>operator</strong> (GET + control POSTs). Role checked server-side on every control endpoint.</li>
+    <li>CSRF tokens on all POSTs; control POSTs additionally re-verified by <code>solariCtl</code> before any SCP frame is emitted.</li>
+  </ul>
+</section>
+
+<section id="build">
+  <h2><span class="h2num">§ 12</span>Build system &amp; cross-compilation</h2>
+  <p class="lead">CMake orchestrates the whole tree and every cross-architecture target; a thin Makefile wraps the common invocations. Third-party deps build from vendored source so the matrix stays hermetic.</p>
+
+  <h3>12.1 Top-level CMake (shape)</h3>
+  <div class="filename">CMakeLists.txt</div>
+  <pre>
+<span class="k">cmake_minimum_required</span>(<span class="k">VERSION</span> <span class="n">3.16</span>)
+<span class="k">project</span>(solarinet <span class="k">C</span>)
+<span class="k">set</span>(<span class="k">CMAKE_C_STANDARD</span> <span class="n">99</span>)
+<span class="k">set</span>(<span class="k">CMAKE_C_STANDARD_REQUIRED</span> <span class="k">ON</span>)
+<span class="k">add_compile_options</span>(-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration)
+
+<span class="c"># vendored deps built from source (hermetic, cross-friendly)</span>
+<span class="k">add_subdirectory</span>(third_party/mbedtls)
+<span class="k">add_subdirectory</span>(third_party/nng)
+<span class="k">add_subdirectory</span>(third_party/cJSON)
+<span class="c"># sqlite + unity added as object libs</span>
+
+<span class="k">add_subdirectory</span>(lib/solari)        <span class="c"># libsolari (static)</span>
+<span class="k">add_subdirectory</span>(src/client)        <span class="c"># solariClient   (all targets)</span>
+<span class="k">add_subdirectory</span>(src/monitor)       <span class="c"># solariMonitor  (linux, all arch)</span>
+<span class="k">if</span>(SOLARI_BUILD_SERVER)               <span class="c"># server only on x86_64/arm64</span>
+  <span class="k">add_subdirectory</span>(src/server)
+<span class="k">endif</span>()
+<span class="k">if</span>(SOLARI_BUILD_TESTS)
+  <span class="k">enable_testing</span>()
+  <span class="k">add_subdirectory</span>(tests)
+<span class="k">endif</span>()
+  </pre>
+
+  <h3>12.2 Per-component target gating</h3>
+  <table>
+    <thead><tr><th>Component</th><th>OS targets</th><th>Architectures</th></tr></thead>
+    <tbody>
+      <tr><td><code>solariClient</code></td><td>Linux, macOS, Windows</td><td>armv7 (ARM32), arm64, x86, x86_64 (+ppc where toolchain exists)</td></tr>
+      <tr><td><code>solariMonitor</code></td><td>Linux</td><td>armv7, arm64, x86, x86_64 (full array)</td></tr>
+      <tr><td><code>solariServer</code></td><td>Linux</td><td>x86_64, arm64 only (gated by <code>SOLARI_BUILD_SERVER</code>)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>12.3 Toolchain file (representative)</h3>
+  <div class="filename">cmake/toolchains/linux-arm64.cmake</div>
+  <pre>
+<span class="k">set</span>(<span class="k">CMAKE_SYSTEM_NAME</span> Linux)
+<span class="k">set</span>(<span class="k">CMAKE_SYSTEM_PROCESSOR</span> aarch64)
+<span class="k">set</span>(<span class="k">CMAKE_C_COMPILER</span> aarch64-linux-gnu-gcc)
+<span class="k">set</span>(<span class="k">CMAKE_FIND_ROOT_PATH</span> /usr/aarch64-linux-gnu)
+<span class="k">set</span>(<span class="k">CMAKE_FIND_ROOT_PATH_MODE_PROGRAM</span> NEVER)
+<span class="k">set</span>(<span class="k">CMAKE_FIND_ROOT_PATH_MODE_LIBRARY</span> ONLY)
+<span class="k">set</span>(<span class="k">CMAKE_FIND_ROOT_PATH_MODE_INCLUDE</span> ONLY)
+  </pre>
+
+  <h3>12.4 Makefile wrapper</h3>
+  <div class="filename">Makefile</div>
+  <pre>
+<span class="c"># convenience over CMake; muscle-memory targets</span>
+BUILD ?= build
+
+<span class="f">all</span>: client monitor server
+
+<span class="f">client</span>:
+	cmake -S . -B $(BUILD) -DSOLARI_BUILD_SERVER=OFF &amp;&amp; cmake --build $(BUILD) --target solariClient
+
+<span class="f">server</span>:
+	cmake -S . -B $(BUILD) -DSOLARI_BUILD_SERVER=ON &amp;&amp; cmake --build $(BUILD) --target solariServer
+
+<span class="f">cross-arm64</span>:
+	cmake -S . -B build-arm64 \
+	  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/linux-arm64.cmake \
+	  -DSOLARI_BUILD_SERVER=ON &amp;&amp; cmake --build build-arm64
+
+<span class="f">cross-arm32</span>:
+	cmake -S . -B build-arm32 \
+	  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/linux-arm32.cmake \
+	  -DSOLARI_BUILD_SERVER=OFF &amp;&amp; cmake --build build-arm32 --target solariClient solariMonitor
+
+<span class="f">windows</span>:
+	cmake -S . -B build-win \
+	  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/windows-x86_64.cmake \
+	  -DSOLARI_BUILD_SERVER=OFF &amp;&amp; cmake --build build-win --target solariClient
+
+<span class="f">test</span>:
+	cmake -S . -B $(BUILD) -DSOLARI_BUILD_TESTS=ON &amp;&amp; cmake --build $(BUILD) &amp;&amp; ctest --test-dir $(BUILD) --output-on-failure
+
+<span class="f">clean</span>:
+	rm -rf build build-*
+  </pre>
+</section>
+
+<section id="config">
+  <h2><span class="h2num">§ 13</span>Configuration formats</h2>
+  <p>Plain <code>key = value</code> files, <code>#</code> comments, sections in <code>[brackets]</code>. A JSON overlay (pushed by the server as a config blob) is merged on top at load, so operators get human-editable files <em>and</em> central control.</p>
+  <div class="twocol">
+    <div>
+      <div class="filename">config/client.conf.sample</div>
+      <pre>
+[identity]
+nodeId      = <span class="c"># filled at enrollment</span>
+hostFqdn    = hydrogen.akoria.net
+
+[server]
+primaryUrl  = tls+tcp://argon.akoria.net:7701
+failoverUrl = tls+tcp://neon.akoria.net:7701
+
+[tls]
+caFile   = /etc/solari/ca.pem
+certFile = /etc/solari/node.pem
+keyFile  = /etc/solari/node.key
+
+[schedule]
+sampleIntervalSec   = 15
+watchdogIntervalSec = 5
+
+[watch]
+process = apache2
+process = mariadbd
+logfile = /var/log/syslog : (error|fail)
+spoolDb = /var/lib/solari/spool.db
+      </pre>
+    </div>
+    <div>
+      <div class="filename">config/monitor.conf.sample</div>
+      <pre>
+[identity]
+nodeId   = <span class="c"># enrollment</span>
+
+[server]
+primaryUrl  = tls+tcp://argon.akoria.net:7701
+failoverUrl = tls+tcp://neon.akoria.net:7701
+
+[probe]
+target = tcp:hydrogen.akoria.net:443 : web
+target = icmp:10.42.0.1 : gateway
+target = udp:10.42.0.53:53 : dns
+roundIntervalSec = 30
+probesPerRound   = 5
+replFactorHint   = 2
+
+[peer]
+gossipIntervalSec = 20
+peerTtlSec        = 90
+      </pre>
+    </div>
+  </div>
+  <div class="filename">config/server.conf.sample</div>
+  <pre>
+[identity]
+nodeId = <span class="c"># enrollment; both servers distinct</span>
+[bind]
+ingestUrl = tls+tcp://0.0.0.0:7701
+surveyUrl = tls+tcp://0.0.0.0:7702
+pubUrl    = tls+tcp://0.0.0.0:7703
+ctlSocket = /run/solari/solariCtl.sock
+[lease]
+leaseRenewSec = 5
+leaseTtlSec   = 15
+[db]
+host = 127.0.0.1
+name = solarinet
+user = solari
+<span class="c"># password via SOLARI_DB_PASS env, never in file</span>
+poolSize = 8
+[retention]
+historyDays = 90
+  </pre>
+</section>
+
+<section id="testing">
+  <h2><span class="h2num">§ 14</span>Testing strategy</h2>
+  <table>
+    <thead><tr><th>Layer</th><th>Tooling</th><th>What it proves</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Unit</strong></td><td>Unity + CMock, per module</td><td>Frame pack/unpack round-trips on both endiannesses (simulated); TLV append/read symmetry; CRC correctness; config parsing; HRW determinism &amp; low churn; lease state machine transitions.</td></tr>
+      <tr><td><strong>Protocol conformance</strong></td><td>Golden-frame fixtures (byte-exact)</td><td>A captured frame decodes to the expected struct and re-encodes byte-identically. Guards wire stability across refactors. Fixtures double as the JSON-projection oracle.</td></tr>
+      <tr><td><strong>Integration</strong></td><td>Docker-composed Linux fleet (server + MariaDB + N monitors + N clients)</td><td>End-to-end: client sample → DB row; monitor probe → reachability matrix; survey → immediate round; control push → epoch convergence.</td></tr>
+      <tr><td><strong>Fault injection</strong></td><td><code>tests/fault/</code> harnesses</td><td>Kill the active server → failover promotes &lt; lease TTL, no data loss (spool drains). Partition a monitor → HRW reassigns its targets. Sever server link → clients spool then drain. Corrupt a frame → CRC rejects, no crash.</td></tr>
+      <tr><td><strong>Cross-build CI</strong></td><td>CMake matrix (qemu-user for non-native arch)</td><td>Client builds &amp; passes smoke tests on armv7/arm64/x86_64 Linux, mingw Windows, macOS (native runner); monitor on the Linux arch array; server on x86_64/arm64.</td></tr>
+    </tbody>
+  </table>
+  <div class="note pick">
+    <span class="lbl">Agent test mandate</span>
+    Every public <code>libsolari</code> function ships with at least one Unity test before its first consumer is wired up. The protocol-conformance golden fixtures are written <em>first</em> (from §5) and treated as immutable for a given <code>SCP_PROTO_VERSION</code> — they are the definition of "correct on the wire."
+  </div>
+</section>
+
+<section id="deploy">
+  <h2><span class="h2num">§ 15</span>Deployment &amp; operations</h2>
+  <h3>15.1 Enrollment flow (one-time per node)</h3>
+  <ol>
+    <li>Operator generates an enrollment token on the server (short-TTL, single-use), delivered out-of-band.</li>
+    <li>Node generates a keypair + CSR, presents token + CSR to the server's enrollment endpoint.</li>
+    <li>Server (using the internal CA / step-ca root) signs the cert with a CN encoding role + FQDN, registers the node row, returns the signed cert + CA root.</li>
+    <li>Node persists cert/key/CA, computes its <code>nodeId</code>, writes it to config, and connects normally thereafter.</li>
+  </ol>
+
+  <h3>15.2 systemd units (Linux)</h3>
+  <div class="filename">deploy/systemd/solari-client.service</div>
+  <pre>
+[Unit]
+Description=SolariNet Client
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/solariClient --config /etc/solari/client.conf
+Restart=always
+RestartSec=2
+User=solari
+AmbientCapabilities=CAP_NET_RAW   <span class="c"># client needs none; monitor unit adds this for ICMP</span>
+[Install]
+WantedBy=multi-user.target
+  </pre>
+  <p class="footnote">The watchdog is spawned by the client itself (§7.3), so systemd supervises the client and the client supervises its watchdog — defense in depth without a second unit. The monitor unit is analogous but adds <code>CAP_NET_RAW</code> for ICMP. Two server units (<code>solari-server.service</code>) run on the primary and failover hosts; both start identically and sort out active/standby via the lease.</p>
+
+  <h3>15.3 Upgrade / deploy</h3>
+  <p>Operator stages a new binary; server issues <code>CTRL_DEPLOY</code> (with SHA-256) to a node, which fetches, verifies, and stages it, then <code>CTRL_RESTART</code> triggers a watchdog-mediated re-exec. Rollout is staged (canary node → cohort → fleet) and tracked via <code>nodeConfig.appliedEpoch</code> convergence visible on the dashboard.</p>
+</section>
+
+<section id="plan">
+  <h2><span class="h2num">§ 16</span>Phased project plan &amp; task breakdown</h2>
+  <p class="lead">The execution worklist. Phases are ordered so each builds only on what precedes it; an agent can work top-to-bottom. Each task names the file(s) and the §-reference that specifies it.</p>
+
+  <div class="phase">
+    <div class="pnum">Phase 0 · Foundation <span class="tag">no deps</span></div>
+    <h3>Repo, build skeleton, vendored deps</h3>
+    <ul>
+      <li>Initialize git repo with the §4 layout; add <code>.gitignore</code>, <code>LICENSE</code>, self-contained <code>README.html</code>.</li>
+      <li>Vendor &amp; pin nng, mbedTLS, SQLite amalgamation, cJSON, Unity under <code>third_party/</code>.</li>
+      <li>Top-level <code>CMakeLists.txt</code> + <code>Makefile</code> + the five toolchain files (§12). Prove an empty <code>libsolari</code> + a "hello" client cross-build for arm64 and mingw.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 1 · libsolari core <span class="tag">depends: P0</span></div>
+    <h3>Common, error, time, log, crypto, framing, TLV</h3>
+    <ul>
+      <li><code>solariCommon.h</code>, <code>solariError.{h,c}</code> (Appendix A enum + strings).</li>
+      <li><code>solariTime.c</code>, <code>solariLog.c</code>, <code>solariCrypto.c</code> (FNV-1a-64, CRC-32, SHA-256, cert CN).</li>
+      <li><code>solariFrame.c</code> + <code>solariTlv.c</code> — pack/unpack/build/parse (§§5,6). <strong>Write golden-frame fixtures &amp; Unity tests first.</strong></li>
+      <li><code>solariMsg.c</code> typed builders/parsers for every message type (§5.4).</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 2 · libsolari I/O <span class="tag">depends: P1</span></div>
+    <h3>Transport, config, spool</h3>
+    <ul>
+      <li><code>solariNet.c</code> — nng wrapper + mbedTLS for all patterns (§6.5). Loopback round-trip test over TLS.</li>
+      <li><code>solariConfig.c</code> — <code>key=value</code> parser + JSON overlay merge (§13).</li>
+      <li><code>solariSpool.c</code> — SQLite store-and-forward (§6.6) with push/peek/ack/nack + backoff. Fault test: enqueue while "offline," drain on "reconnect."</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 3 · Client + PAL <span class="tag">depends: P2</span></div>
+    <h3>solariClient across the OS matrix</h3>
+    <ul>
+      <li><code>platOS.h</code> contract; then <code>platLinux.c</code> first (reference impl), <code>platMacos.c</code>, <code>platWindows.c</code> (§7.2).</li>
+      <li><code>clientCollect.c</code>, <code>clientReport.c</code>, <code>clientWatchdog.c</code>, <code>main.c</code> (§7.3).</li>
+      <li>HELLO/WELCOME handshake; sample loop; spool-on-failure; honor CONTROL.</li>
+      <li>Cross-build &amp; smoke-test on arm64 + mingw; native macOS run.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 4 · Remote Monitor <span class="tag">depends: P2</span></div>
+    <h3>solariMonitor probe engine + redundancy</h3>
+    <ul>
+      <li><code>probeNet.c</code> — TCP/UDP/ICMP probes with RTT/jitter/loss (§8.3); ICMP privilege handling per Appendix C.</li>
+      <li><code>monitorPeer.c</code> (HRW ownership, gossip) + <code>monitorSched.c</code> (schedule rebuild) (§8.2).</li>
+      <li><code>monitorReport.c</code> + <code>main.c</code>; survey responder.</li>
+      <li>Fault test: drop a monitor, confirm HRW reassignment with minimal churn.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 5 · Server <span class="tag">depends: P1–P4, schema</span></div>
+    <h3>solariServer ingest, failover, persistence</h3>
+    <ul>
+      <li>Apply <code>db/schema.sql</code>; <code>serverDb.c</code> (MariaDB Connector/C, prepared stmts, pool).</li>
+      <li><code>serverLease.c</code> (election) + <code>serverIngest.c</code> (validate/dedup/dispatch) + <code>serverMaster.c</code> (reconcile overlaps).</li>
+      <li><code>serverAlert.c</code> (rule eval → PUB) + <code>serverControl.c</code> (config/deploy push, epoch tracking).</li>
+      <li><code>solariCtl.c</code> Unix-socket operator bridge.</li>
+      <li>Fault test: kill active server → failover &lt; TTL, zero loss.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 6 · Dashboard data layer <span class="tag">depends: P5</span></div>
+    <h3>PHP/Apache API (contract only; visuals via Claude Design)</h3>
+    <ul>
+      <li>PDO data-access layer (read-only on monitoring tables); auth + RBAC + CSRF (§11.3).</li>
+      <li>Implement every endpoint in §11.2 returning the stable envelope; SSE bridge from server PUB via <code>solariCtl</code>.</li>
+      <li>Hand the endpoint contract to Claude Design for the C2 UI; wire its components to these endpoints.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 7 · Hardening &amp; ops <span class="tag">depends: all</span></div>
+    <h3>Enrollment, packaging, CI, docs</h3>
+    <ul>
+      <li>Enrollment flow + scripts (§15.1); systemd units; retention/partition maintenance job.</li>
+      <li>Full cross-build CI matrix (qemu-user) + integration + fault suites green.</li>
+      <li>Self-contained HTML operator &amp; developer docs in <code>docs/</code>.</li>
+    </ul>
+  </div>
+
+  <hr class="soft">
+  <h3>Dependency graph (at a glance)</h3>
+  <div class="diagram"><pre>
+  P0 ─▶ P1 ─▶ P2 ─┬─▶ P3 (client) ─┐
+                  └─▶ P4 (monitor) ─┼─▶ P5 (server) ─▶ P6 (dashboard) ─▶ P7
+       schema.sql ──────────────────┘
+  </pre></div>
+</section>
+
+<section id="standards">
+  <h2><span class="h2num">§ 17</span>Coding standards</h2>
+  <ul>
+    <li><strong>Language:</strong> ISO C99, functions only. No C++, no OOP emulation beyond the documented opaque-handle pattern (a <code>typedef struct foo foo;</code> with create/use/destroy functions). No global mutable state; thread state travels in context structs passed by pointer.</li>
+    <li><strong>Naming:</strong> <code>camelCase</code> for functions, variables, struct fields, and typedef'd types; <code>UPPER_SNAKE</code> for macros and enum constants; module-prefixed public names (<code>solariFrameParse</code>, <code>platCpuLoad</code>, <code>monitorOwnsTarget</code>). Descriptive but not unwieldy.</li>
+    <li><strong>Brace style:</strong> K&amp;R (opening brace on the same line; <code>else</code> cuddled). Four-space indent, no tabs in C.</li>
+    <li><strong>Returns &amp; errors:</strong> functions return <code>solariStatus</code>; out-params written only on success unless documented. No <code>errno</code>-style hidden state across the API. Every error path logs at an appropriate level and propagates a code from Appendix A.</li>
+    <li><strong>Memory:</strong> explicit ownership documented in each function's doc-comment; matching <code>*Open/*Close</code>, <code>*Init/*Destroy</code> pairs; zero-copy reads alias caller buffers and say so.</li>
+    <li><strong>Doc-comments:</strong> every public function has a block comment stating purpose, ownership/lifetime of pointers, success/failure semantics, and platform notes where relevant (as shown throughout §§6–9).</li>
+    <li><strong>Portability:</strong> no syscalls outside the PAL; fixed-width <code>&lt;stdint.h&gt;</code> types on the wire; never assume endianness or struct padding — pack field-by-field.</li>
+    <li><strong>Git:</strong> conventional-commit style messages; the monorepo lives in a local git repo, with publishable components mirrored to GitHub at the operator's discretion.</li>
+  </ul>
+</section>
+
+<section id="appendix">
+  <h2><span class="h2num">§ 18</span>Appendices</h2>
+  <h3>Appendix A — Error codes (<code>solariError.h</code>)</h3>
+  <table>
+    <thead><tr><th>Code</th><th>Value</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>SOLARI_OK</code></td><td>0</td><td>Success.</td></tr>
+      <tr><td><code>ERR_INVALID_ARG</code></td><td>-1</td><td>Bad argument / null where non-null required.</td></tr>
+      <tr><td><code>ERR_BUFFER_FULL</code></td><td>-2</td><td>Write would overflow caller buffer.</td></tr>
+      <tr><td><code>ERR_FRAME_INCOMPLETE</code></td><td>-10</td><td>Stream holds less than one full frame.</td></tr>
+      <tr><td><code>ERR_FRAME_BAD_MAGIC</code></td><td>-11</td><td>Sentinel mismatch.</td></tr>
+      <tr><td><code>ERR_FRAME_BAD_CRC</code></td><td>-12</td><td>CRC-32 verification failed.</td></tr>
+      <tr><td><code>ERR_PROTO_VERSION</code></td><td>-13</td><td>Unsupported protocol version.</td></tr>
+      <tr><td><code>ERR_TLV_END</code></td><td>-20</td><td>Reader reached end of payload (loop terminator, not fatal).</td></tr>
+      <tr><td><code>ERR_TLV_TRUNCATED</code></td><td>-21</td><td>TLV length exceeds remaining bytes.</td></tr>
+      <tr><td><code>ERR_CONN_RETRY</code></td><td>-30</td><td>Transient send/recv failure; caller should spool/retry.</td></tr>
+      <tr><td><code>ERR_CONN_FATAL</code></td><td>-31</td><td>Unrecoverable transport error.</td></tr>
+      <tr><td><code>ERR_TLS</code></td><td>-32</td><td>TLS handshake/verify failure.</td></tr>
+      <tr><td><code>ERR_AUTH_ROLE</code></td><td>-40</td><td>Message type illegal for presenting cert role.</td></tr>
+      <tr><td><code>ERR_DB</code></td><td>-50</td><td>Database error (detail logged).</td></tr>
+      <tr><td><code>ERR_LEASE_LOST</code></td><td>-51</td><td>Active server failed to renew lease; must demote.</td></tr>
+      <tr><td><code>ERR_UNKNOWN_MSG</code></td><td>-60</td><td>Unrecognized message type that must be understood.</td></tr>
+      <tr><td><code>ERR_PLATFORM</code></td><td>-70</td><td>PAL call failed (OS-specific detail logged).</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Appendix B — Default ports</h3>
+  <table>
+    <thead><tr><th>Port</th><th>Purpose</th><th>Pattern</th></tr></thead>
+    <tbody>
+      <tr><td>7701/tcp</td><td>Server ingest (client/monitor reports)</td><td>PULL ← PUSH, TLS</td></tr>
+      <tr><td>7702/tcp</td><td>Survey channel</td><td>SURVEYOR → RESPONDENT, TLS</td></tr>
+      <tr><td>7703/tcp</td><td>Event publish (dashboard/notifiers)</td><td>PUB → SUB, TLS</td></tr>
+      <tr><td>unix sock</td><td><code>solariCtl</code> operator bridge</td><td>REQ/REP, local only</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Appendix C — ICMP portability notes</h3>
+  <p>ICMP echo needs either a raw socket (root / <code>CAP_NET_RAW</code>) or, on Linux, the unprivileged <code>SOCK_DGRAM/IPPROTO_ICMP</code> path gated by <code>net.ipv4.ping_group_range</code>. <code>probeRun</code> tries, in order: (1) <code>SOCK_DGRAM</code> ICMP if the gid is permitted; (2) raw socket if the process holds <code>CAP_NET_RAW</code> (the monitor systemd unit grants it ambiently); (3) otherwise records <code>PROBE_UNREACHABLE</code> with a diagnostic detail rather than crashing. Since the monitor targets Linux only, the macOS/Windows ICMP idiosyncrasies don't apply to it; the client never sends ICMP.</p>
+
+  <h3>Appendix D — Glossary</h3>
+  <p class="footnote">
+    <strong>SCP</strong> — SolariNet Control Protocol (§5). &nbsp;·&nbsp;
+    <strong>PAL</strong> — Platform Abstraction Layer (<code>platOS.h</code>, §7.2). &nbsp;·&nbsp;
+    <strong>HRW</strong> — Highest Random Weight (rendezvous) hashing, the monitor's coordinator-free target-assignment scheme (§8.2). &nbsp;·&nbsp;
+    <strong>TLV</strong> — Type-Length-Value, the extensible payload element (§5.6). &nbsp;·&nbsp;
+    <strong>Lease</strong> — the single-row DB mutex that elects the active server (§2). &nbsp;·&nbsp;
+    <strong>Spool</strong> — local SQLite store-and-forward queue enabling fault tolerance (§6.6). &nbsp;·&nbsp;
+    <strong>C2</strong> — Command &amp; Control (the dashboard's role).
+  </p>
+</section>
+
+<footer style="padding:50px 0 80px;color:var(--ink-dim);font-size:13.5px">
+  <hr class="soft">
+  <p><strong style="color:var(--ink)">SolariNet Monitoring</strong> — Architecture &amp; Implementation Plan · v1.0 Build Spec · prepared for autonomous implementation by Claude Code / Codex, with the C2 dashboard layout to be developed in Claude Design against the §11 contract.</p>
+  <p>This document is the single source of truth for the build. Where it is silent, prefer the simplest portable C99 solution consistent with the design tenets in §1.</p>
+</footer>
+
+</div>
+</body>
+</html>
