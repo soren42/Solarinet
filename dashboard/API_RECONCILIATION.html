@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet Dashboard — Design ↔ API Reconciliation</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;--bad:#ff3d72;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;font-size:15.5px}
+  .wrap{max-width:1000px;margin:0 auto;padding:44px 26px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(28px,5vw,44px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 26px}
+  h2{font-family:var(--serif);font-size:23px;margin:36px 0 8px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  h3{font-size:17px;margin:20px 0 6px;color:#eaf1f8}
+  p{margin:0 0 12px}
+  code{font-family:var(--mono);font-size:.86em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{text-align:left;padding:7px 10px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:600}.warn{color:var(--warn);font-weight:600}.bad{color:var(--bad);font-weight:600}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);margin:1px 2px}
+  .pill.ok{color:var(--ok);border-color:rgba(93,211,158,.4)}
+  .pill.gap{color:var(--warn);border-color:rgba(224,121,79,.4)}
+  ul{padding-left:20px}li{margin:4px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:11px 15px;border-radius:0 8px 8px 0;margin:14px 0}
+  .footer{margin-top:42px;color:var(--ink-dim);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dashboard ↔ API Reconciliation</h1>
+  <p class="sub">Claude Design handoff (window.SOLARI mock) vs. the §11.2 REST contract &amp; §10 schema — what lines up, what needs adapting, and what the contract still owes the UI.</p>
+
+  <div class="note">
+    <strong>Import shape.</strong> The design is in-browser React 18 + Babel (no Node build), with a seeded mock data layer in <code>data.jsx</code> exposing one global object, <code>window.SOLARI</code>. The cleanest wiring (Phase 6) keeps that object as the UI's internal model and adds a single <code>api.jsx</code> adapter that fetches the §11.2 endpoints and populates the same shape — so every screen keeps working unchanged. <code>data.jsx</code> stays as the offline/demo fixture.
+  </div>
+
+  <h2>1 · Screens built vs. planned</h2>
+  <p>Three screens are fully designed; five are "next iteration" placeholders. Wiring effort tracks this.</p>
+  <table>
+    <thead><tr><th>Screen</th><th>State in handoff</th><th>Primary data</th></tr></thead>
+    <tbody>
+      <tr><td>Fleet Overview</td><td class="ok">built</td><td><code>nodes</code>, <code>segRollups</code>, <code>fleetRoll</code>, <code>summary</code></td></tr>
+      <tr><td>Node Detail</td><td class="ok">built</td><td><code>nodes[i]</code> (metrics, procs, disks, ifaces, hist)</td></tr>
+      <tr><td>Alerts</td><td class="ok">built</td><td><code>alerts</code>, <code>rules</code></td></tr>
+      <tr><td>Reachability Matrix</td><td class="warn">placeholder</td><td><code>probes</code> + <code>vantages</code></td></tr>
+      <tr><td>Topology Map</td><td class="warn">placeholder</td><td><code>nodes</code>, <code>netgear</code>, <code>segments</code></td></tr>
+      <tr><td>Discovery</td><td class="warn">placeholder</td><td><code>discovered</code></td></tr>
+      <tr><td>Provisioning</td><td class="warn">placeholder</td><td><code>enrollments</code>, <code>builds</code></td></tr>
+      <tr><td>Config &amp; Rules</td><td class="warn">placeholder</td><td><code>config</code>, <code>rules</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>2 · Data model mapping</h2>
+  <table>
+    <thead><tr><th>window.SOLARI</th><th>§11.2 / §10</th><th>Status</th><th>Adapter notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>nodes[]</code></td><td><code>GET /api/nodes</code>, <code>/api/nodes/{id}</code> · tables <code>node</code>, <code>hostCurrent</code></td><td><span class="pill ok">maps</span></td>
+        <td>Field deltas: design uses <code>cpuPct</code>, <code>ramPct</code>, <code>lastSeenMin</code>; contract has <code>cpuLoadMilli[]</code>, <code>ramUsedKb/ramTotalKb</code>, <code>lastSeenAt</code> (ISO). Adapter derives % and "min ago".</td></tr>
+      <tr><td><code>nodes[i].hist</code> (60-pt sparks)</td><td><code>GET /api/nodes/{id}/history?metric=</code></td><td><span class="pill ok">maps</span></td>
+        <td>Server downsamples to a fixed point count; adapter feeds the spark arrays.</td></tr>
+      <tr><td><code>probes[]</code> + <code>vantages[]</code></td><td><code>GET /api/probes</code></td><td><span class="pill ok">maps</span></td>
+        <td>Strong match (per-vantage outcome/rtt/loss). Design adds <code>label</code>, <code>replFactor</code>, rolled-up <code>state</code>.</td></tr>
+      <tr><td><code>alerts[]</code></td><td><code>GET /api/alerts?status=</code> · table <code>alertEvent</code></td><td><span class="pill ok">maps</span></td>
+        <td><code>firedMinAgo</code>→<code>firedAt</code> (ISO), <code>cleared</code>(bool)→<code>clearedAt</code>, name→<code>nodeId</code>+lookup.</td></tr>
+      <tr><td><code>server{}</code></td><td><code>GET /api/server/status</code> · table <code>serverLease</code></td><td><span class="pill ok">maps</span></td>
+        <td>Match on primary/failover/leaseEpoch/expiresAt. Design extras: <code>leaseHealthy</code>, <code>dbHost</code>, <code>historyDays</code>.</td></tr>
+      <tr><td><code>summary{}</code>, <code>segRollups</code>, <code>fleetRoll</code></td><td>derivable from <code>/api/nodes</code></td><td><span class="pill ok">derive</span></td>
+        <td>Compute client-side, or add <code>GET /api/summary</code> for one cheap call.</td></tr>
+      <tr><td><code>rules[]</code></td><td>table <code>alertRule</code> · <em>no endpoint</em></td><td><span class="pill gap">gap</span></td>
+        <td>Add <code>GET /api/rules</code> (+ enable/disable POST for the Config&amp;Rules screen).</td></tr>
+      <tr><td><code>segments[]</code> + CIDRs</td><td><em>not in schema or contract</em></td><td><span class="pill gap">gap</span></td>
+        <td>New concept. Add a <code>segment</code> table (or derive from node IPs) + <code>GET /api/segments</code>.</td></tr>
+      <tr><td><code>discovered[]</code></td><td><em>not in contract</em> (relates to §15.1)</td><td><span class="pill gap">gap</span></td>
+        <td>New <code>GET /api/discovery</code>; needs a discovery source (mDNS/ARP/SCP advert) feeding a table.</td></tr>
+      <tr><td><code>enrollments[]</code></td><td>§15.1 flow · <em>no endpoint</em></td><td><span class="pill gap">gap</span></td>
+        <td>New <code>GET /api/enrollments</code> + control POSTs (approve/sign CSR) via <code>solariCtl</code>.</td></tr>
+      <tr><td><code>builds[]</code></td><td>table <code>nodeConfig</code> (epochs) · §15.3</td><td><span class="pill gap">partial</span></td>
+        <td>Convergence data exists; needs a <code>GET /api/builds</code> projection + a build registry.</td></tr>
+      <tr><td><code>netgear[]</code>, <code>uplink</code>, <code>lldp</code></td><td><code>/api/topology</code> returns monitor→target edges only</td><td><span class="pill gap">mismatch</span></td>
+        <td>Design's Topology wants a <em>LAN gear hierarchy</em> (switches/APs/uplinks/LLDP). Contract's topology is the HRW assignment graph. Decide: extend <code>/api/topology</code> or add <code>/api/netgear</code> + a discovery/LLDP source.</td></tr>
+      <tr><td><code>config{}</code></td><td>§13 conf · <em>no endpoint</em></td><td><span class="pill gap">gap</span></td>
+        <td>Add read-only <code>GET /api/config</code> (global tolerances/retention/lease/ports).</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3 · Cross-cutting issues to resolve</h2>
+  <h3>On-prem / no-cloud tenet (§1)</h3>
+  <p>The design loads React, ReactDOM, and Babel from <code>unpkg.com</code> and fonts from <code>fonts.googleapis.com</code> at runtime. That conflicts with the "local control, no cloud dependency" tenet for an air-gapped intranet — the C2 must work with no internet. <strong>Action:</strong> vendor React/ReactDOM/Babel into <code>dashboard/public/vendor/</code> and self-host the IBM Plex fonts; repoint <code>index.html</code> at local paths.</p>
+  <h3>In-browser JSX transpile</h3>
+  <p>Babel-standalone transpiles the <code>.jsx</code> in the browser on every load — convenient (and consistent with the no-Node rule), but it adds first-paint latency and ships the whole compiler. Acceptable for an internal tool; if load time bites, the only faster path is pre-transpiling, which needs a build tool (Node) we're avoiding — so plan to keep in-browser Babel unless that changes.</p>
+  <h3>PWA without a service worker</h3>
+  <p><code>manifest.webmanifest</code> + icons make it installable, but there's no registered service worker, so it isn't offline-capable yet. Add a <code>sw.js</code> if an operator should keep the last C2 view during a server blip.</p>
+  <h3>Units &amp; time</h3>
+  <p>The UI thinks in percentages and "minutes ago"; the API speaks raw <code>KB</code>/<code>milli</code> and ISO-8601 UTC. Keep all conversion in the <code>api.jsx</code> adapter (the existing <code>SOLARI.fmt</code> helpers already format for display), so the wire stays canonical and the UI stays pretty.</p>
+
+  <h2>4 · Suggested Phase 6 order</h2>
+  <ul>
+    <li>Vendor front-end deps locally (on-prem fix) — quick, unblocks air-gapped use.</li>
+    <li>Write <code>api.jsx</code> adapter → light up the three built screens against the existing endpoints (<code>/api/nodes</code>, <code>/api/probes</code>, <code>/api/alerts</code>, <code>/api/server/status</code>).</li>
+    <li>Stand up the PHP PDO read layer + those endpoints + the SSE bridge (§11.1).</li>
+    <li>Extend the contract for the placeholder screens: <code>/api/rules</code>, <code>/api/segments</code>, <code>/api/summary</code>, then discovery/enrollment/builds/netgear as those subsystems land server-side.</li>
+  </ul>
+
+  <p class="footer">Imported from the Claude Design handoff into <code>dashboard/public/</code>. The mock <code>data.jsx</code> is retained as the offline/demo fixture. This document is the bridge between the design's assumptions and the §11 contract; reconcile contract changes here before building Phase 6.</p>
+</div>
+</body>
+</html>
