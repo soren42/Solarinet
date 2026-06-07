@@ -21,6 +21,17 @@ Testing/
 *.log
 /run/
 
+# Vendored third-party sources fetched by deploy/bootstrap-xenon.sh
+# (kept out of the repo; pinned + rebuilt on the target host)
+/third_party/.prefix/
+/third_party/nng/
+/third_party/mbedtls/
+/third_party/cJSON/
+/third_party/sqlite/sqlite3.c
+/third_party/sqlite/sqlite3.h
+/third_party/unity/unity_internals.h
+/third_party/unity/.upstream
+
 # Secrets / certs (never commit)
 *.pem
 *.key

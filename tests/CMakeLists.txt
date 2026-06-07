@@ -26,3 +26,11 @@ if(SOLARI_WITH_SQLITE)
   target_include_directories(test_spool PRIVATE ${CMAKE_SOURCE_DIR}/include)
   add_test(NAME test_spool COMMAND test_spool)
 endif()
+
+# Transport loopback - only when the nng/mbedTLS I/O layer is built.
+if(SOLARI_WITH_IO)
+  add_executable(test_net_loopback integration/test_net_loopback.c)
+  target_link_libraries(test_net_loopback PRIVATE solari unity)
+  target_include_directories(test_net_loopback PRIVATE ${CMAKE_SOURCE_DIR}/include)
+  add_test(NAME test_net_loopback COMMAND test_net_loopback)
+endif()

@@ -91,6 +91,18 @@ make cross-arm64    make cross-arm32    make windows</pre>
 cmake --build build
 ctest --test-dir build --output-on-failure</pre>
 
+  <p>On a fresh Linux host (e.g. a dedicated build/deploy server), one script
+  installs the toolchain + all dependencies (mbedTLS, nng, SQLite, cJSON,
+  MariaDB Connector/C), then configures, builds, and runs the suites including
+  the SQLite spool and the nng transport loopback:</p>
+  <pre>./deploy/bootstrap-xenon.sh            # system packages where available
+./deploy/bootstrap-xenon.sh --source-deps   # build nng + mbedTLS from pinned source
+./deploy/bootstrap-xenon.sh --help</pre>
+  <p>Build options: <code>-DSOLARI_WITH_SQLITE=ON</code> adds the store-and-forward
+  spool, <code>-DSOLARI_WITH_IO=ON</code> adds the nng/mbedTLS transport,
+  <code>-DSOLARI_WITH_JSON=ON</code> enables the cJSON config overlay. The bare
+  core needs none of them.</p>
+
   <h2>Repository layout</h2>
   <pre>include/solari/   public libsolari headers (the contract)
 lib/solari/       libsolari implementation
