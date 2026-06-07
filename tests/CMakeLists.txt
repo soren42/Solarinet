@@ -9,6 +9,7 @@ set(SOLARI_UNIT_TESTS
   test_tlv
   test_frame
   test_msg
+  test_config
 )
 
 foreach(t ${SOLARI_UNIT_TESTS})
@@ -17,3 +18,11 @@ foreach(t ${SOLARI_UNIT_TESTS})
   target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/include)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+
+# Spool fault test - only when the SQLite spool is built into libsolari.
+if(SOLARI_WITH_SQLITE)
+  add_executable(test_spool fault/test_spool.c)
+  target_link_libraries(test_spool PRIVATE solari unity)
+  target_include_directories(test_spool PRIVATE ${CMAKE_SOURCE_DIR}/include)
+  add_test(NAME test_spool COMMAND test_spool)
+endif()

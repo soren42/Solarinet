@@ -20,7 +20,9 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror=implicit-function-declarati
 # ---- options -------------------------------------------------------------
 option(SOLARI_BUILD_SERVER "Build solariServer (x86_64/arm64 only)" OFF)
 option(SOLARI_BUILD_TESTS  "Build the Unity test suites"            ON)
-option(SOLARI_WITH_IO      "Build the I/O layer (nng/mbedTLS/SQLite)" OFF)
+option(SOLARI_WITH_IO      "Build the nng/mbedTLS transport layer"  OFF)
+option(SOLARI_WITH_SQLITE  "Build the SQLite store-and-forward spool" OFF)
+option(SOLARI_WITH_JSON    "Enable the cJSON config overlay"        OFF)
 
 # ---- vendored deps (only when the I/O layer is on) -----------------------
 if(SOLARI_WITH_IO)
@@ -55,4 +57,4 @@ if(SOLARI_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-message(STATUS "SolariNet config: tests=${SOLARI_BUILD_TESTS} io=${SOLARI_WITH_IO} server=${SOLARI_BUILD_SERVER}")
+message(STATUS "SolariNet config: tests=${SOLARI_BUILD_TESTS} io=${SOLARI_WITH_IO} sqlite=${SOLARI_WITH_SQLITE} server=${SOLARI_BUILD_SERVER}")

@@ -2,13 +2,17 @@
 # The real build logic lives in CMakeLists.txt; this just spares the fingers.
 BUILD ?= build
 
-.PHONY: all core client monitor server test cross-arm64 cross-arm32 windows clean
+.PHONY: all core spool client monitor server test cross-arm64 cross-arm32 windows clean
 
 # Phase 1 core + tests is the default: zero external deps, always builds.
 all: core
 
 core:
 	cmake -S . -B $(BUILD) -DSOLARI_BUILD_TESTS=ON && cmake --build $(BUILD)
+
+# Core + the SQLite store-and-forward spool (links the platform libsqlite3).
+spool:
+	cmake -S . -B $(BUILD) -DSOLARI_BUILD_TESTS=ON -DSOLARI_WITH_SQLITE=ON && cmake --build $(BUILD)
 
 client:
 	cmake -S . -B $(BUILD) -DSOLARI_BUILD_SERVER=OFF -DSOLARI_WITH_IO=ON && cmake --build $(BUILD) --target solariClient
