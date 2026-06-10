@@ -18,7 +18,7 @@ endif()
 
 set(CLIENT_HAS_REPORTING OFF)
 if(SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
-  list(APPEND CLIENT_CORE_SOURCES clientReport.c)
+  list(APPEND CLIENT_CORE_SOURCES clientReport.c clientDiscovery.c)
   set(CLIENT_HAS_REPORTING ON)
 endif()
 

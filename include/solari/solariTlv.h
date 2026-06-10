@@ -43,6 +43,14 @@ enum solariTlvType {
     TLV_PROBE_RESULT      = 0x1101,  /* repeated solariProbeResult (§5.7)  */
     TLV_LINK_STAT         = 0x1102,  /* repeated link stat per peer        */
     TLV_SERVICE_META      = 0x1103,  /* repeated: version/vendor/config kv */
+    /* --- discovery (0x12xx, Phase 3 Handoff sec 4.3) --- */
+    TLV_DISC_SOURCE       = 0x1203,  /* uint8: 1=mDNS 2=ARP 3=advert 4=portscan 5=LLDP */
+    TLV_DISC_ENTITY       = 0x1201,  /* repeated utf8 "ip|mac|iface"        */
+    TLV_DISC_SERVICE      = 0x1202,  /* repeated utf8 "proto|port|banner"   */
+    /* --- topology / LLDP (0x13xx) --- */
+    TLV_TOPO_UPLINK       = 0x1301,  /* utf8 "localIf|gatewayIp|speedMbps"   */
+    TLV_TOPO_LLDP_NEIGH   = 0x1302,  /* repeated utf8 "chassis|port|localIf" */
+    TLV_TOPO_SEGMENT      = 0x1303,  /* repeated utf8 "ifName|cidr"          */
     /* --- control (0x30xx) --- */
     TLV_CTRL_VERB         = 0x3001,  /* uint8: setConfig|deploy|restart|.. */
     TLV_CTRL_PAYLOAD      = 0x3002,  /* opaque blob                        */

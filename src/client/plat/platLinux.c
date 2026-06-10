@@ -13,6 +13,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <ifaddrs.h>
 #include <mntent.h>
 #include <netdb.h>
 #include <regex.h>
@@ -22,6 +23,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/types.h>
@@ -461,6 +464,99 @@ solariStatus platLogStat(const char *path, const char *regex,
     *matchCount = matches;
     *lastOffsetInOut = (uint64_t)st.st_size;
     return SOLARI_OK;
+}
+
+/* ---- discovery & topology ------------------------------------------------- */
+
+solariStatus platArpNeighbors(platNeighbor *out, uint8_t cap, uint8_t *count)
+{
+    FILE *f;
+    char line[256];
+    uint8_t n = 0;
+
+    if (!out || !count || cap == 0) return ERR_INVALID_ARG;
+    f = fopen("/proc/net/arp", "r");
+    if (!f) return ERR_PLATFORM;
+    if (!fgets(line, sizeof line, f)) { fclose(f); *count = 0; return SOLARI_OK; } /* header */
+
+    while (n < cap && fgets(line, sizeof line, f)) {
+        char ip[46], hwtype[16], flags[16], mac[18], mask[16], dev[SOLARI_IFNAME_MAX];
+        if (sscanf(line, "%45s %15s %15s %17s %15s %31s",
+                   ip, hwtype, flags, mac, mask, dev) < 6) continue;
+        if (!strcmp(flags, "0x0")) continue;             /* incomplete entry */
+        if (!strcmp(mac, "00:00:00:00:00:00")) continue;
+        copyStr(out[n].ip,    sizeof out[n].ip,    ip);
+        copyStr(out[n].mac,   sizeof out[n].mac,   mac);
+        copyStr(out[n].iface, sizeof out[n].iface, dev);
+        n++;
+    }
+    fclose(f);
+    *count = n;
+    return SOLARI_OK;
+}
+
+solariStatus platIfaceCidrs(platIfaceCidr *out, uint8_t cap, uint8_t *count)
+{
+    struct ifaddrs *ifa = NULL, *p;
+    uint8_t n = 0;
+
+    if (!out || !count || cap == 0) return ERR_INVALID_ARG;
+    if (getifaddrs(&ifa) != 0) return ERR_PLATFORM;
+
+    for (p = ifa; p && n < cap; p = p->ifa_next) {
+        struct sockaddr_in *addr, *mask;
+        uint32_t a, m, net, mm;
+        int prefix = 0;
+        char netstr[INET_ADDRSTRLEN];
+        struct in_addr na;
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        if (!p->ifa_netmask) continue;
+        if (!strcmp(p->ifa_name, "lo")) continue;
+        addr = (struct sockaddr_in *)(void *)p->ifa_addr;
+        mask = (struct sockaddr_in *)(void *)p->ifa_netmask;
+        a = ntohl(addr->sin_addr.s_addr);
+        m = ntohl(mask->sin_addr.s_addr);
+        net = a & m;
+        for (mm = m; mm; mm >>= 1) prefix += (int)(mm & 1u);
+        na.s_addr = htonl(net);
+        if (!inet_ntop(AF_INET, &na, netstr, sizeof netstr)) continue;
+        copyStr(out[n].ifName, sizeof out[n].ifName, p->ifa_name);
+        snprintf(out[n].cidr, sizeof out[n].cidr, "%s/%d", netstr, prefix);
+        out[n].speedMbps = ifaceCapacityKbps(p->ifa_name) / 1000u;
+        n++;
+    }
+    freeifaddrs(ifa);
+    *count = n;
+    return SOLARI_OK;
+}
+
+solariStatus platDefaultUplink(platUplink *out)
+{
+    FILE *f;
+    char line[256];
+    int found = 0;
+
+    if (!out) return ERR_INVALID_ARG;
+    memset(out, 0, sizeof *out);
+    f = fopen("/proc/net/route", "r");
+    if (!f) return ERR_PLATFORM;
+    if (!fgets(line, sizeof line, f)) { fclose(f); return ERR_PLATFORM; }  /* header */
+
+    while (fgets(line, sizeof line, f)) {
+        char iface[SOLARI_IFNAME_MAX];
+        unsigned long dest = 0, gw = 0;
+        struct in_addr a;
+        if (sscanf(line, "%31s %lx %lx", iface, &dest, &gw) < 3) continue;
+        if (dest != 0) continue;                         /* default route only */
+        a.s_addr = (in_addr_t)gw;                        /* /proc value is net-order */
+        copyStr(out->localIf, sizeof out->localIf, iface);
+        inet_ntop(AF_INET, &a, out->gatewayIp, sizeof out->gatewayIp);
+        out->speedMbps = ifaceCapacityKbps(iface) / 1000u;
+        found = 1;
+        break;
+    }
+    fclose(f);
+    return found ? SOLARI_OK : ERR_PLATFORM;
 }
 
 /* ---- watchdog support ----------------------------------------------------- */

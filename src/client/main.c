@@ -107,12 +107,16 @@ static int runLocal(const clientConfig *cfg, int loop)
 }
 
 #ifdef CLIENT_WITH_REPORTING
-/* reporting mode: announce, then sample -> push-or-spool every interval. */
+#define CLIENT_DISCOVERY_EVERY 20   /* emit discovery/topology every N cycles */
+
+/* reporting mode: announce, then sample -> push-or-spool every interval, with
+ * periodic discovery/topology adverts. */
 static int runReporting(const clientConfig *cfg, int loop)
 {
     clientContext ctx;
     clientState   st;
     solariStatus  rc;
+    unsigned long cycle = 0;
 
     memset(&st, 0, sizeof st);
     if (clientContextInit(&ctx, cfg) != SOLARI_OK) {
@@ -131,6 +135,12 @@ static int runReporting(const clientConfig *cfg, int loop)
             if (!ctx.conn) clientConnect(&ctx);  /* reconnect if we went offline */
             clientReportSend(&ctx, &rep);        /* sends or durably spools */
         }
+        /* periodic neighbor/uplink adverts (best-effort, not spooled) */
+        if (ctx.conn && (cycle % CLIENT_DISCOVERY_EVERY) == 0) {
+            clientSendDiscovery(&ctx);
+            clientSendTopology(&ctx);
+        }
+        cycle++;
         if (loop) solariSleepMs(cfg->sampleIntervalSec * 1000u);
     } while (loop);
 

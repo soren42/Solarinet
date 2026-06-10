@@ -15,6 +15,7 @@
 
 #include "solari/solariNet.h"
 #include "solari/solariFrame.h"
+#include "solari/solariTlv.h"
 #include "solari/solariSpool.h"
 #include "solari/solariTime.h"
 #include "solari/solariError.h"
@@ -131,10 +132,76 @@ static void test_spool_then_drain(void)
     remove(dbpath);
 }
 
+static void test_discovery_frame(void)
+{
+    clientConfig cfg;
+    clientContext ctx;
+    uint8_t frame[8192];
+    size_t flen = 0, plen = 0;
+    uint8_t n = 0;
+    solariFrameHeader h;
+    const uint8_t *payload = NULL, *val = NULL;
+    solariTlvReader r;
+    uint16_t type = 0, len = 0;
+    int sawSource = 0;
+
+    clientConfigDefaults(&cfg);
+    strncpy(cfg.hostFqdn, "disc.akoria.net", sizeof cfg.hostFqdn - 1);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientContextInit(&ctx, &cfg));
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        clientBuildDiscoveryFrame(&ctx, frame, sizeof frame, &flen, &n));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariFrameParse(frame, flen, &h, &payload, &plen, NULL));
+    TEST_ASSERT_EQUAL_UINT8(SCP_MSG_DISCOVERY_ADVERT, h.msgType);
+    TEST_ASSERT_EQUAL_UINT64(ctx.nodeId, h.sourceNodeId);
+
+    solariTlvReaderInit(&r, payload, plen);
+    while (solariTlvNext(&r, &type, &val, &len) == SOLARI_OK)
+        if (type == TLV_DISC_SOURCE) sawSource = 1;
+    TEST_ASSERT_TRUE(sawSource);            /* the ARP source tag is always present */
+
+    clientContextClose(&ctx);
+}
+
+static void test_topology_frame(void)
+{
+    clientConfig cfg;
+    clientContext ctx;
+    uint8_t frame[8192];
+    size_t flen = 0, plen = 0;
+    uint8_t n = 0;
+    solariFrameHeader h;
+    const uint8_t *payload = NULL, *val = NULL;
+    solariTlvReader r;
+    uint16_t type = 0, len = 0;
+    int sawUplink = 0, sawSegment = 0;
+
+    clientConfigDefaults(&cfg);
+    strncpy(cfg.hostFqdn, "topo.akoria.net", sizeof cfg.hostFqdn - 1);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientContextInit(&ctx, &cfg));
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        clientBuildTopologyFrame(&ctx, frame, sizeof frame, &flen, &n));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariFrameParse(frame, flen, &h, &payload, &plen, NULL));
+    TEST_ASSERT_EQUAL_UINT8(SCP_MSG_TOPOLOGY_REPORT, h.msgType);
+
+    solariTlvReaderInit(&r, payload, plen);
+    while (solariTlvNext(&r, &type, &val, &len) == SOLARI_OK) {
+        if (type == TLV_TOPO_UPLINK)  sawUplink = 1;
+        if (type == TLV_TOPO_SEGMENT) sawSegment = 1;
+    }
+    TEST_ASSERT_TRUE(sawSegment);          /* >=1 IPv4 interface on this host */
+    TEST_ASSERT_TRUE(sawUplink);           /* this host has a default route   */
+
+    clientContextClose(&ctx);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_report_live_send);
     RUN_TEST(test_spool_then_drain);
+    RUN_TEST(test_discovery_frame);
+    RUN_TEST(test_topology_frame);
     return UNITY_END();
 }

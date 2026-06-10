@@ -59,6 +59,38 @@ solariStatus platLogStat   (const char *path, const char *regex,
                             uint64_t *sizeNow, uint32_t *matchCount,
                             uint64_t *lastOffsetInOut);
 
+/* ---- discovery & topology (Phase 3 Handoff sec 4) ---- */
+
+/* A neighbor the node can cheaply see (ARP / neighbor table). */
+typedef struct {
+    char ip[46];                     /* dotted IPv4 (or IPv6) */
+    char mac[18];                    /* "aa:bb:cc:dd:ee:ff"   */
+    char iface[SOLARI_IFNAME_MAX];
+} platNeighbor;
+
+/* An interface's network binding (for segment inference). */
+typedef struct {
+    char     ifName[SOLARI_IFNAME_MAX];
+    char     cidr[64];               /* "10.42.0.0/24" (network address) */
+    uint64_t speedMbps;
+} platIfaceCidr;
+
+/* The node's uplink: the default-route interface, its gateway, link speed.
+ * LLDP chassis/port are populated by a fuller path later; this is the cheap
+ * always-available hint (default route) the topology view starts from. */
+typedef struct {
+    char     localIf[SOLARI_IFNAME_MAX];
+    char     gatewayIp[46];
+    uint64_t speedMbps;
+} platUplink;
+
+/* Neighbors from the ARP/neighbor table (complete entries only). */
+solariStatus platArpNeighbors(platNeighbor *out, uint8_t cap, uint8_t *count);
+/* Per-interface IPv4 network CIDRs (loopback skipped). */
+solariStatus platIfaceCidrs(platIfaceCidr *out, uint8_t cap, uint8_t *count);
+/* The default-route uplink. ERR_PLATFORM if there is no default route. */
+solariStatus platDefaultUplink(platUplink *out);
+
 /* ---- watchdog support ---- */
 
 /* Fork+exec a fresh copy of the agent (argv must be NULL-terminated). Returns

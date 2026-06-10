@@ -133,6 +133,22 @@ solariStatus clientReportSend(clientContext *ctx, const solariClientReport *rep)
  * stop on failure (retried next cycle). Bounded per call. */
 solariStatus clientDrainSpool(clientContext *ctx);
 
+/* ---- discovery & topology hooks (Phase 3 Handoff sec 4, 10) ---- */
+
+/* Gather ARP neighbors and emit SCP_MSG_DISCOVERY_ADVERT; gather interface
+ * CIDRs + the default uplink and emit SCP_MSG_TOPOLOGY_REPORT. Both are
+ * best-effort: sent on the live connection if up, else skipped (re-sent next
+ * cycle, not spooled - low-value periodic adverts). */
+solariStatus clientSendDiscovery(clientContext *ctx);
+solariStatus clientSendTopology(clientContext *ctx);
+
+/* Build (without sending) the advert frames, for tests. *nOut receives the
+ * count of entities (discovery) / segments (topology) encoded. */
+solariStatus clientBuildDiscoveryFrame(clientContext *ctx, uint8_t *out, size_t cap,
+                                       size_t *outLen, uint8_t *nOut);
+solariStatus clientBuildTopologyFrame(clientContext *ctx, uint8_t *out, size_t cap,
+                                      size_t *outLen, uint8_t *nOut);
+
 #endif /* CLIENT_WITH_REPORTING */
 
 #endif /* SOLARI_CLIENT_H */

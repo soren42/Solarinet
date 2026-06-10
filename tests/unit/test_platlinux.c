@@ -113,6 +113,30 @@ static void test_proc_alive(void)
     TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, platProcessAlive(-1, &alive));
 }
 
+static void test_discovery_topology(void)
+{
+    platNeighbor nb[16];
+    platIfaceCidr cidrs[8];
+    platUplink up;
+    uint8_t n = 0, i;
+
+    /* ARP table: count may legitimately be 0, but the call must succeed */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, platArpNeighbors(nb, 16, &n));
+
+    /* at least one non-loopback IPv4 interface, each with a CIDR */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, platIfaceCidrs(cidrs, 8, &n));
+    TEST_ASSERT_TRUE(n >= 1);
+    for (i = 0; i < n; i++) {
+        TEST_ASSERT_NOT_NULL(strchr(cidrs[i].cidr, '/'));
+        TEST_ASSERT_TRUE(strlen(cidrs[i].ifName) > 0);
+    }
+
+    /* a default route exists on this host */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, platDefaultUplink(&up));
+    TEST_ASSERT_TRUE(strlen(up.gatewayIp) > 0);
+    TEST_ASSERT_TRUE(strlen(up.localIf) > 0);
+}
+
 static void test_log_stat(void)
 {
     char path[64];
@@ -157,6 +181,7 @@ int main(void)
     RUN_TEST(test_net_and_usb);
     RUN_TEST(test_proc_inspect);
     RUN_TEST(test_proc_alive);
+    RUN_TEST(test_discovery_topology);
     RUN_TEST(test_log_stat);
     return UNITY_END();
 }
