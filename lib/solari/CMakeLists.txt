@@ -22,6 +22,10 @@ endif()
 if(SOLARI_WITH_IO)
   list(APPEND SOLARI_EXTRA_SOURCES solariNet.c)
 endif()
+# The shared push-or-spool reporter needs both the transport and the spool.
+if(SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
+  list(APPEND SOLARI_EXTRA_SOURCES solariReporter.c)
+endif()
 
 add_library(solari STATIC ${SOLARI_CORE_SOURCES} ${SOLARI_EXTRA_SOURCES})
 

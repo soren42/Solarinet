@@ -132,11 +132,11 @@ static int runReporting(const clientConfig *cfg, int loop)
         if (rc != SOLARI_OK) {
             solariLogf(SOLARI_LOG_ERROR, "collect failed: %s", solariStrError(rc));
         } else {
-            if (!ctx.conn) clientConnect(&ctx);  /* reconnect if we went offline */
+            if (!solariReporterConnected(ctx.rep)) clientConnect(&ctx);  /* reconnect */
             clientReportSend(&ctx, &rep);        /* sends or durably spools */
         }
         /* periodic neighbor/uplink adverts (best-effort, not spooled) */
-        if (ctx.conn && (cycle % CLIENT_DISCOVERY_EVERY) == 0) {
+        if (solariReporterConnected(ctx.rep) && (cycle % CLIENT_DISCOVERY_EVERY) == 0) {
             clientSendDiscovery(&ctx);
             clientSendTopology(&ctx);
         }

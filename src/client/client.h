@@ -90,20 +90,15 @@ int clientWatchdogMain(const clientConfig *cfg, int64_t supervisedPid,
 /* ===================== reporting (transport + spool) ===================== */
 #ifdef CLIENT_WITH_REPORTING
 
-#include "solari/solariNet.h"
-#include "solari/solariSpool.h"
+#include "solari/solariReporter.h"
 
-/* Runtime reporting context: the live connection to the active server, the
- * durable spool, and the per-source sequence counter. The push-or-spool path
- * (clientReportSend) is what makes the client fault tolerant: when the server
- * is unreachable the frame is durably queued and drained on reconnect. */
+/* Runtime reporting context: the shared push-or-spool transport (solariReporter,
+ * libsolari) plus this node's id. The transport/retry/spool logic lives in the
+ * reporter; this is the thin client-specific wrapper around it. */
 typedef struct {
     const clientConfig *cfg;
-    solariConn  *conn;        /* PUSH dialer to the active server; may be NULL */
-    solariSpool *spool;       /* store-and-forward; NULL if no spoolDb         */
-    uint64_t     nodeId;      /* stable id for this node (sec 5.5)             */
-    uint32_t     seqNo;       /* per-source monotonic frame sequence           */
-    int          activeUrl;   /* 0 = primary, 1 = failover                     */
+    solariReporter     *rep;   /* shared transport (dial/frame/send-or-spool)  */
+    uint64_t            nodeId; /* stable id for this node (sec 5.5)            */
 } clientContext;
 
 /* Stable 64-bit node id: the configured id, or FNV-1a-64(fqdn|role) (sec 5.5).

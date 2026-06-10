@@ -75,10 +75,10 @@ int clientWatchdogMain(const clientConfig *cfg, int64_t supervisedPid,
                        const char *argv0, char *const clientArgv[])
 {
     uint32_t interval = cfg->watchdogIntervalSec ? cfg->watchdogIntervalSec : 5;
-    uint32_t seq = 0;
 #ifdef CLIENT_WITH_REPORTING
     solariConn *conn = watchdogConnect(cfg);
     uint64_t nodeId = clientNodeId(cfg);
+    uint32_t seq = 0;
 #endif
 
     solariLogf(SOLARI_LOG_INFO, "watchdog up: supervising pid %lld every %us",

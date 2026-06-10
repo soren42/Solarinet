@@ -72,3 +72,10 @@ if(TARGET monitorcore)
   target_link_libraries(test_probe PRIVATE monitorcore unity)
   add_test(NAME test_probe COMMAND test_probe)
 endif()
+
+# Monitor reporting on the shared transport - needs the transport + spool.
+if(TARGET monitorcore AND SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
+  add_executable(test_monitor_report integration/test_monitor_report.c)
+  target_link_libraries(test_monitor_report PRIVATE monitorcore unity)
+  add_test(NAME test_monitor_report COMMAND test_monitor_report)
+endif()

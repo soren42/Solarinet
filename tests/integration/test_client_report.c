@@ -16,7 +16,7 @@
 #include "solari/solariNet.h"
 #include "solari/solariFrame.h"
 #include "solari/solariTlv.h"
-#include "solari/solariSpool.h"
+#include "solari/solariReporter.h"
 #include "solari/solariTime.h"
 #include "solari/solariError.h"
 
@@ -107,7 +107,7 @@ static void test_spool_then_drain(void)
 
     /* server down -> the report must be spooled, not lost */
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientReportSend(&ctx, &rep));
-    TEST_ASSERT_TRUE(solariSpoolDepth(ctx.spool) >= 1);
+    TEST_ASSERT_TRUE(solariReporterSpoolDepth(ctx.rep) >= 1);
 
     /* bring the server up; draining replays the queue to empty */
     memset(&pullOpts, 0, sizeof pullOpts);
@@ -117,11 +117,11 @@ static void test_spool_then_drain(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnListen(&pullOpts, &pull));
     clientConnect(&ctx);                         /* ensure a live conn exists */
 
-    for (tries = 0; tries < 80 && solariSpoolDepth(ctx.spool) > 0; tries++) {
+    for (tries = 0; tries < 80 && solariReporterSpoolDepth(ctx.rep) > 0; tries++) {
         clientDrainSpool(&ctx);
-        if (solariSpoolDepth(ctx.spool) > 0) solariSleepMs(50);
+        if (solariReporterSpoolDepth(ctx.rep) > 0) solariSleepMs(50);
     }
-    TEST_ASSERT_EQUAL_size_t(0, solariSpoolDepth(ctx.spool));
+    TEST_ASSERT_EQUAL_size_t(0, solariReporterSpoolDepth(ctx.rep));
 
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnRecv(pull, &rx, &rlen));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariFrameParse(rx, rlen, &h, NULL, NULL, NULL));

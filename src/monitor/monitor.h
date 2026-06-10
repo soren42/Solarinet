@@ -62,4 +62,30 @@ uint64_t monitorNodeId(const monitorConfig *cfg);
 /* Fully-qualified hostname (Linux; gethostname + canonical lookup). */
 solariStatus monitorHostFqdn(char *out, size_t cap);
 
+/* ===================== reporting (transport + spool) ===================== */
+#ifdef MONITOR_WITH_REPORTING
+
+#include "solari/solariReporter.h"
+
+/* Reporting context: the shared push-or-spool transport (solariReporter) plus
+ * this monitor's node id. Same fault tolerance as the client - MONITOR_REPORTs
+ * are pushed live or durably spooled and replayed on reconnect. */
+typedef struct {
+    const monitorConfig *cfg;
+    solariReporter      *rep;
+    uint64_t             nodeId;
+} monitorContext;
+
+/* Derive nodeId, open the reporter (and spool, if configured). Does not connect. */
+solariStatus monitorContextInit(monitorContext *ctx, const monitorConfig *cfg);
+void         monitorContextClose(monitorContext *ctx);
+/* Best-effort connect (primary, then failover). */
+solariStatus monitorConnect(monitorContext *ctx);
+/* Build a MONITOR_REPORT from probe results and push-or-spool it. */
+solariStatus monitorReportSend(monitorContext *ctx, const solariMonitorReport *rep);
+/* Replay any spooled reports. */
+solariStatus monitorDrainSpool(monitorContext *ctx);
+
+#endif /* MONITOR_WITH_REPORTING */
+
 #endif /* SOLARI_MONITOR_H */

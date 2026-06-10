@@ -8,16 +8,26 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   return()
 endif()
 
-add_library(monitorcore STATIC
+set(MONITOR_CORE_SOURCES
   probeNet.c
   monitorPeer.c
   monitorConfig.c
 )
+set(MONITOR_HAS_REPORTING OFF)
+if(SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
+  list(APPEND MONITOR_CORE_SOURCES monitorReport.c)
+  set(MONITOR_HAS_REPORTING ON)
+endif()
+
+add_library(monitorcore STATIC ${MONITOR_CORE_SOURCES})
 target_include_directories(monitorcore PUBLIC
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(monitorcore PUBLIC solari)
+if(MONITOR_HAS_REPORTING)
+  target_compile_definitions(monitorcore PUBLIC MONITOR_WITH_REPORTING=1)
+endif()
 
 add_executable(solariMonitor main.c)
 target_link_libraries(solariMonitor PRIVATE monitorcore)

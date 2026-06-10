@@ -47,19 +47,22 @@ static const char *outcomeStr(uint8_t o)
     }
 }
 
-static int runRound(const monitorConfig *cfg, uint64_t self)
+/* Probe every owned target, print results, and accumulate them into *out. */
+static void runRound(const monitorConfig *cfg, uint64_t self, solariMonitorReport *out)
 {
     uint64_t fleet[1];
     uint8_t i;
-    int owned = 0;
 
     fleet[0] = self;                 /* standalone fleet: this node owns all */
+    memset(out, 0, sizeof *out);
+    if (cfg->hostFqdn[0]) strncpy(out->hostFqdn, cfg->hostFqdn, sizeof out->hostFqdn - 1);
+    else                  monitorHostFqdn(out->hostFqdn, sizeof out->hostFqdn);
+
     for (i = 0; i < cfg->targetCount; i++) {
         const monitorTarget *t = &cfg->targets[i];
         probeSpec spec;
         solariProbeResult res;
         if (!monitorOwnsTarget(self, fleet, 1, t->targetId, cfg->replFactor)) continue;
-        owned++;
 
         memset(&spec, 0, sizeof spec);
         strncpy(spec.targetHost, t->host, sizeof spec.targetHost - 1);
@@ -73,8 +76,8 @@ static int runRound(const monitorConfig *cfg, uint64_t self)
                t->targetId, protoStr(res.proto), outcomeStr(res.outcome),
                res.rttMicros / 1000.0, res.jitterMicros / 1000.0,
                res.lossPermille / 10.0, t->label);
+        if (out->probeCount < SOLARI_MAX_PROBES) out->probes[out->probeCount++] = res;
     }
-    return owned;
 }
 
 int main(int argc, char **argv)
@@ -115,12 +118,41 @@ int main(int argc, char **argv)
                (unsigned long long)self, (unsigned)cfg.targetCount,
                (unsigned)cfg.replFactor, (unsigned)cfg.probesPerRound);
 
+#ifdef MONITOR_WITH_REPORTING
+    {
+        monitorContext ctx;
+        int reporting = (cfg.primaryUrl[0] != '\0');
+        if (reporting) {
+            if (monitorContextInit(&ctx, &cfg) != SOLARI_OK) {
+                solariLogf(SOLARI_LOG_FATAL, "reporter init failed");
+                solariLogShutdown();
+                return 1;
+            }
+            monitorConnect(&ctx);                    /* best-effort */
+            solariLogf(SOLARI_LOG_INFO, "reporting to %s", cfg.primaryUrl);
+        }
+        do {
+            solariMonitorReport mrep;
+            printf("== probe round @ %llu ==\n", (unsigned long long)solariNowUnixMs());
+            runRound(&cfg, self, &mrep);
+            if (reporting) {
+                if (!solariReporterConnected(ctx.rep)) monitorConnect(&ctx);
+                monitorReportSend(&ctx, &mrep);      /* push or durably spool */
+            }
+            fflush(stdout);
+            if (loop) solariSleepMs(cfg.roundIntervalSec * 1000u);
+        } while (loop);
+        if (reporting) monitorContextClose(&ctx);
+    }
+#else
     do {
+        solariMonitorReport mrep;
         printf("== probe round @ %llu ==\n", (unsigned long long)solariNowUnixMs());
-        runRound(&cfg, self);
+        runRound(&cfg, self, &mrep);
         fflush(stdout);
         if (loop) solariSleepMs(cfg.roundIntervalSec * 1000u);
     } while (loop);
+#endif
 
     solariLogShutdown();
     return 0;

@@ -16,9 +16,9 @@
 #include "platOS.h"
 
 #include "solari/solariFrame.h"
+#include "solari/solariReporter.h"
 #include "solari/solariTlv.h"
 #include "solari/solariLog.h"
-#include "solari/solariTime.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -26,24 +26,6 @@
 #define DISC_PAYLOAD_CAP 16384
 #define DISC_FRAME_CAP   (DISC_PAYLOAD_CAP + 128)
 #define DISC_MAX_NEIGH   64
-
-/* Wrap a built TLV payload in an SCP frame; advances ctx->seqNo. */
-static solariStatus frameUp(clientContext *ctx, uint8_t msgType,
-                            const uint8_t *payload, size_t plen, uint16_t tlvCount,
-                            uint8_t *out, size_t cap, size_t *outLen)
-{
-    solariFrameHeader h;
-    memset(&h, 0, sizeof h);
-    h.magic[0] = SCP_MAGIC_0;
-    h.magic[1] = SCP_MAGIC_1;
-    h.protoVersion   = SCP_PROTO_VERSION;
-    h.msgType        = msgType;
-    h.tlvCount       = tlvCount;
-    h.sourceNodeId   = ctx->nodeId;
-    h.sendTimeUnixMs = solariNowUnixMs();
-    h.seqNo          = ++ctx->seqNo;
-    return solariFrameBuild(&h, payload, plen, out, cap, outLen);
-}
 
 solariStatus clientBuildDiscoveryFrame(clientContext *ctx, uint8_t *out, size_t cap,
                                        size_t *outLen, uint8_t *nOut)
@@ -66,7 +48,8 @@ solariStatus clientBuildDiscoveryFrame(clientContext *ctx, uint8_t *out, size_t 
         if (solariTlvAppendStr(&w, TLV_DISC_ENTITY, ent) != SOLARI_OK) break;
     }
     if (nOut) *nOut = cnt;
-    return frameUp(ctx, SCP_MSG_DISCOVERY_ADVERT, payload, w.len, w.count, out, cap, outLen);
+    return solariReporterFrame(ctx->rep, SCP_MSG_DISCOVERY_ADVERT, SCP_FLAG_NONE,
+                               payload, w.len, w.count, out, cap, outLen);
 }
 
 solariStatus clientBuildTopologyFrame(clientContext *ctx, uint8_t *out, size_t cap,
@@ -95,7 +78,8 @@ solariStatus clientBuildTopologyFrame(clientContext *ctx, uint8_t *out, size_t c
         }
     }
     if (nOut) *nOut = cnt;
-    return frameUp(ctx, SCP_MSG_TOPOLOGY_REPORT, payload, w.len, w.count, out, cap, outLen);
+    return solariReporterFrame(ctx->rep, SCP_MSG_TOPOLOGY_REPORT, SCP_FLAG_NONE,
+                               payload, w.len, w.count, out, cap, outLen);
 }
 
 solariStatus clientSendDiscovery(clientContext *ctx)
@@ -106,13 +90,12 @@ solariStatus clientSendDiscovery(clientContext *ctx)
     solariStatus rc;
 
     if (!ctx) return ERR_INVALID_ARG;
-    if (!ctx->conn) return ERR_CONN_RETRY;               /* best-effort, no spool */
+    if (!solariReporterConnected(ctx->rep)) return ERR_CONN_RETRY;  /* best-effort */
     rc = clientBuildDiscoveryFrame(ctx, frame, sizeof frame, &flen, &n);
     if (rc != SOLARI_OK) return rc;
-    rc = solariConnSend(ctx->conn, frame, flen);
+    rc = solariReporterSendEphemeral(ctx->rep, frame, flen);
     if (rc == SOLARI_OK)
         solariLogf(SOLARI_LOG_DEBUG, "discovery advert sent (%u neighbors)", (unsigned)n);
-    else if (rc == ERR_CONN_FATAL) { solariConnClose(ctx->conn); ctx->conn = NULL; }
     return rc;
 }
 
@@ -124,12 +107,11 @@ solariStatus clientSendTopology(clientContext *ctx)
     solariStatus rc;
 
     if (!ctx) return ERR_INVALID_ARG;
-    if (!ctx->conn) return ERR_CONN_RETRY;
+    if (!solariReporterConnected(ctx->rep)) return ERR_CONN_RETRY;
     rc = clientBuildTopologyFrame(ctx, frame, sizeof frame, &flen, &n);
     if (rc != SOLARI_OK) return rc;
-    rc = solariConnSend(ctx->conn, frame, flen);
+    rc = solariReporterSendEphemeral(ctx->rep, frame, flen);
     if (rc == SOLARI_OK)
         solariLogf(SOLARI_LOG_DEBUG, "topology report sent (%u segments)", (unsigned)n);
-    else if (rc == ERR_CONN_FATAL) { solariConnClose(ctx->conn); ctx->conn = NULL; }
     return rc;
 }
