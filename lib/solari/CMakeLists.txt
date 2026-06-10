@@ -49,7 +49,9 @@ endif()
 
 # ---- JSON overlay (optional) -------------------------------------------
 if(SOLARI_WITH_JSON)
-  target_compile_definitions(solari PRIVATE SOLARI_WITH_JSON=1)
+  # PUBLIC so consumers (e.g. the test suite) can tell the overlay is compiled
+  # in and assert the applied-overlay behavior rather than the ERR_PLATFORM stub.
+  target_compile_definitions(solari PUBLIC SOLARI_WITH_JSON=1)
   if(TARGET cjson)
     target_link_libraries(solari PUBLIC cjson)
   else()

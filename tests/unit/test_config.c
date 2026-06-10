@@ -118,6 +118,23 @@ static void test_case_insensitive_keys(void)
     solariConfigFree(c);
 }
 
+#ifdef SOLARI_WITH_JSON
+static void test_overlay_applies_json(void)
+{
+    solariConfig *c = parse();
+    /* JSON overlay merges "section.key": value entries on top of the base conf */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConfigOverlayJson(c,
+        "{\"overlay.name\":\"applied\",\"overlay.num\":7,\"overlay.flag\":true}"));
+    TEST_ASSERT_EQUAL_STRING("applied", solariConfigGetStr(c, "overlay", "name", "?"));
+    TEST_ASSERT_EQUAL_INT(7, solariConfigGetInt(c, "overlay", "num", -1));
+    TEST_ASSERT_TRUE(solariConfigGetBool(c, "overlay", "flag", false));
+    /* malformed JSON is rejected cleanly, not a crash */
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, solariConfigOverlayJson(c, "{not json"));
+    /* null guards */
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, solariConfigOverlayJson(c, NULL));
+    solariConfigFree(c);
+}
+#else
 static void test_overlay_without_json_returns_platform(void)
 {
     solariConfig *c = parse();
@@ -125,6 +142,7 @@ static void test_overlay_without_json_returns_platform(void)
     TEST_ASSERT_EQUAL_INT(ERR_PLATFORM, solariConfigOverlayJson(c, "{\"a.b\":\"c\"}"));
     solariConfigFree(c);
 }
+#endif
 
 int main(void)
 {
@@ -137,6 +155,10 @@ int main(void)
     RUN_TEST(test_epoch);
     RUN_TEST(test_missing_section_default);
     RUN_TEST(test_case_insensitive_keys);
+#ifdef SOLARI_WITH_JSON
+    RUN_TEST(test_overlay_applies_json);
+#else
     RUN_TEST(test_overlay_without_json_returns_platform);
+#endif
     return UNITY_END();
 }

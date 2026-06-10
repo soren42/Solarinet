@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Phase 2 Completion Report</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:900px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Phase 2 Completion Report</h1>
+  <p class="sub">SolariNet Monitoring · libsolari I/O layer · verified on xenon · all gates green</p>
+
+  <h2>What landed</h2>
+  <p><strong>Phase 2 (libsolari I/O)</strong> from §16 of the base plan — and §2 of the
+  Phase 3 Handoff, which made <em>verify it on xenon</em> step one — is complete and
+  verified. The transport, store-and-forward spool, and JSON config overlay now
+  compile and pass tests on the dedicated Linux dev host. This closes the migration
+  gate; Phase 3 (client + platform layer) is unblocked.</p>
+
+  <table>
+    <thead><tr><th>Module</th><th>Source</th><th>Brings in</th><th>Contract (§)</th></tr></thead>
+    <tbody>
+      <tr><td>nng/mbedTLS transport (PUSH/PULL/SURVEYOR/RESPONDENT/PUB/SUB/REQ/REP)</td><td><code>solariNet.c</code></td><td>nng + mbedTLS</td><td>§6.5</td></tr>
+      <tr><td>SQLite store-and-forward spool (push/peek/ack/nack + backoff)</td><td><code>solariSpool.c</code></td><td>SQLite</td><td>§6.6</td></tr>
+      <tr><td>JSON config overlay (merged on top of the <code>key=value</code> base)</td><td><code>solariConfig.c</code></td><td>cJSON</td><td>§13</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Verification</h2>
+  <p>Built with the full I/O surface enabled
+  (<code>-DSOLARI_WITH_IO=ON -DSOLARI_WITH_SQLITE=ON -DSOLARI_WITH_JSON=ON</code>)
+  under <code>-std=c99 -Wall -Wextra -Wpedantic
+  -Werror=implicit-function-declaration</code>, <span class="ok">zero warnings</span>.</p>
+  <pre>100% tests passed, 0 tests failed out of 7
+  test_crypto        FNV/CRC/SHA vectors, CN parsing        (core)
+  test_tlv           writer/reader symmetry, truncation     (core)
+  test_frame         byte-exact golden header, CRC & magic  (core)
+  test_msg           message round-trips, fwd-compat        (core)
+  test_config        parser + applied JSON overlay          (core + cJSON)
+  test_spool         enqueue-offline / drain-on-reconnect   (SQLite)   &lt;- hard gate
+  test_net_loopback  frame round-trip over TLS              (nng+mbedTLS)</pre>
+  <p>The core + spool suites are the hard gate; the nng TLS loopback round-trips a
+  frame end-to-end. The staged <code>bootstrap-xenon.sh</code> run reports them
+  separately so a transient transport wrinkle can't mask core success.</p>
+
+  <div class="note">
+    <strong>One test was strengthened, not just flipped on.</strong> The config
+    suite previously only asserted the dependency-free stub
+    (<code>solariConfigOverlayJson → ERR_PLATFORM</code>). With <code>SOLARI_WITH_JSON</code>
+    now compiled in, that assertion would have been wrong, so the test branches on
+    the (now <code>PUBLIC</code>) <code>SOLARI_WITH_JSON</code> macro and verifies the
+    <em>applied-overlay</em> path for real: string/number/bool entries merge, malformed
+    JSON and NULL are rejected cleanly. The base dependency-free build keeps asserting
+    the <code>ERR_PLATFORM</code> stub.
+  </div>
+
+  <h2>Dependencies</h2>
+  <p>nng (v1.8.0), mbedTLS (3.6.x), SQLite (3.46+), and cJSON (1.7.19) are resolved
+  from the host's dev packages, installed/idempotently checked by
+  <code>deploy/bootstrap-xenon.sh</code>; the CMake links either vendored-source
+  targets or the system libraries, whichever is present. Using system packages here
+  (rather than strict vendoring) is the deliberate, pragmatic stance — self-host what
+  matters, don't chase hard air-gapping.</p>
+
+  <h2>Build it yourself</h2>
+  <pre>./deploy/bootstrap-xenon.sh           # installs deps, builds, runs the staged suites
+# or directly:
+cmake -S . -B build -DSOLARI_BUILD_TESTS=ON \
+      -DSOLARI_WITH_IO=ON -DSOLARI_WITH_SQLITE=ON -DSOLARI_WITH_JSON=ON
+cmake --build build && ctest --test-dir build --output-on-failure</pre>
+
+  <h2>Next: Phase 3 (client + platform layer)</h2>
+  <ul>
+    <li><code>src/client/platOS.h</code> — the portability seam; then <code>plat/platLinux.c</code> as the reference implementation (<code>/proc</code>, <code>getifaddrs</code>, <code>statvfs</code>).</li>
+    <li><code>clientCollect.c</code>, <code>clientReport.c</code>, <code>clientWatchdog.c</code>, <code>main.c</code> — sample loop, HELLO/WELCOME, spool-on-failure, honor CONTROL (§7.3).</li>
+    <li>macOS / Windows PALs follow (macOS on its own box); plus the new client-side discovery/topology hooks from the Phase 3 Handoff (§4, §10).</li>
+  </ul>
+
+  <p class="footer">Generated at the close of the Phase 2 verification on xenon.
+  Migration gate (Phase 3 Handoff §2.3) satisfied: I/O + SQLite + JSON build clean,
+  spool hard gate green, TLS loopback round-trips. Git history intact on xenon.</p>
+</div>
+</body>
+</html>
