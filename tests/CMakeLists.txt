@@ -53,3 +53,10 @@ if(TARGET clientcore AND SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
   target_link_libraries(test_client_report PRIVATE clientcore unity)
   add_test(NAME test_client_report COMMAND test_client_report)
 endif()
+
+# Watchdog unit test - heartbeat frame + liveness decision (no transport needed).
+if(TARGET clientcore AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(test_watchdog unit/test_watchdog.c)
+  target_link_libraries(test_watchdog PRIVATE clientcore unity)
+  add_test(NAME test_watchdog COMMAND test_watchdog)
+endif()

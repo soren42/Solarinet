@@ -24,7 +24,7 @@
 
 /* ---- helpers -------------------------------------------------------------- */
 
-static uint64_t deriveNodeId(const clientConfig *cfg)
+uint64_t clientNodeId(const clientConfig *cfg)
 {
     char fqdn[SOLARI_FQDN_MAX];
     char buf[SOLARI_FQDN_MAX + 8];
@@ -89,7 +89,7 @@ solariStatus clientContextInit(clientContext *ctx, const clientConfig *cfg)
     if (!ctx || !cfg) return ERR_INVALID_ARG;
     memset(ctx, 0, sizeof *ctx);
     ctx->cfg    = cfg;
-    ctx->nodeId = deriveNodeId(cfg);
+    ctx->nodeId = clientNodeId(cfg);
 
     if (cfg->spoolDb[0]) {
         if (solariSpoolOpen(cfg->spoolDb, &ctx->spool) != SOLARI_OK) {

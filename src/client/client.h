@@ -68,6 +68,25 @@ void clientConfigDefaults(clientConfig *out);
 solariStatus clientCollectReport(const clientConfig *cfg, clientState *st,
                                  bool catalogueOnly, solariClientReport *out);
 
+/* ===================== watchdog (sec 7.3) ===================== */
+/* A sibling process supervises the client, emits liveness heartbeats, and
+ * re-execs the client if it dies. Supervision + re-exec use only the PAL, so
+ * these build everywhere; the heartbeat is sent only when reporting is on. */
+
+/* True if the supervised client process is no longer alive. */
+bool clientWatchdogSupervisedGone(int64_t supervisedPid);
+
+/* Build a header-only SCP_MSG_WATCHDOG heartbeat frame into out. */
+solariStatus clientWatchdogBuildHeartbeat(uint64_t nodeId, uint32_t seq,
+                                          uint8_t *out, size_t cap, size_t *outLen);
+
+/* Watchdog process entry point. Supervises supervisedPid; emits a heartbeat
+ * every cfg->watchdogIntervalSec; when the client is gone, re-execs it via
+ * platSpawnSelf(argv0, clientArgv) and returns (the new client spawns its own
+ * watchdog). Returns 0 normally, non-zero on a fatal setup error. */
+int clientWatchdogMain(const clientConfig *cfg, int64_t supervisedPid,
+                       const char *argv0, char *const clientArgv[]);
+
 /* ===================== reporting (transport + spool) ===================== */
 #ifdef CLIENT_WITH_REPORTING
 
@@ -86,6 +105,10 @@ typedef struct {
     uint32_t     seqNo;       /* per-source monotonic frame sequence           */
     int          activeUrl;   /* 0 = primary, 1 = failover                     */
 } clientContext;
+
+/* Stable 64-bit node id: the configured id, or FNV-1a-64(fqdn|role) (sec 5.5).
+ * Shared by the report context and the watchdog so both stamp the same id. */
+uint64_t clientNodeId(const clientConfig *cfg);
 
 /* Derive nodeId, open the spool (if configured). Does not connect. */
 solariStatus clientContextInit(clientContext *ctx, const clientConfig *cfg);

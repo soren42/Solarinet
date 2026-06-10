@@ -4,7 +4,7 @@
 # layer (clientReport.c) compiles only when libsolari carries the nng transport
 # and the SQLite spool.
 
-set(CLIENT_CORE_SOURCES clientCollect.c)
+set(CLIENT_CORE_SOURCES clientCollect.c clientWatchdog.c)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   list(APPEND CLIENT_CORE_SOURCES plat/platLinux.c)
