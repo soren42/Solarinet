@@ -60,3 +60,15 @@ if(TARGET clientcore AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(test_watchdog PRIVATE clientcore unity)
   add_test(NAME test_watchdog COMMAND test_watchdog)
 endif()
+
+# Monitor: HRW ownership (unit) + the TCP probe engine (integration). Both link
+# monitorcore, which is Linux-only.
+if(TARGET monitorcore)
+  add_executable(test_hrw unit/test_hrw.c)
+  target_link_libraries(test_hrw PRIVATE monitorcore unity)
+  add_test(NAME test_hrw COMMAND test_hrw)
+
+  add_executable(test_probe integration/test_probe.c)
+  target_link_libraries(test_probe PRIVATE monitorcore unity)
+  add_test(NAME test_probe COMMAND test_probe)
+endif()
