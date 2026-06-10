@@ -63,3 +63,71 @@ uint64_t monitorNodeId(const monitorConfig *cfg)
     n = snprintf(buf, sizeof buf, "%s|%d", fqdn, (int)ROLE_MONITOR);
     return solariFnv1a64(buf, (size_t)(n > 0 ? n : 0));
 }
+
+/* ---- peer registry ---- */
+
+void monitorPeersInit(monitorPeers *p, uint64_t selfNodeId)
+{
+    if (!p) return;
+    p->selfNodeId = selfNodeId;
+    p->count = 0;
+}
+
+void monitorPeersHeard(monitorPeers *p, uint64_t nodeId, uint64_t nowMs)
+{
+    size_t i;
+    if (!p || nodeId == 0 || nodeId == p->selfNodeId) return;   /* never track self */
+    for (i = 0; i < p->count; i++) {
+        if (p->peers[i].nodeId == nodeId) { p->peers[i].lastHeardMs = nowMs; return; }
+    }
+    if (p->count < MONITOR_MAX_FLEET) {
+        p->peers[p->count].nodeId = nodeId;
+        p->peers[p->count].lastHeardMs = nowMs;
+        p->count++;
+    }
+}
+
+void monitorPeersPrune(monitorPeers *p, uint64_t nowMs, uint32_t ttlSec)
+{
+    size_t i = 0;
+    uint64_t ttlMs = (uint64_t)ttlSec * 1000u;
+    if (!p) return;
+    while (i < p->count) {
+        if (nowMs >= p->peers[i].lastHeardMs &&
+            nowMs - p->peers[i].lastHeardMs > ttlMs) {
+            p->peers[i] = p->peers[p->count - 1];   /* swap-remove */
+            p->count--;
+        } else {
+            i++;
+        }
+    }
+}
+
+size_t monitorPeersFleet(const monitorPeers *p, uint64_t nowMs, uint32_t ttlSec,
+                         uint64_t *fleetOut, size_t cap)
+{
+    size_t n = 0, i;
+    uint64_t ttlMs = (uint64_t)ttlSec * 1000u;
+    if (!p || !fleetOut || cap == 0) return 0;
+    fleetOut[n++] = p->selfNodeId;
+    for (i = 0; i < p->count && n < cap; i++) {
+        if (nowMs < p->peers[i].lastHeardMs ||
+            nowMs - p->peers[i].lastHeardMs <= ttlMs)
+            fleetOut[n++] = p->peers[i].nodeId;
+    }
+    return n;
+}
+
+size_t monitorOwnedTargets(const monitorConfig *cfg, uint64_t self,
+                           const uint64_t *fleet, size_t fleetLen,
+                           uint8_t *ownedIdx, size_t cap)
+{
+    size_t n = 0;
+    uint8_t i;
+    if (!cfg || !fleet || !ownedIdx) return 0;
+    for (i = 0; i < cfg->targetCount && n < cap; i++) {
+        if (monitorOwnsTarget(self, fleet, fleetLen, cfg->targets[i].targetId, cfg->replFactor))
+            ownedIdx[n++] = i;
+    }
+    return n;
+}

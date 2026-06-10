@@ -47,13 +47,13 @@ static const char *outcomeStr(uint8_t o)
     }
 }
 
-/* Probe every owned target, print results, and accumulate them into *out. */
-static void runRound(const monitorConfig *cfg, uint64_t self, solariMonitorReport *out)
+/* Probe every owned target over the current live `fleet`, print results, and
+ * accumulate them into *out. */
+static void runRound(const monitorConfig *cfg, uint64_t self,
+                     const uint64_t *fleet, size_t fleetLen, solariMonitorReport *out)
 {
-    uint64_t fleet[1];
     uint8_t i;
 
-    fleet[0] = self;                 /* standalone fleet: this node owns all */
     memset(out, 0, sizeof *out);
     if (cfg->hostFqdn[0]) strncpy(out->hostFqdn, cfg->hostFqdn, sizeof out->hostFqdn - 1);
     else                  monitorHostFqdn(out->hostFqdn, sizeof out->hostFqdn);
@@ -62,7 +62,7 @@ static void runRound(const monitorConfig *cfg, uint64_t self, solariMonitorRepor
         const monitorTarget *t = &cfg->targets[i];
         probeSpec spec;
         solariProbeResult res;
-        if (!monitorOwnsTarget(self, fleet, 1, t->targetId, cfg->replFactor)) continue;
+        if (!monitorOwnsTarget(self, fleet, fleetLen, t->targetId, cfg->replFactor)) continue;
 
         memset(&spec, 0, sizeof spec);
         strncpy(spec.targetHost, t->host, sizeof spec.targetHost - 1);
@@ -87,6 +87,7 @@ int main(int argc, char **argv)
     int loop = 0, i;
     monitorConfig cfg;
     uint64_t self;
+    monitorPeers reg;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--config") && i + 1 < argc) cfgPath = argv[++i];
@@ -114,41 +115,66 @@ int main(int argc, char **argv)
     if (intervalOverride > 0) cfg.roundIntervalSec = (uint32_t)intervalOverride;
 
     self = monitorNodeId(&cfg);
-    solariLogf(SOLARI_LOG_INFO, "monitor nodeId=0x%llx, %u targets, replFactor %u, %u/round",
+    monitorPeersInit(&reg, self);
+    solariLogf(SOLARI_LOG_INFO,
+               "monitor nodeId=0x%llx, %u targets, replFactor %u, %u/round, %u peer(s)",
                (unsigned long long)self, (unsigned)cfg.targetCount,
-               (unsigned)cfg.replFactor, (unsigned)cfg.probesPerRound);
+               (unsigned)cfg.replFactor, (unsigned)cfg.probesPerRound,
+               (unsigned)cfg.peerCount);
 
 #ifdef MONITOR_WITH_REPORTING
     {
-        monitorContext ctx;
+        monitorContext  ctx;
+        monitorGossip  *gossip = NULL;
         int reporting = (cfg.primaryUrl[0] != '\0');
+
+        monitorGossipOpen(&cfg, self, &gossip);      /* NULL if no gossipUrl */
         if (reporting) {
             if (monitorContextInit(&ctx, &cfg) != SOLARI_OK) {
                 solariLogf(SOLARI_LOG_FATAL, "reporter init failed");
+                monitorGossipClose(gossip);
                 solariLogShutdown();
                 return 1;
             }
-            monitorConnect(&ctx);                    /* best-effort */
+            monitorConnect(&ctx);
             solariLogf(SOLARI_LOG_INFO, "reporting to %s", cfg.primaryUrl);
         }
         do {
+            uint64_t now = solariNowUnixMs();
+            uint64_t fleet[MONITOR_MAX_FLEET];
+            size_t   fleetLen;
             solariMonitorReport mrep;
-            printf("== probe round @ %llu ==\n", (unsigned long long)solariNowUnixMs());
-            runRound(&cfg, self, &mrep);
+
+            monitorGossipTick(gossip, &reg, now);     /* drain + announce */
+            monitorPeersPrune(&reg, now, cfg.peerTtlSec);
+            fleetLen = monitorPeersFleet(&reg, now, cfg.peerTtlSec, fleet, MONITOR_MAX_FLEET);
+
+            printf("== probe round @ %llu (fleet=%zu) ==\n",
+                   (unsigned long long)now, fleetLen);
+            runRound(&cfg, self, fleet, fleetLen, &mrep);
             if (reporting) {
                 if (!solariReporterConnected(ctx.rep)) monitorConnect(&ctx);
-                monitorReportSend(&ctx, &mrep);      /* push or durably spool */
+                monitorReportSend(&ctx, &mrep);
             }
             fflush(stdout);
             if (loop) solariSleepMs(cfg.roundIntervalSec * 1000u);
         } while (loop);
+
         if (reporting) monitorContextClose(&ctx);
+        monitorGossipClose(gossip);
     }
 #else
     do {
+        uint64_t now = solariNowUnixMs();
+        uint64_t fleet[MONITOR_MAX_FLEET];
+        size_t   fleetLen;
         solariMonitorReport mrep;
-        printf("== probe round @ %llu ==\n", (unsigned long long)solariNowUnixMs());
-        runRound(&cfg, self, &mrep);
+
+        monitorPeersPrune(&reg, now, cfg.peerTtlSec);    /* no gossip: stays {self} */
+        fleetLen = monitorPeersFleet(&reg, now, cfg.peerTtlSec, fleet, MONITOR_MAX_FLEET);
+
+        printf("== probe round @ %llu (fleet=%zu) ==\n", (unsigned long long)now, fleetLen);
+        runRound(&cfg, self, fleet, fleetLen, &mrep);
         fflush(stdout);
         if (loop) solariSleepMs(cfg.roundIntervalSec * 1000u);
     } while (loop);

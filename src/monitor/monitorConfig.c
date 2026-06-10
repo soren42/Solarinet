@@ -40,6 +40,8 @@ void monitorConfigDefaults(monitorConfig *out)
     out->probesPerRound   = 5;
     out->probeTimeoutMs   = 1000;
     out->replFactor       = 2;
+    out->gossipIntervalSec = 20;
+    out->peerTtlSec        = 90;
 }
 
 static probeProto protoFromStr(const char *s)
@@ -129,6 +131,20 @@ solariStatus monitorConfigFromFile(const char *path, monitorConfig *out)
         if (monitorParseTarget(t, &out->targets[out->targetCount]) == SOLARI_OK)
             out->targetCount++;
     }
+
+    /* [peer] mesh */
+    strncpy(out->gossipUrl, solariConfigGetStr(c, "peer", "gossipUrl", ""),
+            sizeof out->gossipUrl - 1);
+    out->gossipIntervalSec = (uint32_t)solariConfigGetInt(c, "peer", "gossipIntervalSec", 20);
+    out->peerTtlSec        = (uint32_t)solariConfigGetInt(c, "peer", "peerTtlSec", 90);
+    n = solariConfigCount(c, "peer", "peer");
+    for (i = 0; i < n && out->peerCount < MONITOR_MAX_FLEET; i++) {
+        const char *u = solariConfigGetStrAt(c, "peer", "peer", i, "");
+        if (u[0] == '\0') continue;
+        strncpy(out->peerUrls[out->peerCount], u, sizeof out->peerUrls[0] - 1);
+        out->peerCount++;
+    }
+
     solariConfigFree(c);
     return SOLARI_OK;
 }

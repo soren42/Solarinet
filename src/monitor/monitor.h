@@ -41,6 +41,13 @@ typedef struct {
     bool     useTls;
     char     caFile[256], certFile[256], keyFile[256];
     char     spoolDb[256];
+
+    /* peer mesh (sec 8.2) */
+    char     gossipUrl[256];              /* this monitor's gossip listener (empty = off) */
+    char     peerUrls[MONITOR_MAX_FLEET][256];
+    uint8_t  peerCount;
+    uint32_t gossipIntervalSec;           /* default 20 */
+    uint32_t peerTtlSec;                  /* default 90 */
 } monitorConfig;
 
 /* Defaults: 30s rounds, 5 probes, 1s timeout, replFactor 2, no targets. */
@@ -61,6 +68,48 @@ uint64_t monitorNodeId(const monitorConfig *cfg);
 
 /* Fully-qualified hostname (Linux; gethostname + canonical lookup). */
 solariStatus monitorHostFqdn(char *out, size_t cap);
+
+/* ---- peer registry & schedule (sec 8.2) ---- */
+
+typedef struct { uint64_t nodeId; uint64_t lastHeardMs; } monitorPeerEntry;
+
+/* Live-membership view this node maintains from gossip. The fleet for HRW is
+ * self plus every peer heard within the TTL. */
+typedef struct {
+    uint64_t         selfNodeId;
+    monitorPeerEntry peers[MONITOR_MAX_FLEET];
+    size_t           count;
+} monitorPeers;
+
+void monitorPeersInit(monitorPeers *p, uint64_t selfNodeId);
+/* Record/refresh a peer's last-heard time (ignores self). */
+void monitorPeersHeard(monitorPeers *p, uint64_t nodeId, uint64_t nowMs);
+/* Drop peers not heard within ttlSec. */
+void monitorPeersPrune(monitorPeers *p, uint64_t nowMs, uint32_t ttlSec);
+/* Build the live fleet (self + peers heard within ttlSec) into fleetOut (sorted
+ * is not required). Returns the number written (<= cap). */
+size_t monitorPeersFleet(const monitorPeers *p, uint64_t nowMs, uint32_t ttlSec,
+                         uint64_t *fleetOut, size_t cap);
+
+/* Indices into cfg->targets that `self` owns over `fleet` at cfg->replFactor.
+ * Returns the count written into ownedIdx (<= cap). */
+size_t monitorOwnedTargets(const monitorConfig *cfg, uint64_t self,
+                           const uint64_t *fleet, size_t fleetLen,
+                           uint8_t *ownedIdx, size_t cap);
+
+/* ---- gossip transport (sec 8.2) ---- */
+#ifdef MONITOR_WITH_REPORTING
+typedef struct monitorGossip monitorGossip;
+
+/* Open the gossip endpoint: a PULL listener on cfg->gossipUrl and PUSH dialers
+ * to each cfg->peerUrls[]. NULL handle (SOLARI_OK) if no gossipUrl configured. */
+solariStatus monitorGossipOpen(const monitorConfig *cfg, uint64_t selfNodeId,
+                               monitorGossip **out);
+void         monitorGossipClose(monitorGossip *g);
+/* One gossip cycle: drain inbound PEER_ALIVE frames (refreshing `reg`), then
+ * announce self to every peer. Best-effort; never blocks long. */
+solariStatus monitorGossipTick(monitorGossip *g, monitorPeers *reg, uint64_t nowMs);
+#endif
 
 /* ===================== reporting (transport + spool) ===================== */
 #ifdef MONITOR_WITH_REPORTING

@@ -29,6 +29,7 @@ typedef enum {
     SCP_MSG_WATCHDOG       = 0x12,  /* w-dog  -> server : liveness heartbeat          */
     SCP_MSG_DISCOVERY_ADVERT = 0x13,/* node   -> server : observed neighbors (Handoff sec 4) */
     SCP_MSG_TOPOLOGY_REPORT  = 0x14,/* node   -> server : uplink / segment adjacency  */
+    SCP_MSG_PEER_ALIVE     = 0x15,  /* monitor<->monitor: gossip liveness (sec 8.2)   */
     SCP_MSG_SURVEY         = 0x20,  /* server -> fleet  : demand immediate round      */
     SCP_MSG_SURVEY_RESP    = 0x21,  /* node   -> server : answer to a survey          */
     SCP_MSG_CONTROL        = 0x30,  /* server -> node   : config/deploy directive     */
