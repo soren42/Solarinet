@@ -45,3 +45,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(test_platlinux PRIVATE solari unity)
   add_test(NAME test_platlinux COMMAND test_platlinux)
 endif()
+
+# Client reporting (push-or-spool) integration test - needs the transport and
+# the spool, so it links clientcore (which carries CLIENT_WITH_REPORTING).
+if(TARGET clientcore AND SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
+  add_executable(test_client_report integration/test_client_report.c)
+  target_link_libraries(test_client_report PRIVATE clientcore unity)
+  add_test(NAME test_client_report COMMAND test_client_report)
+endif()

@@ -1,11 +1,11 @@
 /*
  * main.c - solariClient entry point (sec 7.3).
  *
- * This increment wires the platform layer through collection to a runnable
- * agent: parse args/config, init logging, gather a report, and print a human
- * summary. The HELLO/WELCOME handshake, push-or-spool reporting, watchdog, and
- * CONTROL back-channel land in the next increment (clientReport.c /
- * clientWatchdog.c), at which point --loop becomes the real sample loop.
+ * Two modes:
+ *   - local (default / no server): collect a report and print a human summary.
+ *   - reporting (a [server] primaryUrl is configured and the build has the
+ *     transport+spool): HELLO, then sample -> push-or-spool every interval.
+ * The watchdog sibling and the CONTROL back-channel land in the next increment.
  */
 #include "client.h"
 
@@ -22,8 +22,8 @@ static void usage(const char *argv0)
         "usage: %s [--config PATH] [--interval SEC] [--loop] [--once] [-h]\n"
         "  --config PATH   load a client .conf (sec 13); else autodetect-only\n"
         "  --interval SEC  override the sample interval\n"
-        "  --loop          collect every interval (Ctrl-C to stop)\n"
-        "  --once          collect a single report and exit (default)\n",
+        "  --loop          run continuously (Ctrl-C to stop)\n"
+        "  --once          a single cycle, then exit (default)\n",
         argv0);
 }
 
@@ -83,14 +83,65 @@ static void printReport(const solariClientReport *r)
     }
 }
 
+/* local mode: collect + print, no server. */
+static int runLocal(const clientConfig *cfg, int loop)
+{
+    clientState st;
+    solariStatus rc = SOLARI_OK;
+    memset(&st, 0, sizeof st);
+    do {
+        solariClientReport rep;
+        rc = clientCollectReport(cfg, &st, false, &rep);
+        if (rc != SOLARI_OK) {
+            solariLogf(SOLARI_LOG_ERROR, "collect failed: %s", solariStrError(rc));
+            break;
+        }
+        printReport(&rep);
+        fflush(stdout);
+        if (loop) solariSleepMs(cfg->sampleIntervalSec * 1000u);
+    } while (loop);
+    return rc == SOLARI_OK ? 0 : 1;
+}
+
+#ifdef CLIENT_WITH_REPORTING
+/* reporting mode: announce, then sample -> push-or-spool every interval. */
+static int runReporting(const clientConfig *cfg, int loop)
+{
+    clientContext ctx;
+    clientState   st;
+    solariStatus  rc;
+
+    memset(&st, 0, sizeof st);
+    if (clientContextInit(&ctx, cfg) != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_FATAL, "context init failed");
+        return 1;
+    }
+    clientConnect(&ctx);                       /* best-effort */
+    clientSendHello(&ctx);                      /* best-effort announce */
+
+    do {
+        solariClientReport rep;
+        rc = clientCollectReport(cfg, &st, false, &rep);
+        if (rc != SOLARI_OK) {
+            solariLogf(SOLARI_LOG_ERROR, "collect failed: %s", solariStrError(rc));
+        } else {
+            if (!ctx.conn) clientConnect(&ctx);  /* reconnect if we went offline */
+            clientReportSend(&ctx, &rep);        /* sends or durably spools */
+        }
+        if (loop) solariSleepMs(cfg->sampleIntervalSec * 1000u);
+    } while (loop);
+
+    clientContextClose(&ctx);
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     const char *cfgPath = NULL;
     long intervalOverride = -1;
-    int loop = 0, i;
+    int loop = 0, i, ret;
     clientConfig cfg;
-    clientState  st;
-    solariStatus rc;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--config") && i + 1 < argc) cfgPath = argv[++i];
@@ -104,35 +155,29 @@ int main(int argc, char **argv)
     solariLogInit(SOLARI_LOG_SINK_STDERR, NULL, "solariClient");
 
     if (cfgPath) {
-        rc = clientConfigFromFile(cfgPath, &cfg);
+        solariStatus rc = clientConfigFromFile(cfgPath, &cfg);
         if (rc != SOLARI_OK) {
             solariLogf(SOLARI_LOG_FATAL, "config load failed (%s): %s",
                        cfgPath, solariStrError(rc));
+            solariLogShutdown();
             return 1;
         }
-        solariLogf(SOLARI_LOG_INFO, "config %s: %u procs, %u logs, interval %us",
+        solariLogf(SOLARI_LOG_INFO, "config %s: %u procs, %u logs, interval %us, server '%s'",
                    cfgPath, (unsigned)cfg.procCount, (unsigned)cfg.logCount,
-                   (unsigned)cfg.sampleIntervalSec);
+                   (unsigned)cfg.sampleIntervalSec, cfg.primaryUrl);
     } else {
         clientConfigDefaults(&cfg);
         solariLogf(SOLARI_LOG_INFO, "no --config; autodetect-only collection");
     }
     if (intervalOverride > 0) cfg.sampleIntervalSec = (uint32_t)intervalOverride;
 
-    memset(&st, 0, sizeof st);
-
-    do {
-        solariClientReport rep;
-        rc = clientCollectReport(&cfg, &st, false, &rep);
-        if (rc != SOLARI_OK) {
-            solariLogf(SOLARI_LOG_ERROR, "collect failed: %s", solariStrError(rc));
-            break;
-        }
-        printReport(&rep);
-        fflush(stdout);
-        if (loop) solariSleepMs(cfg.sampleIntervalSec * 1000u);
-    } while (loop);
+#ifdef CLIENT_WITH_REPORTING
+    if (cfg.primaryUrl[0]) ret = runReporting(&cfg, loop);
+    else                   ret = runLocal(&cfg, loop);
+#else
+    ret = runLocal(&cfg, loop);
+#endif
 
     solariLogShutdown();
-    return rc == SOLARI_OK ? 0 : 1;
+    return ret;
 }

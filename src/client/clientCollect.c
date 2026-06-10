@@ -11,6 +11,7 @@
 #include "solari/solariConfig.h"
 #include "solari/solariLog.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 void clientConfigDefaults(clientConfig *out)
@@ -18,6 +19,7 @@ void clientConfigDefaults(clientConfig *out)
     memset(out, 0, sizeof *out);
     out->sampleIntervalSec   = 15;
     out->watchdogIntervalSec = 5;
+    strncpy(out->agentVersion, "0.3.0", sizeof out->agentVersion - 1);
 }
 
 solariStatus clientConfigFromFile(const char *path, clientConfig *out)
@@ -39,6 +41,21 @@ solariStatus clientConfigFromFile(const char *path, clientConfig *out)
         (uint32_t)solariConfigGetInt(c, "schedule", "sampleIntervalSec", 15);
     out->watchdogIntervalSec =
         (uint32_t)solariConfigGetInt(c, "schedule", "watchdogIntervalSec", 5);
+
+    /* [server] + [tls] + spool + nodeId */
+    strncpy(out->primaryUrl,  solariConfigGetStr(c, "server", "primaryUrl", ""),
+            sizeof out->primaryUrl - 1);
+    strncpy(out->failoverUrl, solariConfigGetStr(c, "server", "failoverUrl", ""),
+            sizeof out->failoverUrl - 1);
+    out->useTls = strncmp(out->primaryUrl, "tls+", 4) == 0;
+    strncpy(out->caFile,   solariConfigGetStr(c, "tls", "caFile", ""),   sizeof out->caFile - 1);
+    strncpy(out->certFile, solariConfigGetStr(c, "tls", "certFile", ""), sizeof out->certFile - 1);
+    strncpy(out->keyFile,  solariConfigGetStr(c, "tls", "keyFile", ""),  sizeof out->keyFile - 1);
+    strncpy(out->spoolDb,  solariConfigGetStr(c, "watch", "spoolDb", ""), sizeof out->spoolDb - 1);
+    {
+        const char *nid = solariConfigGetStr(c, "identity", "nodeId", "");
+        if (nid[0]) out->nodeId = (uint64_t)strtoull(nid, NULL, 0);
+    }
 
     /* [watch] process = NAME   (repeated) */
     n = solariConfigCount(c, "watch", "process");
