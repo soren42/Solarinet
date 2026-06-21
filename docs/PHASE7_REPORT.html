@@ -194,15 +194,53 @@
     </tbody>
   </table>
 
+  <h2>Live acceptance (post-Phase 7)</h2>
+  <p>The earlier "authored-correct but not run against a live DB/browser" caveat was then
+  closed for the data layer by standing up a real MariaDB (Docker <code>mariadb:11.8</code>)
+  and driving both tiers against it.</p>
+
+  <h3>Track A — MariaDB &amp; serverDb</h3>
+  <ul>
+    <li><code>db/schema.sql</code> + <code>migrations/001</code> + <code>002</code> applied to
+    a live server with <span class="ok">zero errors/warnings</span>; the <code>002</code>
+    ALTERs verified (<code>node.segId/uplinkGearId</code>, <code>state</code> enum gains
+    <code>retired</code>, <code>probeTarget.label/segId</code>) and history partitions present.</li>
+    <li>New self-skipping integration suite <code>tests/integration/test_server_db_live.c</code>
+    (linked against the real <code>servercore</code>; runs only when <code>SOLARI_TEST_DB</code>
+    is set) drove the actual prepared statements: <span class="ok">7/7 pass</span> — node
+    upsert/touch/state, the <code>hostCurrent</code>+<code>hostHistory</code> client-report
+    txn, alert/audit rows, <code>discovered</code> (ip,kind) upsert, the enrollment state
+    machine, and the lease-claim election. Rows confirmed by direct <code>SELECT</code>.
+    Column/placeholder alignment is now validated at runtime.</li>
+  </ul>
+
+  <h3>Track B — dashboard API &amp; control plane</h3>
+  <ul>
+    <li>Served the SPA + PHP API from one origin against the live DB (after installing
+    <code>pdo_mysql</code>). The shell + vendored runtime/fonts serve <span class="ok">200</span>
+    with correct content-types, and <span class="ok">all 12 read endpoints</span> returned
+    <code>{ok:true}</code> — exercising the real SQL, the §6 amendments (<code>/api/probes</code>
+    <code>label</code>/<code>replFactor</code>/rolled-up <code>state</code>/vantages), segment
+    rollups, the network gear hierarchy, and the <code>summary</code> counts+lease shape the
+    adapter consumes.</li>
+    <li>Control-plane gating verified end-to-end: viewer <span class="ok">403</span> &rarr;
+    operator-without-confirm <span class="ok">409</span> &rarr; empty wipe-scope
+    <span class="ok">400</span> &rarr; operator+confirm+scope reaches the <code>solariCtl</code>
+    bridge and degrades cleanly to <span class="ok">502 control_unavailable</span> when no
+    live socket is present. PHP never touches CA material.</li>
+    <li>A labelled fixture <code>db/seed/demo.sql</code> (the SQL parallel of <code>data.jsx</code>)
+    drives this; documentation IP ranges, idempotent.</li>
+  </ul>
+
   <h2>Known gaps &amp; deferred items</h2>
   <div class="gap">
   <ul>
-    <li><strong>No live MariaDB / browser in this environment.</strong> The server links
-    <code>libmariadb</code> and compiles its SQL/queries, and the dashboard PHP/JSX is
-    authored-correct, but neither was exercised against a running database or browser here.
-    End-to-end acceptance (schema apply, query correctness, SSE, SPA render) is an operator
-    step. The server's accept/dispatch main loop is likewise stubbed pending bound sockets
-    + a live DB.</li>
+    <li><strong>Live <code>solariCtl</code> round-trip &amp; browser visuals still pending.</strong>
+    Mutating actions were validated up to the bridge boundary (gating + graceful failure), but
+    a real control round-trip needs the server's accept/dispatch main loop, which remains
+    stubbed pending bound sockets. Pixel-level SPA rendering / SSE was not driven in a browser
+    here (no browser on-host; the no-Node policy rules out a bundled one) — visual acceptance
+    is the remaining operator step.</li>
     <li><strong>macOS / Windows clients &amp; monitors.</strong> <code>platMacos.c</code> and
     <code>platWindows.c</code> remain unwritten; those CI jobs validate only the portable
     core. Building the agents on those OSes is a future PAL step.</li>
@@ -214,10 +252,11 @@
   </ul>
   </div>
 
-  <p class="footer">Generated at the close of the Phase 7 work session on <code>xenon</code>.
-  All phases through 7 are in-tree and committed on <code>main</code>; CI is green across
-  six platform jobs (<span class="mono-sm">05117d4</span>). Live-database and browser
-  acceptance remain operator steps, not performed here.</p>
+  <p class="footer">Generated at the close of the Phase 7 work session on <code>xenon</code>,
+  updated after the live-acceptance pass. All phases through 7 are in-tree and committed on
+  <code>main</code>; CI is green across six platform jobs. The data layer was accepted against
+  a real MariaDB (schema, <code>serverDb</code> 7/7, all read endpoints, control-plane gating);
+  a live <code>solariCtl</code> round-trip and browser visual acceptance remain operator steps.</p>
 </div>
 </body>
 </html>
