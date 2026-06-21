@@ -62,6 +62,7 @@
 #include "solari/solariTlv.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -523,6 +524,19 @@ solariStatus serverCtlOpen(const serverConfig *cfg, serverContext *ctx,
         (void)unlink(ctl->sockPath);
         free(ctl);
         return ERR_PLATFORM;
+    }
+
+    /* Non-blocking accept: serverCtlPoll() is documented "non-blocking; processes
+     * what is ready", and ctlServiceOne() already treats EAGAIN/EWOULDBLOCK as
+     * "nothing pending". Mark the listener O_NONBLOCK so the server's main loop
+     * can poll it every iteration without stalling on accept() when no operator
+     * request is waiting. */
+    {
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0)
+            solariLogf(SOLARI_LOG_WARN,
+                       "ctl: could not set listener non-blocking: %s "
+                       "(poll may stall without a select() gate)", strerror(errno));
     }
 
     ctl->listenFd = fd;
