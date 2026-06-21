@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Phase 7 Completion &amp; Status Report</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;--warm:#e0a458;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:900px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:18px;margin:24px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}
+  .warn{color:var(--warn);font-weight:650}
+  .mono-sm{font-family:var(--mono);font-size:12px}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Phase 7 Completion &amp; Status Report</h1>
+  <p class="sub">SolariNet Monitoring · topology depth · MCP catch-up · ops &amp; hardening · documentation · and the green-CI reconciliation</p>
+
+  <h2>Status at a glance</h2>
+  <p>With Phase 7 closed, the SolariNet build-out described in the Phase 3 Handoff is
+  complete end-to-end: the zero-dependency core, the I/O layer, the client, the remote
+  monitor, the server with its provisioning/discovery/topology subsystems, the on-prem
+  dashboard data layer, and the operational scaffolding all exist in-tree and pass their
+  gates. The whole pipeline is green on continuous integration across six platform jobs.</p>
+
+  <table>
+    <thead><tr><th>Phase</th><th>State</th><th>Gate</th></tr></thead>
+    <tbody>
+      <tr><td>0–1 · Foundation + libsolari core</td><td class="ok">done</td><td>Core unit suites green</td></tr>
+      <tr><td>2 · libsolari I/O (nng/mbedTLS/SQLite/cJSON)</td><td class="ok">done</td><td>Build clean; TLS loopback round-trips</td></tr>
+      <tr><td>3 · Client + PAL (Linux reference)</td><td class="ok">done</td><td>collect/report/watchdog + discovery hooks</td></tr>
+      <tr><td>4 · Remote monitor + adopt</td><td class="ok">done</td><td>probe/HRW/gossip + <code>CTRL_ADOPT_TARGET</code></td></tr>
+      <tr><td>5 · Server + provisioning/discovery</td><td class="ok">done</td><td>Builds with <code>SOLARI_BUILD_SERVER=ON</code>; links libmariadb</td></tr>
+      <tr><td>6 · Dashboard data layer</td><td class="ok">done</td><td>On-prem; PHP API + adapter (authored-correct)</td></tr>
+      <tr><td>7 · Topology depth / MCP / ops / docs</td><td class="ok">done</td><td>This report</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Gate totals.</strong> Full server build (<code>-DSOLARI_BUILD_SERVER=ON</code>
+    with I/O + SQLite + JSON): <span class="ok">0 warnings</span>, <span class="ok">22/22
+    ctest suites pass</span>. MCP test suite: <span class="ok">81 passed</span>. CI run
+    <span class="mono-sm">27909969275</span> on <code>05117d4</code>:
+    <span class="ok">all 6 jobs green</span> (core, server, cross arm64/arm32/windows,
+    macOS-universal).
+  </div>
+
+  <h2>What landed in Phase 7</h2>
+
+  <h3>Topology depth — <code>serverTopology.c</code></h3>
+  <p>The shallow self-report path (a node naming its own uplink) is extended with a
+  <em>deep managed-gear path</em>: pure, testable normalization of LLDP-MIB neighbour
+  records into <code>networkGear</code> / <code>lldpEdge</code> rows, gear-kind inference
+  (gateway/switch/ap/router from LLDP capability bits, falling back to sysName/sysDesc
+  keywords), stable <code>gearId</code> derivation, and uplink-chain assembly with
+  attached-node counts and a cycle guard for <code>/api/netgear</code>. The actual SNMP
+  fetch — the most environment-specific piece — is isolated behind an
+  <strong>off-by-default <code>SOLARI_WITH_SNMP</code> seam</strong>, so the default and
+  server builds add <em>no</em> net-snmp dependency and still compile everywhere. Nine
+  unit tests were added (<code>test_server_topology</code> now exercises 13 cases).</p>
+
+  <h3>MCP catch-up — <code>integrations/mcp/</code></h3>
+  <p>The FastMCP server is brought in step with the new §6 endpoints and §5 tables:
+  <strong>13 new tools</strong> (14 → 27) covering discovery / enrollments / builds /
+  segments / netgear / topology-view / config reads plus guarded control actions
+  (adopt, ignore, approve, reject, provision, decommission). The destructive tools
+  (<code>approve_enrollment</code>, <code>decommission</code>) require an operator token
+  <em>and</em> an explicit confirm before any network call, mirroring the dashboard's
+  control discipline. The read-only SQL surface gains a <strong>table allow-list</strong>
+  including the new C2 tables (<code>segment</code>, <code>networkGear</code>,
+  <code>lldpEdge</code>, <code>discovered</code>, <code>enrollment</code>,
+  <code>buildArtifact</code>), blocking <code>information_schema</code>/<code>mysql</code>
+  exfiltration while preserving SELECT-only discipline. Tests against an in-memory mock:
+  <span class="ok">81 passed</span>.</p>
+
+  <h3>Ops &amp; hardening</h3>
+  <table>
+    <thead><tr><th>Area</th><th>Files</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td>Enrollment / lifecycle</td><td><code>deploy/enrollment/solari-enroll.sh</code>, <code>solari-decommission.sh</code></td><td>Key+CSR generation &amp; submission; node-local <code>CTRL_DECOMMISSION</code> with confirm-token + wipe-scope</td></tr>
+      <tr><td>Service units</td><td><code>deploy/systemd/solari-{client,monitor,server,client-watchdog}.service</code></td><td>Hardened systemd units for each tier</td></tr>
+      <tr><td>DB maintenance</td><td><code>db/maintenance/retention.sql</code>, <code>roll_history.sql</code></td><td>Retire-purge + history-partition rolling</td></tr>
+      <tr><td>CI</td><td><code>.github/workflows/ci.yml</code></td><td>core / full-server / cross-matrix / macOS jobs (see below)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Documentation</h3>
+  <p>Completion notes <code>docs/PHASE5_REPORT.html</code> and
+  <code>docs/PHASE6_REPORT.html</code>, the operator/developer guide
+  <code>docs/SolariNet_Status_and_Operations.html</code>, and this report — all
+  self-contained HTML in the house style, no external fetches.</p>
+
+  <h2>CI reconciliation — getting the pipeline green</h2>
+  <p>The CI workflow authored in Phase 7 was correct on the development host but failed on
+  fresh GitHub runners. Every failure shared a single theme: <strong>the committed,
+  portable tree carried something the local working tree had been hiding</strong>. Four
+  CI runs walked the failures down to zero. The progression:</p>
+
+  <table>
+    <thead><tr><th>Run</th><th>Commit</th><th>Result</th><th>Surfaced</th></tr></thead>
+    <tbody>
+      <tr><td class="mono-sm">…607255</td><td class="mono-sm">e02893b</td><td class="warn">fail</td><td>Unity macros undefined (<code>TEST_ASSERT_BITS_HIGH/LOW</code>, <code>…EQUAL_STRING_LEN</code>)</td></tr>
+      <tr><td class="mono-sm">…728174</td><td class="mono-sm">9357d9a</td><td class="warn">fail</td><td><code>unity_internals.h: No such file</code></td></tr>
+      <tr><td class="mono-sm">…787878</td><td class="mono-sm">ca87da4</td><td class="warn">partial</td><td>arm32 64-bit asserts; macOS/Windows missing PAL</td></tr>
+      <tr><td class="mono-sm">…969275</td><td class="mono-sm">05117d4</td><td class="ok">all green</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <h3>1 · Unity 2.6.0 not fully in the committed history</h3>
+  <p>The protocol/platform tests use <code>TEST_ASSERT_BITS_HIGH/LOW</code> and
+  <code>TEST_ASSERT_EQUAL_STRING_LEN</code>, which only exist in the full Unity 2.6.0.
+  That upgrade had been committed locally but not pushed, so the first CI run built against
+  the older minimal shim and the macros were implicit-declaration errors under
+  <code>-Werror</code>. <strong>Fix:</strong> push the Unity 2.6.0 vendor commit
+  (<code>9357d9a</code>).</p>
+
+  <h3>2 · <code>unity_internals.h</code> excluded by a stale ignore rule</h3>
+  <p>Full Unity's <code>unity.h</code> does <code>#include "unity_internals.h"</code>, but a
+  leftover <code>.gitignore</code> line from the minimal-shim era
+  (<code>/third_party/unity/unity_internals.h</code>) kept that file untracked. Local builds
+  passed only because the file existed on disk; a fresh checkout had no such file and failed
+  at the first compile. <strong>Fix</strong> (<code>ca87da4</code>): remove the ignore rule
+  and commit the header. Verified by building from a <em>tracked-files-only</em> export to
+  mirror exactly what CI checks out.</p>
+
+  <h3>3 · arm32 — “Unity 64-bit Support Disabled”</h3>
+  <p>The cross-build succeeded but the qemu-user smoke run aborted: the <code>uint64</code>
+  TLV/frame assertions need <code>UNITY_SUPPORT_64</code>, which Unity auto-enables on
+  64-bit hosts but <em>disables</em> on 32-bit ABIs like arm32. <strong>Fix</strong>
+  (<code>05117d4</code>): define <code>UNITY_SUPPORT_64</code> <code>PUBLIC</code> on the
+  <code>unity</code> CMake target, so every suite gets 64-bit assertions on every ABI
+  (a no-op on the already-64-bit hosts, confirmed by the unchanged 22/22 native result).</p>
+
+  <h3>4 · macOS / Windows — no PAL for those OSes yet</h3>
+  <p>Only <code>plat/platLinux.c</code> exists; <code>platMacos.c</code> and
+  <code>platWindows.c</code> are deferred future steps. The client's CMake listed the
+  missing source, so <code>add_library()</code> hard-failed at <em>configure</em> time —
+  and because the client sub-directory is always added, that broke the whole tree on those
+  OSes. <strong>Fix</strong> (<code>05117d4</code>):</p>
+  <ul>
+    <li>Added <code>SOLARI_BUILD_CLIENT</code> / <code>SOLARI_BUILD_MONITOR</code> options
+    (default <code>ON</code>), gating the component sub-directories.</li>
+    <li>Made the client <strong>self-skip</strong> when its target-OS PAL source is absent
+    (a clean <code>message(STATUS …)</code> + <code>return()</code> instead of a hard
+    error), so the portable libsolari core still configures and builds there.</li>
+    <li>Scoped the macOS and Windows-cross CI jobs to the portable core + Unity suites
+    (client/monitor off) — which is Phase 0's actual cross-build acceptance criterion —
+    while Linux arm64/arm32 continue to build the full tree.</li>
+  </ul>
+
+  <div class="note">
+    <strong>Net CMake additions.</strong> Two build options
+    (<code>SOLARI_BUILD_CLIENT</code>, <code>SOLARI_BUILD_MONITOR</code>), a PAL-presence
+    guard in <code>src/client/CMakeLists.txt</code>, and
+    <code>UNITY_SUPPORT_64</code> on the test framework. The pre-existing test target
+    guards (<code>if(TARGET clientcore)</code> / <code>monitorcore</code> /
+    <code>servercore</code>) already cause the dependent suites to follow the components,
+    so no test wiring changed.
+  </div>
+
+  <h3>Final CI matrix</h3>
+  <table>
+    <thead><tr><th>Job</th><th>Builds</th><th>Runs</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>core (default, no deps)</td><td>libsolari + client + monitor + suites</td><td>ctest (loopback best-effort)</td><td class="ok">pass</td></tr>
+      <tr><td>server (full)</td><td>+ I/O + SQLite + JSON + server</td><td>ctest</td><td class="ok">pass</td></tr>
+      <tr><td>cross linux-arm64</td><td>full tree</td><td>qemu-user smoke</td><td class="ok">pass</td></tr>
+      <tr><td>cross linux-arm32</td><td>full tree</td><td>qemu-user smoke</td><td class="ok">pass</td></tr>
+      <tr><td>cross windows-x86_64</td><td>core (client/monitor off)</td><td>build only</td><td class="ok">pass</td></tr>
+      <tr><td>macos-universal</td><td>core (client/monitor off)</td><td>ctest (core)</td><td class="ok">pass</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Known gaps &amp; deferred items</h2>
+  <div class="gap">
+  <ul>
+    <li><strong>No live MariaDB / browser in this environment.</strong> The server links
+    <code>libmariadb</code> and compiles its SQL/queries, and the dashboard PHP/JSX is
+    authored-correct, but neither was exercised against a running database or browser here.
+    End-to-end acceptance (schema apply, query correctness, SSE, SPA render) is an operator
+    step. The server's accept/dispatch main loop is likewise stubbed pending bound sockets
+    + a live DB.</li>
+    <li><strong>macOS / Windows clients &amp; monitors.</strong> <code>platMacos.c</code> and
+    <code>platWindows.c</code> remain unwritten; those CI jobs validate only the portable
+    core. Building the agents on those OSes is a future PAL step.</li>
+    <li><strong>Deep gear discovery is opt-in.</strong> The SNMP/LLDP-MIB walk lives behind
+    <code>SOLARI_WITH_SNMP</code> (off by default, no net-snmp linked). The normalization
+    logic is tested; the live SNMP backend is not.</li>
+    <li><strong>shellcheck not run.</strong> Deploy scripts passed <code>bash -n</code> only;
+    deeper shell linting is recommended in a future CI step.</li>
+  </ul>
+  </div>
+
+  <p class="footer">Generated at the close of the Phase 7 work session on <code>xenon</code>.
+  All phases through 7 are in-tree and committed on <code>main</code>; CI is green across
+  six platform jobs (<span class="mono-sm">05117d4</span>). Live-database and browser
+  acceptance remain operator steps, not performed here.</p>
+</div>
+</body>
+</html>
