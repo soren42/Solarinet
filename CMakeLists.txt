@@ -19,6 +19,8 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror=implicit-function-declarati
 
 # ---- options -------------------------------------------------------------
 option(SOLARI_BUILD_SERVER "Build solariServer (x86_64/arm64 only)" OFF)
+option(SOLARI_BUILD_CLIENT "Build solariClient (needs a PAL for the target OS)" ON)
+option(SOLARI_BUILD_MONITOR "Build solariMonitor (POSIX/Linux for now)"        ON)
 option(SOLARI_BUILD_TESTS  "Build the Unity test suites"            ON)
 option(SOLARI_WITH_IO      "Build the nng/mbedTLS transport layer"  OFF)
 option(SOLARI_WITH_SQLITE  "Build the SQLite store-and-forward spool" OFF)
@@ -40,11 +42,14 @@ endif()
 # ---- libsolari (always) --------------------------------------------------
 add_subdirectory(lib/solari)
 
-# ---- components (only when their entry point exists) ---------------------
-if(EXISTS "${CMAKE_SOURCE_DIR}/src/client/main.c")
+# ---- components (only when enabled and their entry point exists) ---------
+# Client/monitor are Linux-first; the client self-skips on an OS whose PAL is
+# not yet implemented (src/client/CMakeLists.txt), and either can be turned off
+# explicitly so the portable libsolari core still cross-builds for macOS/Windows.
+if(SOLARI_BUILD_CLIENT AND EXISTS "${CMAKE_SOURCE_DIR}/src/client/main.c")
   add_subdirectory(src/client)
 endif()
-if(EXISTS "${CMAKE_SOURCE_DIR}/src/monitor/main.c")
+if(SOLARI_BUILD_MONITOR AND EXISTS "${CMAKE_SOURCE_DIR}/src/monitor/main.c")
   add_subdirectory(src/monitor)
 endif()
 if(SOLARI_BUILD_SERVER AND EXISTS "${CMAKE_SOURCE_DIR}/src/server/main.c")

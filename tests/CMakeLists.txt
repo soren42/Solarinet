@@ -3,6 +3,10 @@
 
 add_library(unity STATIC ${CMAKE_SOURCE_DIR}/third_party/unity/unity.c)
 target_include_directories(unity PUBLIC ${CMAKE_SOURCE_DIR}/third_party/unity)
+# Force 64-bit assertion support on every target ABI. Unity auto-enables it on
+# 64-bit hosts but disables it on 32-bit ones (e.g. arm32), which would abort
+# the u64 TLV/frame round-trip tests with "Unity 64-bit Support Disabled".
+target_compile_definitions(unity PUBLIC UNITY_SUPPORT_64)
 
 set(SOLARI_UNIT_TESTS
   test_crypto

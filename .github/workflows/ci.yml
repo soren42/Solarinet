@@ -86,23 +86,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux cross targets build the full tree (client+monitor) — platLinux
+          # is the reference PAL and works for every Linux ABI.
           - target: linux-arm64
             toolchain: cmake/toolchains/linux-arm64.cmake
             apt: gcc-aarch64-linux-gnu
             qemu: qemu-aarch64-static
             qemu_ld: /usr/aarch64-linux-gnu
+            components: ""
             smoke: true
           - target: linux-arm32
             toolchain: cmake/toolchains/linux-arm32.cmake
             apt: gcc-arm-linux-gnueabihf
             qemu: qemu-arm-static
             qemu_ld: /usr/arm-linux-gnueabihf
+            components: ""
             smoke: true
+          # Windows has no client/monitor PAL yet, so this proves the portable
+          # libsolari core + Unity suites cross-build under mingw (Phase 0 goal).
           - target: windows-x86_64
             toolchain: cmake/toolchains/windows-x86_64.cmake
             apt: gcc-mingw-w64-x86-64
             qemu: ""
             qemu_ld: ""
+            components: "-DSOLARI_BUILD_CLIENT=OFF -DSOLARI_BUILD_MONITOR=OFF"
             smoke: false
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +128,7 @@ jobs:
         run: |
           cmake -S . -B build-${{ matrix.target }} \
             -DCMAKE_TOOLCHAIN_FILE=${{ matrix.toolchain }} \
-            -DSOLARI_BUILD_TESTS=ON
+            -DSOLARI_BUILD_TESTS=ON ${{ matrix.components }}
           cmake --build build-${{ matrix.target }} -j
       # Smoke-test the cross-built Linux test binaries under qemu-user. Loopback
       # transport is skipped (no I/O layer in this config); core/spool exercise
@@ -146,11 +153,15 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      # macOS has no client/monitor PAL yet (platMacos.c is a future step), so
+      # this validates the portable libsolari core + Unity suites build universal
+      # (arm64 + x86_64). The client self-skips on Darwin; monitor is off here.
       - name: Configure + build universal core
         run: |
           cmake -S . -B build-macos \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/macos-universal.cmake \
-            -DSOLARI_BUILD_TESTS=ON
+            -DSOLARI_BUILD_TESTS=ON \
+            -DSOLARI_BUILD_CLIENT=OFF -DSOLARI_BUILD_MONITOR=OFF
           cmake --build build-macos -j
       - name: ctest (core)
         run: ctest --test-dir build-macos --output-on-failure -E 'test_net_loopback'

@@ -6,15 +6,27 @@
 
 set(CLIENT_CORE_SOURCES clientCollect.c clientWatchdog.c)
 
+# Select the PAL for the target OS. Only platLinux.c exists today; platMacos.c
+# and platWindows.c are future PAL steps (base plan sec 7 / Phase 3). If the
+# chosen PAL source is not present yet, skip the client targets entirely so the
+# portable libsolari core still configures and builds on that OS, rather than
+# hard-failing add_library() on a missing source.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  list(APPEND CLIENT_CORE_SOURCES plat/platLinux.c)
+  set(CLIENT_PAL_SOURCE plat/platLinux.c)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  list(APPEND CLIENT_CORE_SOURCES plat/platMacos.c)     # macOS PAL step
+  set(CLIENT_PAL_SOURCE plat/platMacos.c)     # macOS PAL step
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  list(APPEND CLIENT_CORE_SOURCES plat/platWindows.c)   # Windows PAL step
+  set(CLIENT_PAL_SOURCE plat/platWindows.c)   # Windows PAL step
 else()
-  message(WARNING "solariClient: no PAL for ${CMAKE_SYSTEM_NAME}")
+  set(CLIENT_PAL_SOURCE "")
 endif()
+
+if(NOT CLIENT_PAL_SOURCE OR NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${CLIENT_PAL_SOURCE}")
+  message(STATUS "solariClient: no PAL for ${CMAKE_SYSTEM_NAME} yet - skipping client build")
+  return()
+endif()
+
+list(APPEND CLIENT_CORE_SOURCES ${CLIENT_PAL_SOURCE})
 
 set(CLIENT_HAS_REPORTING OFF)
 if(SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
