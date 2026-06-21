@@ -1,7 +1,7 @@
 """Tests for the read-only SQL guard - the security-critical layer."""
 import pytest
 
-from solarinet_mcp.db import DbError, validate_read_only, _enforce_limit
+from solarinet_mcp.db import ALLOWED_TABLES, DbError, validate_read_only, _enforce_limit
 
 
 @pytest.mark.parametrize("sql", [
@@ -53,6 +53,48 @@ def test_rejects_into_outfile():
 def test_rejects_empty():
     with pytest.raises(DbError):
         validate_read_only("   ")
+
+
+@pytest.mark.parametrize("table", [
+    # section 5 C2-capability additions must be readable
+    "segment", "networkGear", "lldpEdge", "discovered", "enrollment", "buildArtifact",
+])
+def test_allow_list_includes_new_tables(table):
+    assert table.lower() in ALLOWED_TABLES
+    # and a SELECT against each passes the guard
+    out = validate_read_only(f"SELECT * FROM {table}")
+    assert out.lower().startswith("select")
+
+
+@pytest.mark.parametrize("table", [
+    # base section 10 tables stay readable (regression)
+    "node", "hostHistory", "alertEvent", "probeTarget", "nodeConfig", "serverLease",
+])
+def test_allow_list_keeps_base_tables(table):
+    assert validate_read_only(f"SELECT * FROM {table} WHERE 1=1")
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT * FROM information_schema.tables",
+    "SELECT user, password FROM mysql.user",
+    "SELECT * FROM performance_schema.threads",
+    "SELECT * FROM secrets",
+    "SELECT n.* FROM node n JOIN mysql.user u ON 1=1",  # disallowed via JOIN
+])
+def test_allow_list_rejects_unlisted_tables(sql):
+    with pytest.raises(DbError):
+        validate_read_only(sql)
+
+
+def test_allow_list_permits_join_of_allowed_tables():
+    sql = ("SELECT e.eventId FROM alertEvent e "
+           "LEFT JOIN alertRule r ON e.ruleId = r.ruleId")
+    assert validate_read_only(sql)
+
+
+def test_allow_list_exempts_cte_names():
+    sql = "WITH recent AS (SELECT * FROM discovered) SELECT * FROM recent"
+    assert validate_read_only(sql)
 
 
 def test_enforce_limit_adds_when_missing():

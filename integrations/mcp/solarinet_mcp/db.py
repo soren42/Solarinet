@@ -31,6 +31,45 @@ _COMMENT_LINE = re.compile(r"--[^\n]*")
 _COMMENT_HASH = re.compile(r"#[^\n]*")
 _FORBIDDEN_SUBSTR = ("into outfile", "into dumpfile")
 
+# Table allow-list (read-only SELECT discipline). Only these SolariNet schema
+# tables may be referenced after FROM/JOIN. This is defence-in-depth on top of
+# the GRANT SELECT-only DB account: it keeps the agent inside the published
+# section 10 schema (and section 5 C2-capability additions) and prevents reads
+# of information_schema / mysql / performance_schema and other system catalogs.
+#
+# Keep this in step with db/migrations (section 5). New section-5 tables added
+# here: segment, networkGear, lldpEdge, discovered, enrollment, buildArtifact.
+ALLOWED_TABLES: frozenset[str] = frozenset(
+    t.lower()
+    for t in (
+        # --- base section 10 schema ---
+        "node",
+        "hostCurrent",
+        "hostHistory",
+        "procCurrent",
+        "probeTarget",
+        "probeCurrent",
+        "probeHistory",
+        "alertRule",
+        "alertEvent",
+        "nodeConfig",
+        "serverLease",
+        # --- section 5 C2-capability additions (002_c2_capabilities.sql) ---
+        "segment",
+        "networkGear",
+        "lldpEdge",
+        "discovered",
+        "enrollment",
+        "buildArtifact",
+    )
+)
+
+# Identifiers that introduce a table reference. We only enforce the allow-list
+# on names that follow these keywords; CTE names (WITH x AS ...) are collected
+# separately and exempted so legitimate WITH...SELECT still works.
+_TABLE_REF = re.compile(r"\b(?:from|join)\s+([`\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", re.IGNORECASE)
+_CTE_NAME = re.compile(r"\b(?:with|,)\s+([`\"]?)([A-Za-z_][A-Za-z0-9_]*)\1\s+as\s*\(", re.IGNORECASE)
+
 
 class DbError(Exception):
     """A database access or validation error."""
@@ -68,7 +107,28 @@ def validate_read_only(sql: str) -> str:
         if bad in lowered:
             raise DbError(f"Disallowed clause: {bad.upper()}.")
 
+    _enforce_table_allow_list(stripped)
+
     return stripped
+
+
+def _enforce_table_allow_list(sql: str) -> None:
+    """Reject any FROM/JOIN target that is not an allow-listed SolariNet table.
+
+    CTE names declared in a WITH clause are exempt so WITH...SELECT works. The
+    comparison is case-insensitive and backtick/quote tolerant.
+    """
+    cte_names = {m.group(2).lower() for m in _CTE_NAME.finditer(sql)}
+    for m in _TABLE_REF.finditer(sql):
+        name = m.group(2)
+        low = name.lower()
+        if low in cte_names:
+            continue
+        if low not in ALLOWED_TABLES:
+            raise DbError(
+                f"Table not in allow-list: {name}. Permitted tables: "
+                + ", ".join(sorted(ALLOWED_TABLES))
+            )
 
 
 def _enforce_limit(sql: str, max_rows: int) -> str:

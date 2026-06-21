@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Phase 6 Completion Report</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:900px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:18px;margin:24px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}
+  .warn{color:var(--warn);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Phase 6 Completion Report</h1>
+  <p class="sub">SolariNet Monitoring · the dashboard data layer · on-prem vendoring · PHP read+control API · SSE bridge</p>
+
+  <h2>What landed</h2>
+  <p><strong>Phase 6 (dashboard data layer)</strong> connects the Claude-designed
+  front end to the live server through a PHP API, with everything served from the
+  box itself. Consistent with the no-cloud tenet, the dashboard makes
+  <em>no external network fetches</em>: React, ReactDOM, and Babel are vendored
+  locally, and the page is reconciled to talk to a same-origin PHP API rather than
+  any hosted service.</p>
+
+  <h3>On-prem vendoring</h3>
+  <p>The front end now loads its runtime from <code>dashboard/public/vendor/</code> —
+  <code>react.production.min.js</code>, <code>react-dom.production.min.js</code>,
+  <code>babel.min.js</code> — plus local <code>fonts/</code> and <code>icons/</code>.
+  <code>index.html</code> references these by relative path; the design's screen and
+  component modules (<code>app.jsx</code>, <code>screens*.jsx</code>,
+  <code>components.jsx</code>, <code>icons.jsx</code>, <code>styles.css</code>) ride along.
+  A service worker (<code>sw.js</code>) and <code>manifest.webmanifest</code> give the
+  app its installable / offline-tolerant shell.</p>
+
+  <h3>API adapter</h3>
+  <p><code>dashboard/public/api.jsx</code> is the front-end adapter: it replaces the
+  design's mock data layer (<code>data.jsx</code>) with calls against the real
+  same-origin endpoints and unwraps the server's response envelope into the shapes
+  the screens already expect.</p>
+
+  <h3>PHP read + control API</h3>
+  <p><code>dashboard/api/</code> is a small PDO-backed PHP service — a front controller
+  (<code>index.php</code>) over a router and route handlers, with a thin library layer:</p>
+  <table>
+    <thead><tr><th>Layer</th><th>Files</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td>Library</td><td><code>lib/bootstrap.php</code>, <code>Router.php</code>, <code>Db.php</code>, <code>Response.php</code>, <code>Coerce.php</code>, <code>Operator.php</code>, <code>SolariCtl.php</code></td><td>PDO handle, routing, JSON envelopes, input coercion, operator-token gate, Unix-socket bridge to <code>solariCtl</code></td></tr>
+      <tr><td>Reads</td><td><code>routes/nodes.php</code>, <code>probes.php</code>, <code>alerts.php</code>, <code>summary.php</code>, <code>topology.php</code>, <code>discovery_mut.php</code>, <code>enrollments_mut.php</code>, <code>provisioning.php</code>, <code>config.php</code></td><td>Read-only projections of the §10 + C2 tables</td></tr>
+      <tr><td>Mutations</td><td><code>routes_mutations.php</code>, <code>control.php</code>, <code>discovery_mut.php</code>, <code>enrollments_mut.php</code></td><td>Control-plane actions, gated and bridged to <code>solariCtl</code></td></tr>
+      <tr><td>Live stream</td><td><code>routes/stream.php</code></td><td>Server-Sent-Events bridge for the live dashboard</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <strong>Control-plane discipline.</strong> Reads go straight to MariaDB via PDO.
+    State-changing actions do <em>not</em> write the database directly — they are routed
+    through the operator-token gate (<code>lib/Operator.php</code>) and handed to the C
+    server over its local <code>solariCtl</code> Unix socket (<code>lib/SolariCtl.php</code>).
+    The PHP tier never becomes a second, divergent source of truth or control authority;
+    the C server stays the sole arbiter of lifecycle actions.
+  </div>
+
+  <h2>Verification</h2>
+  <p>The PHP API and the JSX adapter are <span class="warn">authored-correct but not
+  executed against a live browser or a running PHP-FPM + MariaDB stack in this
+  session.</span> There is no PHP unit harness in the tree, and no browser was driven
+  here. What was verified:</p>
+  <ul>
+    <li>The vendored runtime is present and referenced by relative path — no CDN or
+    external <code>&lt;script src="https://…"&gt;</code> fetches remain, satisfying the
+    no-cloud constraint by inspection.</li>
+    <li>The route surface lines up with the server's control verbs
+    (<code>solariCtl</code>: APPROVE/REJECT, PROVISION, ADOPT, IGNORE, CONTROL,
+    DECOMMISSION) and with the MCP read API, so the three operator surfaces
+    (dashboard, MCP, <code>solariCtl</code>) agree on the same endpoints.</li>
+    <li>The reconciliation between the original design handoff and the live API is
+    recorded in <code>dashboard/API_RECONCILIATION.html</code> /
+    <code>dashboard/DESIGN_HANDOFF.md</code>.</li>
+  </ul>
+
+  <h2>Run it (operator setup)</h2>
+  <pre># Serve the static front end + PHP API from one origin (example: php built-in server)
+php -S 127.0.0.1:8080 -t dashboard/public dashboard/api/index.php
+# point a reverse proxy at dashboard/public for /, and at dashboard/api for /api
+# the API expects: a PDO DSN to the server's MariaDB, and read access to the
+# solariCtl Unix socket for control actions (see deploy/systemd/solari-server.service
+# RuntimeDirectory)</pre>
+  <p>See <code>docs/SolariNet_Status_and_Operations.html</code> (Phase&nbsp;7) for the full
+  dashboard / API / control-plane operator guide.</p>
+
+  <h2>Known gaps &amp; deferred items</h2>
+  <div class="gap">
+  <ul>
+    <li><strong>No browser validation here.</strong> The SPA was not loaded in a browser
+    and the SSE stream was not exercised end-to-end in this session. Visual / interaction
+    acceptance remains an operator step.</li>
+    <li><strong>No live PHP execution here.</strong> The PHP API was reviewed for
+    correctness, not run against PHP-FPM with a live MariaDB and a live
+    <code>solariCtl</code> socket. PDO DSN, auth, and socket-path wiring are
+    deployment configuration the operator supplies.</li>
+    <li><strong>No automated PHP/JS test harness.</strong> Unlike the C and MCP tiers,
+    the dashboard has no unit suite in-tree; its correctness gate is operator acceptance.</li>
+  </ul>
+  </div>
+
+  <p class="footer">Generated at the close of the Phase 6 work session.
+  Front end is fully on-prem (vendored runtime, no external fetches) and the API
+  surface matches the C control plane; live browser + PHP/MariaDB acceptance is an
+  operator step, not performed here.</p>
+</div>
+</body>
+</html>

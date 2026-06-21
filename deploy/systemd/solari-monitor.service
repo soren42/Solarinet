@@ -1,0 +1,58 @@
+# SolariNet Monitor unit (Architecture & Plan §15.2).
+#
+# Analogous to the client unit but grants CAP_NET_RAW for ICMP probes
+# (§8.3 / Appendix C). All other hardening matches the client.
+#
+# Install: /etc/systemd/system/solari-monitor.service
+#   systemctl daemon-reload && systemctl enable --now solari-monitor.service
+
+[Unit]
+Description=SolariNet Monitor
+Documentation=https://github.com/soren42/Solarinet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/solariMonitor --config /etc/solari/monitor.conf
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+
+User=solari
+Group=solari
+
+StateDirectory=solari
+StateDirectoryMode=0750
+RuntimeDirectory=solari
+RuntimeDirectoryMode=0750
+ReadWritePaths=/var/lib/solari
+
+# --- hardening (§15) -------------------------------------------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Monitor needs raw sockets for ICMP echo (§8.3, Appendix C).
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET
+
+[Install]
+WantedBy=multi-user.target

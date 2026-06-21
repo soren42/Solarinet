@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Phase 5 Completion Report</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:900px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:18px;margin:24px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}
+  .warn{color:var(--warn);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Phase 5 Completion Report</h1>
+  <p class="sub">SolariNet Monitoring · the solariServer (§9, §12.2) · ingest · lease · provisioning · discovery · all gates green</p>
+
+  <h2>What landed</h2>
+  <p><strong>Phase 5 (server)</strong> from §16 of the base plan and §5 of the Phase&nbsp;3
+  Handoff is complete. The server is the persistent C2 tier: it terminates the
+  SCP transport, ingests host/probe reports into MariaDB, arbitrates the
+  primary/failover lease, and runs the §7.3 control plane (provision, decommission,
+  adopt-target, enrollment, discovery). It is the first SolariNet binary to take a
+  hard external dependency on a database — MariaDB Connector/C (<code>libmariadb</code>) —
+  on top of the nng + mbedTLS transport already vendored in Phase&nbsp;2.</p>
+
+  <p>The server is gated behind <code>-DSOLARI_BUILD_SERVER=ON</code> and is built only
+  on the 64-bit tiers (x86_64 / arm64) where a database engine is expected to live;
+  the zero-dependency core and the edge agents are unaffected.</p>
+
+  <h2>Subsystems</h2>
+  <table>
+    <thead><tr><th>Subsystem</th><th>Source</th><th>Responsibility</th></tr></thead>
+    <tbody>
+      <tr><td>DB layer</td><td><code>serverDb.c</code></td><td>MariaDB Connector/C handle, prepared statements, upsert helpers over the §10 schema</td></tr>
+      <tr><td>Ingest</td><td><code>serverIngest.c</code></td><td>Decode SCP report/monitor frames → <code>hostCurrent</code>/<code>hostHistory</code>/<code>procCurrent</code>/<code>probeCurrent</code>/<code>probeHistory</code></td></tr>
+      <tr><td>Lease</td><td><code>serverLease.c</code></td><td>Primary/failover arbitration via the <code>serverLease</code> row; identical binaries, role decided by lease</td></tr>
+      <tr><td>Master loop</td><td><code>serverMaster.c</code></td><td>Transport bind, survey/ingest event loop, dispatch to subsystems</td></tr>
+      <tr><td>Alerting</td><td><code>serverAlert.c</code></td><td>Evaluate <code>alertRule</code> against current state, raise/clear <code>alertEvent</code></td></tr>
+      <tr><td>Control plane</td><td><code>serverControl.c</code></td><td>§7.3 verb dispatch (PROVISION / DECOMMISSION / ADOPT / CONTROL)</td></tr>
+      <tr><td>Provisioning</td><td><code>serverProvision.c</code></td><td>Builds <code>CTRL_PROVISION</code>, <code>SCP_MSG_DECOMMISSION</code> (confirm token + wipe scope), <code>CTRL_ADOPT_TARGET</code></td></tr>
+      <tr><td>Discovery</td><td><code>serverDiscovery.c</code></td><td>Records discovered hosts; adopt / ignore lifecycle</td></tr>
+      <tr><td>Topology</td><td><code>serverTopology.c</code></td><td>Monitoring + network hierarchies (deepened in Phase&nbsp;7 — see that report)</td></tr>
+      <tr><td>Operator socket</td><td><code>solariCtl.c</code></td><td>Local Unix-socket control: PING, SURVEY, APPROVE/REJECT, PROVISION, ADOPT, IGNORE, CONTROL, DECOMMISSION/RETIRE</td></tr>
+      <tr><td>Context / main</td><td><code>serverContext.c</code>, <code>main.c</code></td><td>Lifecycle, config, wiring of the above</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Schema &amp; migrations</h3>
+  <p>The base schema (<code>db/schema.sql</code>) defines the §10 tables:
+  <code>node</code>, <code>hostCurrent</code>, <code>hostHistory</code>,
+  <code>procCurrent</code>, <code>probeTarget</code>, <code>probeCurrent</code>,
+  <code>probeHistory</code>, <code>serverLease</code>, <code>alertRule</code>,
+  <code>alertEvent</code>, <code>nodeConfig</code>. <code>hostHistory</code> and
+  <code>probeHistory</code> use a <code>TO_DAYS(sampledAt)</code> RANGE partition
+  scheme so retention can roll by month (the maintenance procedures land in Phase&nbsp;7).
+  Two forward migrations sit alongside it:</p>
+  <ul>
+    <li><code>001_baseline.sql</code> — the §10 baseline as a versioned migration.</li>
+    <li><code>002_c2_capabilities.sql</code> — the Phase&nbsp;3 Handoff §5 C2 tables, purely additive:
+    <code>segment</code>, <code>networkGear</code>, <code>lldpEdge</code>, <code>discovered</code>,
+    <code>enrollment</code>, <code>buildArtifact</code>, plus small column additions on
+    <code>node</code> and <code>probeTarget</code>. No existing table changes shape.</li>
+  </ul>
+
+  <h2>Protocol §4 completion</h2>
+  <p>Phase&nbsp;5 also closed the remaining lifecycle protocol from §4: the
+  <code>SCP_MSG_DECOMMISSION</code> message (0x32), the <code>CTRL_PROVISION</code> /
+  <code>CTRL_DECOMMISSION</code> / <code>CTRL_ADOPT_TARGET</code> verbs, and the
+  <code>TLV_LIFE_CONFIRM</code> / <code>TLV_LIFE_WIPE_SCOPE</code> TLVs. The Phase&nbsp;4
+  monitor gained the matching <code>CTRL_ADOPT_TARGET</code> handler
+  (<code>src/monitor/monitorControl.c</code>) so an adopted probe target is dispatched
+  to the owning monitor. Decommission carries a one-time confirm token and an audit
+  row — the same discipline the node-local executor enforces (see the Phase&nbsp;7
+  decommission runbook).</p>
+
+  <h2>Verification</h2>
+  <p>Built from scratch with the full server surface enabled
+  (<code>-DSOLARI_BUILD_SERVER=ON -DSOLARI_WITH_IO=ON -DSOLARI_WITH_SQLITE=ON
+  -DSOLARI_WITH_JSON=ON</code>) under <code>-Wall -Wextra -Wpedantic</code>,
+  <span class="ok">zero warnings, zero errors</span>. MariaDB was discovered via
+  pkg-config (<code>libs=mariadb</code>) and linked.</p>
+  <pre>100% tests passed, 0 tests failed out of 22 (full ctest, server included)
+  test_server_db          DB-layer helpers / prepared-statement seams
+  test_server_ingest      report/monitor frame -> row mapping
+  test_server_provision   CTRL_PROVISION / DECOMMISSION / ADOPT payload build
+  test_server_alert       rule evaluation, raise/clear
+  test_server_discovery   discovered-host adopt / ignore lifecycle
+  test_server_topology    monitoring + network hierarchy assembly
+  test_server_ctl         operator-socket verb parsing</pre>
+  <p>The server suites follow the established single-<code>.c</code>-include pattern with a
+  shared <code>tests/unit/server_stubs.c</code>, so the subsystem logic is exercised
+  without a live database — the DB handle is stubbed at the seam.</p>
+
+  <div class="note">
+    <strong>Identical binaries, lease-decided role.</strong> Primary and failover run the
+    same <code>solariServer</code>; the <code>serverLease</code> row is the single source of
+    truth for who is active, so failover is a data decision, not a separate build —
+    consistent with the §12.2 HA stance.
+  </div>
+
+  <h2>Build it yourself</h2>
+  <pre>./deploy/bootstrap-xenon.sh           # installs deps incl. libmariadb, builds, tests
+# or directly:
+cmake -S . -B build -DSOLARI_BUILD_TESTS=ON -DSOLARI_BUILD_SERVER=ON \
+      -DSOLARI_WITH_IO=ON -DSOLARI_WITH_SQLITE=ON -DSOLARI_WITH_JSON=ON
+cmake --build build && ctest --test-dir build --output-on-failure</pre>
+
+  <h2>Known gaps &amp; deferred items</h2>
+  <div class="gap">
+  <ul>
+    <li><strong>No live-MariaDB integration run here.</strong> The schema and migrations are
+    authored to valid MariaDB syntax and reviewed, but they were <em>not</em> executed
+    against a live MariaDB instance in this session. The unit suites cover subsystem logic
+    with the DB handle stubbed; an end-to-end ingest-into-a-real-table run remains an
+    operator acceptance step.</li>
+    <li><strong>Topology depth</strong> (deep LLDP-MIB normalization, uplink-chain assembly)
+    was completed in Phase&nbsp;7, not here — see the Phase&nbsp;7 report.</li>
+    <li><strong>Retention / partition rolling</strong> (the procedures that exercise the
+    <code>TO_DAYS</code> partition scheme) ship in Phase&nbsp;7 under <code>db/maintenance/</code>.</li>
+  </ul>
+  </div>
+
+  <p class="footer">Generated at the close of the Phase 5 work session.
+  Full server build clean and 22/22 ctest green, verified in-session.
+  Live-MariaDB acceptance is an operator step, not yet performed here.</p>
+</div>
+</body>
+</html>

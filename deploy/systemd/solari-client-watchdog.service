@@ -1,0 +1,56 @@
+# SolariNet Client watchdog sibling (Architecture & Plan §15.2 / §7.3).
+#
+# The client normally spawns and supervises its own watchdog, so this unit is
+# OPTIONAL: enable it only on sites that want systemd to externally supervise
+# the watchdog process directly (belt-and-suspenders). It binds to the client
+# unit so it starts/stops together and is restarted independently if it dies.
+#
+# Install: /etc/systemd/system/solari-client-watchdog.service
+#   systemctl enable --now solari-client-watchdog.service   # optional
+
+[Unit]
+Description=SolariNet Client Watchdog
+Documentation=https://github.com/soren42/Solarinet
+After=solari-client.service
+BindsTo=solari-client.service
+PartOf=solari-client.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/solariClient --watchdog --config /etc/solari/client.conf
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+
+User=solari
+Group=solari
+RuntimeDirectory=solari
+RuntimeDirectoryMode=0750
+
+# --- hardening -------------------------------------------------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,64 @@
+# SolariNet Client unit (Architecture & Plan §15.2).
+#
+# systemd supervises the client; the client supervises its own watchdog sibling
+# (§7.3) - defense in depth. solari-client-watchdog.service is provided as an
+# optional external supervisor for sites that prefer systemd to watch both.
+#
+# Install: /etc/systemd/system/solari-client.service
+#   useradd --system --no-create-home --shell /usr/sbin/nologin solari
+#   systemctl daemon-reload && systemctl enable --now solari-client.service
+
+[Unit]
+Description=SolariNet Client
+Documentation=https://github.com/soren42/Solarinet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/solariClient --config /etc/solari/client.conf
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+
+# --- identity --------------------------------------------------------------
+User=solari
+Group=solari
+
+# --- writable state --------------------------------------------------------
+# Spool DB lives under /var/lib/solari; runtime socket under /run/solari.
+StateDirectory=solari
+StateDirectoryMode=0750
+RuntimeDirectory=solari
+RuntimeDirectoryMode=0750
+ReadWritePaths=/var/lib/solari
+
+# --- hardening (§15) -------------------------------------------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Client needs no special caps; restrict to nothing and read TLS material RO.
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# /etc/solari (certs/config) is left read-only by ProtectSystem=strict.
+
+[Install]
+WantedBy=multi-user.target

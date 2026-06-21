@@ -157,6 +157,91 @@ class DbHostHistoryInput(_Base):
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 
 
+# ---- section 6 (C2 capabilities) read inputs ------------------------------
+class DiscoveryListInput(_Base):
+    status: str = Field(default="new", description="'new' or 'all'.")
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+class EnrollmentListInput(_Base):
+    status: str | None = Field(
+        default=None,
+        description="Optional filter: 'token','pending','approved','rejected','expired'.",
+    )
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+class BuildsInput(_Base):
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+class SegmentsInput(_Base):
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+class NetgearInput(_Base):
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+class TopologyViewInput(_Base):
+    view: str = Field(
+        default="monitoring",
+        description="'monitoring' (server->monitor->target HRW graph) or "
+        "'network' (gateway->switch/AP->host LAN hierarchy).",
+    )
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+class ConfigReadInput(_Base):
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+# ---- section 6 control inputs ---------------------------------------------
+class DiscoveryAdoptInput(_Base):
+    disc_id: str = Field(..., min_length=1, description="Discovered candidate id.")
+    role: str | None = Field(
+        default=None, description="Role to adopt as: 'client' or 'monitor' (for enrollment path)."
+    )
+    probe_spec: dict[str, Any] | None = Field(
+        default=None, description="Optional probe spec to adopt directly (CTRL_ADOPT_TARGET path)."
+    )
+
+
+class DiscoveryIgnoreInput(_Base):
+    disc_id: str = Field(..., min_length=1, description="Discovered candidate id to ignore.")
+
+
+class EnrollmentApproveInput(_Base):
+    enr_id: str = Field(..., min_length=1, description="Enrollment id to approve (signs the CSR).")
+    confirm: bool = Field(
+        default=False,
+        description="Must be true to proceed. Approving signs a CSR and enrolls a node.",
+    )
+
+
+class EnrollmentRejectInput(_Base):
+    enr_id: str = Field(..., min_length=1, description="Enrollment id to reject.")
+
+
+class ProvisionInput(_Base):
+    node_id: str | None = Field(default=None, description="Target node id (or use enr_id).")
+    enr_id: str | None = Field(default=None, description="Enrollment id (or use node_id).")
+    config_blob: dict[str, Any] = Field(..., description="Config overlay to converge to.")
+    build_id: str | None = Field(default=None, description="Optional buildArtifact id to deploy.")
+
+
+class DecommissionInput(_Base):
+    node_id: str = Field(..., min_length=1, description="Node id to tear down and retire.")
+    wipe_scope: list[str] = Field(
+        default_factory=list,
+        description="What to wipe, e.g. ['config','service','certs']. Empty leaves logs for forensics.",
+    )
+    confirm: bool = Field(
+        default=False,
+        description="Must be true. DESTRUCTIVE: wipes the node and marks it retired.",
+    )
+
+
 # ===========================================================================
 # REST read tools
 # ===========================================================================
@@ -286,10 +371,137 @@ async def solarinet_server_status(params: FormatOnlyInput) -> str:
         return _err(exc)
 
 
+# ---- section 6 (C2 capabilities) read tools -------------------------------
+@mcp.tool(name="solarinet_list_discovery", annotations={"title": "Discovery candidates", **_RO})
+async def solarinet_list_discovery(params: DiscoveryListInput) -> str:
+    """Discovered-but-not-monitored candidates (GET /api/discovery?status=new|all).
+
+    Each item: {discId, host, ip, kind, via, services[], segId, arch, seenCount,
+    lastSeenAt, status}. Use solarinet_adopt_discovery / solarinet_ignore_discovery
+    to act on one.
+
+    Returns: markdown table or JSON list of discovery candidates.
+    """
+    try:
+        data = await _rest().request("GET", "/api/discovery", params={"status": params.status})
+        return _render(data, params.response_format, f"Discovery ({params.status})")
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_list_enrollments", annotations={"title": "Enrollments", **_RO})
+async def solarinet_list_enrollments(params: EnrollmentListInput) -> str:
+    """Pending/decided enrollments (GET /api/enrollments?status=).
+
+    Each item: {enrId, host, ip, role, certFp, status, requestedAt}. Approving an
+    enrollment signs the CSR (operator-only) - see solarinet_approve_enrollment.
+
+    Returns: markdown table or JSON list of enrollments.
+    """
+    try:
+        data = await _rest().request("GET", "/api/enrollments", params={"status": params.status})
+        return _render(data, params.response_format, "Enrollments")
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_list_builds", annotations={"title": "Build registry", **_RO})
+async def solarinet_list_builds(params: BuildsInput) -> str:
+    """Build registry + per-arch convergence (GET /api/builds): which versions
+    exist, how many nodes on each, update-available flags.
+
+    Returns: markdown table or JSON list of build artifacts.
+    """
+    try:
+        data = await _rest().request("GET", "/api/builds")
+        return _render(data, params.response_format, "Builds")
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_list_segments", annotations={"title": "Network segments", **_RO})
+async def solarinet_list_segments(params: SegmentsInput) -> str:
+    """Network segments with rollup counts (GET /api/segments):
+    {segId, label, cidr, wireless, roll:{up,degraded,down,unknown}}.
+
+    Returns: markdown table or JSON list of segments.
+    """
+    try:
+        data = await _rest().request("GET", "/api/segments")
+        return _render(data, params.response_format, "Segments")
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_list_netgear", annotations={"title": "Network gear", **_RO})
+async def solarinet_list_netgear(params: NetgearInput) -> str:
+    """Network gear inventory with attached-node counts and uplink chain
+    (GET /api/netgear) - switches/APs/gateways for the LAN-hierarchy view.
+
+    Returns: markdown table or JSON list of network gear.
+    """
+    try:
+        data = await _rest().request("GET", "/api/netgear")
+        return _render(data, params.response_format, "Network gear")
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_get_topology_view", annotations={"title": "Topology (dual view)", **_RO})
+async def solarinet_get_topology_view(params: TopologyViewInput) -> str:
+    """Topology graph in the chosen projection
+    (GET /api/topology?view=monitoring|network).
+
+    view='monitoring' -> server->monitor->target/client edges (the HRW graph).
+    view='network'    -> gateway->switch/AP->host hierarchy with uplink ports,
+                         link type, speed, and LLDP flag.
+
+    Returns: JSON or markdown of the topology graph.
+    """
+    try:
+        data = await _rest().request("GET", "/api/topology", params={"view": params.view})
+        return _render(data, params.response_format, f"Topology ({params.view})")
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_get_config", annotations={"title": "Read global config", **_RO})
+async def solarinet_get_config(params: ConfigReadInput) -> str:
+    """Read global server config (GET /api/config): tolerances, retention, lease,
+    ports, autoDiscover/autoEnroll flags. Read-only here - editing config is a
+    deliberately separate, operator-gated dashboard action.
+
+    Returns: markdown record or JSON object.
+    """
+    try:
+        data = await _rest().request("GET", "/api/config")
+        return _render(data, params.response_format, "Config")
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
 # ===========================================================================
 # Control tools (side-effectful)
 # ===========================================================================
 _CTRL = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
+# Destructive control: marks node retired / signs CSRs. These mirror the
+# dashboard's operator-RBAC + explicit-confirm discipline (section 6, section 9).
+_DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True}
+
+
+def _require_operator_token() -> str | None:
+    """Return an error string if no operator token is configured, else None.
+
+    Destructive endpoints (decommission, enrollment approve) demand the operator
+    role server-side; failing fast here gives the agent an actionable message
+    instead of a round-trip 403, and mirrors the dashboard's gate.
+    """
+    if not _rest()._cfg.token:  # noqa: SLF001 - intentional config read
+        return (
+            "Error [no_operator_token]: this destructive action requires the "
+            "operator token. Set SOLARINET_API_TOKEN."
+        )
+    return None
 
 
 @mcp.tool(name="solarinet_trigger_survey", annotations={"title": "Trigger survey", **_CTRL})
@@ -327,6 +539,167 @@ async def solarinet_push_config(params: PushConfigInput) -> str:
             json_body={"nodeId": params.node_id, "configBlob": params.config_blob},
         )
         return f"Config push staged for node {params.node_id}.\n\n{to_json(data)}"
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+# ---- section 6 control tools ----------------------------------------------
+@mcp.tool(name="solarinet_adopt_discovery", annotations={"title": "Adopt discovered", **_CTRL})
+async def solarinet_adopt_discovery(params: DiscoveryAdoptInput) -> str:
+    """Promote a discovered candidate to monitored
+    (POST /api/discovery/{discId}/adopt).
+
+    SIDE EFFECT: creates an enrollment or sends CTRL_ADOPT_TARGET so a monitor
+    adds the entity to its live probe schedule. Not destructive. Requires the
+    operator role server-side.
+
+    Args: disc_id, optional role (for the enrollment path), optional probe_spec
+    (for the direct CTRL_ADOPT_TARGET path).
+    Returns: confirmation text or an error.
+    """
+    body: dict[str, Any] = {}
+    if params.role is not None:
+        body["role"] = params.role
+    if params.probe_spec is not None:
+        body["probeSpec"] = params.probe_spec
+    try:
+        data = await _rest().request(
+            "POST", f"/api/discovery/{params.disc_id}/adopt", json_body=body
+        )
+        return f"Adopted discovered candidate {params.disc_id}.\n\n{to_json(data)}"
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_ignore_discovery", annotations={"title": "Ignore discovered", **_CTRL})
+async def solarinet_ignore_discovery(params: DiscoveryIgnoreInput) -> str:
+    """Mark a discovered candidate ignored, suppressing it from the list
+    (POST /api/discovery/{discId}/ignore).
+
+    SIDE EFFECT: sets discovered.status='ignored'. Reversible (it can resurface
+    on the next sighting). Not destructive.
+
+    Args: disc_id.
+    Returns: confirmation text or an error.
+    """
+    try:
+        data = await _rest().request("POST", f"/api/discovery/{params.disc_id}/ignore")
+        return f"Ignored discovered candidate {params.disc_id}.\n\n{to_json(data)}"
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_reject_enrollment", annotations={"title": "Reject enrollment", **_CTRL})
+async def solarinet_reject_enrollment(params: EnrollmentRejectInput) -> str:
+    """Deny a pending enrollment (POST /api/enrollments/{enrId}/reject).
+
+    SIDE EFFECT: sets enrollment.status='rejected'. Not destructive (no node is
+    torn down; the CSR is simply not signed). Requires the operator role.
+
+    Args: enr_id.
+    Returns: confirmation text or an error.
+    """
+    try:
+        data = await _rest().request("POST", f"/api/enrollments/{params.enr_id}/reject")
+        return f"Rejected enrollment {params.enr_id}.\n\n{to_json(data)}"
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(name="solarinet_provision", annotations={"title": "Provision node", **_CTRL})
+async def solarinet_provision(params: ProvisionInput) -> str:
+    """First-time bring-up / re-converge a node (POST /api/control/provision ->
+    CTRL_PROVISION).
+
+    SIDE EFFECT: writes config, installs/enables the service unit, begins
+    reporting. Idempotent - a re-provision converges to the supplied epoch.
+    Requires the operator role.
+
+    Args: node_id OR enr_id (one required), config_blob, optional build_id.
+    Returns: confirmation text or an error.
+    """
+    if not params.node_id and not params.enr_id:
+        return "Error [bad_request]: provide either node_id or enr_id."
+    body: dict[str, Any] = {"configBlob": params.config_blob}
+    if params.node_id:
+        body["nodeId"] = params.node_id
+    if params.enr_id:
+        body["enrId"] = params.enr_id
+    if params.build_id is not None:
+        body["buildId"] = params.build_id
+    try:
+        data = await _rest().request("POST", "/api/control/provision", json_body=body)
+        target = params.node_id or f"enr {params.enr_id}"
+        return f"Provision requested for {target}.\n\n{to_json(data)}"
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+# --- destructive: operator token + explicit confirm required ---------------
+@mcp.tool(
+    name="solarinet_approve_enrollment",
+    annotations={"title": "Approve enrollment (operator)", **_DESTRUCTIVE},
+)
+async def solarinet_approve_enrollment(params: EnrollmentApproveInput) -> str:
+    """Operator-sign a CSR so a node becomes enrolled
+    (POST /api/enrollments/{enrId}/approve).
+
+    GATED: signing admits a new node to the trust domain, so this mirrors the
+    dashboard's operator discipline - it REQUIRES the operator token AND an
+    explicit confirm=true. Without both it refuses before any network call.
+
+    Args: enr_id, confirm (must be true).
+    Returns: confirmation text or an error.
+    """
+    gate = _require_operator_token()
+    if gate:
+        return gate
+    if not params.confirm:
+        return (
+            "Error [confirm_required]: approving an enrollment signs a CSR and "
+            "admits a node. Re-call with confirm=true to proceed."
+        )
+    try:
+        data = await _rest().request("POST", f"/api/enrollments/{params.enr_id}/approve")
+        return f"Approved enrollment {params.enr_id} (CSR signed).\n\n{to_json(data)}"
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    name="solarinet_decommission",
+    annotations={"title": "Decommission node (operator)", **_DESTRUCTIVE},
+)
+async def solarinet_decommission(params: DecommissionInput) -> str:
+    """Tear down and retire a node (POST /api/control/decommission ->
+    SCP_MSG_DECOMMISSION / CTRL_DECOMMISSION with a fresh confirm token).
+
+    DESTRUCTIVE: wipes the requested scope on the target and marks it 'retired';
+    the server writes an audit row. This mirrors the dashboard's double-confirm:
+    it REQUIRES the operator token AND an explicit confirm=true, refusing before
+    any network call otherwise.
+
+    Args: node_id, wipe_scope (e.g. ['config','service','certs']; empty leaves
+    logs for forensics), confirm (must be true).
+    Returns: confirmation text or an error.
+    """
+    gate = _require_operator_token()
+    if gate:
+        return gate
+    if not params.confirm:
+        return (
+            "Error [confirm_required]: decommission is destructive and irreversible. "
+            "Re-call with confirm=true to proceed."
+        )
+    try:
+        data = await _rest().request(
+            "POST", "/api/control/decommission",
+            json_body={"nodeId": params.node_id, "wipeScope": params.wipe_scope, "confirm": True},
+        )
+        return (
+            f"Decommission requested for node {params.node_id} "
+            f"(scope={params.wipe_scope or 'monitoring-only'}).\n\n{to_json(data)}"
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -428,7 +801,17 @@ def list_tools() -> list[str]:
         "solarinet_list_nodes", "solarinet_get_node", "solarinet_get_node_history",
         "solarinet_list_probes", "solarinet_get_probe_history", "solarinet_list_alerts",
         "solarinet_get_topology", "solarinet_server_status",
+        # section 6 reads
+        "solarinet_list_discovery", "solarinet_list_enrollments", "solarinet_list_builds",
+        "solarinet_list_segments", "solarinet_list_netgear", "solarinet_get_topology_view",
+        "solarinet_get_config",
+        # control
         "solarinet_trigger_survey", "solarinet_push_config",
+        "solarinet_adopt_discovery", "solarinet_ignore_discovery",
+        "solarinet_reject_enrollment", "solarinet_provision",
+        # destructive control (operator + confirm)
+        "solarinet_approve_enrollment", "solarinet_decommission",
+        # DB
         "solarinet_db_query", "solarinet_db_node_summary",
         "solarinet_db_active_alerts", "solarinet_db_host_history",
     ]

@@ -1,0 +1,156 @@
+# SolariNet CI (Architecture & Plan §15 / Phase 7).
+#
+# Mirrors the Makefile targets and deploy/bootstrap-xenon.sh staging:
+#   * core      - default zero-dependency Phase 1 core + Unity tests (hard gate)
+#   * server    - full server build (SOLARI_BUILD_SERVER + I/O + SQLite) with
+#                 the §3 dependency set installed the way bootstrap does
+#   * ctest     - the Unity suites via ctest (core + spool required; transport
+#                 loopback best-effort, as bootstrap stages it)
+#   * cross     - the §12 cross matrix (linux-arm64/arm32, windows-x86_64) built
+#                 with cmake/toolchains/*, plus a qemu-user smoke run of the
+#                 cross-built Linux test binaries on non-native arches
+#
+# macos-universal is exercised on the native macOS runner (no qemu needed).
+
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---- default core: zero external deps, always builds (Makefile `all`) -----
+  core:
+    name: core (default, no deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install minimal build tooling
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential cmake git pkg-config
+      - name: Configure + build core (tests on)
+        run: cmake -S . -B build -DSOLARI_BUILD_TESTS=ON && cmake --build build -j
+      - name: ctest (core + spool required; loopback best-effort)
+        run: |
+          ctest --test-dir build --output-on-failure -E 'test_net_loopback'
+          ctest --test-dir build --output-on-failure -R 'test_net_loopback' \
+            || echo "::warning::transport loopback not green (best-effort stage)"
+
+  # ---- full server build with the §3 dependency set ------------------------
+  server:
+    name: server (full, IO + SQLite + server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install full dependency set (mirrors bootstrap-xenon.sh)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential cmake git pkg-config curl unzip ca-certificates \
+            libsqlite3-dev libcjson-dev libmariadb-dev
+          # nng + mbedTLS from packages; bootstrap falls back to source if absent.
+          sudo apt-get install -y libmbedtls-dev libnng-dev || \
+            echo "::warning::libnng-dev/libmbedtls-dev unavailable; server I/O may need --source-deps"
+      - name: Configure + build full server
+        run: |
+          cmake -S . -B build-server \
+            -DSOLARI_BUILD_SERVER=ON \
+            -DSOLARI_WITH_IO=ON \
+            -DSOLARI_WITH_SQLITE=ON \
+            -DSOLARI_WITH_JSON=ON \
+            -DSOLARI_BUILD_TESTS=ON
+          cmake --build build-server -j
+      - name: ctest (full build)
+        run: |
+          ctest --test-dir build-server --output-on-failure -E 'test_net_loopback'
+          ctest --test-dir build-server --output-on-failure -R 'test_net_loopback' \
+            || echo "::warning::transport loopback not green (best-effort stage)"
+
+  # ---- cross matrix (§12 toolchains) + qemu-user smoke ---------------------
+  cross:
+    name: cross ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-arm64
+            toolchain: cmake/toolchains/linux-arm64.cmake
+            apt: gcc-aarch64-linux-gnu
+            qemu: qemu-aarch64-static
+            qemu_ld: /usr/aarch64-linux-gnu
+            smoke: true
+          - target: linux-arm32
+            toolchain: cmake/toolchains/linux-arm32.cmake
+            apt: gcc-arm-linux-gnueabihf
+            qemu: qemu-arm-static
+            qemu_ld: /usr/arm-linux-gnueabihf
+            smoke: true
+          - target: windows-x86_64
+            toolchain: cmake/toolchains/windows-x86_64.cmake
+            apt: gcc-mingw-w64-x86-64
+            qemu: ""
+            qemu_ld: ""
+            smoke: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain + qemu-user
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential cmake git pkg-config ${{ matrix.apt }}
+          if [ -n "${{ matrix.qemu }}" ]; then
+            sudo apt-get install -y qemu-user-static
+          fi
+      # Cross-build the zero-dependency core + Unity tests through the toolchain
+      # file. This proves the §12 cross targets without needing nng/mbedTLS cross
+      # builds in CI (Phase 0 acceptance: "prove an empty libsolari + client
+      # cross-build for arm64 and mingw").
+      - name: Configure + build (${{ matrix.target }})
+        run: |
+          cmake -S . -B build-${{ matrix.target }} \
+            -DCMAKE_TOOLCHAIN_FILE=${{ matrix.toolchain }} \
+            -DSOLARI_BUILD_TESTS=ON
+          cmake --build build-${{ matrix.target }} -j
+      # Smoke-test the cross-built Linux test binaries under qemu-user. Loopback
+      # transport is skipped (no I/O layer in this config); core/spool exercise
+      # framing/TLV/crypto on the target ABI.
+      - name: qemu-user smoke (${{ matrix.target }})
+        if: ${{ matrix.smoke }}
+        run: |
+          export QEMU_LD_PREFIX="${{ matrix.qemu_ld }}"
+          found=0
+          while IFS= read -r bin; do
+            found=1
+            echo "== qemu ${{ matrix.qemu }} ${bin} =="
+            ${{ matrix.qemu }} "${bin}" || { echo "::error::${bin} failed under qemu"; exit 1; }
+          done < <(find build-${{ matrix.target }} -type f -name 'test_*' -perm -u+x)
+          if [ "${found}" -eq 0 ]; then
+            echo "::warning::no cross-built test_* binaries found to smoke-test"
+          fi
+
+  # ---- macOS universal (native runner; §12 macos-universal) ----------------
+  macos:
+    name: macos-universal (native)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure + build universal core
+        run: |
+          cmake -S . -B build-macos \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/macos-universal.cmake \
+            -DSOLARI_BUILD_TESTS=ON
+          cmake --build build-macos -j
+      - name: ctest (core)
+        run: ctest --test-dir build-macos --output-on-failure -E 'test_net_loopback'

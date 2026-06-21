@@ -1,0 +1,67 @@
+# SolariNet Server unit (Architecture & Plan §15.2).
+#
+# Two server units run identically on the primary and failover hosts; both start
+# the same way and sort out active/standby via the serverLease row (§9 failover).
+# The server also exposes the solariCtl Unix socket under /run/solari for the PHP
+# dashboard bridge (cert material never enters the web tier).
+#
+# Install: /etc/systemd/system/solari-server.service
+#   systemctl daemon-reload && systemctl enable --now solari-server.service
+#
+# Requires a reachable MariaDB (db/schema.sql applied). If MariaDB is local,
+# uncomment the After=/Wants= mariadb lines below.
+
+[Unit]
+Description=SolariNet Server
+Documentation=https://github.com/soren42/Solarinet
+After=network-online.target
+Wants=network-online.target
+# After=mariadb.service
+# Wants=mariadb.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/solariServer --config /etc/solari/server.conf
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+
+User=solari
+Group=solari
+
+# solariCtl socket lives in /run/solari; the PHP/Apache user must reach it, so
+# the runtime dir is group-readable (set the web user's group accordingly).
+StateDirectory=solari
+StateDirectoryMode=0750
+RuntimeDirectory=solari
+RuntimeDirectoryMode=0750
+ReadWritePaths=/var/lib/solari
+
+# --- hardening (§15) -------------------------------------------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Server binds high TCP ports (7701-7703) - no privileged caps required.
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

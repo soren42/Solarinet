@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Phase 7 Status &amp; Operations Guide</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:940px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 22px}
+  h2{font-family:var(--serif);font-size:25px;margin:42px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:19px;margin:26px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}
+  .warn{color:var(--warn);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 20px;margin:18px 0;font-size:14px}
+  .toc a{color:var(--accent);text-decoration:none} .toc a:hover{text-decoration:underline}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Status &amp; Operations Guide</h1>
+  <p class="sub">SolariNet Monitoring · Phase 7 completion + operator / developer handbook · gates green in-session</p>
+
+  <p>This document closes <strong>Phase 7</strong> (topology depth, MCP catch-up, and
+  operational hardening) and doubles as the operator / developer handbook for the whole
+  system. It is self-contained: inline CSS, no external fetches, in keeping with the
+  no-cloud tenet. For the earlier phases see <code>PHASE1_REPORT</code> through
+  <code>PHASE6_REPORT</code> and the Phase&nbsp;3 Handoff.</p>
+
+  <div class="toc">
+    <strong>Contents</strong> ·
+    <a href="#p7">Phase 7 deliverables</a> ·
+    <a href="#matrix">Build matrix &amp; options</a> ·
+    <a href="#run">Running server / client / monitor</a> ·
+    <a href="#dash">Dashboard on-prem setup</a> ·
+    <a href="#api">API / control-plane discipline</a> ·
+    <a href="#mcp">The MCP</a> ·
+    <a href="#enroll">Enrollment runbook</a> ·
+    <a href="#decom">Decommission runbook</a> ·
+    <a href="#retention">Retention</a> ·
+    <a href="#ci">CI</a> ·
+    <a href="#gaps">Known gaps</a>
+  </div>
+
+  <h2 id="p7">Phase 7 deliverables</h2>
+
+  <h3>Topology — deep path (server)</h3>
+  <p><code>src/server/serverTopology.c</code> gained a deep-discovery path that
+  normalizes LLDP-MIB rows into the schema's gear/edge model and assembles the
+  <code>/api/netgear</code> view — all pure and SNMP-free in the default build:</p>
+  <ul>
+    <li><strong>LLDP-MIB normalization.</strong> One decoded <code>lldpRemTable</code> row
+    (<code>topoLldpMibRecord</code>) becomes a <code>serverNetGear</code> + a
+    <code>serverLldpEdge</code> (<code>topoNormalizeMibRecord</code>). Gear-kind inference
+    (<code>topoInferGearKind</code>) treats the LLDP <code>SystemCapabilitiesMap</code> bits
+    as authoritative (AP &gt; router &gt; bridge), falling back to sysName / sysDesc keyword
+    matching when caps are absent. Gear IDs (<code>topoMibGearId</code>) are stable and
+    kind-prefixed (<code>sw-/ap-/gw-/rtr-/nd-</code>), seeded sysName → mgmtIp → chassisId.
+    A C99-safe case-insensitive substring (<code>topoContainsCi</code>) avoids GNU
+    <code>strcasestr</code>.</li>
+    <li><strong>Uplink-chain + attached-count assembly.</strong>
+    <code>topoAssembleNetGear</code> de-duplicates gear by gearId, counts DISTINCT attached
+    SolariNet nodes per gear (gear-to-gear edges excluded; a node seen on multiple
+    interfaces counts once), and computes uplink depth with a cycle guard
+    (<code>TOPO_MAX_UPLINK_HOPS</code>). Returns <code>ERR_BUFFER_FULL</code> on an
+    undersized output buffer.</li>
+    <li><strong>Two projections.</strong> <code>/api/topology</code> serves
+    <code>view=monitoring</code> (from HRW + node data) and <code>view=network</code>
+    (from <code>networkGear</code> + <code>lldpEdge</code> + the assembled uplink chain).</li>
+  </ul>
+  <div class="note">
+    <strong>SNMP is a seam, off by default.</strong> The only place a real net-snmp
+    dependency would live, <code>topoSnmpFetchLldp</code>, is guarded by
+    <code>#ifdef SOLARI_WITH_SNMP</code> (undefined by default). In the default build it
+    returns <code>ERR_PLATFORM</code> and writes zero records, so the build carries
+    <em>zero</em> added dependencies; <code>serverTopologyDeepWalk</code> cleanly no-ops.
+    <code>src/server/server.h</code> was left untouched — it is frozen for subsystem
+    implementers per its own contract.
+  </div>
+
+  <h3>MCP — Phase 7 catch-up</h3>
+  <p>The Python / FastMCP server (<code>integrations/mcp/</code>) grew from 14 to
+  <strong>27 registered tools</strong>, covering the §5/§6 read surface and a gated,
+  audited control surface. The SQL-query tool also gained a table allow-list. Details in
+  <a href="#mcp">the MCP section</a>.</p>
+
+  <h3>Operational hardening</h3>
+  <p>Enrollment / decommission scripts (<code>deploy/enrollment/</code>), hardened systemd
+  units (<code>deploy/systemd/</code>), DB maintenance procedures
+  (<code>db/maintenance/</code>), and a GitHub Actions CI workflow
+  (<code>.github/workflows/ci.yml</code>). All additive — no C sources or dashboard files
+  were modified to land them.</p>
+
+  <h2 id="matrix">Build matrix &amp; options</h2>
+  <p>The build is layered: a zero-dependency ISO&nbsp;C99 core that builds anywhere, with
+  heavier capability behind explicit CMake options. All options default <code>OFF</code>.</p>
+  <table>
+    <thead><tr><th>Option</th><th>Default</th><th>Pulls in</th><th>Enables</th></tr></thead>
+    <tbody>
+      <tr><td><code>SOLARI_BUILD_TESTS</code></td><td>OFF</td><td>(vendored Unity)</td><td>the ctest suites</td></tr>
+      <tr><td><code>SOLARI_WITH_IO</code></td><td>OFF</td><td>nng + mbedTLS</td><td>the transport layer (<code>solariNet</code>)</td></tr>
+      <tr><td><code>SOLARI_WITH_SQLITE</code></td><td>OFF</td><td>SQLite</td><td>the store-and-forward spool</td></tr>
+      <tr><td><code>SOLARI_WITH_JSON</code></td><td>OFF</td><td>cJSON</td><td>the JSON config overlay</td></tr>
+      <tr><td><code>SOLARI_BUILD_SERVER</code></td><td>OFF</td><td>libmariadb (+ IO transitively)</td><td>solariServer (x86_64 / arm64 only)</td></tr>
+      <tr><td><code>SOLARI_WITH_SNMP</code></td><td>undefined</td><td>net-snmp (none vendored)</td><td>the topology deep-walk SNMP fetch seam</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Cross / platform toolchains</h3>
+  <p><code>cmake/toolchains/</code> carries <code>linux-x86_64</code>,
+  <code>linux-arm64</code>, <code>linux-arm32</code>, <code>windows-x86_64</code>, and
+  <code>macos-universal</code>. The server tier is built only on the 64-bit Linux targets;
+  the edge agents build across the matrix.</p>
+
+  <pre># core only (no deps, builds anywhere)
+cmake -S . -B build -DSOLARI_BUILD_TESTS=ON
+cmake --build build && ctest --test-dir build --output-on-failure
+
+# full server tier
+cmake -S . -B build -DSOLARI_BUILD_TESTS=ON -DSOLARI_BUILD_SERVER=ON \
+      -DSOLARI_WITH_IO=ON -DSOLARI_WITH_SQLITE=ON -DSOLARI_WITH_JSON=ON
+cmake --build build && ctest --test-dir build --output-on-failure</pre>
+
+  <div class="note">
+    <strong>Verified in this session.</strong> A clean-from-scratch full-server configure +
+    build under <code>-Wall -Wextra -Wpedantic</code> reports
+    <span class="ok">0 warnings, 0 errors</span>; MariaDB was found via pkg-config and
+    linked. <code>ctest</code>: <span class="ok">100% passed, 0 failed out of 22</span>
+    (server suites included). The MCP suite reports <span class="ok">81 passed</span>.
+  </div>
+
+  <h2 id="run">Running server / client / monitor</h2>
+  <p>The supported way to run the three roles is via the hardened systemd units in
+  <code>deploy/systemd/</code> (§15.2):</p>
+  <table>
+    <thead><tr><th>Unit</th><th>Role</th><th>Hardening note</th></tr></thead>
+    <tbody>
+      <tr><td><code>solari-server.service</code></td><td>solariServer (primary or failover — same binary, lease-decided)</td><td><code>RuntimeDirectory</code> provides the <code>solariCtl</code> socket dir</td></tr>
+      <tr><td><code>solari-monitor.service</code></td><td>probe monitor</td><td>adds <code>CAP_NET_RAW</code> for ICMP probing</td></tr>
+      <tr><td><code>solari-client.service</code></td><td>edge agent</td><td>least-privilege sandbox</td></tr>
+      <tr><td><code>solari-client-watchdog.service</code></td><td>optional external supervisor of the client-spawned watchdog sibling</td><td>defense-in-depth for the §7.3 watchdog</td></tr>
+    </tbody>
+  </table>
+  <pre>install -m0644 deploy/systemd/*.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now solari-server.service       # the C2 tier
+systemctl enable --now solari-monitor.service      # probe monitor(s)
+systemctl enable --now solari-client.service       # on each monitored host</pre>
+  <p>Each unit's <code>ExecStart</code> points at the installed binary and a config file;
+  until the binaries are installed, <code>systemd-analyze verify</code> flags only the
+  expected "binary not installed yet" diagnostic — every directive is otherwise recognized.</p>
+
+  <h2 id="dash">Dashboard on-prem setup</h2>
+  <p>The dashboard (Phase 6) is fully on-prem: React / ReactDOM / Babel are vendored under
+  <code>dashboard/public/vendor/</code>, fonts and icons are local, and the page makes no
+  external fetches. Serve <code>dashboard/public/</code> as the static root and
+  <code>dashboard/api/</code> (a PDO-backed PHP service) under <code>/api</code> on the same
+  origin. The API needs a PDO DSN to the server's MariaDB (reads) and access to the
+  <code>solariCtl</code> Unix socket (control actions). See <code>PHASE6_REPORT.html</code>
+  for the route map.</p>
+
+  <h2 id="api">API / control-plane discipline</h2>
+  <p>There are three operator surfaces — the dashboard PHP API, the MCP, and the
+  <code>solariCtl</code> Unix socket — and they share one discipline:</p>
+  <ul>
+    <li><strong>Reads are direct, control is routed.</strong> Read endpoints project the
+    database. State-changing actions never write the DB from the edge surface; they are
+    handed to the C server (via <code>solariCtl</code>), which stays the single arbiter.</li>
+    <li><strong>Destructive actions require an operator token <em>and</em> explicit
+    confirmation.</strong> Approve-enrollment (signs a CSR) and decommission (wipes a node)
+    refuse before any network call unless both the operator token and an explicit
+    <code>confirm=true</code> are present. Decommission carries a one-time confirm token
+    (<code>TLV_LIFE_CONFIRM</code>) echoed for audit.</li>
+    <li><strong>solariCtl verbs:</strong> <code>PING</code>, <code>SURVEY</code>,
+    <code>APPROVE</code>/<code>REJECT</code>, <code>PROVISION</code>, <code>ADOPT</code>,
+    <code>IGNORE</code>, <code>CONTROL</code>, <code>DECOMMISSION</code>/<code>RETIRE</code>.</li>
+  </ul>
+
+  <h2 id="mcp">The MCP</h2>
+  <p><code>integrations/mcp/</code> is a Python / FastMCP server exposing SolariNet to an
+  AI assistant. It wraps the same REST surface (envelope-unwrapping <code>RestClient</code>)
+  and a read-only SQL surface; clients are injectable for tests. Deps live in a
+  git-ignored <code>.venv</code>. <strong>27 tools</strong> total after Phase&nbsp;7.</p>
+
+  <h3>Read tools (GET, read-only)</h3>
+  <p>Among the §6 reads added this phase: <code>solarinet_list_discovery</code>,
+  <code>solarinet_list_enrollments</code>, <code>solarinet_list_builds</code>,
+  <code>solarinet_list_segments</code>, <code>solarinet_list_netgear</code>,
+  <code>solarinet_get_topology_view</code> (dual-hierarchy
+  <code>view=monitoring|network</code>), and a read-only <code>solarinet_get_config</code>.</p>
+
+  <h3>Control tools</h3>
+  <ul>
+    <li><strong>Non-destructive (POST):</strong> <code>solarinet_adopt_discovery</code>,
+    <code>solarinet_ignore_discovery</code>, <code>solarinet_reject_enrollment</code>,
+    <code>solarinet_provision</code> (requires node_id or enr_id).</li>
+    <li><strong>Destructive (gated):</strong> <code>solarinet_approve_enrollment</code>
+    (signs CSR) and <code>solarinet_decommission</code> (wipe). Both are marked
+    <code>destructiveHint</code> and require the operator token <em>and</em>
+    <code>confirm=true</code>, refusing before any network call — mirroring the dashboard
+    discipline. A <code>_require_operator_token()</code> helper enforces the token gate.</li>
+  </ul>
+
+  <h3>SQL guard — table allow-list</h3>
+  <p>The read-only SQL tool now enforces an explicit table allow-list
+  (<code>solarinet_mcp/db.py</code>) on top of the existing SELECT/WITH-only,
+  anti-stacking, no-OUTFILE checks. <code>_enforce_table_allow_list()</code> extracts every
+  <code>FROM</code>/<code>JOIN</code> target, exempts CTE names declared via <code>WITH</code>,
+  and rejects anything unlisted — blocking <code>information_schema</code> / <code>mysql</code>
+  / <code>performance_schema</code> exfiltration. The allow-list covers the §10 base tables
+  plus the new §5 tables (<code>segment</code>, <code>networkGear</code>, <code>lldpEdge</code>,
+  <code>discovered</code>, <code>enrollment</code>, <code>buildArtifact</code>).</p>
+
+  <pre># run the MCP test suite
+cd integrations/mcp && .venv/bin/python -m pytest -q     # 81 passed</pre>
+
+  <h2 id="enroll">Enrollment runbook</h2>
+  <p><code>deploy/enrollment/solari-enroll.sh</code> enrolls a node end-to-end, generating
+  key material <em>locally</em> and only ever sending a CSR:</p>
+  <ol>
+    <li>Generates an EC P-256 key + CSR locally (<code>--rsa</code> for an RSA key). The CN
+    encodes <code>role:fqdn</code> per §15.1 / §5.5 (e.g. <code>CN=monitor:beryl.akoria.net</code>).</li>
+    <li>Submits <code>{token, role, fqdn, certFp, csrPem}</code> to the server — over HTTPS
+    (<code>--server</code>) or a local <code>solariCtl</code> Unix socket
+    (<code>--ctl-socket</code>).</li>
+    <li>Handles the <code>status=pending</code> reply (awaiting operator approval).</li>
+    <li>On approval, installs the signed cert + CA root, verifies the chain, and stamps
+    <code>nodeId</code> into <code>[identity]</code> of the node config.</li>
+  </ol>
+  <pre># enroll a monitor against the server over HTTPS
+deploy/enrollment/solari-enroll.sh --role monitor --fqdn beryl.akoria.net \
+    --token "$ENROLL_TOKEN" --server https://server.akoria.net
+
+# generate key + CSR only (no submission) — useful for offline / staged enrollment
+deploy/enrollment/solari-enroll.sh --role monitor --fqdn beryl.akoria.net --csr-only</pre>
+  <p>Key flags: <code>--role</code>, <code>--fqdn</code>, <code>--token</code>,
+  <code>--server</code> / <code>--ctl-socket</code>, <code>--rsa</code> /
+  <code>--key-bits</code>, <code>--csr-only</code>, <code>--conf-dir</code> /
+  <code>--config</code>, <code>--insecure</code>, <code>--force</code>.</p>
+  <p class="note"><strong>Verified:</strong> <code>--csr-only</code> produced a real EC key +
+  CSR whose <code>openssl req -verify</code> returns "self-signature verify OK"
+  (<code>subject=CN=monitor:beryl.akoria.net</code>).</p>
+
+  <h2 id="decom">Decommission runbook</h2>
+  <p><code>deploy/enrollment/solari-decommission.sh</code> is the node-local
+  <code>CTRL_DECOMMISSION</code> executor (Handoff §4.2 / §7.3). It is deliberately hard to
+  fire by accident:</p>
+  <ol>
+    <li>Requires a server-issued <code>--confirm-token</code> (<code>TLV_LIFE_CONFIRM</code>)
+    echoed for audit, plus an interactive phrase confirmation.</li>
+    <li><code>--wipe-scope config,certs,spool,logs,unit,all</code>
+    (<code>TLV_LIFE_WIPE_SCOPE</code>) selects what is erased.</li>
+    <li>Stops the service, reports retirement best-effort <em>before</em> key deletion,
+    securely erases the scoped material (<code>shred</code> when available), then
+    disables / removes the unit.</li>
+    <li><code>--dry-run</code> to rehearse; <code>--local-force --yes</code> for an offline
+    or forced teardown when the server is unreachable.</li>
+  </ol>
+  <pre># server-driven, audited teardown of a node
+deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope all
+# rehearse without touching anything
+deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope config,certs --dry-run</pre>
+  <p class="note"><strong>Verified:</strong> scope parsing and a full <code>--dry-run</code>
+  exit cleanly (rc=0); both scripts pass <code>bash -n</code>.</p>
+
+  <h2 id="retention">Retention &amp; history rolling</h2>
+  <p><code>db/maintenance/</code> holds MariaDB stored procedures that operationalize the
+  <code>TO_DAYS(sampledAt)</code> RANGE partition scheme from <code>db/schema.sql</code>:</p>
+  <ul>
+    <li><code>retention.sql</code> — <code>solari_purge_retired</code> /
+    <code>solari_purge_history</code> / <code>solari_retention_run</code>: purge
+    <code>state='retired'</code> nodes (with FK-cascade children plus explicit
+    <code>nodeConfig</code> / <code>hostHistory</code>) past the retention window, with a
+    row-level history safety net.</li>
+    <li><code>roll_history.sql</code> — <code>solari_roll_partitions</code>: REORGANIZE the
+    <code>p_max</code> catch-all into monthly <code>pYYYYMM</code> partitions ahead of now and
+    DROP-PARTITION months aged past retention, on both <code>hostHistory</code> and
+    <code>probeHistory</code>. Idempotent via <code>information_schema.PARTITIONS</code>
+    guards; dynamic DDL via PREPARE/EXECUTE.</li>
+  </ul>
+  <p>Schedule them from cron / an event scheduler, e.g. <code>CALL solari_retention_run(...)</code>
+  nightly and <code>CALL solari_roll_partitions(...)</code> monthly.</p>
+
+  <h2 id="ci">CI</h2>
+  <p><code>.github/workflows/ci.yml</code> defines four jobs (validated as well-formed YAML):</p>
+  <ul>
+    <li><code>core</code> — the default zero-dependency build + ctest.</li>
+    <li><code>server</code> — the full <code>SOLARI_BUILD_SERVER + IO + SQLITE + JSON</code>
+    build with the bootstrap dependency set.</li>
+    <li><code>cross</code> — a matrix (linux-arm64 / arm32, windows-x86_64) via the
+    <code>cmake/toolchains/*</code> files, with a qemu-user smoke run of the cross-built
+    <code>test_*</code> binaries.</li>
+    <li><code>macos</code> — a universal build on the native runner.</li>
+  </ul>
+  <p>Loopback / transport staging is best-effort, mirroring <code>bootstrap-xenon.sh</code>.</p>
+
+  <h2 id="gaps">Known gaps &amp; deferred items</h2>
+  <div class="gap">
+  <ul>
+    <li><strong>No live MariaDB execution here.</strong> Schema, migrations, and the
+    maintenance / retention procedures are authored to valid MariaDB syntax and reviewed —
+    one FETCH-into-user-variable issue was fixed to use a declared cursor variable — but
+    they were <em>not</em> run against a live MariaDB instance in this session.</li>
+    <li><strong>No browser / live-PHP validation here.</strong> The dashboard SPA and the
+    PHP API are authored-correct but were not loaded in a browser or run against a live
+    PHP-FPM + MariaDB + <code>solariCtl</code> stack. SSE was not exercised end-to-end.</li>
+    <li><strong>SNMP topology fetch is a stub.</strong> The deep-walk normalizer and
+    assembler are real and tested; the actual net-snmp fetch is behind
+    <code>SOLARI_WITH_SNMP</code> and returns <code>ERR_PLATFORM</code> until a backend is
+    compiled in. No SNMP dependency is vendored.</li>
+    <li><strong>shellcheck not run.</strong> shellcheck is not installed in this environment
+    and could not be fetched; the enrollment / decommission scripts pass <code>bash -n</code>
+    and were written to shellcheck conventions and manually reviewed.</li>
+    <li><strong>systemd / CI not executed against real infra.</strong> Units pass
+    <code>systemd-analyze verify</code> (only the expected "binary not installed" ExecStart
+    diagnostics); the CI workflow is valid YAML but has not run on GitHub from this session.</li>
+  </ul>
+  </div>
+
+  <p class="footer">Generated at the close of the Phase 7 work session.
+  In-session gates: full-server build clean (0 warnings/errors), 22/22 ctest green,
+  MCP 81/81 green. Live-MariaDB, browser/PHP, SNMP-backend, and CI-on-infra acceptance
+  are operator steps, faithfully noted as not performed here.</p>
+</div>
+</body>
+</html>

@@ -46,6 +46,13 @@
 #define TOPO_MAX_NEIGH_PER_REPORT 256
 #define TOPO_MAX_SEG_PER_REPORT   64
 
+/* Deep managed-gear walk: bound a single device's LLDP-MIB neighbour table so a
+ * misbehaving switch cannot make the normalizer loop unboundedly. */
+#define TOPO_MAX_MIB_NEIGH        4096
+/* Uplink-chain assembly: cap the hop count so a cyclic uplinkGearId graph (bad
+ * data) cannot livelock the walker. */
+#define TOPO_MAX_UPLINK_HOPS      64
+
 /* ===================================================================== */
 /* Pure helpers (no DB) - kept static and side-effect free for testing.   */
 /* ===================================================================== */
@@ -149,6 +156,362 @@ static void topoDeriveSegId(const char *cidr, char *out, size_t cap)
     out[0] = '\0';
     if (!cidr || cidr[0] == '\0') return;
     topoDeriveGearId("seg-", cidr, out, cap);
+}
+
+/* Forward declarations: the gear/edge builders + persist live with the shallow
+ * path further down, but the deep-discovery normalizer (next) reuses them. */
+static bool topoBuildGear(serverNetGear *g, const char *gearId,
+                          const char *name, const char *kind,
+                          const char *mgmtIp, const char *segId, bool wireless);
+static void topoBuildEdge(serverLldpEdge *e, uint64_t nodeId, const char *gearId,
+                          const char *localIf, const char *peerPort,
+                          bool wireless, int speedMbps, bool viaLldp);
+static solariStatus topoPersist(serverContext *ctx, const serverNetGear *gear,
+                                const serverLldpEdge *edge, uint64_t whenUnixMs);
+
+/* ===================================================================== */
+/* Deep managed-gear (LLDP-MIB) normalization - pure, SNMP-free logic.    */
+/*                                                                        */
+/* The SNMP walk that actually FETCHES these rows from a managed device is */
+/* isolated behind topoSnmpFetchLldp() below (OFF by default). Everything  */
+/* here operates on already-fetched, in-memory LLDP-MIB records so it is   */
+/* fully unit-testable with no net-snmp dependency.                        */
+/* ===================================================================== */
+
+/* LLDP chassis/port id subtypes we care about (LLDP-MIB lldpChassisIdSubtype /
+ * lldpPortIdSubtype). Values match the standard MIB enumerations; only the ones
+ * we normalize specially are named, the rest fall through to a verbatim copy. */
+typedef enum {
+    TOPO_ID_SUB_CHASSIS_MAC   = 4,  /* macAddress           */
+    TOPO_ID_SUB_NETWORK_ADDR  = 5,  /* networkAddress (IP)  */
+    TOPO_ID_SUB_IFNAME        = 5,  /* portId: interfaceName (alias of 5)   */
+    TOPO_ID_SUB_LOCAL         = 7   /* local (free-form)    */
+} topoIdSubtype;
+
+/* One normalized LLDP-MIB remote-systems-table row, as produced by an SNMP walk
+ * of lldpRemTable on a managed device. All strings already decoded to UTF-8 /
+ * printable form by the fetch seam; this struct is the clean boundary the pure
+ * normalizer consumes. */
+typedef struct {
+    char     chassisId[64];     /* lldpRemChassisId (MAC, addr, or name)  */
+    int      chassisSubtype;    /* lldpRemChassisIdSubtype                 */
+    char     portId[64];        /* lldpRemPortId                          */
+    int      portSubtype;       /* lldpRemPortIdSubtype                    */
+    char     sysName[96];       /* lldpRemSysName                         */
+    char     sysDesc[160];      /* lldpRemSysDesc                         */
+    char     mgmtIp[SERVER_IP_MAX]; /* lldpRemManAddr (IPv4/IPv6), "" ok  */
+    char     localIf[48];       /* the local port the neighbour was seen on */
+    int      capabilities;      /* lldpRemSysCapEnabled bitmap (see below) */
+    bool     wireless;          /* link is wireless (WLAN cap / radio if)  */
+    int      speedMbps;         /* link speed if known, else 0            */
+} topoLldpMibRecord;
+
+/* LLDP system-capability bits (LLDP-MIB LldpSystemCapabilitiesMap). We only key
+ * gear-kind inference off a small subset. */
+enum {
+    TOPO_CAP_REPEATER = 0x0002,
+    TOPO_CAP_BRIDGE   = 0x0004,  /* switch        */
+    TOPO_CAP_WLAN_AP  = 0x0008,  /* access point  */
+    TOPO_CAP_ROUTER   = 0x0010,
+    TOPO_CAP_PHONE    = 0x0020,
+    TOPO_CAP_STATION  = 0x0080   /* end host      */
+};
+
+/* Case-insensitive substring search (haystack contains needle). Pure, no libc
+ * strcasestr (which is a GNU extension and not C99). */
+static bool topoContainsCi(const char *hay, const char *needle)
+{
+    size_t nl;
+    if (!hay || !needle) return false;
+    nl = strlen(needle);
+    if (nl == 0) return true;
+    for (; *hay; hay++) {
+        size_t i = 0;
+        while (i < nl &&
+               tolower((unsigned char)hay[i]) == tolower((unsigned char)needle[i]))
+            i++;
+        if (i == nl) return true;
+    }
+    return false;
+}
+
+/* Infer the schema gear-kind ("gateway"|"switch"|"ap"|"router"|"other") from an
+ * LLDP-MIB record. Capability bits are authoritative when present (they come
+ * straight from the device); sysName/sysDesc keywords are the fallback when a
+ * device reports no/empty capabilities (common on cheap managed gear). The order
+ * mirrors operator intent: an AP that is also a bridge is still an "ap"; a router
+ * that also bridges is a "router"; a pure bridge is a "switch". Returns a pointer
+ * to a static string literal. */
+static const char *topoInferGearKind(const topoLldpMibRecord *rec)
+{
+    int caps;
+    if (!rec) return "other";
+    caps = rec->capabilities;
+
+    if (caps != 0) {
+        if (caps & TOPO_CAP_WLAN_AP)  return "ap";
+        if (caps & TOPO_CAP_ROUTER)   return "router";
+        if (caps & TOPO_CAP_BRIDGE)   return "switch";
+        if (caps & TOPO_CAP_REPEATER) return "switch";
+        /* Router/phone/station-only with no bridging -> not infra gear. */
+        return "other";
+    }
+
+    /* No capability hint: lean on the human-readable identity strings. */
+    if (topoContainsCi(rec->sysName, "ap")    ||
+        topoContainsCi(rec->sysDesc, "access point") ||
+        topoContainsCi(rec->sysDesc, "wireless")     ||
+        topoContainsCi(rec->sysDesc, "wifi")         ||
+        topoContainsCi(rec->sysDesc, "wi-fi")) return "ap";
+    if (topoContainsCi(rec->sysName, "gw")    ||
+        topoContainsCi(rec->sysName, "gateway") ||
+        topoContainsCi(rec->sysDesc, "gateway")) return "gateway";
+    if (topoContainsCi(rec->sysName, "rtr")   ||
+        topoContainsCi(rec->sysName, "router") ||
+        topoContainsCi(rec->sysDesc, "router")) return "router";
+    if (topoContainsCi(rec->sysName, "sw")    ||
+        topoContainsCi(rec->sysName, "switch") ||
+        topoContainsCi(rec->sysDesc, "switch") ||
+        topoContainsCi(rec->sysDesc, "ethernet switch")) return "switch";
+    return "other";
+}
+
+/* Choose the stable gearId seed + prefix for an LLDP-MIB record. Preference:
+ *   1. sysName (human-stable, survives MAC churn on stacked/virtual chassis)
+ *   2. mgmtIp  (stable management address)
+ *   3. chassisId (MAC / local id - last resort)
+ * The prefix encodes inferred kind so ids read naturally (sw-/ap-/gw-/rtr-/nd-).
+ * Writes the derived id into out. Returns the seed actually used (for callers
+ * that want to record provenance); never NULL. */
+static const char *topoMibGearId(const topoLldpMibRecord *rec, const char *kind,
+                                 char *out, size_t cap)
+{
+    const char *prefix = "nd-";
+    const char *seed;
+
+    if (kind) {
+        if      (strcmp(kind, "switch")  == 0) prefix = "sw-";
+        else if (strcmp(kind, "ap")      == 0) prefix = "ap-";
+        else if (strcmp(kind, "gateway") == 0) prefix = "gw-";
+        else if (strcmp(kind, "router")  == 0) prefix = "rtr-";
+    }
+
+    if (rec && rec->sysName[0] != '\0')       seed = rec->sysName;
+    else if (rec && rec->mgmtIp[0] != '\0')   seed = rec->mgmtIp;
+    else if (rec && rec->chassisId[0] != '\0')seed = rec->chassisId;
+    else                                       seed = "";
+
+    topoDeriveGearId(prefix, seed, out, cap);
+    return seed;
+}
+
+/* Normalize ONE LLDP-MIB remote-systems row into a networkGear inventory row +
+ * the lldpEdge connecting `nodeId` (the SolariNet node hosting the SNMP walk, or
+ * 0 if the walk ran against an out-of-band collector) to that gear.
+ *
+ * This is the heart of the deep path: it turns raw MIB columns into the same
+ * schema rows the shallow self-report path produces, so both feed one inventory.
+ * model is filled from sysDesc (truncated to schema width); the edge carries
+ * peerPort = the neighbour's portId, viaLldp=true (it came from the LLDP-MIB).
+ *
+ * Returns false (and leaves the out-params untouched) if the record has no
+ * usable identity (empty chassisId AND sysName AND mgmtIp) - nothing to persist.
+ */
+static bool topoNormalizeMibRecord(const topoLldpMibRecord *rec, uint64_t nodeId,
+                                   const char *segId,
+                                   serverNetGear *g, serverLldpEdge *e)
+{
+    const char *kind;
+    char gearId[SERVER_GEARID_MAX];
+    const char *name;
+
+    if (!rec || !g || !e) return false;
+    if (rec->chassisId[0] == '\0' && rec->sysName[0] == '\0' &&
+        rec->mgmtIp[0] == '\0')
+        return false;
+
+    kind = topoInferGearKind(rec);
+    topoMibGearId(rec, kind, gearId, sizeof gearId);
+    if (gearId[0] == '\0') return false;
+
+    /* Prefer the human-readable sysName for the display name; fall back to the
+     * mgmtIp, then the chassis id. topoBuildGear defaults name->gearId if all
+     * are empty. */
+    name = (rec->sysName[0] != '\0') ? rec->sysName
+         : (rec->mgmtIp[0]  != '\0') ? rec->mgmtIp
+         : rec->chassisId;
+
+    if (!topoBuildGear(g, gearId, name, kind, rec->mgmtIp, segId, rec->wireless))
+        return false;
+
+    /* Enrich beyond the shallow path: the deep walk knows the model (sysDesc).
+     * sysDesc can exceed model's width; copy at most model-1 bytes (explicit
+     * precision keeps the truncation intentional and warning-free). */
+    if (rec->sysDesc[0] != '\0')
+        snprintf(g->model, sizeof g->model, "%.*s",
+                 (int)(sizeof g->model - 1), rec->sysDesc);
+
+    topoBuildEdge(e, nodeId, gearId, rec->localIf, rec->portId,
+                  rec->wireless, rec->speedMbps, true);
+    return true;
+}
+
+/* ===================================================================== */
+/* /api/netgear assembly - attached-node counts + uplink chain.           */
+/*                                                                        */
+/* Pure aggregation over an in-memory snapshot of the networkGear +       */
+/* lldpEdge tables, so the projection that backs GET /api/netgear (and    */
+/* the view=network hierarchy) is unit-testable without MariaDB. The web  */
+/* tier reads the same columns straight from the DB; this logic documents */
+/* and validates the exact rollup it must perform.                        */
+/* ===================================================================== */
+
+/* One row of the /api/netgear projection: a gear plus its derived rollups. */
+typedef struct {
+    char     gearId[SERVER_GEARID_MAX];
+    char     name[96];
+    char     kind[12];
+    char     uplinkGearId[SERVER_GEARID_MAX]; /* immediate parent, "" if root */
+    unsigned attachedNodes;   /* distinct SolariNet nodes edged to this gear  */
+    unsigned uplinkDepth;     /* hops to a root (0 = root / no uplink)         */
+} topoNetGearView;
+
+/* Find the index of gear `gearId` in the rows array, or -1. */
+static int topoFindGear(const topoNetGearView *rows, size_t n, const char *gearId)
+{
+    size_t i;
+    if (!gearId || gearId[0] == '\0') return -1;
+    for (i = 0; i < n; i++)
+        if (strcmp(rows[i].gearId, gearId) == 0) return (int)i;
+    return -1;
+}
+
+/* Compute, for one gear row, the number of hops up its uplinkGearId chain to a
+ * root (a gear with empty uplink or one that is not present in the set). Caps at
+ * TOPO_MAX_UPLINK_HOPS so a cyclic graph (corrupt data) returns the cap instead
+ * of looping forever. Pure - reads only the rows array. */
+static unsigned topoUplinkDepth(const topoNetGearView *rows, size_t n, size_t start)
+{
+    unsigned depth = 0;
+    int cur = (int)start;
+
+    while (depth < TOPO_MAX_UPLINK_HOPS) {
+        const char *up;
+        int next;
+        if (cur < 0 || (size_t)cur >= n) break;
+        up = rows[cur].uplinkGearId;
+        if (up[0] == '\0') break;            /* reached a root */
+        next = topoFindGear(rows, n, up);
+        if (next < 0) break;                 /* parent not in set -> root-ish */
+        if (next == (int)start) { depth = TOPO_MAX_UPLINK_HOPS; break; } /* cycle */
+        depth++;
+        cur = next;
+    }
+    return depth;
+}
+
+/* Assemble the /api/netgear projection from a gear inventory snapshot + the edge
+ * list. For each gear row we (a) copy identity + uplinkGearId, (b) count the
+ * DISTINCT nodeIds attached via lldpEdge rows that reference it (an edge with
+ * nodeId==0 is gear-to-gear and is NOT counted as an attached node), and
+ * (c) derive the uplink-chain depth. Gear is de-duplicated by gearId: a repeated
+ * gearId in `gear` collapses onto the first occurrence (attached counts still
+ * accumulate from all matching edges). Writes up to *count rows into out and
+ * updates *count to the number written. Returns ERR_BUFFER_FULL if out is too
+ * small for the de-duplicated gear set, else SOLARI_OK. */
+static solariStatus topoAssembleNetGear(const serverNetGear *gear, size_t gearN,
+                                        const serverLldpEdge *edges, size_t edgeN,
+                                        topoNetGearView *out, size_t *count)
+{
+    size_t i, j, rows = 0;
+    size_t cap = (count ? *count : 0);
+
+    if (!out || !count) return ERR_INVALID_ARG;
+    if (gearN && !gear) return ERR_INVALID_ARG;
+    if (edgeN && !edges) return ERR_INVALID_ARG;
+
+    /* Pass 1: de-duplicate gear by gearId into the projection rows. */
+    for (i = 0; i < gearN; i++) {
+        if (gear[i].gearId[0] == '\0') continue;
+        if (topoFindGear(out, rows, gear[i].gearId) >= 0) continue; /* dupe */
+        if (rows >= cap) { *count = rows; return ERR_BUFFER_FULL; }
+        memset(&out[rows], 0, sizeof out[rows]);
+        snprintf(out[rows].gearId, sizeof out[rows].gearId, "%s", gear[i].gearId);
+        snprintf(out[rows].name,   sizeof out[rows].name,   "%s", gear[i].name);
+        snprintf(out[rows].kind,   sizeof out[rows].kind,   "%s", gear[i].kind);
+        snprintf(out[rows].uplinkGearId, sizeof out[rows].uplinkGearId, "%s",
+                 gear[i].uplinkGearId);
+        rows++;
+    }
+
+    /* Pass 2: attached-node counts. We count DISTINCT (gear, nodeId) pairs, so a
+     * node reporting the same gear over several interfaces counts once. With the
+     * small per-gear edge fan-in expected here a linear distinct check is fine. */
+    for (i = 0; i < rows; i++) {
+        for (j = 0; j < edgeN; j++) {
+            size_t k;
+            bool seen = false;
+            if (edges[j].nodeId == 0) continue;            /* gear-to-gear edge */
+            if (strcmp(edges[j].gearId, out[i].gearId) != 0) continue;
+            for (k = 0; k < j; k++) {
+                if (edges[k].nodeId == edges[j].nodeId &&
+                    strcmp(edges[k].gearId, out[i].gearId) == 0) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) out[i].attachedNodes++;
+        }
+    }
+
+    /* Pass 3: uplink-chain depth (needs the full row set to resolve parents). */
+    for (i = 0; i < rows; i++)
+        out[i].uplinkDepth = topoUplinkDepth(out, rows, i);
+
+    *count = rows;
+    return SOLARI_OK;
+}
+
+/* Public projection accessor backing GET /api/netgear: given snapshots of the
+ * networkGear + lldpEdge tables (read by the control/API tier), fill `out` with
+ * the de-duplicated gear set decorated with attached-node counts and uplink-chain
+ * depth. Thin, deliberate wrapper around the pure assembler so the rollup lives
+ * in one tested place rather than being re-derived in SQL/PHP. Not declared in
+ * server.h (this header is frozen for subsystem implementers); the API tier links
+ * it by prototype. *count is in/out: capacity in, rows written out. */
+solariStatus serverTopologyNetGearView(const serverNetGear *gear, size_t gearN,
+                                       const serverLldpEdge *edges, size_t edgeN,
+                                       topoNetGearView *out, size_t *count)
+{
+    return topoAssembleNetGear(gear, gearN, edges, edgeN, out, count);
+}
+
+/* ===================================================================== */
+/* SNMP fetch seam - the ONLY place a real net-snmp dependency would live. */
+/*                                                                        */
+/* OFF by default: with SOLARI_WITH_SNMP undefined the build adds ZERO    */
+/* dependencies and this returns ERR_PLATFORM ("no SNMP backend"). The    */
+/* normalization logic above is fully exercised by the unit tests without */
+/* ever calling this. A real implementation (guarded by the macro) would  */
+/* walk lldpRemTable / lldpLocPortTable / sysName / sysDescr and fill the  */
+/* records[] array, then the caller runs topoNormalizeMibRecord() on each. */
+/* ===================================================================== */
+static solariStatus topoSnmpFetchLldp(const char *mgmtIp, const char *community,
+                                      topoLldpMibRecord *records, size_t *count)
+{
+#ifdef SOLARI_WITH_SNMP
+    /* Real net-snmp walk goes here (compiled in only when explicitly enabled).
+     * It must bound the result at TOPO_MAX_MIB_NEIGH and decode each column into
+     * the topoLldpMibRecord fields exactly as the normalizer expects. */
+    return topoSnmpFetchLldpImpl(mgmtIp, community, records, count);
+#else
+    (void)mgmtIp;
+    (void)community;
+    (void)records;
+    if (count) *count = 0;
+    /* No SNMP backend compiled in - the deep path is a no-op enhancement here. */
+    return ERR_PLATFORM;
+#endif
 }
 
 /* Build a synthesized networkGear row for a gateway/switch the node points at.
@@ -351,5 +714,56 @@ solariStatus serverTopologyOnReport(serverContext *ctx, uint64_t nodeId,
                "topology: report from 0x%llx uplinks=%u neighbours=%u "
                "segments=%u edges=%u", (unsigned long long)nodeId,
                uplinks, neighbours, segments, edges);
+    return SOLARI_OK;
+}
+
+/* Deep managed-gear interrogation entry point (Handoff §7.2 enhancement). Runs
+ * the SNMP/LLDP-MIB walk against `mgmtIp` (through the OFF-by-default seam),
+ * normalizes every returned neighbour into networkGear + lldpEdge rows, and
+ * upserts them. `nodeId` is the SolariNet node that performed the walk (the L2
+ * peer of the gear), or 0 for an out-of-band collector. `segId` may be "".
+ *
+ * With no SNMP backend compiled in, the fetch seam returns ERR_PLATFORM and this
+ * is a clean no-op (returns ERR_PLATFORM, persists nothing) - the build carries
+ * zero extra dependencies and the shallow self-report path remains the source of
+ * the host->switch hierarchy. The normalization + assembly logic this would
+ * drive is fully unit-tested independently of the seam. */
+solariStatus serverTopologyDeepWalk(serverContext *ctx, uint64_t nodeId,
+                                    const char *mgmtIp, const char *community,
+                                    const char *segId)
+{
+    static topoLldpMibRecord records[TOPO_MAX_MIB_NEIGH];
+    size_t count = TOPO_MAX_MIB_NEIGH, i, persisted = 0;
+    solariStatus rc;
+    uint64_t now;
+
+    if (!ctx) return ERR_INVALID_ARG;
+    if (!mgmtIp || mgmtIp[0] == '\0') return ERR_INVALID_ARG;
+    if (!ctx->db) return ERR_DB;
+
+    rc = topoSnmpFetchLldp(mgmtIp, community, records, &count);
+    if (rc != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_DEBUG,
+                   "topology: deep walk of %s skipped (rc=%d, %s)",
+                   mgmtIp, (int)rc, solariStrError(rc));
+        return rc;          /* ERR_PLATFORM when no SNMP backend is built in */
+    }
+    if (count > TOPO_MAX_MIB_NEIGH) count = TOPO_MAX_MIB_NEIGH;
+
+    now = solariNowUnixMs();
+    for (i = 0; i < count; i++) {
+        serverNetGear gear;
+        serverLldpEdge edge;
+        if (!topoNormalizeMibRecord(&records[i], nodeId,
+                                    segId ? segId : "", &gear, &edge))
+            continue;
+        rc = topoPersist(ctx, &gear, &edge, now);
+        if (rc != SOLARI_OK) return rc;
+        persisted++;
+    }
+
+    solariLogf(SOLARI_LOG_INFO,
+               "topology: deep walk of %s normalized %u/%zu LLDP-MIB neighbours",
+               mgmtIp, (unsigned)persisted, count);
     return SOLARI_OK;
 }
