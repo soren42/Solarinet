@@ -1,0 +1,13 @@
+# SolariNet dashboard API — route all non-file requests through the front controller.
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+
+# Never serve the source of the helper/route files directly.
+<FilesMatch "\.php$">
+    Require all granted
+</FilesMatch>
+<FilesMatch "\.sql$">
+    Require all denied
+</FilesMatch>

@@ -52,7 +52,13 @@
         <div className="page-head">
           <div><h1 className="page-title">Reachability Matrix</h1><div className="page-sub">{S.probes.length} probe targets × {monCols.length} monitor vantages · HRW-assigned</div></div>
           <div className="page-head__right">
-            <button className="backbtn" onClick={() => window.__solariToast && window.__solariToast("Survey dispatched to monitor fleet", "survey")}><Icon name="survey" size={15} />Survey now</button>
+            <button className="backbtn" onClick={() => {
+              const a = (window.SOLARI && window.SOLARI.api) || null;
+              if (a && a.survey) {
+                a.survey("all").then(() => { window.__solariToast && window.__solariToast("Survey dispatched to monitor fleet", "survey"); a.refresh && a.refresh().catch(() => {}); })
+                  .catch((e) => window.__solariToast && window.__solariToast(`Survey failed: ${e && e.message || "error"}`, "close"));
+              } else { window.__solariToast && window.__solariToast("Survey dispatched to monitor fleet", "survey"); }
+            }}><Icon name="survey" size={15} />Survey now</button>
           </div>
         </div>
 

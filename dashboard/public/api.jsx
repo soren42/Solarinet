@@ -1,0 +1,595 @@
+/* ============================================================
+   SolariNet — live API adapter (Handoff §8.2 wiring pattern)
+
+   Fetches the §11.2 + §6 REST endpoints and populates window.SOLARI
+   with the EXACT same shape data.jsx produces, so every screen keeps
+   working unchanged. The wire is canonical (KB / milli / ‰ / ISO-8601
+   UTC, raw units — Architecture §11.2); ALL unit + time conversion to
+   what the UI wants (% and "min ago") lives here.
+
+   data.jsx remains the labelled offline / demo fixture. If there is no
+   live API (global flag, <meta>, or a failed/garbage fetch) we fall
+   back to that fixture and tag window.SOLARI.source = "offline".
+
+   No build step: plain JS hung off window globals, same idiom as
+   data.jsx. Loaded by index.html AFTER data.jsx (so SOLARI/fmt exist
+   as the fallback) and BEFORE app.jsx (so app boots against live data).
+   ============================================================ */
+(function () {
+  "use strict";
+
+  // ---- where the REST API lives (same-origin by default) -------------
+  function apiBase() {
+    var m = document.querySelector('meta[name="solari-api-base"]');
+    if (m && m.content) return m.content.replace(/\/+$/, "");
+    if (window.SOLARI_API_BASE) return String(window.SOLARI_API_BASE).replace(/\/+$/, "");
+    return "/api";
+  }
+  const BASE = apiBase();
+
+  // ---- "is there a live API?" switch ---------------------------------
+  // Force offline:  window.SOLARI_OFFLINE = true  OR  <meta name="solari-mode" content="offline">
+  // Force live:     window.SOLARI_OFFLINE = false OR  <meta name="solari-mode" content="live">
+  // Default: probe /api/summary; fall back to the fixture if it fails.
+  function modeHint() {
+    var m = document.querySelector('meta[name="solari-mode"]');
+    if (m && m.content) return m.content.trim().toLowerCase();
+    if (window.SOLARI_OFFLINE === true) return "offline";
+    if (window.SOLARI_OFFLINE === false) return "live";
+    return "auto";
+  }
+
+  // ---- the offline fixture (whatever data.jsx already built) ----------
+  // data.jsx is guaranteed to have run first; keep a frozen reference so
+  // a fall-back never re-runs the seeded generator.
+  const FIXTURE = window.SOLARI || {};
+  // The fmt helpers are defined by data.jsx; reuse them verbatim so the
+  // wire->display conversion matches the fixture exactly.
+  const fmt = (FIXTURE.fmt) || {
+    kb(kb) { if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB"; if (kb >= 1024) return (kb / 1024).toFixed(0) + " MB"; return kb + " KB"; },
+    mbps(m) { if (m >= 1000) return (m / 1000).toFixed(1) + " Gb/s"; return m + " Mb/s"; },
+    ago(min) { if (min < 1) return "just now"; if (min < 60) return min + "m ago"; if (min < 1440) return Math.floor(min / 60) + "h ago"; return Math.floor(min / 1440) + "d ago"; },
+    rtt(us) { if (!us) return "—"; if (us >= 1000) return (us / 1000).toFixed(1) + " ms"; return us + " µs"; },
+  };
+
+  // =====================================================================
+  // wire -> UI primitives (raw units & ISO-8601 in; UI scalars out)
+  // =====================================================================
+  function minsSince(iso) {
+    if (!iso) return null;
+    var t = Date.parse(iso);
+    if (isNaN(t)) return null;
+    return Math.max(0, Math.round((Date.now() - t) / 60000));
+  }
+  function daysSince(iso) {
+    var m = minsSince(iso);
+    return m == null ? null : Math.floor(m / 1440);
+  }
+  function secsSince(iso) {
+    if (!iso) return null;
+    var t = Date.parse(iso);
+    if (isNaN(t)) return null;
+    return Math.max(0, Math.round((Date.now() - t) / 1000));
+  }
+  function pct(used, total) {
+    if (!total) return 0;
+    return Math.round((used / total) * 100);
+  }
+  // cpuLoadMilli[] (per-core, 1000 = one full core-second) -> 0..100 %
+  function milliToPct(milli) {
+    if (milli == null) return 0;
+    return Math.max(0, Math.min(100, Math.round(milli / 10)));
+  }
+
+  // =====================================================================
+  // fetch helpers — unwrap the §11.2 envelope {ok,data,ts}/{ok:false,error}
+  // =====================================================================
+  function ApiError(code, message) {
+    var e = new Error(message || "api error");
+    e.code = code || "ERR";
+    e.isApiError = true;
+    return e;
+  }
+
+  function unwrap(json) {
+    // accept the stable envelope; also tolerate a bare payload defensively.
+    if (json && typeof json === "object" && "ok" in json) {
+      if (json.ok === false) {
+        var err = json.error || {};
+        throw ApiError(err.code, err.message);
+      }
+      return json.data;
+    }
+    return json;
+  }
+
+  function getJSON(path, opts) {
+    opts = opts || {};
+    var url = path.charAt(0) === "/" && path.indexOf("/api") === 0 ? path : (BASE + path);
+    return fetch(url, {
+      method: opts.method || "GET",
+      headers: Object.assign(
+        { "Accept": "application/json" },
+        opts.body ? { "Content-Type": "application/json" } : {}
+      ),
+      credentials: "same-origin",
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    }).then(function (r) {
+      return r.json().catch(function () {
+        throw ApiError("BAD_JSON", "HTTP " + r.status + " — non-JSON response");
+      }).then(function (j) {
+        if (!r.ok && !(j && "ok" in j)) throw ApiError("HTTP_" + r.status, "HTTP " + r.status);
+        return unwrap(j);
+      });
+    });
+  }
+  // expose raw helpers for screens that want ad-hoc calls
+  function post(path, body) { return getJSON(path, { method: "POST", body: body || {} }); }
+
+  // =====================================================================
+  // ENDPOINT PATHS (the PHP agent must match these exactly)
+  // =====================================================================
+  const EP = {
+    summary:      "/api/summary",
+    nodes:        "/api/nodes",
+    node:         function (id) { return "/api/nodes/" + encodeURIComponent(id); },
+    nodeHistory:  function (id, metric) { return "/api/nodes/" + encodeURIComponent(id) + "/history?metric=" + encodeURIComponent(metric); },
+    alerts:       "/api/alerts",            // ?status=active|all
+    rules:        "/api/rules",
+    rule:         function (id) { return "/api/rules/" + encodeURIComponent(id); },
+    probes:       "/api/probes",
+    segments:     "/api/segments",
+    topology:     function (view) { return "/api/topology?view=" + encodeURIComponent(view || "monitoring"); },
+    netgear:      "/api/netgear",
+    discovery:    "/api/discovery",         // ?status=new|all
+    discAdopt:    function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/adopt"; },
+    discIgnore:   function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/ignore"; },
+    enrollments:  "/api/enrollments",       // ?status=
+    enrApprove:   function (id) { return "/api/enrollments/" + encodeURIComponent(id) + "/approve"; },
+    enrReject:    function (id) { return "/api/enrollments/" + encodeURIComponent(id) + "/reject"; },
+    builds:       "/api/builds",
+    config:       "/api/config",
+    provision:    "/api/control/provision",
+    decommission: "/api/control/decommission",
+    survey:       "/api/control/survey",
+    stream:       "/api/stream",
+  };
+
+  // =====================================================================
+  // mappers: wire row -> the SOLARI shape data.jsx exposes
+  // =====================================================================
+
+  // node summary (/api/nodes) — list rows are light; detail (/api/nodes/{id})
+  // carries cores/disks/ifaces/procs/hist. mapNode handles either.
+  function mapNode(w, segIndex) {
+    var seg = segIndex[w.segId] || {};
+    var ramTotalKb = w.ramTotalKb || 0;
+    var ramUsedKb = w.ramUsedKb || 0;
+    var swapTotalKb = w.swapTotalKb || 0;
+    var swapUsedKb = w.swapUsedKb || 0;
+    var lastSeenMin = w.lastSeenMin != null ? w.lastSeenMin : minsSince(w.lastSeenAt);
+    if (lastSeenMin == null) lastSeenMin = 0;
+
+    var cores = (w.cpuLoadMilli || w.cores || []).map(function (c) {
+      // detail gives cpuLoadMilli (raw); a re-served fixture may already be %.
+      return (w.cpuLoadMilli) ? milliToPct(c) : c;
+    });
+    var cpuPct = w.cpuPct != null ? w.cpuPct
+      : cores.length ? Math.round(cores.reduce(function (a, b) { return a + b; }, 0) / cores.length)
+      : milliToPct(w.cpuAvgMilli);
+
+    var disks = (w.disks || []).map(function (d) {
+      return {
+        mount: d.mount,
+        totalGb: d.totalGb != null ? d.totalGb : (d.totalKb ? Math.round(d.totalKb / 1048576) : 0),
+        usedPct: d.usedPct != null ? d.usedPct : pct(d.usedKb, d.totalKb),
+        fs: d.fs,
+      };
+    });
+    var ifaces = (w.ifaces || []).map(function (f) {
+      // wire reports throughput in Kbps -> Mbps for the UI
+      var rxMbps = f.rxMbps != null ? f.rxMbps : Math.round((f.rxKbps || 0) / 1000);
+      var txMbps = f.txMbps != null ? f.txMbps : Math.round((f.txKbps || 0) / 1000);
+      var capMbps = f.capMbps != null ? f.capMbps : (f.speedMbps || 0);
+      return { name: f.name, capMbps: capMbps, rxMbps: rxMbps, txMbps: txMbps, errs: f.errs || 0 };
+    });
+    var procs = (w.procs || []).map(function (p) {
+      return {
+        name: p.name, pid: p.pid, runState: p.runState,
+        nFiles: p.nFiles, nSockets: p.nSockets,
+        rssKb: p.rssKb != null ? p.rssKb : 0,
+      };
+    });
+
+    var ramPct = w.ramPct != null ? w.ramPct : pct(ramUsedKb, ramTotalKb);
+    var swapPct = w.swapPct != null ? w.swapPct : pct(swapUsedKb, swapTotalKb);
+    var diskMaxPct = disks.reduce(function (m, d) { return Math.max(m, d.usedPct); }, 0);
+
+    var node = {
+      nodeId: w.nodeId,
+      sym: w.sym || "",
+      name: w.name || (w.hostFqdn ? w.hostFqdn.split(".")[0] : String(w.nodeId)),
+      hostFqdn: w.hostFqdn,
+      ip: w.ip,
+      role: w.role,
+      segId: w.segId, segName: seg.name || w.segName || "", cidr: seg.cidr || w.cidr || "",
+      osName: w.osName, arch: w.arch,
+      state: w.state,
+      lastSeenMin: lastSeenMin,
+      enrolledDaysAgo: w.enrolledDaysAgo != null ? w.enrolledDaysAgo : daysSince(w.enrolledAt),
+      configEpoch: w.configEpoch != null ? w.configEpoch : (w.appliedEpoch || 0),
+      converged: w.converged != null ? w.converged : true,
+      cpuPct: cpuPct, cores: cores,
+      ramPct: ramPct, ramUsedKb: ramUsedKb, ramTotalKb: ramTotalKb,
+      swapPct: swapPct, swapUsedKb: swapUsedKb, swapTotalKb: swapTotalKb,
+      disks: disks, ifaces: ifaces, procs: procs,
+      diskMaxPct: diskMaxPct,
+      netTotalMbps: ifaces.reduce(function (a, b) { return a + b.rxMbps + b.txMbps; }, 0),
+      netCapMbps: ifaces.reduce(function (a, b) { return a + b.capMbps; }, 0),
+      alertsCount: w.alertsCount != null ? w.alertsCount : 0,
+      hist: w.hist || { cpu: [], ram: [], net: [], disk: [] },
+      uptimeDays: w.uptimeDays != null ? w.uptimeDays : daysSince(w.bootAt),
+      // network-hierarchy fields (topology view=network)
+      uplink: w.uplinkGearId || w.uplink || null,
+      uplinkPort: w.uplinkPort || w.localIf || null,
+      linkType: w.linkType || null,
+      linkSpeedMbps: w.linkSpeedMbps != null ? w.linkSpeedMbps : (w.speedMbps || (ifaces[0] && ifaces[0].capMbps) || 1000),
+      lldp: w.lldp != null ? w.lldp : (w.viaLldp || false),
+      rssi: w.rssi,
+      label: w.label,
+    };
+    return node;
+  }
+
+  function mapProbe(w) {
+    var vantages = (w.vantages || []).map(function (v) {
+      return {
+        monitorNode: v.monitorNode, monitorName: v.monitorName,
+        outcome: v.outcome,
+        rttMicros: v.rttMicros || 0,
+        jitterMicros: v.jitterMicros || 0,
+        lossPermille: v.lossPermille != null ? v.lossPermille : 0,
+        throughputKbps: v.throughputKbps || 0,
+        // wire carries sampledAt (ISO) -> UI wants "min ago" scalar
+        sampledMin: v.sampledMin != null ? v.sampledMin : (minsSince(v.sampledAt) || 0),
+      };
+    });
+    var anyBad = vantages.some(function (v) { return v.outcome !== "ok"; });
+    var allBad = vantages.length > 0 && vantages.every(function (v) { return v.outcome !== "ok"; });
+    return {
+      targetId: w.targetId, host: w.host, hostNode: w.hostNode,
+      port: w.port, proto: w.proto, label: w.label,
+      replFactor: w.replFactor != null ? w.replFactor : vantages.length,
+      vantages: vantages,
+      state: w.state || (allBad ? "down" : anyBad ? "degraded" : "up"),
+    };
+  }
+
+  function mapAlert(w, nodeIndex) {
+    var n = w.nodeId != null ? nodeIndex[w.nodeId] : null;
+    return {
+      eventId: w.eventId, ruleId: w.ruleId, ruleName: w.ruleName,
+      node: w.node || (n ? n.name : null),
+      nodeId: w.nodeId != null ? w.nodeId : null,
+      segName: w.segName || (n ? n.segName : null),
+      severity: w.severity, detail: w.detail,
+      firedMinAgo: w.firedMinAgo != null ? w.firedMinAgo : (minsSince(w.firedAt) || 0),
+      cleared: w.cleared != null ? w.cleared : !!w.clearedAt,
+    };
+  }
+
+  function mapDiscovered(w) {
+    return {
+      discId: w.discId,
+      host: w.host || w.ip,
+      ip: w.ip,
+      via: w.via,
+      kind: w.kind,
+      services: w.services || [],
+      seen: w.seen != null ? w.seen : (minsSince(w.lastSeenAt) || 0),
+      seenCount: w.seenCount,
+      seg: w.segId || w.seg,
+      arch: w.arch,
+      status: w.status,
+    };
+  }
+
+  function mapEnrollment(w) {
+    return {
+      enrId: w.enrId,
+      host: w.host, ip: w.ip, role: w.role,
+      fp: w.certFp || w.fp,
+      requestedMin: w.requestedMin != null ? w.requestedMin : (minsSince(w.requestedAt) || 0),
+      status: w.status,
+    };
+  }
+
+  function mapBuild(w) {
+    return {
+      buildId: w.buildId,
+      arch: w.arch, os: w.os, version: w.version, channel: w.channel,
+      nodes: w.nodes != null ? w.nodes : (w.nodeCount || 0),
+      status: w.status || (w.updateAvailable ? "update" : "current"),
+    };
+  }
+
+  function mapGear(w) {
+    return {
+      id: w.gearId || w.id,
+      name: w.name, kind: w.kind, model: w.model,
+      seg: w.segId || w.seg, ports: w.ports,
+      uplink: w.uplinkGearId || w.uplink || null,
+      wireless: !!w.wireless,
+      attached: w.attached != null ? w.attached : (w.attachedCount || 0),
+    };
+  }
+
+  // rollups, identical to data.jsx
+  function rollup(list) {
+    var r = { total: list.length, up: 0, degraded: 0, down: 0, unknown: 0, retired: 0 };
+    list.forEach(function (n) { if (r[n.state] != null) r[n.state]++; });
+    return r;
+  }
+
+  // =====================================================================
+  // assemble window.SOLARI live (parallel fetch of the §6/§11.2 reads)
+  // =====================================================================
+  function loadLive() {
+    return Promise.all([
+      getJSON(EP.summary),
+      getJSON(EP.nodes),
+      getJSON(EP.segments),
+      getJSON(EP.probes),
+      getJSON(EP.alerts + "?status=all"),
+      getJSON(EP.rules),
+      getJSON(EP.discovery + "?status=new"),
+      getJSON(EP.enrollments),
+      getJSON(EP.builds),
+      getJSON(EP.config),
+      getJSON(EP.netgear),
+    ]).then(function (res) {
+      var summaryW = res[0] || {};
+      var nodesW = res[1] || [];
+      var segsW = res[2] || [];
+      var probesW = res[3] || [];
+      var alertsW = res[4] || [];
+      var rulesW = res[5] || [];
+      var discW = res[6] || [];
+      var enrW = res[7] || [];
+      var buildsW = res[8] || [];
+      var configW = res[9] || {};
+      var gearW = res[10] || [];
+      // /api/summary carries the lease/failover state (§6) — no separate call.
+      var leaseW = (summaryW && summaryW.lease) || {};
+      var countsW = (summaryW && summaryW.counts) || {};
+
+      // segments (with adapter-side rollups so the UI shape is identical)
+      var segIndex = {};
+      var segments = segsW.map(function (s) {
+        var seg = { id: s.segId, name: s.label, cidr: s.cidr, desc: s.notes || "", wireless: !!s.wireless };
+        segIndex[s.segId] = seg;
+        return seg;
+      });
+
+      var nodes = nodesW.map(function (w) { return mapNode(w, segIndex); });
+      var nodeIndex = {};
+      nodes.forEach(function (n) { nodeIndex[n.nodeId] = n; });
+
+      var probes = probesW.map(mapProbe);
+      var alerts = alertsW.map(function (a) { return mapAlert(a, nodeIndex); });
+      // same ordering discipline as data.jsx
+      alerts.sort(function (a, b) {
+        var sev = { crit: 0, warn: 1, info: 2 };
+        if (a.cleared !== b.cleared) return a.cleared ? 1 : -1;
+        if (sev[a.severity] !== sev[b.severity]) return sev[a.severity] - sev[b.severity];
+        return a.firedMinAgo - b.firedMinAgo;
+      });
+
+      var rules = rulesW.map(function (r) { return Object.assign({}, r); });
+      var discovered = discW.map(mapDiscovered);
+      var enrollments = enrW.map(mapEnrollment);
+      var builds = buildsW.map(mapBuild);
+      var netgear = gearW.map(mapGear);
+
+      var monitors = nodes.filter(function (n) { return n.role === "monitor"; });
+
+      // rollups
+      var fleetRoll = rollup(nodes);
+      var segRollups = {};
+      segments.forEach(function (s) {
+        segRollups[s.id] = rollup(nodes.filter(function (n) { return n.segId === s.id; }));
+      });
+
+      // summary — the cheap /api/summary call returns counts.* (§6); fall back
+      // to fixture-style derivation from the node list if a count is absent.
+      var summary = {
+        systems: countsW.nodes != null ? countsW.nodes : nodes.length,
+        hosts: countsW.clients != null ? countsW.clients : nodes.filter(function (n) { return n.role === "client"; }).length,
+        servers: countsW.servers != null ? countsW.servers : nodes.filter(function (n) { return n.role === "server"; }).length,
+        monitors: countsW.monitors != null ? countsW.monitors : monitors.length,
+        applications: countsW.applications != null ? countsW.applications : nodes.reduce(function (a, n) { return a + n.procs.length; }, 0),
+        probes: countsW.probes != null ? countsW.probes : probes.length,
+        version: summaryW.version || "—",
+        uptimeStr: summaryW.uptimeStr || (summaryW.uptimeSec ? fmtUptime(summaryW.uptimeSec) : "—"),
+      };
+
+      // server lease banner — derived from summary.lease {leaseHolder, leaseEpoch, expiresAt}.
+      var primary = nodeIndex[leaseW.leaseHolder];
+      var ttlSec = configW.lease ? configW.lease.ttlSec : 15;
+      var msToExpiry = leaseW.expiresAt ? (Date.parse(leaseW.expiresAt) - Date.now()) : null;
+      var ageSec = msToExpiry != null ? Math.max(0, ttlSec - (msToExpiry / 1000)) : 0;
+      var server = {
+        primary: primary ? primary.name : (leaseW.leaseHolder || "—"),
+        primaryId: leaseW.leaseHolder,
+        failover: null,
+        failoverId: null,
+        leaseEpoch: leaseW.leaseEpoch,
+        leaseHealthy: leaseW.expiresAt ? Date.parse(leaseW.expiresAt) > Date.now() : false,
+        leaseTtlSec: ttlSec,
+        leaseAgeSec: Math.round(ageSec) || 0,
+        dbHost: configW.dbHost || "—",
+        historyDays: (configW.retention && configW.retention.historyDays) || 90,
+      };
+
+      var live = {
+        nodes: nodes, segments: segments, segRollups: segRollups, fleetRoll: fleetRoll, summary: summary,
+        probes: probes, rules: rules, alerts: alerts, discovered: discovered,
+        builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
+        monitors: monitors,
+        server: server,
+        activeCrit: alerts.filter(function (a) { return !a.cleared && a.severity === "crit"; }).length,
+        activeWarn: alerts.filter(function (a) { return !a.cleared && a.severity === "warn"; }).length,
+        fmt: fmt,
+        source: "live",
+        api: API,
+      };
+      return live;
+    });
+  }
+
+  function fmtUptime(sec) {
+    var d = Math.floor(sec / 86400);
+    var h = Math.floor((sec % 86400) / 3600);
+    return d + "d " + String(h).padStart(2, "0") + "h";
+  }
+
+  // =====================================================================
+  // on-demand loaders (detail view + history; keep the same shapes)
+  // =====================================================================
+  function loadNode(id) {
+    var segIndex = {};
+    (window.SOLARI.segments || []).forEach(function (s) { segIndex[s.id] = s; });
+    return getJSON(EP.node(id)).then(function (w) { return mapNode(w, segIndex); });
+  }
+  function loadNodeHistory(id, metric) {
+    // server downsamples; wire is {points:[..]} or a bare array. Return the spark array.
+    return getJSON(EP.nodeHistory(id, metric)).then(function (w) {
+      if (Array.isArray(w)) return w;
+      return (w && w.points) || [];
+    });
+  }
+  function loadTopology(view) { return getJSON(EP.topology(view)); }
+
+  // =====================================================================
+  // mutation helpers — route through the POST endpoints; surface {ok:false}
+  // =====================================================================
+  const API = {
+    base: BASE,
+    endpoints: EP,
+    get: getJSON,
+    post: post,
+
+    // detail / history / topology reads
+    node: loadNode,
+    nodeHistory: loadNodeHistory,
+    topology: loadTopology,
+
+    // discovery
+    adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
+    ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },
+
+    // enrollment — approve is destructive (signs a cert) so it carries the
+    // explicit double-confirm the PHP layer + solariCtl demand.
+    approveEnrollment: function (enrId) { return post(EP.enrApprove(enrId), { confirm: true }); },
+    rejectEnrollment: function (enrId) { return post(EP.enrReject(enrId), {}); },
+
+    // lifecycle
+    provision: function (body) { return post(EP.provision, body || {}); }, // {nodeId|enrId, configBlob, buildId}
+    decommission: function (nodeId, wipeScope) {
+      return post(EP.decommission, { nodeId: nodeId, wipeScope: wipeScope || ["config", "certs", "spool", "logs", "unit"], confirm: true });
+    },
+
+    // config & rules
+    saveConfig: function (config) { return post(EP.config, config); },
+    saveRule: function (ruleId, patch) { return post(EP.rule(ruleId), patch); },
+    toggleRule: function (ruleId, enabled) { return post(EP.rule(ruleId), { enabled: enabled }); },
+
+    // survey (already in base §11.2)
+    survey: function (scope) { return post(EP.survey, { scope: scope || "all" }); },
+
+    // refresh the whole model in place (re-runs loadLive, keeps fmt/api). Mutates
+    // window.SOLARI in place so captured `const S = window.SOLARI` refs stay live.
+    refresh: function () {
+      return loadLive().then(function (live) {
+        Object.keys(live).forEach(function (k) { window.SOLARI[k] = live[k]; });
+        window.SOLARI.source = "live";
+        window.SOLARI.api = API;
+        return window.SOLARI;
+      });
+    },
+
+    // live SSE stream (§8.4 / §11.1) — optional; screens may subscribe.
+    stream: function (onEvent) {
+      if (!window.EventSource) return null;
+      var es = new EventSource(BASE === "/api" ? EP.stream : (BASE + "/stream"));
+      ["nodeStateChange", "alertFired", "probeUpdate"].forEach(function (name) {
+        es.addEventListener(name, function (e) {
+          var data; try { data = JSON.parse(e.data); } catch (_) { data = e.data; }
+          onEvent && onEvent(name, data);
+        });
+      });
+      return es;
+    },
+  };
+
+  // =====================================================================
+  // boot: decide live vs. offline, then resolve window.solariReady
+  // =====================================================================
+  function useFixture(reason) {
+    // keep the seeded fixture as-is, just label it.
+    window.SOLARI = FIXTURE;
+    window.SOLARI.source = "offline";
+    window.SOLARI.api = API;            // mutations still callable (will 404 offline, handled by caller)
+    window.SOLARI.offlineReason = reason || null;
+    return window.SOLARI;
+  }
+
+  // Apply a freshly-loaded live model onto the EXISTING window.SOLARI object
+  // in place (rather than replacing the reference). data.jsx, app.jsx, and every
+  // screen capture `const S = window.SOLARI` at module-load — mutating in place
+  // keeps all of those references live without touching any screen file.
+  function applyLive(live) {
+    var target = window.SOLARI || (window.SOLARI = {});
+    Object.keys(live).forEach(function (k) { target[k] = live[k]; });
+    target.source = "live";
+    target.api = API;
+    return target;
+  }
+
+  var hint = modeHint();
+  var bootP;
+  if (hint === "offline") {
+    bootP = Promise.resolve(useFixture("forced offline"));
+  } else {
+    bootP = loadLive().then(function (live) {
+      return applyLive(live);
+    }).catch(function (err) {
+      if (hint === "live") {
+        // explicitly live: surface the failure but still keep the app bootable
+        console.error("[SolariNet] live API required but failed:", err);
+      } else {
+        console.warn("[SolariNet] live API unavailable, using offline fixture:", err && err.message);
+      }
+      return useFixture(err && err.message);
+    });
+  }
+
+  // app.jsx can `await window.solariReady` before first render; if it
+  // doesn't, window.SOLARI is still populated synchronously enough for
+  // the existing synchronous boot (fixture) and re-rendered on refresh.
+  window.solariReady = bootP;
+  window.SolariAPI = API;
+
+  // ---------------------------------------------------------------------
+  // service worker registration (§8.4). sw.js lives next to index.html.
+  // index.html is owned by another agent; if it registers the SW there,
+  // this is a harmless no-op (re-register resolves to the same worker).
+  // ---------------------------------------------------------------------
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("sw.js").catch(function (e) {
+        console.warn("[SolariNet] service worker registration failed:", e && e.message);
+      });
+    });
+  }
+})();

@@ -9,6 +9,9 @@
   const fmt = S.fmt;
 
   function toast(msg, icon) { if (window.__solariToast) window.__solariToast(msg, icon); }
+  // adapter handle (live mutations); null/offline-safe
+  function api() { return (window.SOLARI && window.SOLARI.api) || null; }
+  function refresh() { const a = api(); if (a && a.refresh) a.refresh().catch(function () {}); }
 
   /* ===================== DISCOVERY ===================== */
   function Discovery({ onOpenNode }) {
@@ -19,8 +22,38 @@
     const byVia = {};
     items.forEach((d) => { byVia[d.via] = (byVia[d.via] || 0) + 1; });
 
-    function stage(d) { setStaged((s) => ({ ...s, [d.host]: "staged" })); toast(`Enrollment token issued → ${d.host}`, "shield"); }
-    function ignore(d) { setStaged((s) => ({ ...s, [d.host]: "ignored" })); toast(`${d.host} ignored`, "close"); }
+    // adopt (monitor) — POST /api/discovery/{discId}/adopt via the adapter
+    function stage(d) {
+      setStaged((s) => ({ ...s, [d.host]: "staged" }));   // optimistic
+      const a = api();
+      if (a && a.adoptDiscovered && d.discId != null) {
+        a.adoptDiscovered(d.discId).then(function () {
+          toast(`Adopting ${d.host} → solariCtl (probe target)`, "shield");
+          refresh();
+        }).catch(function (e) {
+          setStaged((s) => { const n = { ...s }; delete n[d.host]; return n; });
+          toast(`Adopt failed: ${e && e.message || "error"}`, "close");
+        });
+      } else {
+        toast(`Enrollment token issued → ${d.host}`, "shield");
+      }
+    }
+    // ignore — POST /api/discovery/{discId}/ignore via the adapter
+    function ignore(d) {
+      setStaged((s) => ({ ...s, [d.host]: "ignored" }));  // optimistic
+      const a = api();
+      if (a && a.ignoreDiscovered && d.discId != null) {
+        a.ignoreDiscovered(d.discId).then(function () {
+          toast(`${d.host} ignored`, "close");
+          refresh();
+        }).catch(function (e) {
+          setStaged((s) => { const n = { ...s }; delete n[d.host]; return n; });
+          toast(`Ignore failed: ${e && e.message || "error"}`, "close");
+        });
+      } else {
+        toast(`${d.host} ignored`, "close");
+      }
+    }
 
     return (
       <div className="page">
@@ -81,8 +114,41 @@
     const drifted = S.nodes.filter((n) => !n.converged);
     const converged = S.nodes.length - drifted.length;
 
-    function approve(e) { setEnr((list) => list.filter((x) => x.host !== e.host)); toast(`CSR signed — ${e.host} enrolled as ${e.role}`, "shield"); }
-    function deny(e) { setEnr((list) => list.filter((x) => x.host !== e.host)); toast(`Enrollment denied — ${e.host}`, "close"); }
+    // approve (sign CSR) — POST /api/enrollments/{enrId}/approve via the adapter.
+    // Destructive: the adapter sends confirm:true; the bridge signs via the CA.
+    function approve(e) {
+      const a = api();
+      if (a && a.approveEnrollment && e.enrId != null) {
+        setEnr((list) => list.filter((x) => x.host !== e.host));   // optimistic
+        a.approveEnrollment(e.enrId).then(function () {
+          toast(`CSR signed — ${e.host} enrolled as ${e.role}`, "shield");
+          refresh();
+        }).catch(function (err) {
+          setEnr(S.enrollments);   // revert from model
+          toast(`Approve failed: ${err && err.message || "error"}`, "close");
+        });
+      } else {
+        setEnr((list) => list.filter((x) => x.host !== e.host));
+        toast(`CSR signed — ${e.host} enrolled as ${e.role}`, "shield");
+      }
+    }
+    // reject — POST /api/enrollments/{enrId}/reject via the adapter
+    function deny(e) {
+      const a = api();
+      if (a && a.rejectEnrollment && e.enrId != null) {
+        setEnr((list) => list.filter((x) => x.host !== e.host));   // optimistic
+        a.rejectEnrollment(e.enrId).then(function () {
+          toast(`Enrollment denied — ${e.host}`, "close");
+          refresh();
+        }).catch(function (err) {
+          setEnr(S.enrollments);
+          toast(`Reject failed: ${err && err.message || "error"}`, "close");
+        });
+      } else {
+        setEnr((list) => list.filter((x) => x.host !== e.host));
+        toast(`Enrollment denied — ${e.host}`, "close");
+      }
+    }
     function issueToken() {
       const t = "SLR-" + Math.random().toString(36).slice(2, 8).toUpperCase() + "-" + Math.random().toString(36).slice(2, 6).toUpperCase();
       setToken({ value: t, ttl: 900 });
@@ -144,7 +210,15 @@
                       <div className="td-mono" style={{ fontWeight: 600 }}>{n.name}<span className="muted" style={{ fontSize: 11 }}> · {n.segName}</span></div>
                       <div className="td-mono muted" style={{ fontSize: 11 }}>target epoch {n.configEpoch} · applied {n.configEpoch - 1} · drift</div>
                     </div>
-                    <button className="btn-primary" onClick={(ev) => { ev.stopPropagation(); toast(`Config re-pushed → ${n.name} (SCP_MSG_CONTROL)`, "settings"); }}><Icon name="refresh" size={13} />Re-push</button>
+                    <button className="btn-primary" onClick={(ev) => {
+                      ev.stopPropagation();
+                      const a = api();
+                      if (a && a.provision && n.nodeId != null) {
+                        a.provision({ nodeId: n.nodeId, configEpoch: n.configEpoch }).then(function () {
+                          toast(`Config re-pushed → ${n.name} (solariCtl PROVISION)`, "settings"); refresh();
+                        }).catch(function (e) { toast(`Re-push failed: ${e && e.message || "error"}`, "close"); });
+                      } else { toast(`Config re-pushed → ${n.name} (SCP_MSG_CONTROL)`, "settings"); }
+                    }}><Icon name="refresh" size={13} />Re-push</button>
                   </div>
                 ))}
                 {drifted.length === 0 && <div className="td-mono muted" style={{ fontSize: 13, padding: 16 }}>All nodes converged.</div>}
@@ -208,7 +282,14 @@
               <button className={tab === "agents" ? "on" : ""} onClick={() => setTab("agents")}><Icon name="host" size={14} />Per-agent</button>
             </div>
             <button className="backbtn" onClick={() => onNav("alerts")}><Icon name="alerts" size={15} />Alert rules</button>
-            {tab === "global" && <button className={"btn-primary" + (dirty ? "" : " disabled")} onClick={() => { if (dirty) { toast("Config staged → pushed to fleet on next epoch", "settings"); setDirty(false); } }}><Icon name="check" size={14} />Save & push</button>}
+            {tab === "global" && <button className={"btn-primary" + (dirty ? "" : " disabled")} onClick={() => {
+              if (!dirty) return;
+              const a = api();
+              if (a && a.saveConfig) {
+                a.saveConfig(cfg).then(function () { toast("Config saved → pushed to fleet (solariCtl)", "settings"); setDirty(false); refresh(); })
+                  .catch(function (e) { toast(`Save failed: ${e && e.message || "error"}`, "close"); });
+              } else { toast("Config staged → pushed to fleet on next epoch", "settings"); setDirty(false); }
+            }}><Icon name="check" size={14} />Save & push</button>}
           </div>
         </div>
 
@@ -335,7 +416,29 @@
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
     }, []);
-    function push() { toast("Config pushed → " + node.name + " (SCP_MSG_CONTROL · epoch " + (node.configEpoch + 1) + ")", "settings"); onClose(); }
+    // decommission (irreversible) — double-confirmed: a UI confirm here, plus the
+    // adapter sends confirm:true and the PHP/bridge run the two-step token handshake.
+    function decommission() {
+      if (!window.confirm(`Decommission ${node.name}? This securely wipes config, certs, spool, logs, and the service unit, then retires the node. This cannot be undone.`)) return;
+      const a = api();
+      if (a && a.decommission && node.nodeId != null) {
+        a.decommission(node.nodeId, ["config", "certs", "spool", "logs", "unit"]).then(function () {
+          toast(`Decommissioned → ${node.name} (retired)`, "close"); refresh(); onClose();
+        }).catch(function (e) { toast(`Decommission failed: ${e && e.message || "error"}`, "close"); });
+      } else {
+        toast(`Decommission requires the live control plane`, "close");
+      }
+    }
+    function push() {
+      const a = api();
+      if (a && a.provision && node.nodeId != null) {
+        a.provision({ nodeId: node.nodeId, configEpoch: node.configEpoch + 1, configBlob: draft }).then(function () {
+          toast("Config pushed → " + node.name + " (solariCtl · epoch " + (node.configEpoch + 1) + ")", "settings"); refresh(); onClose();
+        }).catch(function (e) { toast(`Push failed: ${e && e.message || "error"}`, "close"); });
+      } else {
+        toast("Config pushed → " + node.name + " (SCP_MSG_CONTROL · epoch " + (node.configEpoch + 1) + ")", "settings"); onClose();
+      }
+    }
 
     function Slider({ label, k, min, max, unit }) {
       return (
@@ -406,6 +509,7 @@
             )}
           </div>
           <div className="modal__foot">
+            <button className="btn-ghost" onClick={decommission} style={{ marginRight: "auto", color: "var(--crit)", borderColor: "var(--crit)" }}><Icon name="close" size={14} />Decommission</button>
             <button className="btn-ghost" onClick={onClose}>Cancel</button>
             <button className="btn-primary" onClick={push}><Icon name="check" size={14} />Push to node</button>
           </div>

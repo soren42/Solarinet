@@ -165,5 +165,16 @@
     );
   }
 
-  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  // Boot against the adapter: wait for window.solariReady (api.jsx) so the first
+  // paint reflects the live API when reachable, else the offline fixture. The
+  // adapter mutates window.SOLARI in place, so the `S` captured above is live by
+  // the time this resolves. If api.jsx is absent (or older), render immediately.
+  function mount() {
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  }
+  if (window.solariReady && typeof window.solariReady.then === "function") {
+    window.solariReady.then(mount, mount);
+  } else {
+    mount();
+  }
 })();

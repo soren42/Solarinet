@@ -423,11 +423,26 @@
     const warn = S.alerts.filter((a) => !a.cleared && a.severity === "warn").length;
     const info = S.alerts.filter((a) => !a.cleared && a.severity === "info").length;
 
+    const api = () => (window.SOLARI && window.SOLARI.api) || null;
+    // edit threshold locally; persist on commit (POST /api/rules/{id})
     function setThreshold(id, val) { setRules((rs) => rs.map((r) => r.ruleId === id ? { ...r, threshold: val } : r)); }
+    function commitThreshold(id, val) {
+      const a = api();
+      if (a && a.saveRule) a.saveRule(id, { threshold: val }).catch((e) => toast(`Rule save failed: ${e && e.message || "error"}`, "close"));
+    }
+    // toggle armed/disarmed (POST /api/rules/{id} {enabled})
     function toggleRule(id) {
-      setRules((rs) => rs.map((r) => r.ruleId === id ? { ...r, enabled: !r.enabled } : r));
       const r = rules.find((x) => x.ruleId === id);
-      toast(`Rule "${r.name}" ${r.enabled ? "disabled" : "enabled"}`, r.enabled ? "close" : "check");
+      const next = !(r && r.enabled);
+      setRules((rs) => rs.map((x) => x.ruleId === id ? { ...x, enabled: next } : x));   // optimistic
+      const label = (r && (r.name || r.metric)) || ("rule " + id);
+      const a = api();
+      if (a && a.toggleRule) {
+        a.toggleRule(id, next).then(() => toast(`Rule "${label}" ${next ? "enabled" : "disabled"}`, next ? "check" : "close"))
+          .catch((e) => { setRules((rs) => rs.map((x) => x.ruleId === id ? { ...x, enabled: !next } : x)); toast(`Toggle failed: ${e && e.message || "error"}`, "close"); });
+      } else {
+        toast(`Rule "${label}" ${next ? "enabled" : "disabled"}`, next ? "check" : "close");
+      }
     }
 
     return (
@@ -482,7 +497,7 @@
                   {r.op !== "transition" && r.enabled && (
                     <div className="thr" style={{ marginTop: 12 }}>
                       <input type="range" min={r.metric === "rttMicros" ? 1000 : 0} max={r.metric === "rttMicros" ? 60000 : r.unit === "s" ? 300 : 100}
-                        step={r.metric === "rttMicros" ? 1000 : 1} value={r.threshold} onChange={(e) => setThreshold(r.ruleId, +e.target.value)} />
+                        step={r.metric === "rttMicros" ? 1000 : 1} value={r.threshold} onChange={(e) => setThreshold(r.ruleId, +e.target.value)} onMouseUp={(e) => commitThreshold(r.ruleId, +e.target.value)} onTouchEnd={(e) => commitThreshold(r.ruleId, +e.target.value)} />
                       <span className="num">{r.threshold}{r.unit}</span>
                     </div>
                   )}
