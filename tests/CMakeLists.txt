@@ -87,3 +87,34 @@ if(TARGET monitorcore AND SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
   target_link_libraries(test_gossip PRIVATE monitorcore unity)
   add_test(NAME test_gossip COMMAND test_gossip)
 endif()
+
+# ---------------------------------------------------------------------------
+# Server pure-logic unit tests (Phase 5). Each test #includes exactly ONE
+# subsystem .c to reach its static helpers, then links libsolari + unity +
+# libmariadb (serverDb.c pulls in the MariaDB client headers) and the weak
+# server_stubs.c that satisfies the cross-subsystem symbols the included TU
+# references in its non-pure entry points (which the tests never call). No live
+# MariaDB or socket is required. Gated on SOLARI_BUILD_SERVER so the default
+# build is unaffected.
+if(TARGET servercore)
+  set(SOLARI_SERVER_UNIT_TESTS
+    test_server_db
+    test_server_ingest
+    test_server_provision
+    test_server_alert
+    test_server_topology
+    test_server_discovery
+    test_server_ctl
+  )
+  foreach(t ${SOLARI_SERVER_UNIT_TESTS})
+    add_executable(${t} unit/${t}.c unit/server_stubs.c)
+    target_compile_definitions(${t} PRIVATE _GNU_SOURCE)
+    target_include_directories(${t} PRIVATE
+      ${CMAKE_SOURCE_DIR}/include
+      ${CMAKE_SOURCE_DIR}/src/server
+      $<TARGET_PROPERTY:servercore,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_link_libraries(${t} PRIVATE solari unity
+      $<TARGET_PROPERTY:servercore,INTERFACE_LINK_LIBRARIES>)
+    add_test(NAME ${t} COMMAND ${t})
+  endforeach()
+endif()
