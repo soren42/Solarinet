@@ -29,7 +29,6 @@ Testing/
 /third_party/cJSON/
 /third_party/sqlite/sqlite3.c
 /third_party/sqlite/sqlite3.h
-/third_party/unity/unity_internals.h
 /third_party/unity/.upstream
 
 # Secrets / certs (never commit)
