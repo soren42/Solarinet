@@ -63,6 +63,16 @@ solariStatus solariConnSend(solariConn *c, const uint8_t *frame, size_t len);
  * returns ERR_CONN_RETRY on timeout with nothing available. */
 solariStatus solariConnRecv(solariConn *c, const uint8_t **frame, size_t *len);
 
+/* Common name (CN) of the TLS-verified peer that sent the frame returned by the
+ * most recent successful solariConnRecv on this conn. Writes a NUL-terminated
+ * string into buf (truncated to cap). Lets the server derive the presenting
+ * node's role from its certificate (serverIngestValidate). Returns
+ * ERR_INVALID_ARG on bad args, ERR_CONN_RETRY if no frame has been received yet,
+ * or ERR_TLS when the peer presented no verifiable certificate (e.g. a non-TLS
+ * transport). buf is set to "" in every non-OK case. The CN reflects the last
+ * recv and is invalidated by the next recv/close on this conn. */
+solariStatus solariConnPeerCn(solariConn *c, char *buf, size_t cap);
+
 /* Close the connection and release the handle (NULL-safe). */
 void solariConnClose(solariConn *c);
 

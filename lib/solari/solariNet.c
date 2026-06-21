@@ -32,8 +32,8 @@
 struct solariConn {
     nng_socket sock;
     bool       sockOpen;
-    void      *rxbuf;     /* last NNG_FLAG_ALLOC buffer; freed on next recv/close */
-    size_t     rxlen;
+    nng_msg   *rxmsg;     /* last received message; freed on next recv/close      */
+    nng_pipe   rxpipe;    /* pipe the last message arrived on (peer TLS identity) */
 };
 
 /* Map an nng return code to solariStatus for send/recv paths. */
@@ -180,30 +180,51 @@ solariStatus solariConnSend(solariConn *c, const uint8_t *frame, size_t len)
 solariStatus solariConnRecv(solariConn *c, const uint8_t **frame, size_t *len)
 {
     int rv;
-    void *buf = NULL;
-    size_t sz = 0;
+    nng_msg *msg = NULL;
 
     if (!c || !frame || !len) return ERR_INVALID_ARG;
 
-    /* free any buffer handed out by the previous recv */
-    if (c->rxbuf) { nng_free(c->rxbuf, c->rxlen); c->rxbuf = NULL; c->rxlen = 0; }
+    /* release the message handed out by the previous recv. We receive into an
+     * nng_msg (rather than NNG_FLAG_ALLOC) so the pipe the frame arrived on - and
+     * thus the sender's TLS-verified CN - stays recoverable for role auth. */
+    if (c->rxmsg) { nng_msg_free(c->rxmsg); c->rxmsg = NULL; }
 
-    rv = nng_recv(c->sock, &buf, &sz, NNG_FLAG_ALLOC);
+    rv = nng_recvmsg(c->sock, &msg, 0);
     if (rv != 0) {
         *frame = NULL; *len = 0;
         return mapTransient(rv);
     }
-    c->rxbuf = buf;
-    c->rxlen = sz;
-    *frame = (const uint8_t *)buf;
-    *len = sz;
+    c->rxmsg  = msg;
+    c->rxpipe = nng_msg_get_pipe(msg);
+    *frame = (const uint8_t *)nng_msg_body(msg);
+    *len   = nng_msg_len(msg);
+    return SOLARI_OK;
+}
+
+solariStatus solariConnPeerCn(solariConn *c, char *buf, size_t cap)
+{
+    char *cn = NULL;
+    int   rv;
+
+    if (buf && cap > 0) buf[0] = '\0';
+    if (!c || !buf || cap == 0) return ERR_INVALID_ARG;
+    if (c->rxmsg == NULL) return ERR_CONN_RETRY;   /* no frame received yet */
+
+    /* The peer CN is a property of the pipe the last message arrived on. On a
+     * plaintext transport (or an unverified peer) nng has no CN to report. */
+    rv = nng_pipe_get_string(c->rxpipe, NNG_OPT_TLS_PEER_CN, &cn);
+    if (rv != 0 || cn == NULL) return ERR_TLS;
+
+    strncpy(buf, cn, cap - 1);
+    buf[cap - 1] = '\0';
+    nng_strfree(cn);
     return SOLARI_OK;
 }
 
 void solariConnClose(solariConn *c)
 {
     if (!c) return;
-    if (c->rxbuf) nng_free(c->rxbuf, c->rxlen);
+    if (c->rxmsg) nng_msg_free(c->rxmsg);
     if (c->sockOpen) nng_close(c->sock);
     free(c);
 }
