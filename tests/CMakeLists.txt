@@ -121,4 +121,15 @@ if(TARGET servercore)
       $<TARGET_PROPERTY:servercore,INTERFACE_LINK_LIBRARIES>)
     add_test(NAME ${t} COMMAND ${t})
   endforeach()
+
+  # Live-DB integration suite: links the real servercore library and drives the
+  # actual prepared statements. Self-skips (exit 0) unless SOLARI_TEST_DB is set,
+  # so it is harmless in CI without a database.
+  add_executable(test_server_db_live integration/test_server_db_live.c)
+  target_compile_definitions(test_server_db_live PRIVATE _GNU_SOURCE)
+  target_include_directories(test_server_db_live PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/server)
+  target_link_libraries(test_server_db_live PRIVATE servercore unity)
+  add_test(NAME test_server_db_live COMMAND test_server_db_live)
 endif()
