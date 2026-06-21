@@ -92,6 +92,42 @@ static void test_bufferFull(void)
     TEST_ASSERT_EQUAL_INT(ERR_BUFFER_FULL, solariTlvAppendU8(&w, TLV_ROLE, 2));
 }
 
+/* Lifecycle TLVs (§4): the decommission confirm token (u64) and wipe-scope
+ * bitfield (u8) must survive a write/read cycle intact. */
+static void test_lifecycle_tlv_roundTrip(void)
+{
+    uint8_t buf[64];
+    solariTlvWriter w;
+    solariTlvReader r;
+    uint16_t type, len;
+    const uint8_t *val;
+    uint8_t  scope;
+    uint64_t token;
+
+    solariTlvWriterInit(&w, buf, sizeof buf);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariTlvAppendU64(&w, TLV_LIFE_CONFIRM, 0xCAFEF00DDEADBEEFull));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariTlvAppendU8(&w, TLV_LIFE_WIPE_SCOPE,
+                          SOLARI_WIPE_CONFIG | SOLARI_WIPE_CERTS | SOLARI_WIPE_SPOOL));
+
+    solariTlvReaderInit(&r, buf, w.len);
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvNext(&r, &type, &val, &len));
+    TEST_ASSERT_EQUAL_UINT16(TLV_LIFE_CONFIRM, type);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvReadU64(val, len, &token));
+    TEST_ASSERT_EQUAL_UINT64(0xCAFEF00DDEADBEEFull, token);
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvNext(&r, &type, &val, &len));
+    TEST_ASSERT_EQUAL_UINT16(TLV_LIFE_WIPE_SCOPE, type);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvReadU8(val, len, &scope));
+    TEST_ASSERT_EQUAL_UINT8(0x07, scope);   /* config|certs|spool */
+    TEST_ASSERT_BITS_HIGH(SOLARI_WIPE_CONFIG, scope);
+    TEST_ASSERT_BITS_LOW(SOLARI_WIPE_LOGS | SOLARI_WIPE_UNIT, scope);
+
+    TEST_ASSERT_EQUAL_INT(ERR_TLV_END, solariTlvNext(&r, &type, &val, &len));
+}
+
 static void test_reader_truncated(void)
 {
     /* a TLV header claiming 10 bytes but only 2 present */
@@ -110,6 +146,7 @@ int main(void)
     RUN_TEST(test_typed_roundTrip);
     RUN_TEST(test_typedRead_lengthMismatch);
     RUN_TEST(test_bufferFull);
+    RUN_TEST(test_lifecycle_tlv_roundTrip);
     RUN_TEST(test_reader_truncated);
     return UNITY_END();
 }

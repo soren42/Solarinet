@@ -4,8 +4,9 @@
  * This increment wires probe + HRW ownership into a runnable monitor: load the
  * .conf, take the targets this node owns (HRW; a standalone monitor owns all),
  * probe each per round, and print the reachability/RTT/loss results. The peer
- * mesh + gossip, push-or-spool MONITOR_REPORT, survey responder, and
- * CTRL_ADOPT_TARGET land in the next increment.
+ * mesh + gossip, push-or-spool MONITOR_REPORT, and CTRL_ADOPT_TARGET adoption
+ * (monitorHandleControl) are wired; the control receive path that dispatches an
+ * inbound SCP_MSG_CONTROL frame to it lands with the survey responder.
  */
 #include "monitor.h"
 

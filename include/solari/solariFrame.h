@@ -34,6 +34,7 @@ typedef enum {
     SCP_MSG_SURVEY_RESP    = 0x21,  /* node   -> server : answer to a survey          */
     SCP_MSG_CONTROL        = 0x30,  /* server -> node   : config/deploy directive     */
     SCP_MSG_CONTROL_RESULT = 0x31,  /* node   -> server : outcome of a directive       */
+    SCP_MSG_DECOMMISSION   = 0x32,  /* server -> node   : authoritative teardown; always audited */
     SCP_MSG_WHO_IS_PRIMARY = 0x40,  /* node   -> server : failover discovery query     */
     SCP_MSG_PRIMARY_IS     = 0x41,  /* server -> node   : names current lease holder   */
     SCP_MSG_ACK            = 0x50,  /* any    -> any    : acknowledgement              */

@@ -12,6 +12,7 @@ set(MONITOR_CORE_SOURCES
   probeNet.c
   monitorPeer.c
   monitorConfig.c
+  monitorControl.c
 )
 set(MONITOR_HAS_REPORTING OFF)
 if(SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)

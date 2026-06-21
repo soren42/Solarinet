@@ -57,6 +57,23 @@ solariStatus monitorConfigFromFile(const char *path, monitorConfig *out);
 /* Parse "proto:host[:port][ : label]" into a target (proto = tcp|udp|icmp). */
 solariStatus monitorParseTarget(const char *spec, monitorTarget *out);
 
+/* Live scheduler add path (sec 8, Phase 3 Handoff sec 4.2/7.4): parse `spec`
+ * and append it to cfg->targets so the next probe round picks it up. Idempotent
+ * (adopting an already-present targetId is a no-op success). ERR_BUFFER_FULL at
+ * MONITOR_MAX_TARGETS; ERR_INVALID_ARG on a malformed spec. Both the .conf
+ * loader and CTRL_ADOPT_TARGET converge through here. */
+solariStatus monitorAddTarget(monitorConfig *cfg, const char *spec);
+
+/* Handle an SCP_MSG_CONTROL payload (sec 8). Reads TLV_CTRL_VERB; for
+ * CTRL_ADOPT_TARGET it reads the target spec from TLV_CTRL_PAYLOAD and adopts it
+ * into `cfg`'s live schedule via monitorAddTarget. Builds an SCP_MSG_CONTROL_RESULT
+ * payload into resultBuf (TLV_CTRL_VERB echo + TLV_ERROR_CODE magnitude, 0 = ok),
+ * writing *resultLen / *resultTlvCount. Returns the directive's own outcome. */
+solariStatus monitorHandleControl(monitorConfig *cfg,
+                                  const uint8_t *payload, size_t payloadLen,
+                                  uint8_t *resultBuf, size_t resultCap,
+                                  size_t *resultLen, uint16_t *resultTlvCount);
+
 /* HRW ownership (sec 8.2): true if `self` is among the top-k monitors for
  * `targetId` over `fleet`. Deterministic; removing a non-owner never changes a
  * target's owner set (low churn). */

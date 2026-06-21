@@ -95,6 +95,24 @@ solariStatus monitorParseTarget(const char *spec, monitorTarget *out)
     return SOLARI_OK;
 }
 
+solariStatus monitorAddTarget(monitorConfig *cfg, const char *spec)
+{
+    monitorTarget t;
+    solariStatus rc;
+    uint8_t i;
+
+    if (!cfg || !spec) return ERR_INVALID_ARG;
+    rc = monitorParseTarget(spec, &t);
+    if (rc != SOLARI_OK) return rc;
+
+    for (i = 0; i < cfg->targetCount; i++)               /* idempotent by targetId */
+        if (!strcmp(cfg->targets[i].targetId, t.targetId)) return SOLARI_OK;
+
+    if (cfg->targetCount >= MONITOR_MAX_TARGETS) return ERR_BUFFER_FULL;
+    cfg->targets[cfg->targetCount++] = t;
+    return SOLARI_OK;
+}
+
 solariStatus monitorConfigFromFile(const char *path, monitorConfig *out)
 {
     solariConfig *c = NULL;
@@ -128,8 +146,7 @@ solariStatus monitorConfigFromFile(const char *path, monitorConfig *out)
     for (i = 0; i < n && out->targetCount < MONITOR_MAX_TARGETS; i++) {
         const char *t = solariConfigGetStrAt(c, "probe", "target", i, "");
         if (t[0] == '\0') continue;
-        if (monitorParseTarget(t, &out->targets[out->targetCount]) == SOLARI_OK)
-            out->targetCount++;
+        monitorAddTarget(out, t);                        /* parse + idempotent append */
     }
 
     /* [peer] mesh */

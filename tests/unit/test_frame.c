@@ -161,6 +161,27 @@ static void test_frame_incomplete(void)
         solariFrameParse(frame, frameLen - 1, &out, NULL, NULL, NULL));
 }
 
+/* A SCP_MSG_DECOMMISSION frame (§4) round-trips like any other message type:
+ * msgType is carried through untouched by build/parse. */
+static void test_frame_decommission_roundTrip(void)
+{
+    solariFrameHeader in = goldenHeaderStruct();
+    const uint8_t payload[] = { 0x08 };   /* CTRL_DECOMMISSION verb byte */
+    uint8_t frame[64];
+    size_t frameLen = 0, plen = 0;
+    const uint8_t *pp = NULL;
+    solariFrameHeader out;
+
+    in.msgType = SCP_MSG_DECOMMISSION;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameBuild(&in, payload, sizeof payload, frame, sizeof frame, &frameLen));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameParse(frame, frameLen, &out, &pp, &plen, NULL));
+    TEST_ASSERT_EQUAL_UINT8(SCP_MSG_DECOMMISSION, out.msgType);
+    TEST_ASSERT_EQUAL_size_t(sizeof payload, plen);
+    TEST_ASSERT_EQUAL_MEMORY(payload, pp, sizeof payload);
+}
+
 static void test_frame_buildBufferTooSmall(void)
 {
     solariFrameHeader in = goldenHeaderStruct();
@@ -183,6 +204,7 @@ int main(void)
     RUN_TEST(test_frame_emptyPayload);
     RUN_TEST(test_frame_corruptCrc);
     RUN_TEST(test_frame_incomplete);
+    RUN_TEST(test_frame_decommission_roundTrip);
     RUN_TEST(test_frame_buildBufferTooSmall);
     return UNITY_END();
 }

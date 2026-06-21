@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Phase 3 Handoff &amp; Architecture Reconciliation</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#11161e; --panel2:#161c26; --ink:#d7dee8; --ink-dim:#9aa7b8;
+    --line:#222c39; --accent:#3fb6d3; --accent2:#7c5cff; --warm:#e0a458; --ok:#5dd39e;
+    --warn:#e0794f; --code-bg:#0a0e14; --code-ink:#c8d3e0; --kw:#7c9eff; --str:#8fd6a0;
+    --com:#5f6e82; --num:#e0a458; --ty:#5dd3c8;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.62;font-size:16px;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+  /* ---- cover ---- */
+  .cover{
+    min-height:62vh;display:flex;flex-direction:column;justify-content:center;
+    padding:90px 0 50px;border-bottom:1px solid var(--line);
+    background:
+      radial-gradient(900px 400px at 80% -10%, rgba(124,92,255,.16), transparent 60%),
+      radial-gradient(700px 360px at 10% 10%, rgba(63,182,211,.12), transparent 55%);
+  }
+  .kicker{font-family:var(--mono);font-size:12.5px;letter-spacing:.32em;text-transform:uppercase;color:var(--accent);margin-bottom:22px}
+  h1.title{font-family:var(--serif);font-weight:600;font-size:clamp(40px,7vw,76px);line-height:1.02;margin:0 0 18px;letter-spacing:-.01em}
+  h1.title .sub{display:block;font-size:.42em;color:var(--ink-dim);font-style:italic;font-weight:400;margin-top:14px;letter-spacing:0}
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin-top:40px;border-radius:8px;overflow:hidden}
+  .meta-grid div{background:var(--panel);padding:14px 18px}
+  .meta-grid .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-dim)}
+  .meta-grid .v{font-size:15px;margin-top:4px}
+  /* ---- typography ---- */
+  section{padding:54px 0;border-bottom:1px solid var(--line)}
+  h2{font-family:var(--serif);font-size:clamp(26px,3.6vw,38px);font-weight:600;letter-spacing:-.01em;margin:0 0 6px;scroll-margin-top:20px}
+  .h2num{font-family:var(--mono);color:var(--accent);font-size:.6em;letter-spacing:.1em;display:block;margin-bottom:6px}
+  h3{font-family:var(--sans);font-size:21px;font-weight:650;margin:36px 0 10px;color:#eaf1f8}
+  h4{font-family:var(--mono);font-size:14px;letter-spacing:.04em;font-weight:600;margin:26px 0 8px;color:var(--accent)}
+  p{margin:0 0 14px}
+  .lead{font-size:18.5px;color:#e7eef6}
+  strong{color:#f0f5fb;font-weight:650}
+  em{color:var(--ink-dim)}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(63,182,211,.3)}
+  a:hover{border-color:var(--accent)}
+  ul,ol{margin:0 0 16px;padding-left:22px}
+  li{margin:5px 0}
+  code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  /* ---- callouts ---- */
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:14px 18px;border-radius:0 8px 8px 0;margin:18px 0}
+  .note.warn{border-color:var(--warn)}
+  .note.pick{border-color:var(--ok)}
+  .note .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:4px}
+  .note.warn .lbl{color:var(--warn)} .note.pick .lbl{color:var(--ok)}
+  /* ---- code blocks ---- */
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:18px 20px;overflow-x:auto;margin:18px 0;font-family:var(--mono);font-size:13px;line-height:1.55;color:var(--code-ink)}
+  pre .c{color:var(--com);font-style:italic}
+  pre .k{color:var(--kw)} pre .s{color:var(--str)} pre .n{color:var(--num)} pre .t{color:var(--ty)} pre .f{color:#e6c07b}
+  .filename{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);letter-spacing:.05em;margin:20px 0 -8px;padding-left:4px}
+  .filename::before{content:"▸ ";color:var(--accent)}
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 13px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  td code{font-size:.9em}
+  /* ---- diagram ---- */
+  .diagram{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:22px;overflow-x:auto;margin:20px 0}
+  .diagram pre{border:none;background:none;padding:0;margin:0;font-size:12.5px;color:#aebfd4}
+  /* ---- TOC ---- */
+  nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px 28px;margin:30px 0}
+  nav.toc h3{margin-top:0;color:var(--accent);font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase}
+  nav.toc ol{column-count:2;column-gap:36px;padding-left:18px;font-size:14.5px}
+  @media(max-width:640px){nav.toc ol{column-count:1}}
+  nav.toc a{border:none;color:var(--ink)}
+  nav.toc a:hover{color:var(--accent)}
+  /* ---- pills / badges ---- */
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 9px;border-radius:20px;border:1px solid var(--line);background:var(--panel2);color:var(--ink-dim);margin:2px 4px 2px 0}
+  .pill.c{color:var(--accent);border-color:rgba(63,182,211,.4)}
+  .pill.ok{color:var(--ok);border-color:rgba(93,211,158,.4)}
+  /* ---- phase cards ---- */
+  .phase{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px;margin:14px 0;position:relative}
+  .phase .pnum{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--accent2);text-transform:uppercase}
+  .phase h3{margin:4px 0 8px}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:5px;background:rgba(124,92,255,.14);color:#b3a0ff;margin-left:8px}
+  hr.soft{border:none;border-top:1px dashed var(--line);margin:28px 0}
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  @media(max-width:760px){.twocol{grid-template-columns:1fr}}
+  .footnote{font-size:13.5px;color:var(--ink-dim)}
+  ::selection{background:rgba(124,92,255,.35)}
+</style>
+<style>
+  /* ---- additions for the reconciliation doc ---- */
+  .status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:22px 0}
+  .scard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden}
+  .scard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+  .scard.done::before{background:var(--ok)} .scard.partial::before{background:var(--warm)}
+  .scard.todo::before{background:var(--accent2)} .scard.new::before{background:var(--accent)}
+  .scard .st{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase}
+  .scard.done .st{color:var(--ok)} .scard.partial .st{color:var(--warm)}
+  .scard.todo .st{color:#b3a0ff} .scard.new .st{color:var(--accent)}
+  .scard h4{margin:6px 0 4px;color:#eaf1f8;font-family:var(--sans);font-size:15.5px;letter-spacing:0}
+  .scard p{margin:0;font-size:13px;color:var(--ink-dim)}
+  .chk{list-style:none;padding-left:0}
+  .chk li{padding-left:26px;position:relative;margin:7px 0}
+  .chk li::before{content:"☐";position:absolute;left:0;color:var(--accent);font-size:15px}
+  .chk li.d::before{content:"☑";color:var(--ok)}
+  .tag-new{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:5px;background:rgba(63,182,211,.16);color:var(--accent);margin-left:8px;letter-spacing:.05em;vertical-align:middle}
+  .tag-chg{background:rgba(224,164,88,.16);color:var(--warm)}
+  .verified{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--ok);border:1px solid rgba(93,211,158,.4);border-radius:20px;padding:2px 10px;margin:4px 0}
+  .runbook{counter-reset:step}
+  .runbook li{margin:14px 0}
+  kbd{font-family:var(--mono);font-size:.85em;background:#05080e;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 7px;color:#bcd0f0}
+</style>
+</head>
+<body>
+<header class="cover">
+  <div class="wrap">
+    <div class="kicker">SolariNet Monitoring · Phase 2 → Phase 3 · Migration to xenon</div>
+    <h1 class="title">Phase 3 Handoff
+      <span class="sub">Reconciled state, the xenon migration runbook, and the integrated architecture for the new C2 capabilities</span>
+    </h1>
+    <div class="meta-grid">
+      <div><div class="k">Document</div><div class="v">Handoff &amp; Architecture Reconciliation</div></div>
+      <div><div class="k">Supersedes</div><div class="v">§16 plan from the base spec (extends, not replaces)</div></div>
+      <div><div class="k">Base spec</div><div class="v">SolariNet_Architecture_and_Plan.html</div></div>
+      <div><div class="k">Verified by</div><div class="v">Direct re-build of the core on ingest</div></div>
+      <div><div class="k">Dev host</div><div class="v">macOS desktop → xenon.akoria.net</div></div>
+      <div><div class="k">Repo</div><div class="v">github.com/soren42/Solarinet</div></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<section id="purpose">
+  <h2><span class="h2num">§ 0</span>What this document is</h2>
+  <p class="lead">This is the working handoff for the move from Phase 2 (libsolari I/O) to Phase 3 (client + platform layer), as development migrates off the macOS desktop and onto <strong>xenon</strong>, the dedicated AI-development system. It reconciles the code as it actually exists today against the base architecture plan, folds in the new C2 capabilities added during the dashboard work, and gives a coding agent an unambiguous worklist from here forward.</p>
+  <p>It <strong>extends</strong> the base spec (<code>docs/SolariNet_Architecture_and_Plan.html</code>); it does not replace it. Where this document and the base plan agree, the base plan remains the reference. Where they differ — new tables, new endpoints, new protocol verbs, the on-prem dashboard fix — <strong>this document wins</strong>, because it reflects decisions made after the base plan was written.</p>
+  <div class="note pick">
+    <span class="lbl">Reading order for the agent</span>
+    §1 (what's really done) → §2 (get building on xenon, verify Phase 2) → §3–§7 (the new architecture you'll implement) → §10 (the updated phase plan, your worklist) → §11 (housekeeping before first push). §§4–6 are the contract additions; treat them with the same authority as §§5/10/11 of the base spec.
+  </div>
+</section>
+
+<section id="state">
+  <h2><span class="h2num">§ 1</span>Reconciled current state</h2>
+  <p class="lead">What the archive actually contains, cross-checked against the §16 phase plan — not what the plan <em>expected</em> to exist by now.</p>
+
+  <div class="status-grid">
+    <div class="scard done"><div class="st">Verified green</div><h4>Phase 0 · Foundation</h4><p>Repo layout, CMake + Makefile + five toolchain files, vendoring strategy. Builds an empty libsolari and cross-targets.</p></div>
+    <div class="scard done"><div class="st">Verified green</div><h4>Phase 1 · libsolari core</h4><p>common, error, time, log, crypto, frame, TLV, typed messages. Pure C99, zero external deps. Golden-frame fixture pins the wire format.</p></div>
+    <div class="scard partial"><div class="st">Code-complete · unverified</div><h4>Phase 2 · libsolari I/O</h4><p><code>solariNet.c</code> (nng+mbedTLS), <code>solariConfig.c</code> (key=value + JSON overlay), <code>solariSpool.c</code> (SQLite). Written against the deps but not yet compiled, because the deps aren't vendored on the macOS box. <strong>This is what xenon verifies first.</strong></p></div>
+    <div class="scard new"><div class="st">New · from dashboard work</div><h4>Dashboard + 6 new capabilities</h4><p>Claude Design delivered a React C2 (3 screens built, 5 scaffolded) and, at your direction, six capabilities beyond the base plan. §3 folds them into the architecture.</p></div>
+    <div class="scard new"><div class="st">New · not in base plan</div><h4>Python MCP server</h4><p><code>integrations/mcp/</code> — FastMCP, 14 tools over the §11.2 API + §10 SQL + control plane. Validated against a mock. §9.</p></div>
+    <div class="scard todo"><div class="st">Next</div><h4>Phase 3 · Client + PAL</h4><p>The destination of this migration. Unblocked the moment Phase 2 verifies on xenon.</p></div>
+  </div>
+
+  <h3>1.1 What I verified on ingest (not taken on faith)</h3>
+  <p>I rebuilt the dependency-free core directly with <code>gcc -std=c99 -Wall -Wextra -Wpedantic -Werror=implicit-function-declaration</code> and ran the unit suites that need no vendored libraries:</p>
+  <div class="verified">✓ test_crypto · test_tlv · test_frame · test_msg — all built clean (zero warnings) and passed</div>
+  <p>So the Phase 0–1 "all gates green" claim in <code>docs/PHASE1_REPORT.html</code> holds up independently. The three historical bugs that report mentions (CRC-32 polynomial typo, FNV offset basis, cert-CN trim) are fixed and covered by tests against published vectors.</p>
+
+  <h3>1.2 What I could not verify here, and why that's expected</h3>
+  <p>The Phase 2 translation units (<code>solariNet.c</code>, <code>solariSpool.c</code>, and the JSON-overlay path in <code>solariConfig.c</code>) are gated behind the CMake options <code>SOLARI_WITH_IO</code>, <code>SOLARI_WITH_SQLITE</code>, and <code>SOLARI_WITH_JSON</code>. They <code>#include &lt;nng/nng.h&gt;</code>, <code>&lt;mbedtls/…&gt;</code>, <code>sqlite3.h</code>, and <code>cJSON.h</code> — none of which are vendored in the archive (<code>third_party/</code> holds only a minimal SQLite header shim and the Unity test framework). This is exactly the state the Phase 1 report predicted: the heavy libraries arrive in Phase 2, fetched by the bootstrap script. The code reads as correct and complete against the published APIs; it simply hasn't been compiled yet. <strong>Compiling and testing it is step one on xenon (§2).</strong></p>
+
+  <h3>1.3 Build options, as they exist now</h3>
+  <table>
+    <thead><tr><th>CMake option</th><th>Default</th><th>Gates</th></tr></thead>
+    <tbody>
+      <tr><td><code>SOLARI_BUILD_TESTS</code></td><td>ON</td><td>Unity suites under <code>tests/</code>.</td></tr>
+      <tr><td><code>SOLARI_WITH_IO</code></td><td>OFF</td><td><code>solariNet.c</code> — pulls nng + mbedTLS.</td></tr>
+      <tr><td><code>SOLARI_WITH_SQLITE</code></td><td>OFF</td><td><code>solariSpool.c</code> — pulls the SQLite amalgamation.</td></tr>
+      <tr><td><code>SOLARI_WITH_JSON</code></td><td>OFF</td><td>cJSON config-overlay path in <code>solariConfig.c</code>.</td></tr>
+      <tr><td><code>SOLARI_BUILD_SERVER</code></td><td>OFF</td><td><code>src/server/</code> (still to be written, Phase 5).</td></tr>
+    </tbody>
+  </table>
+  <p class="footnote">The base <code>key=value</code> config parser works without <code>SOLARI_WITH_JSON</code>; only the JSON overlay merge needs cJSON. This means a minimal client can be built with no JSON dependency at all — worth remembering for the most constrained ARM32 targets in Phase 3.</p>
+</section>
+
+<section id="migration">
+  <h2><span class="h2num">§ 2</span>Migration runbook: macOS desktop → xenon</h2>
+  <p class="lead">The macOS box carried the project through the zero-dependency core. Phase 2's nng/mbedTLS/SQLite chain and Phase 3's Linux-first platform layer belong on the dedicated Linux dev host. The good news: the migration is almost entirely automated by a script already in the tree.</p>
+
+  <h3>2.1 Why move now</h3>
+  <ul>
+    <li><strong>Phase 2 needs the dep chain built natively.</strong> nng-with-TLS over mbedTLS is far less fiddly to build and test on Linux than on macOS, and xenon is where the system will actually run.</li>
+    <li><strong>Phase 3 is Linux-first.</strong> <code>platLinux.c</code> is the reference platform implementation; it wants <code>/proc</code>, <code>getifaddrs</code>, raw sockets, and <code>CAP_NET_RAW</code> semantics that are native on xenon.</li>
+    <li><strong>The macOS box still has a job.</strong> Keep it for building and smoke-testing <code>platMacos.c</code> when Phase 3 reaches the macOS PAL — cross-compilation and native macOS runs stay there. Primary development simply moves to xenon.</li>
+  </ul>
+
+  <h3>2.2 The runbook</h3>
+  <ol class="runbook">
+    <li><strong>Get the repo onto xenon.</strong> Clone from <code>github.com/soren42/Solarinet</code> once it's pushed (§11), or <code>rsync</code> the working tree from the macOS box. Confirm <kbd>git status</kbd> is clean and you're on the intended branch.</li>
+    <li><strong>Run the bootstrap.</strong> <kbd>./deploy/bootstrap-xenon.sh</kbd>. It is idempotent and safe to re-run. It detects the package manager (apt/dnf/yum), installs the build toolchain and dependency dev packages, and — crucially — <em>falls back to building nng and mbedTLS from pinned source</em> (<code>NNG_TAG=v1.8.0</code>, <code>MBEDTLS_TAG=v3.6.2</code>) when distro packages are missing. It then configures with <code>-DSOLARI_WITH_IO=ON -DSOLARI_WITH_SQLITE=ON -DSOLARI_BUILD_TESTS=ON</code>, builds, and runs the suites in two stages.</li>
+    <li><strong>Read the staged test output.</strong> The script splits results deliberately: the core + spool suites are a <em>hard gate</em>; the nng TLS loopback (<code>test_net_loopback</code>) is reported <em>best-effort</em>, so a transient port-in-use or a TLS-build wrinkle doesn't mask real success. If the loopback fails, that's your first Phase-2 debugging target — not a reason to proceed past it.</li>
+    <li><strong>Add cross toolchains when you need them.</strong> <kbd>./deploy/bootstrap-xenon.sh --with-cross</kbd> pulls <code>gcc-aarch64-linux-gnu</code>, <code>gcc-arm-linux-gnueabihf</code>, and <code>gcc-mingw-w64-x86-64</code> for the Phase 3 client matrix. Not needed until you're cross-building the client.</li>
+    <li><strong>Confirm the Phase 2 gate is green</strong> before touching Phase 3. The definition of done for the migration is: <code>SOLARI_WITH_IO</code> + <code>SOLARI_WITH_SQLITE</code> build clean and the transport loopback round-trips a frame over TLS. Capture that as a short Phase-2 completion note (mirroring the Phase 1 report style) so the milestone is recorded.</li>
+  </ol>
+  <div class="note">
+    <span class="lbl">Verify, don't assume</span>
+    The script's pinned versions (nng v1.8.0, mbedTLS v3.6.2, SQLite 3.46.1, cJSON v1.7.18, Unity v2.6.0) are sensible and current as of the last edit. Before a long unattended source build, glance at whether mbedTLS has cut a newer 3.6.x patch — staying on the latest 3.6 LTS line is worth a one-line tag bump. Don't jump to mbedTLS 4.x without checking nng's compatibility; nng pins to the mbedTLS 3.x API.
+  </div>
+
+  <h3>2.3 Definition of done for the migration</h3>
+  <ul class="chk">
+    <li>Repo present on xenon, clean tree, builds with default options (core green).</li>
+    <li><code>bootstrap-xenon.sh</code> completes; nng + mbedTLS available (packaged or source-built).</li>
+    <li><code>SOLARI_WITH_IO</code> + <code>SOLARI_WITH_SQLITE</code> + <code>SOLARI_WITH_JSON</code> all compile clean.</li>
+    <li>Core + spool suites pass (hard gate); transport TLS loopback round-trips.</li>
+    <li>Phase 2 completion note written; tree committed.</li>
+  </ul>
+</section>
+
+<section id="newfeatures">
+  <h2><span class="h2num">§ 3</span>The new capabilities — overview</h2>
+  <p class="lead">During the dashboard work, six capabilities were added beyond the base plan — some at your explicit direction, some surfaced by the design. They are real product scope now, and the rest of this document specifies them as architecture, not wish-list.</p>
+
+  <table>
+    <thead><tr><th>Capability</th><th>What it is</th><th>Touches</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Remote lifecycle management</strong> <span class="tag-new">new</span></td><td>Provision, deploy, manage, (re)configure, and <em>fully remove</em> SolariNet across every node from the C2 — including teardown of all settings on decommission.</td><td>SCP verbs (§4), <code>enrollment</code>/<code>buildArtifact</code> tables (§5), provisioning endpoints (§6), server provisioning service (§7).</td></tr>
+      <tr><td><strong>Dual-hierarchy visualization</strong> <span class="tag-new">new</span></td><td>A topology view that can render <em>either</em> the monitoring-system hierarchy (server → monitors → clients/targets) <em>or</em> the network-connection hierarchy (gateway → switches/APs → hosts), the latter built from client reports, monitor inspection, network-gear inspection, and <strong>LLDP</strong>.</td><td><code>networkGear</code>/<code>lldpEdge</code>/<code>segment</code> tables (§5), <code>/api/topology</code> rework + <code>/api/netgear</code> (§6), topology/LLDP collector (§7).</td></tr>
+      <tr><td><strong>Autodetect / discovery</strong> <span class="tag-new">new</span></td><td>Continuously identify new systems, networks, applications, and other trackable entities (via mDNS, ARP sweep, SCP advertisement, port scan) and surface them as candidate monitored vectors for one-click configuration and deployment.</td><td><code>discovered</code> table (§5), <code>/api/discovery</code> (§6), discovery engine (§7), <code>SCP_MSG_DISCOVERY_ADVERT</code> (§4).</td></tr>
+      <tr><td><strong>Network segments</strong> <span class="tag-new">new</span></td><td>First-class network segments (CIDR-scoped) used for rollups, topology grouping, and discovery scoping.</td><td><code>segment</code> table (§5), <code>/api/segments</code> (§6).</td></tr>
+      <tr><td><strong>Config &amp; rules management</strong> <span class="tag-chg">extends §11/§13</span></td><td>Read and edit global tolerances/retention/lease/ports, and enable/disable alert rules, from the C2.</td><td><code>/api/config</code>, <code>/api/rules</code> (§6).</td></tr>
+      <tr><td><strong>Reachability matrix</strong> <span class="tag-chg">extends §11.2</span></td><td>Per-vantage probe outcome/RTT/loss grid. Mostly satisfied by the existing <code>/api/probes</code>; needs roll-up state and labels.</td><td><code>/api/probes</code> shape additions (§6).</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note warn">
+    <span class="lbl">The one genuinely missing primitive</span>
+    Everything else extends an idea already in the base plan. <strong>Full removal / decommission does not exist anywhere yet</strong> — not in the SCP control verbs, not in the schema, not in the dashboard. The base plan's <code>CTRL_*</code> set covers config/deploy/restart but has no "tear this node down and forget it" path. The user called this out explicitly ("removal of all settings across all system nodes"), so §4 adds the verb and §7 specifies the teardown semantics carefully — removal is the operation most likely to go wrong destructively, so it gets a confirmation + audit trail.
+  </div>
+</section>
+
+<section id="scp">
+  <h2><span class="h2num">§ 4</span>Protocol additions (SCP)</h2>
+  <p class="lead">The new capabilities need a small, backward-compatible extension to the SolariNet Control Protocol. All of it fits the §5 framing untouched — new message types and new TLVs only, so <code>SCP_PROTO_VERSION</code> does <strong>not</strong> bump (§5.9: adding message/TLV types is non-breaking; old peers skip what they don't understand).</p>
+
+  <h3>4.1 New message types</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Code</th><th>Direction</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>SCP_MSG_DISCOVERY_ADVERT</code> <span class="tag-new">new</span></td><td>0x13</td><td>node → server</td><td>A node reports entities it has observed but that aren't enrolled — neighbors from mDNS/ARP/LLDP, open service ports, new MACs. Feeds the discovery engine.</td></tr>
+      <tr><td><code>SCP_MSG_TOPOLOGY_REPORT</code> <span class="tag-new">new</span></td><td>0x14</td><td>node → server</td><td>Link-layer adjacency a node can see: its uplink switch/port from LLDP, peer reachability, interface→segment binding. Feeds the network-hierarchy view.</td></tr>
+      <tr><td><code>SCP_MSG_DECOMMISSION</code> <span class="tag-new">new</span></td><td>0x32</td><td>server → node</td><td>Authoritative teardown directive (see verb below). Distinct from <code>CONTROL</code> so it can never be confused with a routine config push and is always audited.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.2 New control verbs (TLV_CTRL_VERB, extends §5.8)</h3>
+  <table>
+    <thead><tr><th>Verb</th><th>Value</th><th>Effect on node</th></tr></thead>
+    <tbody>
+      <tr><td><code>CTRL_PROVISION</code> <span class="tag-new">new</span></td><td>7</td><td>First-time bring-up: write config, install/enable the service unit, begin reporting. Idempotent — a re-provision converges to the supplied epoch.</td></tr>
+      <tr><td><code>CTRL_DECOMMISSION</code> <span class="tag-new">new</span></td><td>8</td><td>Carried by <code>SCP_MSG_DECOMMISSION</code>. Graceful: stop sampling/probing, flush &amp; close the spool, <strong>securely erase</strong> local config, certs, keys, and spool DB, disable and remove the service unit, then exit. Replies <code>CONTROL_RESULT</code> (best-effort, before key deletion) so the server can mark the node <code>retired</code>.</td></tr>
+      <tr><td><code>CTRL_ADOPT_TARGET</code> <span class="tag-new">new</span></td><td>9</td><td>(Monitor) promote a discovered entity to a live probe target without a full redeploy — the "one-click monitor this" path from the Discovery screen.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.3 New TLV types</h3>
+  <pre>
+<span class="c">/* --- discovery (0x12xx) --- */</span>
+TLV_DISC_ENTITY     = <span class="n">0x1201</span>,  <span class="c">/* repeated: {kind, host/ip, via, seg, arch} */</span>
+TLV_DISC_SERVICE    = <span class="n">0x1202</span>,  <span class="c">/* repeated: {proto, port, banner?}          */</span>
+TLV_DISC_SOURCE     = <span class="n">0x1203</span>,  <span class="c">/* uint8: 1=mDNS 2=ARP 3=SCP_advert 4=portscan 5=LLDP */</span>
+<span class="c">/* --- topology / LLDP (0x13xx) --- */</span>
+TLV_TOPO_UPLINK     = <span class="n">0x1301</span>,  <span class="c">/* {peerChassisId, peerPort, localIf, speedMbps} */</span>
+TLV_TOPO_LLDP_NEIGH = <span class="n">0x1302</span>,  <span class="c">/* repeated LLDP neighbor TLV set            */</span>
+TLV_TOPO_SEGMENT    = <span class="n">0x1303</span>,  <span class="c">/* {ifName, cidr, segHint}                   */</span>
+<span class="c">/* --- lifecycle (0x32xx) --- */</span>
+TLV_LIFE_CONFIRM    = <span class="n">0x3201</span>,  <span class="c">/* uint64: echo token the server must match  */</span>
+                                  <span class="c">/* to authorize a destructive decommission  */</span>
+TLV_LIFE_WIPE_SCOPE = <span class="n">0x3202</span>   <span class="c">/* bitfield: config|certs|spool|logs|unit    */</span>
+  </pre>
+  <div class="note">
+    <span class="lbl">Destructive-op safety</span>
+    <code>CTRL_DECOMMISSION</code> requires a server-issued confirmation token (<code>TLV_LIFE_CONFIRM</code>) that the node echoes — a single stray frame can't wipe a host. The wipe scope is explicit (<code>TLV_LIFE_WIPE_SCOPE</code>) so "remove from monitoring but leave logs for forensics" is expressible. Every decommission writes an <code>alertEvent</code>-style audit row server-side (§5) before the node is marked <code>retired</code>.
+  </div>
+</section>
+
+<section id="schema">
+  <h2><span class="h2num">§ 5</span>Schema additions (MariaDB)</h2>
+  <p class="lead">Six new tables and two small column additions extend <code>db/schema.sql</code>. They are additive — no existing table changes shape — so this is a forward migration, not a rewrite. Add as <code>db/migrations/002_c2_capabilities.sql</code>.</p>
+  <div class="filename">db/migrations/002_c2_capabilities.sql</div>
+  <pre>
+<span class="c">-- network segments (first-class; referenced by node, gear, discovery)</span>
+<span class="k">CREATE TABLE</span> segment (
+  segId    <span class="t">VARCHAR</span>(<span class="n">32</span>) <span class="k">PRIMARY KEY</span>,        <span class="c">-- "core","compute","storage","dmz","lab","iot"</span>
+  label    <span class="t">VARCHAR</span>(<span class="n">64</span>) <span class="k">NOT NULL</span>,
+  cidr     <span class="t">VARCHAR</span>(<span class="n">64</span>) <span class="k">NOT NULL</span>,            <span class="c">-- e.g. "10.42.20.0/24"</span>
+  wireless <span class="t">BOOLEAN</span> <span class="k">NOT NULL DEFAULT FALSE</span>,
+  notes    <span class="t">VARCHAR</span>(<span class="n">255</span>)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- network gear (switches/APs/gateways) for the LAN-hierarchy topology</span>
+<span class="k">CREATE TABLE</span> networkGear (
+  gearId   <span class="t">VARCHAR</span>(<span class="n">48</span>) <span class="k">PRIMARY KEY</span>,        <span class="c">-- "sw-core-01","gw","ap-lab-01"</span>
+  name     <span class="t">VARCHAR</span>(<span class="n">96</span>) <span class="k">NOT NULL</span>,
+  kind     <span class="t">ENUM</span>(<span class="s">'gateway'</span>,<span class="s">'switch'</span>,<span class="s">'ap'</span>,<span class="s">'router'</span>,<span class="s">'other'</span>) <span class="k">NOT NULL</span>,
+  model    <span class="t">VARCHAR</span>(<span class="n">96</span>), segId <span class="t">VARCHAR</span>(<span class="n">32</span>),
+  ports    <span class="t">SMALLINT</span>, uplinkGearId <span class="t">VARCHAR</span>(<span class="n">48</span>),  <span class="c">-- self-referential hierarchy</span>
+  wireless <span class="t">BOOLEAN NOT NULL DEFAULT FALSE</span>, mgmtIp <span class="t">VARCHAR</span>(<span class="n">64</span>),
+  lastSeenAt <span class="t">DATETIME</span>,
+  <span class="k">INDEX</span>(segId), <span class="k">INDEX</span>(uplinkGearId)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- LLDP / inspection-derived adjacency: who connects where, at L2</span>
+<span class="k">CREATE TABLE</span> lldpEdge (
+  id          <span class="t">BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY</span>,
+  nodeId      <span class="t">BIGINT UNSIGNED</span>,                <span class="c">-- a SolariNet node, if the endpoint is one</span>
+  gearId      <span class="t">VARCHAR</span>(<span class="n">48</span>),                     <span class="c">-- the switch/AP side</span>
+  localIf     <span class="t">VARCHAR</span>(<span class="n">48</span>), peerPort <span class="t">VARCHAR</span>(<span class="n">48</span>),
+  linkType    <span class="t">ENUM</span>(<span class="s">'wired'</span>,<span class="s">'wireless'</span>) <span class="k">NOT NULL</span>,
+  speedMbps   <span class="t">INT</span>, rssi <span class="t">SMALLINT</span>, viaLldp <span class="t">BOOLEAN NOT NULL DEFAULT FALSE</span>,
+  observedAt  <span class="t">DATETIME</span> <span class="k">NOT NULL</span>,
+  <span class="k">INDEX</span>(nodeId), <span class="k">INDEX</span>(gearId)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- discovered-but-not-monitored candidates</span>
+<span class="k">CREATE TABLE</span> discovered (
+  discId    <span class="t">BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY</span>,
+  host      <span class="t">VARCHAR</span>(<span class="n">255</span>), ip <span class="t">VARCHAR</span>(<span class="n">64</span>) <span class="k">NOT NULL</span>,
+  kind      <span class="t">ENUM</span>(<span class="s">'host'</span>,<span class="s">'service'</span>,<span class="s">'network'</span>,<span class="s">'other'</span>) <span class="k">NOT NULL</span>,
+  via       <span class="t">ENUM</span>(<span class="s">'mdns'</span>,<span class="s">'arp'</span>,<span class="s">'scp_advert'</span>,<span class="s">'portscan'</span>,<span class="s">'lldp'</span>) <span class="k">NOT NULL</span>,
+  services  <span class="t">JSON</span>,                            <span class="c">-- ["ssh:22","http:80"]</span>
+  segId     <span class="t">VARCHAR</span>(<span class="n">32</span>), arch <span class="t">VARCHAR</span>(<span class="n">16</span>),
+  seenCount <span class="t">INT NOT NULL DEFAULT</span> <span class="n">1</span>, firstSeenAt <span class="t">DATETIME</span>, lastSeenAt <span class="t">DATETIME</span>,
+  status    <span class="t">ENUM</span>(<span class="s">'new'</span>,<span class="s">'ignored'</span>,<span class="s">'adopting'</span>,<span class="s">'adopted'</span>) <span class="k">NOT NULL DEFAULT</span> <span class="s">'new'</span>,
+  <span class="k">UNIQUE</span>(ip, kind), <span class="k">INDEX</span>(status), <span class="k">INDEX</span>(segId)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- pending enrollments (CSRs awaiting operator approval) — §15.1 made stateful</span>
+<span class="k">CREATE TABLE</span> enrollment (
+  enrId       <span class="t">BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY</span>,
+  host        <span class="t">VARCHAR</span>(<span class="n">255</span>), ip <span class="t">VARCHAR</span>(<span class="n">64</span>),
+  role        <span class="t">ENUM</span>(<span class="s">'client'</span>,<span class="s">'monitor'</span>,<span class="s">'server'</span>) <span class="k">NOT NULL</span>,
+  certFp      <span class="t">VARCHAR</span>(<span class="n">95</span>),                    <span class="c">-- SHA-256 CSR fingerprint, colon-hex</span>
+  status      <span class="t">ENUM</span>(<span class="s">'token'</span>,<span class="s">'pending'</span>,<span class="s">'approved'</span>,<span class="s">'rejected'</span>,<span class="s">'expired'</span>) <span class="k">NOT NULL</span>,
+  requestedAt <span class="t">DATETIME</span>, decidedAt <span class="t">DATETIME</span>, decidedBy <span class="t">VARCHAR</span>(<span class="n">64</span>),
+  csrPem      <span class="t">TEXT</span>,                          <span class="c">-- held only until signed, then nulled</span>
+  <span class="k">INDEX</span>(status)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- build/artifact registry (per arch/os/channel) + convergence rollup</span>
+<span class="k">CREATE TABLE</span> buildArtifact (
+  buildId   <span class="t">BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY</span>,
+  arch      <span class="t">VARCHAR</span>(<span class="n">16</span>) <span class="k">NOT NULL</span>, os <span class="t">VARCHAR</span>(<span class="n">16</span>) <span class="k">NOT NULL</span>,
+  version   <span class="t">VARCHAR</span>(<span class="n">32</span>) <span class="k">NOT NULL</span>,
+  channel   <span class="t">ENUM</span>(<span class="s">'stable'</span>,<span class="s">'beta'</span>,<span class="s">'dev'</span>) <span class="k">NOT NULL DEFAULT</span> <span class="s">'stable'</span>,
+  sha256    <span class="t">CHAR</span>(<span class="n">64</span>) <span class="k">NOT NULL</span>, sizeBytes <span class="t">BIGINT UNSIGNED</span>,
+  artifactUri <span class="t">VARCHAR</span>(<span class="n">255</span>), publishedAt <span class="t">DATETIME</span>,
+  <span class="k">UNIQUE</span>(arch, os, version, channel)
+) <span class="k">ENGINE</span>=InnoDB;
+
+<span class="c">-- small additions to existing tables (additive)</span>
+<span class="k">ALTER TABLE</span> node     <span class="k">ADD COLUMN</span> segId <span class="t">VARCHAR</span>(<span class="n">32</span>) <span class="k">AFTER</span> arch,
+                       <span class="k">ADD COLUMN</span> uplinkGearId <span class="t">VARCHAR</span>(<span class="n">48</span>),
+                       <span class="k">MODIFY</span> state <span class="t">ENUM</span>(<span class="s">'up'</span>,<span class="s">'degraded'</span>,<span class="s">'down'</span>,<span class="s">'unknown'</span>,<span class="s">'retired'</span>) <span class="k">NOT NULL DEFAULT</span> <span class="s">'unknown'</span>;
+<span class="k">ALTER TABLE</span> probeTarget <span class="k">ADD COLUMN</span> label <span class="t">VARCHAR</span>(<span class="n">128</span>), <span class="k">ADD COLUMN</span> segId <span class="t">VARCHAR</span>(<span class="n">32</span>);
+  </pre>
+  <p class="footnote">The <code>retired</code> state on <code>node</code> is what a completed decommission sets — the row is kept for audit/history rather than deleted, so the fleet's past is never silently rewritten. A nightly job may purge <code>retired</code> rows older than the retention window.</p>
+</section>
+
+<section id="api">
+  <h2><span class="h2num">§ 6</span>REST/JSON contract additions</h2>
+  <p class="lead">New and amended endpoints that the dashboard binds to. Same envelope as §11.2 of the base spec (<code>{ok, data, ts}</code> / <code>{ok:false, error}</code>), same ISO-8601-UTC and raw-unit discipline on the wire — display conversion stays in the dashboard adapter (§8).</p>
+  <table>
+    <thead><tr><th>Method &amp; path</th><th>Returns / accepts</th><th>Backed by</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /api/segments</code> <span class="tag-new">new</span></td><td>Segments with rollup counts: <code>{segId, label, cidr, wireless, roll:{up,degraded,down,unknown}}</code></td><td><code>segment</code> + derived from <code>node.segId</code></td></tr>
+      <tr><td><code>GET /api/topology?view=monitoring|network</code> <span class="tag-chg">reworked</span></td><td><code>view=monitoring</code> → server→monitor→target/client edges (the old HRW graph). <code>view=network</code> → gateway→switch/AP→host hierarchy with uplink ports, link type, speed, LLDP flag.</td><td>monitoring: HRW + <code>node</code>. network: <code>networkGear</code> + <code>lldpEdge</code> + <code>node.uplinkGearId</code></td></tr>
+      <tr><td><code>GET /api/netgear</code> <span class="tag-new">new</span></td><td>Network gear inventory with attached-node counts and uplink chain.</td><td><code>networkGear</code>, <code>lldpEdge</code></td></tr>
+      <tr><td><code>GET /api/discovery?status=new|all</code> <span class="tag-new">new</span></td><td>Discovered candidates: <code>{discId, host, ip, kind, via, services[], segId, arch, seenCount, lastSeenAt, status}</code></td><td><code>discovered</code></td></tr>
+      <tr><td><code>POST /api/discovery/{discId}/adopt</code> <span class="tag-new">new</span></td><td>Promote a candidate to monitored. Body selects role/probe spec. → enrollment or <code>CTRL_ADOPT_TARGET</code>.</td><td>discovery engine → <code>solariCtl</code></td></tr>
+      <tr><td><code>POST /api/discovery/{discId}/ignore</code> <span class="tag-new">new</span></td><td>Mark a candidate ignored (suppress from the list).</td><td><code>discovered.status</code></td></tr>
+      <tr><td><code>GET /api/enrollments?status=</code> <span class="tag-new">new</span></td><td>Pending/decided enrollments: <code>{enrId, host, ip, role, certFp, status, requestedAt}</code></td><td><code>enrollment</code></td></tr>
+      <tr><td><code>POST /api/enrollments/{enrId}/approve</code> <span class="tag-new">new</span></td><td>Operator signs the CSR → node becomes enrolled. RBAC: operator.</td><td><code>solariCtl</code> (holds CA path) → sign</td></tr>
+      <tr><td><code>POST /api/enrollments/{enrId}/reject</code> <span class="tag-new">new</span></td><td>Deny enrollment.</td><td><code>enrollment.status</code></td></tr>
+      <tr><td><code>GET /api/builds</code> <span class="tag-new">new</span></td><td>Build registry + per-arch convergence: which versions exist, how many nodes on each, update-available flags.</td><td><code>buildArtifact</code> + <code>nodeConfig</code> epochs</td></tr>
+      <tr><td><code>POST /api/control/provision</code> <span class="tag-new">new</span></td><td>Body <code>{nodeId|enrId, configBlob, buildId}</code> → <code>CTRL_PROVISION</code>.</td><td><code>solariCtl</code></td></tr>
+      <tr><td><code>POST /api/control/decommission</code> <span class="tag-new">new</span></td><td>Body <code>{nodeId, wipeScope[], confirm:true}</code> → issues <code>SCP_MSG_DECOMMISSION</code>/<code>CTRL_DECOMMISSION</code> with a fresh confirm token. RBAC: operator; double-confirmed.</td><td><code>solariCtl</code> → audit row</td></tr>
+      <tr><td><code>GET /api/config</code> · <code>POST /api/config</code> <span class="tag-new">new</span></td><td>Read/replace global tolerances, retention, lease, ports, autoDiscover/autoEnroll flags.</td><td>server config + <code>solariCtl</code></td></tr>
+      <tr><td><code>GET /api/rules</code> · <code>POST /api/rules/{ruleId}</code> <span class="tag-new">new</span></td><td>List alert rules; enable/disable/edit one.</td><td><code>alertRule</code></td></tr>
+      <tr><td><code>GET /api/summary</code> <span class="tag-new">new</span></td><td>One cheap call for the controller header tiles: counts of systems/hosts/servers/monitors/applications/probes, version, uptime.</td><td>derived; cached</td></tr>
+      <tr><td><code>GET /api/probes</code> <span class="tag-chg">amended</span></td><td>Add <code>label</code>, <code>replFactor</code>, and a rolled-up <code>state</code> across vantages to each target (Reachability Matrix needs these).</td><td><code>probeTarget</code> + <code>probeCurrent</code></td></tr>
+    </tbody>
+  </table>
+  <div class="note">
+    <span class="lbl">Control-plane discipline preserved</span>
+    Every mutating endpoint still routes through <code>solariCtl</code> over its Unix socket — PHP never holds cert/CA material, exactly as the base plan's §9/§11.1 require. The new destructive ones (<code>decommission</code>, <code>enrollments/approve</code>) additionally demand operator RBAC and an explicit confirm, and <code>solariCtl</code> re-verifies before emitting any SCP frame.
+  </div>
+</section>
+
+<section id="subsystems">
+  <h2><span class="h2num">§ 7</span>New server-side subsystems</h2>
+  <p class="lead">The endpoints above are fed by four new server subsystems, each a C source file under <code>src/server/</code> following the established handle/return-status conventions. They land in Phase 5 (server) and Phase 7 (the discovery/topology collectors that depend on monitor data), per the updated plan in §10.</p>
+
+  <h3>7.1 Discovery engine — <code>serverDiscovery.c</code> <span class="tag-new">new</span></h3>
+  <ul>
+    <li>Consumes <code>SCP_MSG_DISCOVERY_ADVERT</code> from clients and monitors; upserts <code>discovered</code> rows keyed by <code>(ip, kind)</code>, incrementing <code>seenCount</code>.</li>
+    <li>Sources: clients report mDNS/ARP neighbors they can cheaply see; monitors add port-scan and SCP-advertisement findings; the topology collector contributes LLDP-seen-but-unenrolled devices.</li>
+    <li>Applies <code>config.autoDiscover</code> (gather vs. not) and <code>config.autoEnroll</code> (auto-issue enrollment vs. hold for operator) — both default conservative (discover yes, auto-enroll no).</li>
+    <li>De-dupes against the <code>node</code> table so already-monitored entities never appear as "new."</li>
+  </ul>
+
+  <h3>7.2 Topology / LLDP collector — <code>serverTopology.c</code> <span class="tag-new">new</span></h3>
+  <ul>
+    <li>Consumes <code>SCP_MSG_TOPOLOGY_REPORT</code>; maintains <code>networkGear</code> and <code>lldpEdge</code>.</li>
+    <li>Node side: each client/monitor reports its uplink (LLDP chassis/port where the OS exposes it; falls back to ARP + switch inspection). Monitors additionally inspect managed gear (SNMP/LLDP-MIB) where reachable, populating <code>networkGear</code>.</li>
+    <li>Builds both projections for <code>/api/topology</code>: the monitoring hierarchy (from HRW assignment, already computable) and the network hierarchy (from gear + edges).</li>
+    <li><strong>Scope note:</strong> deep managed-switch interrogation (full LLDP-MIB walks) is the most environment-specific piece. Start with what nodes self-report (their own uplink) — that alone yields a usable host→switch hierarchy — and treat exhaustive gear discovery as an enhancement.</li>
+  </ul>
+
+  <h3>7.3 Provisioning &amp; lifecycle — <code>serverProvision.c</code> <span class="tag-new">new</span></h3>
+  <ul>
+    <li>Owns the enrollment state machine (<code>token → pending → approved/rejected</code>) and CSR signing via the internal CA, through <code>solariCtl</code>.</li>
+    <li>Issues <code>CTRL_PROVISION</code> (bring-up), routine <code>CTRL_SET_CONFIG</code>/<code>CTRL_DEPLOY</code> (already in base), and <code>CTRL_DECOMMISSION</code> (teardown).</li>
+    <li><strong>Decommission is the carefully-guarded path:</strong> generate a one-time confirm token, persist an audit row, emit <code>SCP_MSG_DECOMMISSION</code>, await best-effort <code>CONTROL_RESULT</code>, then set <code>node.state='retired'</code>. If the node is already offline, mark intent and complete the teardown when/if it returns, or let the operator force-retire (which only updates server records — the node, when wiped manually, simply never reconnects).</li>
+    <li>Tracks build convergence by joining <code>buildArtifact</code> against <code>nodeConfig.appliedEpoch</code> for <code>/api/builds</code>.</li>
+  </ul>
+
+  <h3>7.4 Probe-target adoption — <code>monitorAdopt</code> path <span class="tag-new">new</span></h3>
+  <p>The "monitor this discovered thing now" action: <code>serverProvision.c</code> resolves the discovered entity to a probe spec and sends <code>CTRL_ADOPT_TARGET</code> to the owning monitors (selected by the existing HRW logic, §8.2 of the base plan). No redeploy; the monitor adds the target to its live schedule. This reuses the monitor's existing scheduler — only a new control handler is required there.</p>
+</section>
+
+<section id="dashboard">
+  <h2><span class="h2num">§ 8</span>Dashboard reconciliation</h2>
+  <p class="lead">Claude Design delivered a React 18 C2 that transpiles in-browser via Babel-standalone — no Node build step, which keeps it inside the no-Node rule. Three screens are wired to mock data; five are scaffolded against the same mock. The work to make it real is wiring, not redesign. One issue must be fixed before it can run on the intranet.</p>
+
+  <h3>8.1 Must-fix: on-prem / no-cloud</h3>
+  <div class="note warn">
+    <span class="lbl">Blocks air-gapped operation</span>
+    <code>index.html</code> loads React, ReactDOM, and Babel from <code>unpkg.com</code> and fonts from <code>fonts.googleapis.com</code> at runtime. That violates the base plan's "local control, no cloud dependency" tenet and your standing no-phone-home preference — the C2 must work with no internet. <strong>Fix:</strong> vendor <code>react</code>, <code>react-dom</code>, and <code>@babel/standalone</code> into <code>dashboard/public/vendor/</code> (the versions are already SRI-pinned, so just download those exact files), self-host the IBM Plex Sans/Mono woff2s under <code>dashboard/public/fonts/</code>, and repoint <code>index.html</code> at the local paths. Switch React to the production build while you're there. This is quick and unblocks everything else.
+  </div>
+
+  <h3>8.2 The wiring pattern (keep it; it's the right call)</h3>
+  <p>The design exposes one global model, <code>window.SOLARI</code>, built by <code>data.jsx</code> (a seeded mock). The reconciliation doc Claude Design left in the tree (<code>dashboard/API_RECONCILIATION.html</code>) proposes — correctly — to add a single <code>api.jsx</code> adapter that fetches the §11.2 + §6 endpoints and populates the <em>same shape</em>, so every screen keeps working unchanged and <code>data.jsx</code> stays as the offline/demo fixture. All unit/time conversion (the UI thinks in <code>%</code> and "min ago"; the wire speaks KB/milli and ISO-8601) lives in that adapter via the existing <code>SOLARI.fmt</code> helpers. Build it once; light up screens against it incrementally.</p>
+
+  <h3>8.3 Screen status &amp; what each needs</h3>
+  <table>
+    <thead><tr><th>Screen</th><th>State</th><th>To make real</th></tr></thead>
+    <tbody>
+      <tr><td>Fleet Overview</td><td>built</td><td><code>/api/nodes</code> + <code>/api/summary</code> via adapter.</td></tr>
+      <tr><td>Node Detail</td><td>built</td><td><code>/api/nodes/{id}</code> + <code>/api/nodes/{id}/history</code>.</td></tr>
+      <tr><td>Alerts &amp; Tolerances</td><td>built</td><td><code>/api/alerts</code> + <code>/api/rules</code> (enable/disable POST).</td></tr>
+      <tr><td>Reachability Matrix</td><td>scaffolded</td><td>amended <code>/api/probes</code> (rolled-up state + label).</td></tr>
+      <tr><td>Topology Map</td><td>scaffolded</td><td>reworked <code>/api/topology?view=</code> + <code>/api/netgear</code>; the dual-hierarchy toggle is already in the UI.</td></tr>
+      <tr><td>Discovery</td><td>scaffolded</td><td><code>/api/discovery</code> + adopt/ignore POSTs.</td></tr>
+      <tr><td>Provisioning</td><td>scaffolded</td><td><code>/api/enrollments</code>, <code>/api/builds</code>, provision/decommission POSTs.</td></tr>
+      <tr><td>Config &amp; Rules</td><td>scaffolded</td><td><code>/api/config</code> (read/write) + <code>/api/rules</code>.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.4 Smaller items</h3>
+  <ul>
+    <li><strong>Service worker:</strong> the PWA manifest + icons make it installable, but there's no <code>sw.js</code>, so it isn't offline-capable. Add one if an operator should retain the last C2 view during a server blip.</li>
+    <li><strong>In-browser Babel latency:</strong> acceptable for an internal tool and consistent with no-Node. The only faster path is pre-transpiling, which needs Node — so don't. If first-paint ever bites, cache the transpiled output in the service worker rather than introducing a build step.</li>
+    <li><strong>SSE bridge:</strong> the live path is <code>/api/stream</code> (Server-Sent Events) fed from the server PUB socket through <code>solariCtl</code> — no WebSockets, no long-lived PHP worker beyond the thin bridge.</li>
+  </ul>
+</section>
+
+<section id="mcp">
+  <h2><span class="h2num">§ 9</span>The MCP integration</h2>
+  <p class="lead">New since the base plan: <code>integrations/mcp/</code> is a Python (FastMCP) server that gives an LLM agent read access to the dashboard API and the MariaDB schema, plus a guarded set of control actions. It's written in Python — not Node, per policy — with unit tests and an eval suite.</p>
+  <ul>
+    <li><strong>Three surfaces:</strong> the read-only §11.2 API, read-only SQL over the §10 schema (intended to run under a <code>GRANT SELECT</code>-only account), and the operator control plane (survey / config push).</li>
+    <li><strong>Status:</strong> since the REST API (Phase 6) and live MariaDB aren't up yet, it targets the <em>documented</em> contract and is validated against an in-memory mock of both. Point it at the real deployment with environment variables only — no code changes, no secrets in files.</li>
+    <li><strong>Reconciliation action:</strong> when the new §6 endpoints land, extend the MCP's tool set to cover discovery, provisioning, and topology reads. Keep the SQL guard's allow-list in step with the new tables (§5). The destructive control tools (decommission) must require the operator token and mirror the same confirm discipline as the dashboard.</li>
+  </ul>
+</section>
+
+<section id="plan">
+  <h2><span class="h2num">§ 10</span>Updated phase plan (from here)</h2>
+  <p class="lead">Phases 0–1 are done; Phase 2 is code-complete and verified on xenon as step one. The plan below supersedes §16 of the base spec from Phase 2 onward, slotting the six new capabilities into the right phases rather than bolting them on at the end.</p>
+
+  <div class="phase">
+    <div class="pnum">Phase 2 · libsolari I/O <span class="tag">on xenon · verify first</span></div>
+    <h3>Compile &amp; prove the transport/spool/config-overlay layer</h3>
+    <ul>
+      <li>Run <code>bootstrap-xenon.sh</code>; get nng+mbedTLS+SQLite+cJSON building (§2).</li>
+      <li>Green: core + spool hard gate; TLS loopback round-trip. Write the Phase 2 completion note.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 3 · Client + PAL <span class="tag">the migration's destination</span></div>
+    <h3>solariClient across the OS matrix + discovery/topology hooks</h3>
+    <ul>
+      <li>Base plan §7 work: <code>platOS.h</code> → <code>platLinux.c</code> (reference) → <code>platMacos.c</code> (on the macOS box) → <code>platWindows.c</code>; collect/report/watchdog/main.</li>
+      <li><span class="tag-new">new</span> Client-side discovery hooks: report cheap mDNS/ARP neighbors via <code>SCP_MSG_DISCOVERY_ADVERT</code>; report own uplink (LLDP where exposed) via <code>SCP_MSG_TOPOLOGY_REPORT</code>. These are small additions to <code>clientCollect.c</code> behind the PAL.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 4 · Remote Monitor <span class="tag">+ adopt &amp; scan</span></div>
+    <h3>Probe engine + redundancy + discovery contributions</h3>
+    <ul>
+      <li>Base plan §8 work: <code>probeNet.c</code>, HRW ownership/gossip, scheduler, survey responder.</li>
+      <li><span class="tag-new">new</span> <code>CTRL_ADOPT_TARGET</code> handler (add a discovered target to the live schedule); optional port-scan/SCP-advert discovery contributions.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 5 · Server <span class="tag">+ provisioning &amp; lifecycle</span></div>
+    <h3>Ingest, failover, DB, alerts, control — and the new subsystems</h3>
+    <ul>
+      <li>Base plan §9 work: schema apply, <code>serverDb</code>, <code>serverLease</code>, <code>serverIngest</code>, <code>serverMaster</code>, <code>serverAlert</code>, <code>serverControl</code>, <code>solariCtl</code>.</li>
+      <li><span class="tag-new">new</span> Apply migration <code>002_c2_capabilities.sql</code> (§5).</li>
+      <li><span class="tag-new">new</span> <code>serverProvision.c</code> (enrollment state machine, provision/decommission, build convergence) and the new control verbs (§4.2). Decommission with confirm-token + audit.</li>
+      <li><span class="tag-new">new</span> <code>serverDiscovery.c</code> (consume adverts → <code>discovered</code>; autoDiscover/autoEnroll gating).</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 6 · Dashboard data layer <span class="tag">+ on-prem fix first</span></div>
+    <h3>PHP/PDO API + adapter + screen wiring</h3>
+    <ul>
+      <li><span class="tag-new">new</span> <strong>First:</strong> vendor React/Babel/fonts locally, switch to production React (§8.1) — unblocks air-gapped use.</li>
+      <li>Write <code>api.jsx</code> adapter; light up the three built screens against base endpoints.</li>
+      <li>Stand up the PHP PDO read layer, the base §11.2 endpoints, and the §6 additions; SSE bridge via <code>solariCtl</code>.</li>
+      <li>Wire the five scaffolded screens (Reachability, Topology dual-view, Discovery, Provisioning, Config&amp;Rules) as their endpoints land. Add <code>sw.js</code>.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="pnum">Phase 7 · Topology depth, hardening &amp; ops <span class="tag">+ MCP catch-up</span></div>
+    <h3>Deep gear discovery, enrollment flow, packaging, CI, MCP</h3>
+    <ul>
+      <li><span class="tag-new">new</span> <code>serverTopology.c</code> deep path: managed-gear LLDP-MIB/SNMP inspection populating <code>networkGear</code> beyond node self-report.</li>
+      <li>Base plan §15 work: enrollment scripts, systemd units, retention/partition maintenance, full cross-build CI (qemu-user), integration + fault suites.</li>
+      <li><span class="tag-new">new</span> Extend the MCP tool set + SQL guard allow-list to the new tables/endpoints (§9).</li>
+      <li>Self-contained HTML operator/developer docs.</li>
+    </ul>
+  </div>
+
+  <hr class="soft">
+  <h3>Updated dependency graph</h3>
+  <div class="diagram"><pre>
+  [done] P0 ─▶ P1 ─▶  P2 (xenon: verify I/O) ─┬─▶ P3 client (+disc/topo hooks) ─┐
+                                              └─▶ P4 monitor (+adopt) ──────────┼─▶ P5 server
+   migration 002.sql ───────────────────────────────────────────────────────┘   (+provision,
+                                                                                   +discovery)
+                                                                                       │
+                                  P6 dashboard (on-prem fix → adapter → wire) ◀────────┘
+                                                                                       │
+                                                  P7 topology depth + hardening + MCP ◀┘
+  </pre></div>
+</section>
+
+<section id="housekeeping">
+  <h2><span class="h2num">§ 11</span>Housekeeping before first push</h2>
+  <p>Small things found on ingest that are worth clearing before the tree goes to <code>github.com/soren42/Solarinet</code>:</p>
+  <ul class="chk">
+    <li>Remove the stray zero-byte <code>testdel.tmp</code> at the repo root, and add a <code>.gitignore</code> covering <code>build/</code>, <code>build-*/</code>, <code>third_party/.prefix/</code>, <code>*.tmp</code>, and the vendored dashboard libs if you'd rather not commit them.</li>
+    <li>The archive has no <code>.git</code> — the local repo from Phase 1 didn't travel in the zip. On xenon, confirm history is intact (or re-init and make a clean "Phase 1 + 2" baseline commit) before pushing.</li>
+    <li><code>third_party/</code> currently holds only the SQLite header shim and Unity. After bootstrap, decide whether to commit the vendored nng/mbedTLS/cJSON sources (hermetic, large) or keep fetching them via the script (lean, needs network at setup). Either is defensible; the script already supports both.</li>
+    <li>Keep <code>data.jsx</code> as the labelled offline/demo fixture — don't let it drift into looking like live data once <code>api.jsx</code> exists.</li>
+    <li>Record the Phase 2 completion note (mirroring <code>docs/PHASE1_REPORT.html</code>) so the milestone trail stays continuous.</li>
+  </ul>
+</section>
+
+<footer style="padding:50px 0 80px;color:var(--ink-dim);font-size:13.5px">
+  <hr class="soft">
+  <p><strong style="color:var(--ink)">SolariNet — Phase 3 Handoff &amp; Architecture Reconciliation.</strong> Extends the base spec; authoritative where they differ. Verified against the ingested tree (core rebuilt green on ingest); the new C2 capabilities are specified to the same standard as the base architecture so a coding agent can implement them straight through. Migrate to xenon, verify Phase 2, then proceed down §10.</p>
+</footer>
+
+</div>
+</body>
+</html>
+

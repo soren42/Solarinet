@@ -155,7 +155,10 @@ typedef enum {
     CTRL_RESTART      = 3,
     CTRL_PROBE_NOW    = 4,
     CTRL_SET_SCHEDULE = 5,
-    CTRL_DRAIN_SPOOL  = 6
+    CTRL_DRAIN_SPOOL  = 6,
+    CTRL_PROVISION    = 7,    /* first-time bring-up; re-provision converges to epoch */
+    CTRL_DECOMMISSION = 8,    /* carried by SCP_MSG_DECOMMISSION: teardown + secure erase */
+    CTRL_ADOPT_TARGET = 9     /* monitor: promote a discovered entity to a live target */
 } solariCtrlVerb;
 
 typedef struct {

@@ -55,9 +55,22 @@ enum solariTlvType {
     TLV_CTRL_VERB         = 0x3001,  /* uint8: setConfig|deploy|restart|.. */
     TLV_CTRL_PAYLOAD      = 0x3002,  /* opaque blob                        */
     TLV_CTRL_TARGET_EPOCH = 0x3003,  /* uint64 config epoch to converge to */
+    /* --- lifecycle (0x32xx) --- */
+    TLV_LIFE_CONFIRM      = 0x3201,  /* uint64: echo token the server must match to */
+                                     /* authorize a destructive decommission        */
+    TLV_LIFE_WIPE_SCOPE   = 0x3202,  /* uint8 bitfield: config|certs|spool|logs|unit */
     /* --- error (0xFFxx) --- */
     TLV_ERROR_CODE        = 0xFF01,  /* uint16 (Appendix A)                */
     TLV_ERROR_DETAIL      = 0xFF02   /* utf8                               */
+};
+
+/* ---- TLV_LIFE_WIPE_SCOPE bits (§4) - which local state a decommission erases ---- */
+enum {
+    SOLARI_WIPE_CONFIG = 0x01,   /* local config files                 */
+    SOLARI_WIPE_CERTS  = 0x02,   /* certs & private keys               */
+    SOLARI_WIPE_SPOOL  = 0x04,   /* store-and-forward spool DB         */
+    SOLARI_WIPE_LOGS   = 0x08,   /* local logs (omit to keep forensics)*/
+    SOLARI_WIPE_UNIT   = 0x10    /* disable & remove the service unit  */
 };
 
 /* ---- writer: a cursor over a caller-owned buffer ---- */

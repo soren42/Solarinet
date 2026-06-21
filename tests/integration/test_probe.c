@@ -5,8 +5,11 @@
  * and are exercised manually, not asserted here.)
  */
 #include "unity.h"
+#include "monitor.h"
 #include "probeNet.h"
 #include "solari/solariError.h"
+#include "solari/solariMsg.h"
+#include "solari/solariTlv.h"
 
 #include <string.h>
 #include <unistd.h>
@@ -86,6 +89,68 @@ static void test_dns_fail(void)
     TEST_ASSERT_EQUAL_UINT8(PROBE_DNS_FAIL, r.outcome);
 }
 
+/* Build an SCP_MSG_CONTROL payload carrying CTRL_ADOPT_TARGET with `spec` as the
+ * directive payload (the same spec form the .conf uses). */
+static size_t buildAdopt(const char *spec, uint8_t *payload, size_t cap)
+{
+    solariControl c;
+    size_t outLen = 0;
+    uint16_t tc = 0;
+    memset(&c, 0, sizeof c);
+    c.verb       = CTRL_ADOPT_TARGET;
+    c.payload    = (const uint8_t *)spec;
+    c.payloadLen = (uint16_t)strlen(spec);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariMsgBuildControl(&c, payload, cap, &outLen, &tc));
+    return outLen;
+}
+
+/* Returns true if cfg holds a target with the given HRW targetId. */
+static int hasTarget(const monitorConfig *cfg, const char *targetId)
+{
+    uint8_t i;
+    for (i = 0; i < cfg->targetCount; i++)
+        if (!strcmp(cfg->targets[i].targetId, targetId)) return 1;
+    return 0;
+}
+
+/* CTRL_ADOPT_TARGET adds the discovered entity to the live schedule, replies ok,
+ * and is idempotent (re-adopting the same spec does not double-add). */
+static void test_adopt_target(void)
+{
+    monitorConfig cfg;
+    uint8_t payload[256], result[64];
+    size_t plen, rlen = 0;
+    uint16_t rtc = 0, code = 0xffff;
+    uint8_t verb = 0;
+    solariTlvReader r;
+    uint16_t type; const uint8_t *val; uint16_t len;
+
+    monitorConfigDefaults(&cfg);
+    TEST_ASSERT_EQUAL_UINT8(0, cfg.targetCount);
+
+    plen = buildAdopt("tcp:198.51.100.7:443 : edge", payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        monitorHandleControl(&cfg, payload, plen, result, sizeof result, &rlen, &rtc));
+    TEST_ASSERT_EQUAL_UINT8(1, cfg.targetCount);
+    TEST_ASSERT_TRUE(hasTarget(&cfg, "tcp:198.51.100.7:443"));
+
+    /* result echoes the verb and a zero (ok) error magnitude */
+    solariTlvReaderInit(&r, result, rlen);
+    while (solariTlvNext(&r, &type, &val, &len) == SOLARI_OK) {
+        if (type == TLV_CTRL_VERB)  solariTlvReadU8 (val, len, &verb);
+        if (type == TLV_ERROR_CODE) solariTlvReadU16(val, len, &code);
+    }
+    TEST_ASSERT_EQUAL_UINT8(CTRL_ADOPT_TARGET, verb);
+    TEST_ASSERT_EQUAL_UINT16(0, code);
+
+    /* idempotent: adopting the same spec again leaves the count unchanged */
+    plen = buildAdopt("tcp:198.51.100.7:443 : edge", payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        monitorHandleControl(&cfg, payload, plen, result, sizeof result, &rlen, &rtc));
+    TEST_ASSERT_EQUAL_UINT8(1, cfg.targetCount);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -93,5 +158,6 @@ int main(void)
     RUN_TEST(test_tcp_refused);
     RUN_TEST(test_tcp_unreachable);
     RUN_TEST(test_dns_fail);
+    RUN_TEST(test_adopt_target);
     return UNITY_END();
 }
