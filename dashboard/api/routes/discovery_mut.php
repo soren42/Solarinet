@@ -55,7 +55,11 @@ return static function (Router $router): void {
             $args['class'] = $body['class'];
         }
         if (isset($body['poolId']) && (is_int($body['poolId']) || ctype_digit((string) $body['poolId']))) {
-            $args['pool'] = (string) (int) $body['poolId'];
+            $pid = (int) $body['poolId'];
+            if ($pid !== 0 && Db::row('SELECT poolId FROM pool WHERE poolId = :i', [':i' => $pid]) === null) {
+                Response::error('bad_request', "No pool $pid", 400);
+            }
+            if ($pid !== 0) $args['pool'] = (string) $pid;
         }
         if (isset($body['notes']) && is_string($body['notes']) && $body['notes'] !== '') {
             $args['notes'] = substr($body['notes'], 0, 240);

@@ -24,7 +24,8 @@
     ), [fleet, stateFilter, roleFilter]);
 
     const roll = S.fleetRoll;
-    const avgCpu = Math.round(fleet.filter((n) => n.state !== "down").reduce((a, n) => a + n.cpuPct, 0) / Math.max(1, fleet.filter((n) => n.state !== "down").length));
+    const cpuNodes = fleet.filter((n) => !n.isAsset && n.state !== "down");
+    const avgCpu = Math.round(cpuNodes.reduce((a, n) => a + n.cpuPct, 0) / Math.max(1, cpuNodes.length));
     const monsUp = fleet.filter((n) => n.role === "monitor" && n.state === "up").length;
     const monsTotal = fleet.filter((n) => n.role === "monitor").length;
 

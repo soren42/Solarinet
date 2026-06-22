@@ -171,7 +171,7 @@
             server={S.server} onSurvey={() => survey(null)} />
           <div className="content">
             {route.name === "fleet" && PoolCards && <PoolCards onOpen={() => go("assets")} />}
-            {route.name === "fleet" && <FleetOverview onOpenNode={openNode} view={fleetView} setView={setFleetView} fleet={S.nodes} />}
+            {route.name === "fleet" && <FleetOverview onOpenNode={openNode} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
             {route.name === "assets" && Assets && <Assets onOpenNode={openNode} />}
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
             {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} rules={rules} setRules={setRules} toast={toast} />}

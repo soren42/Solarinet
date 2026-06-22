@@ -669,8 +669,20 @@
   /* ===================== ASSETS (monitored systems) ===================== */
   function Assets({ onOpenNode }) {
     const [assets, setAssets] = useState(S.assets || []);
+    const [, force] = useState(0);
     const pools = S.pools || [];
     const dot = { up: "var(--ok)", degraded: "var(--amber)", down: "var(--red)", unknown: "var(--muted)" };
+
+    function newPool() {
+      const name = window.prompt("New pool name (e.g. DNS, Core infra):", "");
+      if (name == null || name.trim() === "") return;
+      const a = api();
+      if (!a || !a.createPool) { toast("Pool creation unavailable (offline)", "close"); return; }
+      a.createPool({ name: name.trim() })
+        .then(function () { toast("Pool created: " + name.trim(), "check"); return a.refresh ? a.refresh() : null; })
+        .then(function () { force(function (n) { return n + 1; }); })
+        .catch(function (e) { toast("Create failed: " + (e && e.message || "error"), "close"); });
+    }
 
     function patch(asset, body, msg) {
       const a = api();
@@ -694,7 +706,10 @@
     return (
       <div className="page">
         <div className="page-head">
-          <div><h1 className="page-title">Systems</h1><div className="page-sub">{assets.length} monitored system(s)</div></div>
+          <div><h1 className="page-title">Systems</h1><div className="page-sub">{assets.length} monitored · {pools.length} pool(s)</div></div>
+          <div className="page-head__right">
+            <button className="btn-primary" onClick={newPool}><Icon name="plus" size={14} />New pool</button>
+          </div>
         </div>
         <PoolCards />
         {assets.length === 0 && (

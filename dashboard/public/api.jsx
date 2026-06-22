@@ -340,6 +340,26 @@
     return r;
   }
 
+  // Synthesize a node-shaped row for a monitored asset (no agent), so adopted
+  // systems appear in the Fleet Overview alongside enrolled nodes. Host metrics
+  // are blank (reachability-only); state comes from its probe-target rollup.
+  function mapAssetNode(a) {
+    return {
+      nodeId: "asset-" + a.assetId, assetId: a.assetId, isAsset: true,
+      sym: "", name: a.displayName || a.ip, hostFqdn: a.host || a.ip, ip: a.ip,
+      role: "system", segId: a.poolId, segName: a.poolName || "—", cidr: "",
+      osName: a.class, arch: "", state: a.state || "unknown",
+      lastSeenMin: 0, enrolledDaysAgo: 0, configEpoch: 0, converged: true,
+      cpuPct: 0, cores: [], ramPct: 0, ramUsedKb: 0, ramTotalKb: 0,
+      swapPct: 0, swapUsedKb: 0, swapTotalKb: 0,
+      disks: [], ifaces: [], procs: [], diskMaxPct: 0,
+      netTotalMbps: 0, netCapMbps: 0, alertsCount: 0,
+      hist: { cpu: [], ram: [], net: [], disk: [] }, uptimeDays: 0,
+      uplink: null, uplinkPort: null, linkType: null, linkSpeedMbps: 0, lldp: false,
+      targetCount: a.targetCount, tags: a.tags || [], pool: a.poolName,
+    };
+  }
+
   // =====================================================================
   // assemble window.SOLARI live (parallel fetch of the §6/§11.2 reads)
   // =====================================================================
@@ -413,8 +433,12 @@
 
       var monitors = nodes.filter(function (n) { return n.role === "monitor"; });
 
-      // rollups
-      var fleetRoll = rollup(nodes);
+      // adopted systems (assets) appear in the fleet view as reachability-only rows
+      var systemNodes = assetsW.map(mapAssetNode);
+      var allFleet = nodes.concat(systemNodes);
+
+      // rollups (over nodes + systems so the overview tiles count everything)
+      var fleetRoll = rollup(allFleet);
       var segRollups = {};
       segments.forEach(function (s) {
         segRollups[s.id] = rollup(nodes.filter(function (n) { return n.segId === s.id; }));
@@ -456,6 +480,7 @@
         probes: probes, rules: rules, alerts: alerts, discovered: discovered,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
+        systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
         activeCrit: alerts.filter(function (a) { return !a.cleared && a.severity === "crit"; }).length,
