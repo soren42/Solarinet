@@ -134,6 +134,7 @@
     nodes:        "/api/nodes",
     node:         function (id) { return "/api/nodes/" + encodeURIComponent(id); },
     nodeHistory:  function (id, metric) { return "/api/nodes/" + encodeURIComponent(id) + "/history?metric=" + encodeURIComponent(metric); },
+    nodeConfig:   function (id) { return "/api/nodes/" + encodeURIComponent(id) + "/config"; },
     alerts:       "/api/alerts",            // ?status=active|all
     rules:        "/api/rules",
     rule:         function (id) { return "/api/rules/" + encodeURIComponent(id); },
@@ -142,6 +143,7 @@
     topology:     function (view) { return "/api/topology?view=" + encodeURIComponent(view || "monitoring"); },
     netgear:      "/api/netgear",
     discovery:    "/api/discovery",         // ?status=new|all
+    discScan:     "/api/discovery/scan",     // POST {cidr, ports?}
     discAdopt:    function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/adopt"; },
     discIgnore:   function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/ignore"; },
     enrollments:  "/api/enrollments",       // ?status=
@@ -153,6 +155,9 @@
     decommission: "/api/control/decommission",
     survey:       "/api/control/survey",
     stream:       "/api/stream",
+    login:        "/api/auth/login",
+    logout:       "/api/auth/logout",
+    whoami:       "/api/auth/whoami",
   };
 
   // =====================================================================
@@ -485,6 +490,7 @@
     topology: loadTopology,
 
     // discovery
+    discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
     ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },
 
@@ -501,6 +507,8 @@
 
     // config & rules
     saveConfig: function (config) { return post(EP.config, config); },
+    getNodeConfig: function (id) { return getJSON(EP.nodeConfig(id)); },
+    setNodeConfig: function (id, cfg) { return post(EP.nodeConfig(id), { config: cfg }); },
     saveRule: function (ruleId, patch) { return post(EP.rule(ruleId), patch); },
     toggleRule: function (ruleId, enabled) { return post(EP.rule(ruleId), { enabled: enabled }); },
 
@@ -517,6 +525,11 @@
         return window.SOLARI;
       });
     },
+
+    // ---- authentication (§11.1) ----
+    whoami: function () { return getJSON(EP.whoami); },
+    login:  function (username, password) { return post(EP.login, { username: username, password: password }); },
+    logout: function () { return post(EP.logout, {}); },
 
     // live SSE stream (§8.4 / §11.1) — optional; screens may subscribe.
     stream: function (onEvent) {
@@ -556,14 +569,30 @@
     return target;
   }
 
+  // An authenticated-API error (401 / login failure) is NOT the same as the API
+  // being unreachable: we must show a login screen, not silently serve the demo
+  // fixture. app.jsx checks window.SOLARI_NEEDS_AUTH to gate on a login form.
+  function isAuthErr(err) {
+    if (!err) return false;
+    return err.code === "unauthorized" ||
+           err.code === "invalid_credentials" ||
+           err.code === "HTTP_401";
+  }
+
   var hint = modeHint();
   var bootP;
   if (hint === "offline") {
     bootP = Promise.resolve(useFixture("forced offline"));
   } else {
     bootP = loadLive().then(function (live) {
+      window.SOLARI_NEEDS_AUTH = false;
       return applyLive(live);
     }).catch(function (err) {
+      if (isAuthErr(err)) {
+        // Live API is up but we are not logged in: gate on the login screen.
+        window.SOLARI_NEEDS_AUTH = true;
+        return useFixture("authentication required");
+      }
       if (hint === "live") {
         // explicitly live: surface the failure but still keep the app bootable
         console.error("[SolariNet] live API required but failed:", err);

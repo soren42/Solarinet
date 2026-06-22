@@ -50,3 +50,6 @@ __pycache__/
 *.swp
 *~
 .DS_Store
+
+# Local dashboard credentials (never commit)
+/solari-auth.json

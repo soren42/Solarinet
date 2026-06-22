@@ -17,8 +17,14 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/lib/bootstrap.php';
+require_once __DIR__ . '/lib/Auth.php';
+require_once __DIR__ . '/lib/Operator.php';
 
 $router = solari_router();
+
+// Auth routes are the ONLY endpoints reachable without a session.
+$registerAuth = require __DIR__ . '/routes/auth.php';
+$registerAuth($router);
 
 // Register the read (GET) routes.
 $register = require __DIR__ . '/routes.php';
@@ -29,5 +35,16 @@ $register($router);
 // see routes_mutations.php and lib/SolariCtl.php.
 $registerMut = require __DIR__ . '/routes_mutations.php';
 $registerMut($router);
+
+// ---- authentication gate -------------------------------------------------
+// Everything except /api/auth/* requires an established session. Single-admin
+// local mode for now (intranet only); see lib/Auth.php. This is the hard gate
+// the audit flagged as missing: no endpoint (read or mutate) is reachable
+// unauthenticated.
+$reqPath = parse_url(solari_uri(), PHP_URL_PATH);
+$reqPath = is_string($reqPath) ? $reqPath : '/';
+if (strpos($reqPath, '/api/auth/') === false) {
+    Auth::requireSession();   // emits 401 + exits when no valid session
+}
 
 $router->dispatch(solari_method(), solari_uri());

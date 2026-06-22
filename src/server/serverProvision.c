@@ -227,16 +227,24 @@ static solariStatus provSendControl(serverContext *ctx,
                                     const uint8_t *frame, size_t len)
 {
     solariStatus st;
-    if (!ctx->control) {
+    /* Server->node directives are PUBLISHED on the fleet PUB channel. The REP
+     * control socket only answers node-initiated requests (who-is-primary,
+     * control acks) and cannot originate an unsolicited send, so it is the wrong
+     * channel for a push. Nodes SUB to the PUB endpoint and act on directives
+     * addressed to them; their CONTROL_RESULT returns over the ingest path. A
+     * PUB send succeeds even with no current subscribers (the desired state is
+     * already persisted and will reconverge), so this never fails the push. */
+    if (!ctx->pub) {
         solariLogf(SOLARI_LOG_WARN,
-                   "provision: no control conn bound; directive deferred (%zu B)",
+                   "provision: no pub conn bound; directive deferred (%zu B)",
                    len);
         return ERR_CONN_RETRY;
     }
-    st = solariConnSend(ctx->control, frame, len);
+    st = solariConnSend(ctx->pub, frame, len);
     if (st != SOLARI_OK) {
         solariLogf(SOLARI_LOG_WARN,
-                   "provision: control send failed: %s", solariStrError(st));
+                   "provision: directive publish failed: %s "
+                   "(persisted; will reconverge)", solariStrError(st));
     }
     return st;
 }

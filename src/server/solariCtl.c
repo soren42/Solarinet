@@ -53,6 +53,7 @@
  * at the file footer.
  */
 #include "server.h"
+#include "serverScan.h"
 
 #include "solari/solariCrypto.h"
 #include "solari/solariError.h"
@@ -61,6 +62,7 @@
 #include "solari/solariTime.h"
 #include "solari/solariTlv.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -126,6 +128,29 @@ static size_t ctlTrimLine(char *s)
  * minimal protocol (the PHP layer URL-encodes anything richer before sending).
  * Returns SOLARI_OK if found, ERR_TLV_END if the key is absent, or
  * ERR_BUFFER_FULL if the value does not fit. Pure. */
+/* In-place percent-decode (%XX -> byte). A malformed %XX is left untouched. The
+ * operator-bridge wire URL-encodes any value containing non-token bytes (JSON
+ * config blobs carry '{', '"', ':', etc.); this reverses that so handlers see
+ * the raw value. Bare tokens (ids, hex, names) contain no '%' and pass through. */
+static void ctlPctDecode(char *s)
+{
+    char *r = s, *w = s;
+    while (*r) {
+        if (r[0] == '%' && isxdigit((unsigned char)r[1]) &&
+            isxdigit((unsigned char)r[2])) {
+            int hi = isdigit((unsigned char)r[1]) ? r[1] - '0'
+                       : (tolower((unsigned char)r[1]) - 'a' + 10);
+            int lo = isdigit((unsigned char)r[2]) ? r[2] - '0'
+                       : (tolower((unsigned char)r[2]) - 'a' + 10);
+            *w++ = (char)((hi << 4) | lo);
+            r += 3;
+        } else {
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
+}
+
 static solariStatus ctlArgStr(const char *args, const char *key,
                               char *out, size_t cap)
 {
@@ -149,6 +174,7 @@ static solariStatus ctlArgStr(const char *args, const char *key,
             if (vlen + 1 > cap) return ERR_BUFFER_FULL;
             memcpy(out, eq + 1, vlen);
             out[vlen] = '\0';
+            ctlPctDecode(out);          /* reverse the wire's URL-encoding */
             return SOLARI_OK;
         }
         p = end;
@@ -315,13 +341,29 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         return ctlReplyOk(replyOut, replyCap, "pong");
     }
 
+    /* ---- active discovery scan (non-destructive) ---- */
+    if (strcmp(verb, "DISCOVER") == 0) {
+        char cidr[96], ports[256], extra[64];
+        size_t found = 0;
+        if (ctlArgStr(args, "cidr", cidr, sizeof cidr) != SOLARI_OK || !cidr[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "cidr required");
+        if (ctlArgStr(args, "ports", ports, sizeof ports) != SOLARI_OK) ports[0] = '\0';
+        st = serverScanRun(ctl->ctx, cidr, ports[0] ? ports : NULL, &found);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "scan failed");
+        (void)snprintf(extra, sizeof extra, "found=%zu", found);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
     /* ---- broadcast survey (non-destructive) ---- */
     if (strcmp(verb, "SURVEY") == 0) {
         uint8_t frame[CTL_REQ_CAP];
         size_t  frameLen = 0;
         st = serverControlBuildSurvey(ctl->ctx, frame, sizeof frame, &frameLen);
-        if (st == SOLARI_OK && ctl->ctx->control)
-            st = solariConnSend(ctl->ctx->control, frame, frameLen);
+        /* Server->fleet demands ride the PUB channel, not the REP control socket
+         * (which can only answer node-initiated requests). */
+        if (st == SOLARI_OK && ctl->ctx->pub)
+            st = solariConnSend(ctl->ctx->pub, frame, frameLen);
         if (st == SOLARI_OK || st == ERR_CONN_RETRY)
             return ctlReplyOk(replyOut, replyCap, "survey=sent");
         return ctlReplyErr(replyOut, replyCap, st, "survey failed");
@@ -397,8 +439,9 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         st = serverControlBuild(ctl->ctx, nodeId, (solariCtrlVerb)verbNum, epoch,
                                 payLen ? (const uint8_t *)payload : NULL,
                                 (uint16_t)payLen, frame, sizeof frame, &frameLen);
-        if (st == SOLARI_OK && ctl->ctx->control)
-            st = solariConnSend(ctl->ctx->control, frame, frameLen);
+        /* Directives are published on the fleet PUB channel (see SURVEY note). */
+        if (st == SOLARI_OK && ctl->ctx->pub)
+            st = solariConnSend(ctl->ctx->pub, frame, frameLen);
         if (st == SOLARI_OK || st == ERR_CONN_RETRY)
             return ctlReplyOk(replyOut, replyCap, "control=sent");
         return ctlReplyErr(replyOut, replyCap, st, "control failed");
