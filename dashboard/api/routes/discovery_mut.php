@@ -39,25 +39,53 @@ return static function (Router $router): void {
     });
 
     // POST /api/discovery/{discId}/adopt
+    // body (all optional): { displayName, class, poolId, tags:[], notes,
+    //   heartbeat:bool (default true), services:[port,...] (default: all discovered) }
+    // The C bridge (ADOPT) upserts the asset, provisions a TCP target per selected
+    // service + the ICMP heartbeat, and marks the row adopted. PHP only marshals.
     $router->post('/api/discovery/{discId}/adopt', static function (array $p): void {
         $discId = self_disc_id($p['discId']);
         $body   = solari_json_body();
 
         $args = ['disc' => $discId];
-        // A probe spec, if supplied, may carry JSON; SolariCtl URL-encodes it.
-        if (isset($body['spec'])) {
-            $spec = is_string($body['spec']) ? $body['spec'] : json_encode($body['spec']);
-            if ($spec !== '' && $spec !== false) {
-                $args['spec'] = $spec;
+        if (isset($body['displayName']) && is_string($body['displayName']) && $body['displayName'] !== '') {
+            $args['name'] = substr($body['displayName'], 0, 120);
+        }
+        if (isset($body['class']) && in_array($body['class'], ['server','appliance','network','iot','host','other'], true)) {
+            $args['class'] = $body['class'];
+        }
+        if (isset($body['poolId']) && (is_int($body['poolId']) || ctype_digit((string) $body['poolId']))) {
+            $args['pool'] = (string) (int) $body['poolId'];
+        }
+        if (isset($body['notes']) && is_string($body['notes']) && $body['notes'] !== '') {
+            $args['notes'] = substr($body['notes'], 0, 240);
+        }
+        if (isset($body['tags']) && is_array($body['tags'])) {
+            $args['tags'] = json_encode(array_values($body['tags']));
+        }
+        // heartbeat defaults to on
+        $args['heartbeat'] = (array_key_exists('heartbeat', $body) && !$body['heartbeat']) ? '0' : '1';
+        // explicit service port selection (else the bridge uses all discovered)
+        if (isset($body['services']) && is_array($body['services']) && $body['services'] !== []) {
+            $ports = [];
+            foreach ($body['services'] as $s) {
+                $port = is_array($s) ? ($s['port'] ?? null) : $s;
+                if (is_int($port) || (is_string($port) && ctype_digit($port))) {
+                    $pn = (int) $port;
+                    if ($pn > 0 && $pn <= 65535) $ports[] = $pn;
+                }
             }
+            if ($ports !== []) $args['services'] = implode(',', $ports);
         }
         $op = Operator::name();
-        if ($op !== '') {
-            $args['op'] = $op;
-        }
+        if ($op !== '') $args['op'] = $op;
 
-        SolariCtl::call('ADOPT', $args);
-        Response::ok(['discId' => $discId, 'status' => 'adopting']);
+        $reply = SolariCtl::call('ADOPT', $args);
+        Response::ok([
+            'discId'  => $discId,
+            'assetId' => isset($reply['assetId']) ? (int) $reply['assetId'] : null,
+            'status'  => 'adopted',
+        ]);
     });
 
     // POST /api/discovery/{discId}/ignore

@@ -502,18 +502,20 @@ solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *sta
 solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
                                        const char *host, int port,
                                        const char *proto, int replFactor,
-                                       const char *label, const char *segId)
+                                       const char *label, const char *segId,
+                                       uint64_t assetId)
 {
     static const char *SQL =
-        "INSERT INTO probeTarget (targetId, host, port, proto, replFactor, label, segId) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO probeTarget (targetId, host, port, proto, replFactor, label, segId, assetId) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON DUPLICATE KEY UPDATE host=VALUES(host), port=VALUES(port), "
         "  proto=VALUES(proto), replFactor=VALUES(replFactor), "
-        "  label=VALUES(label), segId=VALUES(segId)";
+        "  label=VALUES(label), segId=VALUES(segId), assetId=VALUES(assetId)";
     MYSQL      *conn = dbConn(db);
     MYSQL_STMT *st;
-    MYSQL_BIND  b[7];
+    MYSQL_BIND  b[8];
     int          vPort = port, vRepl = replFactor;
+    unsigned long long vAsset = assetId;
     unsigned long lTid, lHost, lProto, lLabel, lSeg;
     solariStatus rc;
 
@@ -527,7 +529,232 @@ solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
     dbBindI32(&b[4], &vRepl);
     dbBindStr(&b[5], (label && label[0]) ? label : NULL, &lLabel);
     dbBindStr(&b[6], (segId && segId[0]) ? segId : NULL, &lSeg);
-    rc = dbStmtRunWrite(st, b, 7);
+    if (assetId) dbBindU64(&b[7], &vAsset); else dbBindStr(&b[7], NULL, &lSeg);
+    rc = dbStmtRunWrite(st, b, 8);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *targetId)
+{
+    static const char *SQL = "DELETE FROM probeTarget WHERE targetId = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long l0;
+    solariStatus rc;
+
+    if (!conn || !targetId) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], targetId, &l0);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *assetId)
+{
+    static const char *SQL = "SELECT assetId FROM asset WHERE ip = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  in[1], out[1];
+    unsigned long lIp;
+    unsigned long long vId = 0;
+    my_bool      isNull = 0;
+    solariStatus rc;
+
+    if (assetId) *assetId = 0;
+    if (!conn || !ip || !assetId) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&in[0], ip, &lIp);
+    if (mysql_stmt_bind_param(st, in) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    if (mysql_stmt_execute(st) != 0)        { mysql_stmt_close(st); return ERR_DB; }
+    dbBindOutU64(&out[0], &vId, &isNull);
+    if (mysql_stmt_bind_result(st, out) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    if (mysql_stmt_fetch(st) == 0 && !isNull) *assetId = vId;
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
+                                 const char *displayName, const char *className,
+                                 uint64_t poolId, const char *tagsJson,
+                                 const char *notes, bool monitorHost,
+                                 uint64_t *assetId)
+{
+    static const char *SQL =
+        "INSERT INTO asset (ip, host, displayName, class, poolId, tags, notes, "
+        "  monitorHost, createdAt, updatedAt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP()) "
+        "ON DUPLICATE KEY UPDATE "
+        "  host=COALESCE(VALUES(host),host), displayName=VALUES(displayName), "
+        "  class=VALUES(class), poolId=VALUES(poolId), tags=VALUES(tags), "
+        "  notes=VALUES(notes), monitorHost=VALUES(monitorHost), "
+        "  updatedAt=UTC_TIMESTAMP()";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[8];
+    unsigned long long vPool = poolId;
+    int          vMon = monitorHost ? 1 : 0;
+    unsigned long lIp, lHost, lName, lClass, lTags, lNotes;
+    solariStatus rc;
+
+    if (!conn || !ip || !className) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], ip, &lIp);
+    dbBindStr(&b[1], (host && host[0]) ? host : NULL, &lHost);
+    dbBindStr(&b[2], (displayName && displayName[0]) ? displayName : NULL, &lName);
+    dbBindStr(&b[3], className, &lClass);
+    if (poolId) dbBindU64(&b[4], &vPool); else dbBindStr(&b[4], NULL, &lTags);
+    dbBindStr(&b[5], (tagsJson && tagsJson[0]) ? tagsJson : NULL, &lTags);
+    dbBindStr(&b[6], (notes && notes[0]) ? notes : NULL, &lNotes);
+    dbBindI32(&b[7], &vMon);
+    rc = dbStmtRunWrite(st, b, 8);
+    mysql_stmt_close(st);
+    if (rc != SOLARI_OK) return rc;
+    return serverDbGetAssetIdByIp(db, ip, assetId);
+}
+
+solariStatus serverDbCreatePool(serverDb *db, const char *name, const char *desc,
+                                const char *color, uint64_t *poolId)
+{
+    static const char *SQL =
+        "INSERT INTO pool (name, description, color, createdAt) "
+        "VALUES (?, ?, ?, UTC_TIMESTAMP())";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[3];
+    unsigned long lN, lD, lC;
+    solariStatus rc;
+
+    if (poolId) *poolId = 0;
+    if (!conn || !name || !name[0]) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], name, &lN);
+    dbBindStr(&b[1], (desc && desc[0]) ? desc : NULL, &lD);
+    dbBindStr(&b[2], (color && color[0]) ? color : NULL, &lC);
+    rc = dbStmtRunWrite(st, b, 3);
+    if (rc == SOLARI_OK && poolId)
+        *poolId = (unsigned long long)mysql_stmt_insert_id(st);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbUpdatePool(serverDb *db, uint64_t poolId, const char *name,
+                                const char *desc, const char *color)
+{
+    static const char *SQL =
+        "UPDATE pool SET name=COALESCE(?,name), description=COALESCE(?,description), "
+        "  color=COALESCE(?,color) WHERE poolId=?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[4];
+    unsigned long long vId = poolId;
+    unsigned long lN, lD, lC;
+    solariStatus rc;
+
+    if (!conn || poolId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], (name  && name[0])  ? name  : NULL, &lN);
+    dbBindStr(&b[1], (desc  && desc[0])  ? desc  : NULL, &lD);
+    dbBindStr(&b[2], (color && color[0]) ? color : NULL, &lC);
+    dbBindU64(&b[3], &vId);
+    rc = dbStmtRunWrite(st, b, 4);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbSetGlobalConfig(serverDb *db, const char *configJson,
+                                     const char *updatedBy, uint64_t *epoch)
+{
+    static const char *SQL =
+        "INSERT INTO globalConfig (id, configBlob, epoch, updatedAt, updatedBy) "
+        "VALUES (1, ?, 1, UTC_TIMESTAMP(), ?) "
+        "ON DUPLICATE KEY UPDATE configBlob=VALUES(configBlob), "
+        "  epoch=epoch+1, updatedAt=UTC_TIMESTAMP(), updatedBy=VALUES(updatedBy)";
+    static const char *SEL = "SELECT epoch FROM globalConfig WHERE id=1";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[2], out[1];
+    unsigned long lCfg, lBy;
+    unsigned long long vEpoch = 0;
+    my_bool      isNull = 0;
+    solariStatus rc;
+
+    if (epoch) *epoch = 0;
+    if (!conn || !configJson) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], configJson, &lCfg);
+    dbBindStr(&b[1], (updatedBy && updatedBy[0]) ? updatedBy : NULL, &lBy);
+    rc = dbStmtRunWrite(st, b, 2);
+    mysql_stmt_close(st);
+    if (rc != SOLARI_OK) return rc;
+
+    rc = dbStmtPrepare(conn, SEL, &st);
+    if (rc != SOLARI_OK) return rc;
+    if (mysql_stmt_execute(st) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    dbBindOutU64(&out[0], &vEpoch, &isNull);
+    if (mysql_stmt_bind_result(st, out) == 0 && mysql_stmt_fetch(st) == 0 && epoch)
+        *epoch = vEpoch;
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e)
+{
+    char        sql[512];
+    int         n = 0;
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[8];
+    int         nb = 0;
+    /* stable storage for bound scalars */
+    int         vEnabled = 0, vFor = 0;
+    double      vThresh = 0.0;
+    unsigned long long vId;
+    unsigned long lOp, lSev, lMet, lScope;
+    solariStatus rc;
+
+    if (!conn || !e || e->ruleId <= 0) return ERR_INVALID_ARG;
+
+    /* Build the SET clause from present fields only. Column names are fixed
+     * literals (never from input), so this is injection-safe; values bind. */
+    n += snprintf(sql + n, sizeof sql - n, "UPDATE alertRule SET ");
+    {
+        int first = 1;
+        #define ADDSET(col) do { n += snprintf(sql+n, sizeof sql-n, "%s%s=?", first?"":", ", col); first=0; } while(0)
+        if (e->hasEnabled)    ADDSET("enabled");
+        if (e->hasThreshold)  ADDSET("threshold");
+        if (e->hasForSeconds) ADDSET("forSeconds");
+        if (e->hasOp)         ADDSET("op");
+        if (e->hasSeverity)   ADDSET("severity");
+        if (e->hasMetric)     ADDSET("metric");
+        if (e->hasScope)      ADDSET("scope");
+        #undef ADDSET
+        if (first) return ERR_INVALID_ARG;   /* nothing to update */
+    }
+    n += snprintf(sql + n, sizeof sql - n, " WHERE ruleId=?");
+
+    rc = dbStmtPrepare(conn, sql, &st);
+    if (rc != SOLARI_OK) return rc;
+
+    if (e->hasEnabled)    { vEnabled = e->enabled ? 1 : 0; dbBindI32(&b[nb++], &vEnabled); }
+    if (e->hasThreshold)  { vThresh = e->threshold;        dbBindDouble(&b[nb++], &vThresh); }
+    if (e->hasForSeconds) { vFor = e->forSeconds;          dbBindI32(&b[nb++], &vFor); }
+    if (e->hasOp)         dbBindStr(&b[nb++], e->op, &lOp);
+    if (e->hasSeverity)   dbBindStr(&b[nb++], e->severity, &lSev);
+    if (e->hasMetric)     dbBindStr(&b[nb++], e->metric, &lMet);
+    if (e->hasScope)      dbBindStr(&b[nb++], e->scope, &lScope);
+    vId = (unsigned long long)e->ruleId;
+    dbBindU64(&b[nb++], &vId);
+
+    rc = dbStmtRunWrite(st, b, nb);
     mysql_stmt_close(st);
     return rc;
 }

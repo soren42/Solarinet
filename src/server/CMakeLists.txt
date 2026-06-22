@@ -47,6 +47,7 @@ set(SERVER_CORE_SOURCES
   serverProvision.c
   serverDiscovery.c
   serverScan.c
+  serverAssets.c
   serverTopology.c
   solariCtl.c
 )

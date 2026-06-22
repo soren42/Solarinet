@@ -630,7 +630,7 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
         if (port) (void)snprintf(targetId, sizeof targetId, "tcp:%s:%d", ent.ip, port);
         else      (void)snprintf(targetId, sizeof targetId, "icmp:%s", ent.ip);
         prc = serverDbUpsertProbeTarget(ctx->db, targetId, ent.ip, port, proto,
-                                        2 /* replFactor */, label, ent.segId);
+                                        2 /* replFactor */, label, ent.segId, 0);
         if (prc != SOLARI_OK)
             solariLogf(SOLARI_LOG_WARN,
                        "provision/adopt: probeTarget upsert for disc %llu failed: %s "

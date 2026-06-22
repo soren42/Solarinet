@@ -147,11 +147,51 @@ solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *sta
 /* Upsert a probe target (the authoritative catalog /api/probes reads). Created
  * when a discovered entity is adopted so the target is visible (and assignable
  * to monitors) immediately, before any vantage has reported. proto is
- * 'icmp'|'tcp'|'udp'; port 0 for icmp. Keyed by targetId. */
+ * 'icmp'|'tcp'|'udp'; port 0 for icmp. assetId links it to its owning system
+ * (0 = unlinked). Keyed by targetId. */
 solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
                                        const char *host, int port,
                                        const char *proto, int replFactor,
-                                       const char *label, const char *segId);
+                                       const char *label, const char *segId,
+                                       uint64_t assetId);
+/* Delete a probe target by id (e.g. when a host heartbeat is turned off). */
+solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *targetId);
+
+/* ---- assets / pools (monitored systems + functional groups; §10 ext) ---- */
+/* Upsert a monitored system keyed by ip; *assetId returns the row id. poolId 0
+ * leaves it unassigned; tagsJson may be NULL. monitorHost toggles the heartbeat
+ * intent (the ICMP target itself is (de)provisioned by the caller). */
+solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
+                                 const char *displayName, const char *className,
+                                 uint64_t poolId, const char *tagsJson,
+                                 const char *notes, bool monitorHost,
+                                 uint64_t *assetId);
+/* Look up an asset id by ip (*assetId = 0 if none). */
+solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *assetId);
+/* Create a functional pool; *poolId returns the id. ERR_DB on a duplicate name. */
+solariStatus serverDbCreatePool(serverDb *db, const char *name, const char *desc,
+                                const char *color, uint64_t *poolId);
+/* Update a pool's fields (NULL leaves a field unchanged). */
+solariStatus serverDbUpdatePool(serverDb *db, uint64_t poolId, const char *name,
+                                const char *desc, const char *color);
+
+/* ---- global config / rules (operator config writes; §10) ---- */
+/* Persist the fleet-wide config document and bump its epoch; *epoch returns the
+ * new epoch. configJson is stored verbatim. */
+solariStatus serverDbSetGlobalConfig(serverDb *db, const char *configJson,
+                                     const char *updatedBy, uint64_t *epoch);
+/* Update one alertRule. Each field is applied only if its hasXxx flag is set. */
+typedef struct {
+    int    ruleId;
+    bool   hasEnabled;    bool   enabled;
+    bool   hasThreshold;  double threshold;
+    bool   hasForSeconds; int    forSeconds;
+    bool   hasOp;         char   op[12];
+    bool   hasSeverity;   char   severity[8];
+    bool   hasMetric;     char   metric[64];
+    bool   hasScope;      char   scope[8];
+} serverAlertRuleEdit;
+solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e);
 
 /* ---- report persistence (§9.1 representative writers, §10) ---- */
 /* Upsert hostCurrent + append hostHistory in one txn (§9.1). All time UTC. */

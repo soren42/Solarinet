@@ -13,6 +13,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/Response.php';
 require_once __DIR__ . '/Db.php';
 require_once __DIR__ . '/Router.php';
+require_once __DIR__ . '/Coerce.php';
+require_once __DIR__ . '/Rollup.php';
 
 // Never leak PHP notices/HTML into a JSON body; surface them as clean errors.
 error_reporting(E_ALL);
