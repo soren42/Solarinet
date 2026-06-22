@@ -353,17 +353,22 @@
       getJSON(EP.config),
       getJSON(EP.netgear),
     ]).then(function (res) {
+      // Defensive unpack: a list endpoint that unexpectedly returns an object
+      // must degrade that one section to empty, never throw — a throw here would
+      // drop the WHOLE dashboard to the offline fixture.
+      var A = function (v) { return Array.isArray(v) ? v : []; };
       var summaryW = res[0] || {};
-      var nodesW = res[1] || [];
-      var segsW = res[2] || [];
-      var probesW = res[3] || [];
-      var alertsW = res[4] || [];
-      var rulesW = res[5] || [];
-      var discW = res[6] || [];
-      var enrW = res[7] || [];
-      var buildsW = res[8] || [];
+      var nodesW = A(res[1]);
+      var segsW = A(res[2]);
+      var probesW = A(res[3]);
+      var alertsW = A(res[4]);
+      var rulesW = A(res[5]);
+      var discW = A(res[6]);
+      var enrW = A(res[7]);
+      // /api/builds returns { builds:[], nodeVersionDist:[] } — take the array.
+      var buildsW = (res[8] && Array.isArray(res[8].builds)) ? res[8].builds : A(res[8]);
       var configW = res[9] || {};
-      var gearW = res[10] || [];
+      var gearW = A(res[10]);
       // /api/summary carries the lease/failover state (§6) — no separate call.
       var leaseW = (summaryW && summaryW.lease) || {};
       var countsW = (summaryW && summaryW.counts) || {};
