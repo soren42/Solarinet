@@ -151,6 +151,10 @@
     enrReject:    function (id) { return "/api/enrollments/" + encodeURIComponent(id) + "/reject"; },
     builds:       "/api/builds",
     config:       "/api/config",
+    pools:        "/api/pools",
+    pool:         function (id) { return "/api/pools/" + encodeURIComponent(id); },
+    assets:       "/api/assets",
+    asset:        function (id) { return "/api/assets/" + encodeURIComponent(id); },
     provision:    "/api/control/provision",
     decommission: "/api/control/decommission",
     survey:       "/api/control/survey",
@@ -352,6 +356,10 @@
       getJSON(EP.builds),
       getJSON(EP.config),
       getJSON(EP.netgear),
+      // new operator-config reads; tolerate failure so they never force the
+      // whole dashboard into the offline fixture.
+      getJSON(EP.pools).catch(function () { return []; }),
+      getJSON(EP.assets).catch(function () { return []; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -369,6 +377,8 @@
       var buildsW = (res[8] && Array.isArray(res[8].builds)) ? res[8].builds : A(res[8]);
       var configW = res[9] || {};
       var gearW = A(res[10]);
+      var poolsW = A(res[11]);
+      var assetsW = A(res[12]);
       // /api/summary carries the lease/failover state (§6) — no separate call.
       var leaseW = (summaryW && summaryW.lease) || {};
       var countsW = (summaryW && summaryW.counts) || {};
@@ -445,6 +455,7 @@
         nodes: nodes, segments: segments, segRollups: segRollups, fleetRoll: fleetRoll, summary: summary,
         probes: probes, rules: rules, alerts: alerts, discovered: discovered,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
+        pools: poolsW, assets: assetsW,
         monitors: monitors,
         server: server,
         activeCrit: alerts.filter(function (a) { return !a.cleared && a.severity === "crit"; }).length,
@@ -498,6 +509,13 @@
     discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
     ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },
+    // pools + assets (operator config; writes go to the C bridge server-side)
+    pools: function () { return getJSON(EP.pools); },
+    createPool: function (body) { return post(EP.pools, body || {}); },
+    updatePool: function (id, body) { return post(EP.pool(id), body || {}); },
+    assets: function () { return getJSON(EP.assets); },
+    asset: function (id) { return getJSON(EP.asset(id)); },
+    updateAsset: function (id, body) { return post(EP.asset(id), body || {}); },
 
     // enrollment — approve is destructive (signs a cert) so it carries the
     // explicit double-confirm the PHP layer + solariCtl demand.
