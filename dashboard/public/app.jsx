@@ -156,6 +156,11 @@
 
     return (
       <div className="app">
+        {S.source === "offline" && (
+          <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "var(--amber, #ffb23d)", color: "#05080e", textAlign: "center", fontSize: 12, fontWeight: 600, padding: "5px 10px", letterSpacing: "0.02em" }}>
+            ⚠ DEMO DATA — live API unreachable{S.offlineReason ? " (" + S.offlineReason + ")" : ""}; showing the offline fixture, not your fleet.
+          </div>
+        )}
         {!navHidden && window.innerWidth <= 980 && <div className="scrim" onClick={() => setNavHidden(true)} />}
         <Sidebar active={route.name === "node" ? "fleet" : route.name}
           onNav={go} collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} hidden={navHidden} summary={S.summary} activeCrit={S.activeCrit} />
