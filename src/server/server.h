@@ -144,6 +144,15 @@ solariStatus serverDbTouchNode(serverDb *db, uint64_t nodeId, uint64_t whenUnixM
 /* Set derived health state ('up'/'degraded'/'down'/'unknown'/'retired'). */
 solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *state);
 
+/* Upsert a probe target (the authoritative catalog /api/probes reads). Created
+ * when a discovered entity is adopted so the target is visible (and assignable
+ * to monitors) immediately, before any vantage has reported. proto is
+ * 'icmp'|'tcp'|'udp'; port 0 for icmp. Keyed by targetId. */
+solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
+                                       const char *host, int port,
+                                       const char *proto, int replFactor,
+                                       const char *label, const char *segId);
+
 /* ---- report persistence (§9.1 representative writers, §10) ---- */
 /* Upsert hostCurrent + append hostHistory in one txn (§9.1). All time UTC. */
 solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,

@@ -118,5 +118,9 @@ WEAK solariStatus serverProvisionAdoptTarget(serverContext *c, uint64_t id, cons
 WEAK solariStatus serverScanRun(serverContext *c, const char *cidr,
     const char *ports, size_t *found)
 { (void)c;(void)cidr;(void)ports; if(found)*found=0; return SOLARI_OK; }
+WEAK solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *tid,
+    const char *host, int port, const char *proto, int repl,
+    const char *label, const char *seg)
+{ (void)db;(void)tid;(void)host;(void)port;(void)proto;(void)repl;(void)label;(void)seg; return SOLARI_OK; }
 WEAK solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csr, char *b, size_t c)
 { (void)ctl;(void)csr; if(b&&c)b[0]='\0'; return ERR_TLS; }

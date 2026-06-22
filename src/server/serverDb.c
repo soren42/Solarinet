@@ -499,6 +499,39 @@ solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *sta
     return rc;
 }
 
+solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
+                                       const char *host, int port,
+                                       const char *proto, int replFactor,
+                                       const char *label, const char *segId)
+{
+    static const char *SQL =
+        "INSERT INTO probeTarget (targetId, host, port, proto, replFactor, label, segId) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON DUPLICATE KEY UPDATE host=VALUES(host), port=VALUES(port), "
+        "  proto=VALUES(proto), replFactor=VALUES(replFactor), "
+        "  label=VALUES(label), segId=VALUES(segId)";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[7];
+    int          vPort = port, vRepl = replFactor;
+    unsigned long lTid, lHost, lProto, lLabel, lSeg;
+    solariStatus rc;
+
+    if (!conn || !targetId || !proto) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], targetId, &lTid);
+    dbBindStr(&b[1], (host && host[0]) ? host : NULL, &lHost);
+    dbBindI32(&b[2], &vPort);
+    dbBindStr(&b[3], proto, &lProto);
+    dbBindI32(&b[4], &vRepl);
+    dbBindStr(&b[5], (label && label[0]) ? label : NULL, &lLabel);
+    dbBindStr(&b[6], (segId && segId[0]) ? segId : NULL, &lSeg);
+    rc = dbStmtRunWrite(st, b, 7);
+    mysql_stmt_close(st);
+    return rc;
+}
+
 /* ===================================================================== */
 /* report persistence (§9.1, §10)                                         */
 /* ===================================================================== */
