@@ -14,6 +14,30 @@ declare(strict_types=1);
 
 return static function (Router $router): void {
 
+    // POST /api/discovery/scan  body: { cidr: "10.0.0.0/24", ports?: "22,80,443" }
+    // Triggers an active discovery scan (TCP connect-scan) via solariCtl; results
+    // land in `discovered` and are read back via GET /api/discovery.
+    $router->post('/api/discovery/scan', static function (): void {
+        $body = solari_json_body();
+        $cidr = isset($body['cidr']) ? (string) $body['cidr'] : '';
+        if (preg_match('#^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$#', $cidr) !== 1) {
+            Response::error('bad_request', 'cidr must be IPv4 CIDR, e.g. 192.168.1.0/24.', 400);
+        }
+        $args = ['cidr' => $cidr];
+        if (isset($body['ports'])) {
+            $ports = (string) $body['ports'];
+            if (preg_match('/^[0-9,]+$/', $ports) === 1) {
+                $args['ports'] = $ports;
+            }
+        }
+        $op = Operator::name();
+        if ($op !== '') {
+            $args['op'] = $op;
+        }
+        $reply = SolariCtl::call('DISCOVER', $args);
+        Response::ok(['cidr' => $cidr, 'found' => isset($reply['found']) ? (int) $reply['found'] : null, 'status' => 'scanned']);
+    });
+
     // POST /api/discovery/{discId}/adopt
     $router->post('/api/discovery/{discId}/adopt', static function (array $p): void {
         $discId = self_disc_id($p['discId']);

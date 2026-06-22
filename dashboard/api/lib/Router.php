@@ -102,29 +102,26 @@ final class Router
     }
 
     /**
-     * Strip the script/base prefix and query string from the raw request URI so
-     * routing works whether the API is served from the document root or a
-     * subdirectory, and whether or not rewrites collapse "index.php".
+     * Reduce the raw request URI to a routable path. Every API route lives under
+     * "/api", so we anchor on the first "/api" segment and discard whatever
+     * mount prefix precedes it. This makes routing independent of where the app
+     * is mounted — document root, an "/api" Apache alias, a subdirectory, or a
+     * rewritten "index.php" left in the path — without depending on SCRIPT_NAME
+     * (which the PHP built-in server and some SAPIs report inconsistently).
      */
     private function normalizePath(string $uri): string
     {
         $path = parse_url($uri, PHP_URL_PATH);
-        if (!is_string($path)) {
-            $path = '/';
+        if (!is_string($path) || $path === '') {
+            return '/';
         }
 
-        // Drop a trailing "/index.php" or the script's own directory prefix.
-        $script = $_SERVER['SCRIPT_NAME'] ?? '';
-        if ($script !== '') {
-            $base = rtrim(str_replace('\\', '/', dirname($script)), '/');
-            if ($base !== '' && $base !== '/' && str_starts_with($path, $base)) {
-                $path = substr($path, strlen($base));
-            }
+        $pos = strpos($path, '/api/');
+        if ($pos !== false) {
+            return substr($path, $pos);          // ".../api/foo" -> "/api/foo"
         }
-        $path = preg_replace('#/index\.php$#', '', $path) ?? $path;
-
-        if ($path === '' ) {
-            $path = '/';
+        if (str_ends_with($path, '/api')) {
+            return '/api';
         }
         return $path;
     }

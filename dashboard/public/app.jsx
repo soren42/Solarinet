@@ -104,9 +104,19 @@
     }, []);
 
     const survey = useCallback((node, kind) => {
-      if (kind === "config") toast(`Config push staged for ${node.name} → solariCtl`, "settings");
-      else if (node) toast(`Survey requested — ${node.name} (SCP_MSG_SURVEY)`, "survey");
-      else toast("Fleet survey dispatched to all vantages", "survey");
+      const api = S.api;
+      const label = kind === "config"
+        ? `Re-converge requested${node ? " — " + node.name : ""}`
+        : (node ? `Survey requested — ${node.name}` : "Fleet survey dispatched");
+      const icon = kind === "config" ? "settings" : "survey";
+      // SURVEY is a fleet-wide demand (SCP_MSG_SURVEY) published to the fleet.
+      if (api && api.survey) {
+        api.survey("all")
+          .then(() => toast(label, icon))
+          .catch((e) => toast("Survey failed: " + (e && e.message), "alerts"));
+      } else {
+        toast(label + " (offline)", icon);
+      }
     }, [toast]);
 
     function toggleNav() {
@@ -129,6 +139,11 @@
         { id: "view-cards", group: "Actions", label: "Fleet: Cards view", icon: "cards", action: () => { setFleetView("cards"); go("fleet"); } },
         { id: "survey-all", group: "Actions", label: "Survey entire fleet now", icon: "survey", action: () => survey(null) },
         { id: "theme", group: "Actions", label: "Toggle dark / light theme", icon: theme === "dark" ? "sun" : "moon", action: () => setTheme((t) => t === "dark" ? "light" : "dark") },
+        { id: "logout", group: "Actions", label: "Log out", icon: "enter", action: () => {
+            const api = window.SolariAPI;
+            const done = () => window.location.reload();
+            (api && api.logout ? api.logout() : Promise.resolve()).then(done, done);
+        } },
       ];
       // node jump targets — prioritise problem nodes, bound the list
       const problem = S.nodes.filter((n) => n.state === "down" || n.state === "degraded");
@@ -165,12 +180,52 @@
     );
   }
 
+  // Login gate. When the live API is reachable but we have no session, api.jsx
+  // sets window.SOLARI_NEEDS_AUTH; we show this instead of the app. On success we
+  // reload so the adapter re-boots against the now-authenticated API.
+  function LoginScreen() {
+    const [u, setU] = useState("");
+    const [p, setP] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const submit = (e) => {
+      e.preventDefault();
+      if (!u || !p) return;
+      setBusy(true); setErr("");
+      const api = window.SolariAPI;
+      (api && api.login ? api.login(u, p) : Promise.reject(new Error("API unavailable")))
+        .then(() => window.location.reload())
+        .catch((ex) => { setErr((ex && ex.message) || "Login failed"); setBusy(false); });
+    };
+    const field = { width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 10, borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)", color: "inherit", fontSize: 14, fontFamily: "inherit" };
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <form onSubmit={submit} style={{ width: 320, padding: 28, borderRadius: 14, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 12px 48px rgba(0,0,0,0.45)" }}>
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <Icon name="shield" size={34} style={{ color: "var(--teal, #35e0d0)" }} />
+            <div style={{ fontWeight: 700, fontSize: 18, marginTop: 6 }}>SolariNet</div>
+            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>Monitoring · sign in</div>
+          </div>
+          <input autoFocus value={u} onChange={(e) => setU(e.target.value)} placeholder="Username" autoComplete="username" style={field} />
+          <input type="password" value={p} onChange={(e) => setP(e.target.value)} placeholder="Password" autoComplete="current-password" style={field} />
+          {err ? <div style={{ color: "var(--red, #ff3d72)", fontSize: 12, margin: "2px 0 10px" }}>{err}</div> : null}
+          <button type="submit" disabled={busy || !u || !p}
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: busy ? "default" : "pointer", fontWeight: 600, fontSize: 14, background: "var(--teal, #35e0d0)", color: "#05080e", opacity: (busy || !u || !p) ? 0.6 : 1 }}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   // Boot against the adapter: wait for window.solariReady (api.jsx) so the first
   // paint reflects the live API when reachable, else the offline fixture. The
   // adapter mutates window.SOLARI in place, so the `S` captured above is live by
   // the time this resolves. If api.jsx is absent (or older), render immediately.
   function mount() {
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    if (window.SOLARI_NEEDS_AUTH) { root.render(<LoginScreen />); return; }
+    root.render(<App />);
   }
   if (window.solariReady && typeof window.solariReady.then === "function") {
     window.solariReady.then(mount, mount);

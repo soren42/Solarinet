@@ -17,6 +17,8 @@
   function Discovery({ onOpenNode }) {
     const [staged, setStaged] = useState({});      // host -> "staged" | "ignored"
     const [auto, setAuto] = useState(S.config.autoDiscover);
+    const [cidr, setCidr] = useState("");
+    const [scanning, setScanning] = useState(false);
     const items = S.discovered;
     const active = items.filter((d) => staged[d.host] !== "ignored");
     const byVia = {};
@@ -55,12 +57,34 @@
       }
     }
 
+    // active scan — POST /api/discovery/scan (TCP connect-scan via solariCtl)
+    function scanNow() {
+      const target = cidr.trim();
+      if (!/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(target)) {
+        toast("Enter a CIDR, e.g. 192.168.1.0/24", "close"); return;
+      }
+      const a = api();
+      if (!a || !a.discoverScan) { toast("Scan unavailable (offline)", "close"); return; }
+      setScanning(true);
+      a.discoverScan(target).then(function (r) {
+        toast(`Scan complete — ${r && r.found != null ? r.found : "?"} host(s) found`, "discovery");
+        refresh();
+      }).catch(function (e) {
+        toast(`Scan failed: ${e && e.message || "error"}`, "close");
+      }).finally(function () { setScanning(false); });
+    }
+
     return (
       <div className="page">
         <div className="page-head">
           <div><h1 className="page-title">Discovery</h1><div className="page-sub">{items.length} candidates found · not yet monitored</div></div>
           <div className="page-head__right">
-            <div className="statuschip"><span className="dot up glow" style={{ width: 8, height: 8, animation: "pulse 1.6s infinite" }} />scanning {S.segments.length} segments</div>
+            <input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="192.168.1.0/24"
+              onKeyDown={(e) => { if (e.key === "Enter") scanNow(); }}
+              style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13, width: 150 }} />
+            <button className="btn-primary" disabled={scanning} onClick={scanNow}>
+              <Icon name="discovery" size={14} />{scanning ? "Scanning…" : "Scan"}
+            </button>
             <div className="chip" onClick={() => { setAuto((a) => !a); toast(`Auto-discovery ${auto ? "paused" : "resumed"}`, auto ? "close" : "check"); }}>
               <button className={"switch" + (auto ? " on" : "")} style={{ pointerEvents: "none" }}><i /></button>Auto-discover
             </div>

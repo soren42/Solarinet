@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/Auth.php';
+
 /**
  * Operator — resolves the authenticated operator identity + role for the
  * dashboard mutation layer (§6, §11.1).
@@ -11,43 +13,32 @@ declare(strict_types=1);
  * the web tier learns *who* the operator is and *what role* they hold, so the
  * mutation routes stay declarative.
  *
- * Identity sources, in priority order:
- *   1. A front-end auth layer that populates $_SERVER['REMOTE_USER'] /
- *      'PHP_AUTH_USER' (Apache Basic/Negotiate/mod_auth_*).
- *   2. SOLARI_OPERATOR / SOLARI_OPERATOR_ROLE env (single-operator deployments
- *      behind a trusted reverse proxy).
- *
- * Role source:
- *   - $_SERVER['SOLARI_ROLE'] (set by the proxy from a group claim), else
- *   - SOLARI_OPERATOR_ROLE env, else 'viewer'.
+ * Identity + role come from the authenticated session (lib/Auth.php) — the
+ * principal established at /api/auth/login. The previous design trusted
+ * $_SERVER['REMOTE_USER']/['SOLARI_ROLE'], which are only meaningful behind a
+ * configured auth proxy and were otherwise spoofable/absent; the session is now
+ * the single source of truth, so identity cannot be forged by request headers.
  *
  * Destructive endpoints (enrollment approve, decommission) call requireOperator()
- * which fails closed (403) when the resolved role is not 'operator'/'admin'.
+ * which fails closed (403) when the resolved role is not 'operator'/'admin'. The
+ * front controller's auth gate already guarantees a session exists at all.
  */
 final class Operator
 {
     private const PRIVILEGED_ROLES = ['operator', 'admin'];
 
-    /** Resolve the operator login name, or '' if none could be determined. */
+    /** Resolve the operator login name, or '' if not authenticated. */
     public static function name(): string
     {
-        foreach (['REMOTE_USER', 'PHP_AUTH_USER'] as $k) {
-            if (!empty($_SERVER[$k]) && is_string($_SERVER[$k])) {
-                return $_SERVER[$k];
-            }
-        }
-        $env = getenv('SOLARI_OPERATOR');
-        return ($env === false) ? '' : $env;
+        $p = Auth::current();
+        return $p === null ? '' : (string) $p['username'];
     }
 
-    /** Resolve the operator role (lower-cased), defaulting to 'viewer'. */
+    /** Resolve the operator role (lower-cased), or 'viewer' if not authenticated. */
     public static function role(): string
     {
-        if (!empty($_SERVER['SOLARI_ROLE']) && is_string($_SERVER['SOLARI_ROLE'])) {
-            return strtolower($_SERVER['SOLARI_ROLE']);
-        }
-        $env = getenv('SOLARI_OPERATOR_ROLE');
-        return ($env === false || $env === '') ? 'viewer' : strtolower($env);
+        $p = Auth::current();
+        return $p === null ? 'viewer' : strtolower((string) $p['role']);
     }
 
     /** True if the current identity holds a privileged (write) role. */

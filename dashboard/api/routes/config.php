@@ -28,26 +28,84 @@ return static function (Router $router): void {
     });
 
     // --- POST /api/config ------------------------------------------------
-    // Accepts a (partial or full) config document, validates the numeric ranges,
-    // and stages it. The fleet-wide application is delegated to solariCtl, which
-    // owns the control conn; PHP only forwards the staged blob.
+    // Accepts a (partial or full) global config document, validates the numeric
+    // ranges, PERSISTS it (globalConfig), and pushes it to every active node via
+    // the operator bridge (PROVISION node= epoch= cfg=), which both writes
+    // nodeConfig and emits the control frame. Replaces the prior no-op that
+    // forwarded the blob to SURVEY (which ignores it).
     $router->post('/api/config', static function (): void {
-        $body = solari_json_body();
+        $body   = solari_json_body();
         $merged = config_merge(config_current_view(), $body);
         config_validate($merged);                       // emits 400 on bad ranges
 
-        // Delegate the fleet push to the operator bridge. The bridge re-emits the
-        // config to nodes as control frames; PHP forwards the staged blob only.
-        $op = Operator::name();
-        $args = ['cfg' => json_encode($merged)];
-        if ($op !== '') {
-            $args['op'] = $op;
-        }
-        // SURVEY is the bridge's safe, non-destructive "re-converge now" trigger;
-        // the staged config is forwarded as cfg= for the bridge to broadcast.
-        SolariCtl::call('SURVEY', $args);
+        $op    = Operator::name();
+        $epoch = config_persist_global($merged, $op);   // store + bump epoch
 
-        Response::ok($merged);
+        // Push to the fleet. Each non-retired node is provisioned with the new
+        // global doc at the new epoch; the bridge persists nodeConfig and emits
+        // the directive (a deferred send for an offline node still persists).
+        $pushed = 0; $failed = 0;
+        foreach (Db::rows("SELECT nodeId FROM node WHERE state <> 'retired'") as $n) {
+            $args = ['node' => (string) $n['nodeId'], 'epoch' => (string) $epoch,
+                     'cfg' => json_encode($merged)];
+            if ($op !== '') $args['op'] = $op;
+            try { SolariCtl::call('PROVISION', $args); $pushed++; }
+            catch (Throwable $e) { $failed++; error_log('[solari-config] push to ' . $n['nodeId'] . ' failed: ' . $e->getMessage()); }
+        }
+
+        Response::ok($merged + ['epoch' => $epoch, 'pushed' => $pushed, 'failed' => $failed]);
+    });
+
+    // --- GET /api/nodes/{id}/config -------------------------------------
+    // Per-node desired/applied config from nodeConfig.
+    $router->get('/api/nodes/{id}/config', static function (array $p): void {
+        $nodeId = config_node_id($p['id']);
+        $row = Db::row(
+            'SELECT targetEpoch, appliedEpoch, configBlob, lastDirectiveAt, lastResult
+               FROM nodeConfig WHERE nodeId = :id',
+            [':id' => $nodeId]
+        );
+        if ($row === null) {
+            Response::ok(['nodeId' => $nodeId, 'config' => null, 'targetEpoch' => 0,
+                          'appliedEpoch' => 0, 'converged' => true, 'lastResult' => null]);
+        }
+        $cfg = $row['configBlob'] !== null ? json_decode((string) $row['configBlob'], true) : null;
+        Response::ok([
+            'nodeId'       => $nodeId,
+            'config'       => $cfg,
+            'targetEpoch'  => Coerce::int($row['targetEpoch']),
+            'appliedEpoch' => Coerce::int($row['appliedEpoch'] ?? 0),
+            'converged'    => Coerce::int($row['appliedEpoch'] ?? 0) >= Coerce::int($row['targetEpoch']),
+            'lastResult'   => $row['lastResult'],
+            'lastDirectiveAt' => Coerce::iso($row['lastDirectiveAt'] ?? null),
+        ]);
+    });
+
+    // --- POST /api/nodes/{id}/config ------------------------------------
+    // body: { config: {...} }  — set a node's desired config and push it.
+    $router->post('/api/nodes/{id}/config', static function (array $p): void {
+        $nodeId = config_node_id($p['id']);
+        if (Db::row('SELECT nodeId FROM node WHERE nodeId = :id', [':id' => $nodeId]) === null) {
+            Response::error('not_found', "No node $nodeId", 404);
+        }
+        $body = solari_json_body();
+        $cfg  = $body['config'] ?? null;
+        if (!is_array($cfg)) {
+            Response::error('bad_request', 'body must be { "config": { ... } }.', 400);
+        }
+
+        // Next epoch = max(this node's target, global epoch) + 1, so a node push
+        // never lands below the fleet floor.
+        $cur    = (int) (Db::scalar('SELECT targetEpoch FROM nodeConfig WHERE nodeId = :id', [':id' => $nodeId]) ?? 0);
+        $global = (int) (Db::scalar('SELECT epoch FROM globalConfig WHERE id = 1') ?? 0);
+        $epoch  = max($cur, $global) + 1;
+
+        $op   = Operator::name();
+        $args = ['node' => (string) $nodeId, 'epoch' => (string) $epoch, 'cfg' => json_encode($cfg)];
+        if ($op !== '') $args['op'] = $op;
+        SolariCtl::call('PROVISION', $args);            // persists nodeConfig + emits
+
+        Response::ok(['nodeId' => $nodeId, 'config' => $cfg, 'targetEpoch' => $epoch, 'status' => 'pushed']);
     });
 
     // --- POST /api/rules/{ruleId} ---------------------------------------
@@ -162,6 +220,22 @@ function config_current_view(): array
         'autoEnroll'   => false,
     ];
 
+    // Overlay the persisted global config document, if one has been saved. This
+    // is what makes edits stick across reads (the document is the control-plane
+    // source of truth; defaults are only the initial seed).
+    try {
+        $row = Db::row('SELECT configBlob, epoch FROM globalConfig WHERE id = 1');
+        if ($row !== null && $row['configBlob'] !== null) {
+            $saved = json_decode((string) $row['configBlob'], true);
+            if (is_array($saved)) {
+                $cfg = config_merge($cfg, $saved);
+            }
+            $cfg['epoch'] = Coerce::int($row['epoch']);
+        }
+    } catch (Throwable $e) {
+        // No globalConfig table/row yet: the documented defaults are a valid view.
+    }
+
     // Reflect the live lease TTL window if a row exists (best-effort; defaults stand).
     try {
         $row = Db::row('SELECT leaseEpoch, expiresAt FROM serverLease WHERE id = 1');
@@ -173,6 +247,40 @@ function config_current_view(): array
     }
 
     return $cfg;
+}
+
+/**
+ * Persist the merged global config document and bump its epoch. Returns the new
+ * epoch. The document is stored verbatim (minus volatile/derived keys) so reads
+ * reflect exactly what was pushed.
+ *
+ * @param array<string,mixed> $merged
+ */
+function config_persist_global(array $merged, string $operator): int
+{
+    // Don't store derived/volatile fields back into the document.
+    unset($merged['epoch']);
+
+    $prev  = (int) (Db::scalar('SELECT epoch FROM globalConfig WHERE id = 1') ?? 0);
+    $epoch = $prev + 1;
+    Db::exec(
+        'INSERT INTO globalConfig (id, configBlob, epoch, updatedAt, updatedBy)
+              VALUES (1, :blob, :epoch, UTC_TIMESTAMP(), :by)
+         ON DUPLICATE KEY UPDATE
+              configBlob = VALUES(configBlob), epoch = VALUES(epoch),
+              updatedAt  = VALUES(updatedAt),  updatedBy = VALUES(updatedBy)',
+        [':blob' => json_encode($merged), ':epoch' => $epoch, ':by' => ($operator !== '' ? $operator : null)]
+    );
+    return $epoch;
+}
+
+/** Validate + return a positive node id, or emit 400. */
+function config_node_id($v): string
+{
+    if (preg_match('/^\d+$/', (string) $v) !== 1 || (string) $v === '0') {
+        Response::error('bad_request', 'node id must be a positive integer.', 400);
+    }
+    return (string) $v;
 }
 
 /**

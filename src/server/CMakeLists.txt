@@ -46,11 +46,20 @@ set(SERVER_CORE_SOURCES
   serverControl.c
   serverProvision.c
   serverDiscovery.c
+  serverScan.c
   serverTopology.c
   solariCtl.c
 )
 
 add_library(servercore STATIC ${SERVER_CORE_SOURCES})
+
+# Optional best-effort discovery enrichment via host tools (avahi/SNMP). OFF by
+# default so the core scan stays pure standard C; enable to layer mDNS/SNMP hints
+# onto port-scan results (requires avahi-utils / net-snmp on the server host).
+option(SOLARI_WITH_DISCOVERY_TOOLS "Enrich discovery scans via host avahi/SNMP tools" OFF)
+if(SOLARI_WITH_DISCOVERY_TOOLS)
+  target_compile_definitions(servercore PRIVATE SOLARI_WITH_DISCOVERY_TOOLS=1)
+endif()
 target_include_directories(servercore PUBLIC
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}
