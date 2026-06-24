@@ -85,13 +85,18 @@ so the host appears in Fleet Overview / NodeDetail with live metrics.
   - the `--server` URL (default `tls+tcp://<server-fqdn>:7701`) must be a name/IP
     in the server cert SAN (now `localhost`, `xenon`, `xenon.akoria.net`,
     `127.0.0.1`, `10.0.0.20` — re-issue `run/pki/server.*` to add others);
-  - **non-x86 targets** (e.g. a Raspberry Pi pihole = arm64): cross-build the
-    client with `cmake/toolchains/linux-arm64.cmake` and drop the result in
-    `deploy/dist/arm64/solariClient` (the script picks it up by arch).
+  - **non-x86 targets** (e.g. a Raspberry Pi pihole = arm64): build the client
+    for that arch first with `deploy/cross-build-client.sh arm64` — a native
+    build inside an emulated container (Docker + qemu/binfmt; register once with
+    `sudo docker run --privileged --rm tonistiigi/binfmt --install arm64`). It
+    outputs `deploy/dist/arm64/solariClient`, which remote-deploy picks up by
+    arch. remote-deploy also installs the client's runtime libs (libnng1,
+    libmbedtls, libsqlite3-0, libcjson1) on the target.
 
-  Production note: this issues the cert directly from the CA. Switch to the
-  token/CSR flow (`deploy/enrollment/solari-enroll.sh`) once server-side CSR
-  signing is wired.
+  Cert issuance: the client's key + CSR are generated for the target and signed
+  by the server's internal CA over the solariCtl SIGN verb — the CA private key
+  never touches the deploy host. Relocate the CA later via the server [ca]
+  block (mode=remote + url).
 
 A reporting client is marked `up` and its `lastSeenAt` advances each cycle.
 

@@ -53,3 +53,8 @@ __pycache__/
 
 # Local dashboard credentials (never commit)
 /solari-auth.json
+
+# cross-built client binaries (per-arch; rebuilt via deploy/cross-build-client.sh)
+/deploy/dist/
+/build-arm64/
+/build-arm32/

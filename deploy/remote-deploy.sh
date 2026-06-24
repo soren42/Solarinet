@@ -190,6 +190,9 @@ do_push "${TMP}/node.key"                 "${CONF_DIR}/node.key"        0600
 do_push "${TMP}/client.conf"              "${CONF_DIR}/client.conf"     0644
 do_push "${TMP}/solarinet-client.service" /etc/systemd/system/solarinet-client.service 0644
 do_remote "mkdir -p /var/lib/solari"
+# Runtime shared libs the (dynamically-linked) client needs. Best-effort across
+# Debian/Ubuntu releases (mbedTLS soname package name varies); harmless if absent.
+do_remote "sh -c 'command -v apt-get >/dev/null && (apt-get update -y >/dev/null 2>&1; apt-get install -y libnng1 libsqlite3-0 libcjson1 libmbedtls14 2>/dev/null || apt-get install -y libnng1 libsqlite3-0 libcjson1 libmbedtls12 2>/dev/null) || true'"
 do_remote "systemctl daemon-reload"
 do_remote "systemctl enable --now solarinet-client"
 
