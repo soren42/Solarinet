@@ -125,6 +125,18 @@ solariStatus clientCollectReport(const clientConfig *cfg, clientState *st,
             out->procCount++;
     }
 
+    /* ---- auto-detected listening services (service identification) ----
+     * Beyond the configured watch list, surface what the host actually exposes
+     * on the network so the operator sees each system's services without
+     * per-host config. Appended into any remaining proc slots. */
+    if (out->procCount < SOLARI_MAX_PROCS) {
+        uint8_t got = 0;
+        if (platListenServices(&out->procs[out->procCount],
+                               (uint8_t)(SOLARI_MAX_PROCS - out->procCount),
+                               &got) == SOLARI_OK)
+            out->procCount += got;
+    }
+
     /* ---- watched logs (stateful tail offsets) ---- */
     for (i = 0; i < cfg->logCount && out->logCount < SOLARI_MAX_LOGS; i++) {
         solariLogEntry *e = &out->logs[out->logCount];

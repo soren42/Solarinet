@@ -51,6 +51,10 @@ solariStatus platUsbThroughput(solariUsbEntry *bus, uint8_t cap, uint8_t *count)
  * On success with the process NOT running: out->name is set, out->pid = -1,
  * out->state = 0, counts = 0 (a "watched but down" record, not an error). */
 solariStatus platProcInspect(const char *procName, solariProcEntry *out);
+/* Auto-detect the host's listening TCP services (service identification). Fills
+ * out[] with one entry per distinct listening port (name "<svc>:<port>",
+ * state 'L', pid 0); *count gets the number written (<= cap). */
+solariStatus platListenServices(solariProcEntry *out, uint8_t cap, uint8_t *count);
 /* Stat a log file: current size, and the count of newly-appended lines (since
  * *lastOffsetInOut) matching `regex` (POSIX ERE; NULL counts every new line).
  * Updates *lastOffsetInOut to the new size; resets to 0 if the file shrank

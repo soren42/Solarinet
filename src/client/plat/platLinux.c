@@ -423,6 +423,67 @@ solariStatus platProcInspect(const char *procName, solariProcEntry *out)
     return SOLARI_OK;
 }
 
+/* ---- listening-service identification (/proc/net/tcp{,6}) ----------------- */
+
+/* Best-effort IANA-ish label for a listening port. */
+static const char *platSvcName(uint16_t p)
+{
+    switch (p) {
+    case 21: return "ftp";    case 22: return "ssh";   case 23: return "telnet";
+    case 25: return "smtp";   case 53: return "dns";   case 80: return "http";
+    case 110: return "pop3";  case 123: return "ntp";  case 143: return "imap";
+    case 161: return "snmp";  case 389: return "ldap"; case 443: return "https";
+    case 445: return "smb";   case 587: return "submission"; case 631: return "ipp";
+    case 993: return "imaps"; case 995: return "pop3s"; case 1883: return "mqtt";
+    case 3306: return "mysql"; case 3389: return "rdp"; case 5432: return "postgres";
+    case 5900: return "vnc";  case 6379: return "redis"; case 8080: return "http-alt";
+    case 8443: return "https-alt"; case 9090: return "http-mgmt"; case 9100: return "jetdirect";
+    case 7701: return "solari-ingest"; case 7702: return "solari-control"; case 7703: return "solari-pub";
+    default: return "tcp";
+    }
+}
+
+solariStatus platListenServices(solariProcEntry *out, uint8_t cap, uint8_t *count)
+{
+    static const char *paths[2] = { "/proc/net/tcp", "/proc/net/tcp6" };
+    uint16_t ports[64];
+    int      np = 0, pi;
+    uint8_t  n = 0;
+
+    if (!out || !count || cap == 0) return ERR_INVALID_ARG;
+    *count = 0;
+
+    for (pi = 0; pi < 2; pi++) {
+        FILE *f = fopen(paths[pi], "r");
+        char  line[512];
+        if (!f) continue;
+        if (!fgets(line, sizeof line, f)) { fclose(f); continue; }  /* header */
+        while (fgets(line, sizeof line, f) &&
+               np < (int)(sizeof ports / sizeof ports[0])) {
+            unsigned lport = 0, rport = 0, stt = 0;
+            /* "sl: LOCALHEX:PORT REMHEX:PORT ST ..."; ST 0x0A == LISTEN. */
+            if (sscanf(line, " %*d: %*[0-9A-Fa-f]:%x %*[0-9A-Fa-f]:%x %x",
+                       &lport, &rport, &stt) == 3 && stt == 0x0A) {
+                int k, dup = 0;
+                for (k = 0; k < np; k++) if (ports[k] == (uint16_t)lport) { dup = 1; break; }
+                if (!dup) ports[np++] = (uint16_t)lport;
+            }
+        }
+        fclose(f);
+    }
+
+    for (pi = 0; pi < np && n < cap; pi++) {
+        solariProcEntry *e = &out[n++];
+        memset(e, 0, sizeof *e);
+        snprintf(e->name, sizeof e->name, "%s:%u",
+                 platSvcName(ports[pi]), (unsigned)ports[pi]);
+        e->pid   = 0;
+        e->state = 'L';   /* listening service (not a watched process) */
+    }
+    *count = n;
+    return SOLARI_OK;
+}
+
 /* ---- log file stat -------------------------------------------------------- */
 
 solariStatus platLogStat(const char *path, const char *regex,
