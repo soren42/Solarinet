@@ -505,7 +505,13 @@
   function loadNode(id) {
     var segIndex = {};
     (window.SOLARI.segments || []).forEach(function (s) { segIndex[s.id] = s; });
-    return getJSON(EP.node(id)).then(function (w) { return mapNode(w, segIndex); });
+    return getJSON(EP.node(id)).then(function (w) {
+      // /api/nodes/{id} nests {node, host, procs, alerts}; mapNode wants a flat
+      // record, so merge node identity + host metrics (+ procs) before mapping.
+      var flat = Object.assign({}, w.node || {}, w.host || {});
+      if (w.procs) flat.procs = w.procs;
+      return mapNode(flat, segIndex);
+    });
   }
   function loadNodeHistory(id, metric) {
     // server downsamples; wire is {points:[..]} or a bare array. Return the spark array.

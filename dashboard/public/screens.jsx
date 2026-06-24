@@ -2,7 +2,7 @@
    SolariNet — screens: FleetOverview, NodeDetail, AlertsScreen
    ============================================================ */
 (function () {
-  const { useState, useMemo } = React;
+  const { useState, useMemo, useEffect } = React;
   const Icon = window.Icon;
   const { StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars, metricColor } = window;
   const S = window.SOLARI;
@@ -244,8 +244,21 @@
   /* ===================== NODE DETAIL ===================== */
   function NodeDetail({ node, onBack, onSurvey }) {
     const [metric, setMetric] = useState("cpu");
-    // Re-resolve from the live model so periodic polls refresh the open detail.
-    const n = (S.nodes || S.fleet || []).find((x) => x.nodeId === node.nodeId) || node;
+    const [detail, setDetail] = useState(null);
+    // Fetch the full node detail (real current CPU cores / RAM / disks / ifaces /
+    // procs from hostCurrent) and refresh on the poll interval. The list entry
+    // only carries identity + state, so without this the gauges read zero.
+    useEffect(function () {
+      const api = S.api;
+      if (!api || !api.node) return undefined;
+      let live = true;
+      const load = function () { api.node(node.nodeId).then(function (d) { if (live) setDetail(d); }).catch(function () {}); };
+      load();
+      const iv = setInterval(load, 10000);
+      return function () { live = false; clearInterval(iv); };
+    }, [node.nodeId]);
+    // Prefer fetched detail; fall back to the live list entry, then the passed node.
+    const n = detail || (S.nodes || S.fleet || []).find((x) => x.nodeId === node.nodeId) || node;
     const nodeAlerts = S.alerts.filter((a) => a.nodeId === n.nodeId && !a.cleared);
     const nodeProbes = S.probes.filter((p) => p.hostNode === n.nodeId);
     const metricMap = {
@@ -322,9 +335,11 @@
             <div className="panel__body">
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontFamily: "var(--mono)", fontSize: 12 }}>
                 <span className="muted" style={{ textTransform: "uppercase", letterSpacing: ".08em", fontSize: 10 }}>{cur.label}</span>
-                <span style={{ color: cur.color, fontWeight: 600, fontSize: 16 }}>{cur.data[cur.data.length - 1].toFixed(0)}{metric === "net" ? "" : "%"}</span>
+                <span style={{ color: cur.color, fontWeight: 600, fontSize: 16 }}>{(cur.data && cur.data.length) ? cur.data[cur.data.length - 1].toFixed(0) + (metric === "net" ? "" : "%") : "—"}</span>
               </div>
-              <TimeSeries data={cur.data} color={cur.color} max={cur.max} h={170} />
+              {(cur.data && cur.data.length)
+                ? <TimeSeries data={cur.data} color={cur.color} max={cur.max} h={170} />
+                : <div className="muted" style={{ height: 170, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>no history yet — collecting…</div>}
             </div>
           </div>
 
