@@ -76,10 +76,22 @@ so the host appears in Fleet Overview / NodeDetail with live metrics.
 - **Same-host (self-monitoring):** copy `client.conf.sample` to `run/client.conf`,
   point `primaryUrl` at `tls+tcp://localhost:7701`, use the local `client.*` cert,
   install `solarinet-client.service`, `systemctl enable --now solarinet-client`.
-- **Remote host:** cross-build `solariClient`, enroll to get a client cert —
-  `deploy/enrollment/solari-enroll.sh --role client --token <token>` — drop a
-  `client.conf` pointing at the server's FQDN (must match the server cert SAN),
-  and install the unit. The node self-registers via HELLO on first connect.
+- **Remote host (one command):** `deploy/remote-deploy.sh --host user@HOST`
+  detects the target arch, places the client binary, issues a per-host cert from
+  the internal CA, drops `client.conf` + CA/cert/key, installs the systemd unit,
+  and starts it. `--dry-run` prints the plan first. The node self-registers via
+  HELLO on first connect. Requirements:
+  - the target user needs passwordless **sudo**, and key-based SSH;
+  - the `--server` URL (default `tls+tcp://<server-fqdn>:7701`) must be a name/IP
+    in the server cert SAN (now `localhost`, `xenon`, `xenon.akoria.net`,
+    `127.0.0.1`, `10.0.0.20` — re-issue `run/pki/server.*` to add others);
+  - **non-x86 targets** (e.g. a Raspberry Pi pihole = arm64): cross-build the
+    client with `cmake/toolchains/linux-arm64.cmake` and drop the result in
+    `deploy/dist/arm64/solariClient` (the script picks it up by arch).
+
+  Production note: this issues the cert directly from the CA. Switch to the
+  token/CSR flow (`deploy/enrollment/solari-enroll.sh`) once server-side CSR
+  signing is wired.
 
 A reporting client is marked `up` and its `lastSeenAt` advances each cycle.
 
