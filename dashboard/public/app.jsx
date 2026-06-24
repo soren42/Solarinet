@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail } = window;
 
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
@@ -92,9 +92,20 @@
       return () => clearInterval(iv);
     }, []);
 
+    const scrollTop = () => { const c = document.querySelector(".content"); if (c) c.scrollTop = 0; };
     const openNode = useCallback((nodeOrId) => {
-      const node = typeof nodeOrId === "string" ? S.nodes.find((n) => n.nodeId === nodeOrId) : nodeOrId;
-      if (node) { setRoute({ name: "node", node }); document.querySelector(".content") && (document.querySelector(".content").scrollTop = 0); }
+      const node = typeof nodeOrId === "string"
+        ? ((S.fleet || S.nodes).find((n) => n.nodeId === nodeOrId)) : nodeOrId;
+      if (!node) return;
+      // Adopted systems (no agent) get the asset detail page, not the metric-heavy
+      // agent NodeDetail (which assumes host telemetry and would blank out).
+      if (node.isAsset) setRoute({ name: "asset", assetId: node.assetId });
+      else setRoute({ name: "node", node });
+      scrollTop();
+    }, []);
+    const openService = useCallback((targetId, backRoute) => {
+      setRoute({ name: "service", targetId, backRoute: backRoute || { name: "reachability" } });
+      scrollTop();
     }, []);
 
     const go = useCallback((id) => {
@@ -174,6 +185,8 @@
             {route.name === "fleet" && <FleetOverview onOpenNode={openNode} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
             {route.name === "assets" && Assets && <Assets onOpenNode={openNode} />}
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
+            {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}
+            {route.name === "service" && ServiceDetail && <ServiceDetail targetId={route.targetId} onBack={() => setRoute(route.backRoute)} />}
             {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} rules={rules} setRules={setRules} toast={toast} />}
             {route.name === "reachability" && <Reachability onOpenNode={openNode} />}
             {route.name === "topology" && <Topology onOpenNode={openNode} />}

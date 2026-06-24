@@ -2,11 +2,13 @@
    SolariNet — screens3: Discovery, Provisioning, Config & Rules
    ============================================================ */
 (function () {
-  const { useState } = React;
+  const { useState, useEffect } = React;
   const Icon = window.Icon;
   const { StatusDot } = window;
   const S = window.SOLARI;
   const fmt = S.fmt;
+  const STATE_DOT = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)", unknown: "var(--unknown)" };
+  const dotStyle = (state, sz) => ({ background: STATE_DOT[state] || "var(--unknown)", width: sz || 9, height: sz || 9, display: "inline-block", borderRadius: "50%" });
 
   function toast(msg, icon) { if (window.__solariToast) window.__solariToast(msg, icon); }
   // adapter handle (live mutations); null/offline-safe
@@ -748,5 +750,122 @@
     );
   }
 
-  Object.assign(window, { Discovery, Provisioning, ConfigScreen, PoolCards, Assets });
+  /* ===================== PER-SERVER (ASSET) DETAIL ===================== */
+  function AssetDetail({ assetId, onBack, onOpenService, toast }) {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState(null);
+    const pools = S.pools || [];
+
+    function load() {
+      const a = api();
+      if (a && a.asset) {
+        a.asset(assetId).then(setData).catch((e) => setErr((e && e.message) || "load failed"));
+      } else {
+        const found = (S.assets || []).find((x) => x.assetId === assetId);
+        setData(found ? Object.assign({ targets: [] }, found) : null);
+      }
+    }
+    useEffect(load, [assetId]);
+
+    function patch(body, msg) {
+      const a = api();
+      if (!a || !a.updateAsset) { toast && toast("Edit unavailable (offline)", "close"); return; }
+      a.updateAsset(assetId, body).then(() => { toast && toast(msg || "Updated", "check"); load(); if (a.refresh) a.refresh(); })
+        .catch((e) => toast && toast("Update failed: " + (e && e.message || "error"), "close"));
+    }
+    function rename() { const v = window.prompt("Rename system", data.displayName); if (v != null && v.trim() !== "") patch({ displayName: v.trim() }, "Renamed"); }
+
+    if (err) return (<div className="page"><button className="btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14} />Back</button><div className="muted" style={{ marginTop: 16 }}>Couldn't load system: {err}</div></div>);
+    if (!data) return (<div className="page"><div className="muted">Loading…</div></div>);
+    const targets = data.targets || [];
+    const sel = { background: "rgba(255,255,255,0.04)", color: "inherit", border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", borderRadius: 6, padding: "3px 6px", fontFamily: "inherit", fontSize: 13 };
+
+    return (
+      <div className="page">
+        <button className="btn-ghost" onClick={onBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back</button>
+        <div className="page-head">
+          <div>
+            <h1 className="page-title"><span style={dotStyle(data.state, 11)} />&nbsp;{data.displayName} <Icon name="settings" size={13} style={{ opacity: 0.4, cursor: "pointer" }} onClick={rename} /></h1>
+            <div className="page-sub">{data.ip}{data.host ? " · " + data.host : ""} · {data.class} · {data.poolName || "Unassigned"}</div>
+          </div>
+        </div>
+
+        <div className="kpis" style={{ marginBottom: 18 }}>
+          <div className="kpi"><div className="kpi__k">State</div><div className="kpi__v" style={{ color: STATE_DOT[data.state] }}>{data.state}</div></div>
+          <div className="kpi"><div className="kpi__k">Targets</div><div className="kpi__v">{targets.length}</div></div>
+          <div className="kpi"><div className="kpi__k">Class</div><div className="kpi__v" style={{ fontSize: 15 }}>
+            <select value={data.class} onChange={(e) => patch({ class: e.target.value }, "Reclassified")} style={sel}>
+              {["server", "appliance", "network", "iot", "host", "other"].map((c) => <option key={c} value={c}>{c}</option>)}
+            </select></div></div>
+          <div className="kpi"><div className="kpi__k">Pool</div><div className="kpi__v" style={{ fontSize: 15 }}>
+            <select value={String(data.poolId || "")} onChange={(e) => patch({ poolId: Number(e.target.value) }, "Moved pool")} style={sel}>
+              {pools.map((p) => <option key={p.poolId} value={String(p.poolId)}>{p.name}</option>)}
+            </select></div></div>
+          <div className="kpi"><div className="kpi__k">Heartbeat</div><div className="kpi__v">
+            <button className={"switch" + (data.monitorHost ? " on" : "")} onClick={() => patch({ monitorHost: !data.monitorHost }, data.monitorHost ? "Heartbeat off" : "Heartbeat on")}><i /></button></div></div>
+        </div>
+
+        <div className="page-sub" style={{ margin: "4px 0 10px" }}>Monitored targets — click for per-service detail</div>
+        {targets.length === 0 && <div className="muted">No targets yet. Enable the heartbeat or adopt services for this system.</div>}
+        {targets.length > 0 && (
+          <div className="tablewrap"><table className="grid">
+            <thead><tr><th>Target</th><th>Proto</th><th>Port</th><th>State</th><th>Vantages</th></tr></thead>
+            <tbody>
+              {targets.map((t) => (
+                <tr key={t.targetId} style={{ cursor: "pointer" }} onClick={() => onOpenService(t.targetId)}>
+                  <td>{t.label || t.targetId}</td>
+                  <td>{t.proto}</td>
+                  <td className="td-mono">{t.port || "—"}</td>
+                  <td><span style={dotStyle(t.state)} /> {t.state}</td>
+                  <td className="td-mono">{t.vantages}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+        <div className="muted" style={{ marginTop: 18, fontSize: 12 }}>
+          {data.nodeId ? "Agent linked — host metrics available." : "No agent deployed on this system — reachability only. Deploy a SolariNet client to collect CPU / RAM / disk metrics."}
+        </div>
+      </div>
+    );
+  }
+
+  /* ===================== PER-SERVICE (TARGET) DETAIL ===================== */
+  function ServiceDetail({ targetId, onBack }) {
+    const probe = (S.probes || []).find((p) => p.targetId === targetId);
+    if (!probe) return (<div className="page"><button className="btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14} />Back</button><div className="muted" style={{ marginTop: 16 }}>Target not found.</div></div>);
+    const rtt = (us) => (fmt && fmt.rtt) ? fmt.rtt(us) : (us ? (us / 1000).toFixed(1) + " ms" : "—");
+    return (
+      <div className="page">
+        <button className="btn-ghost" onClick={onBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back</button>
+        <div className="page-head">
+          <div>
+            <h1 className="page-title"><span style={dotStyle(probe.state, 11)} />&nbsp;{probe.label || probe.targetId}</h1>
+            <div className="page-sub">{probe.proto}{probe.port ? ":" + probe.port : ""} · {probe.host} · state {probe.state}</div>
+          </div>
+        </div>
+        <div className="page-sub" style={{ margin: "4px 0 10px" }}>Vantages ({probe.vantages.length})</div>
+        {probe.vantages.length === 0 && <div className="muted">No monitor has probed this target yet. Deploy or assign a monitor to collect reachability, RTT, and loss.</div>}
+        {probe.vantages.length > 0 && (
+          <div className="tablewrap"><table className="grid">
+            <thead><tr><th>Monitor</th><th>Outcome</th><th>RTT</th><th>Jitter</th><th>Loss</th><th>Seen</th></tr></thead>
+            <tbody>
+              {probe.vantages.map((v, i) => (
+                <tr key={i}>
+                  <td>{v.monitorName || v.monitorNode}</td>
+                  <td><span style={{ background: v.outcome === "ok" ? "var(--ok)" : "var(--crit)", width: 9, height: 9, display: "inline-block", borderRadius: "50%" }} /> {v.outcome}</td>
+                  <td className="td-mono">{rtt(v.rttMicros)}</td>
+                  <td className="td-mono">{(v.jitterMicros / 1000).toFixed(1)} ms</td>
+                  <td className="td-mono">{(v.lossPermille / 10).toFixed(1)}%</td>
+                  <td className="td-mono muted">{v.sampledMin}m ago</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+      </div>
+    );
+  }
+
+  Object.assign(window, { Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail });
 })();
