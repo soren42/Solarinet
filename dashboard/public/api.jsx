@@ -158,6 +158,7 @@
     provision:    "/api/control/provision",
     decommission: "/api/control/decommission",
     survey:       "/api/control/survey",
+    deploy:       "/api/control/deploy",
     stream:       "/api/stream",
     login:        "/api/auth/login",
     logout:       "/api/auth/logout",
@@ -563,6 +564,9 @@
     saveConfig: function (config) { return post(EP.config, config); },
     getNodeConfig: function (id) { return getJSON(EP.nodeConfig(id)); },
     setNodeConfig: function (id, cfg) { return post(EP.nodeConfig(id), { config: cfg }); },
+    // remote client deployment (server-side, via the bridge; poll the log)
+    deployClient: function (body) { return post(EP.deploy, body || {}); },
+    deployLog: function (host) { return getJSON(EP.deploy + "?host=" + encodeURIComponent(host)); },
     saveRule: function (ruleId, patch) { return post(EP.rule(ruleId), patch); },
     toggleRule: function (ruleId, enabled) { return post(EP.rule(ruleId), { enabled: enabled }); },
 

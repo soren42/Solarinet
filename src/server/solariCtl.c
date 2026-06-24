@@ -72,6 +72,7 @@
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* Optional mbedTLS x509 CA backend. Vendored only with the full I/O layer; the
@@ -302,10 +303,49 @@ static size_t ctlReplyOk(char *out, size_t cap, const char *extra)
  * Pure. */
 static bool ctlVerbIsDestructive(const char *verb)
 {
-    /* SIGN mints a trusted certificate — privileged, so it requires a named
-     * operator just like the teardown verbs. */
+    /* SIGN mints a trusted certificate and DEPLOY runs a remote install — both
+     * privileged, so they require a named operator like the teardown verbs. */
     return strcmp(verb, "DECOMMISSION") == 0 || strcmp(verb, "RETIRE") == 0 ||
-           strcmp(verb, "SIGN") == 0;
+           strcmp(verb, "SIGN") == 0 || strcmp(verb, "DEPLOY") == 0;
+}
+
+/* Sanitize an arbitrary string into a safe filename fragment ([A-Za-z0-9._-]). */
+static void ctlSanitizeName(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (; in && *in && o + 1 < cap; in++) {
+        char c = *in;
+        out[o++] = ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')
+                       ? c : '_';
+    }
+    out[o] = '\0';
+}
+
+/* Spawn remote-deploy.sh fully detached (double-fork + setsid), with stdout/err
+ * redirected to logPath. Returns once the deploy has been launched — the server
+ * loop never blocks on the (multi-minute) deploy. argv must be NULL-terminated. */
+static solariStatus ctlSpawnDetached(char *const argv[], const char *logPath)
+{
+    pid_t pid = fork();
+    if (pid < 0) return ERR_PLATFORM;
+    if (pid == 0) {
+        pid_t g = fork();
+        if (g < 0) _exit(127);
+        if (g > 0) _exit(0);                 /* intermediate exits immediately */
+        setsid();                            /* detach from the server */
+        {
+            int fd = open(logPath, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+            if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); if (fd > 2) close(fd); }
+        }
+        execv(argv[0], argv);                /* no shell — args passed literally */
+        _exit(127);
+    }
+    {
+        int status;
+        (void)waitpid(pid, &status, 0);      /* reap the intermediate; grandchild -> init */
+    }
+    return SOLARI_OK;
 }
 
 /* RBAC gate for destructive verbs: every destructive request must name the
@@ -411,6 +451,34 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
                                 : ctlReplyErr(replyOut, replyCap, st, "sign failed");
         free(csr); free(cert); free(extra);
         return ret;
+    }
+
+    /* ---- deploy the client to a remote host (operator-gated, detached) ---- */
+    if (strcmp(verb, "DEPLOY") == 0) {
+        char host[128], server[256], arch[16], fqdn[160], sanit[160], logpath[256], extra[300];
+        char *argv[16];
+        int   n = 0;
+        if (ctlArgStr(args, "host", host, sizeof host) != SOLARI_OK || !host[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "host required");
+        if (ctlArgStr(args, "server", server, sizeof server) != SOLARI_OK) server[0] = '\0';
+        if (ctlArgStr(args, "arch",   arch,   sizeof arch)   != SOLARI_OK) arch[0]   = '\0';
+        if (ctlArgStr(args, "fqdn",   fqdn,   sizeof fqdn)   != SOLARI_OK) fqdn[0]   = '\0';
+        ctlSanitizeName(host, sanit, sizeof sanit);
+        (void)snprintf(logpath, sizeof logpath, "run/deploy-%s.log", sanit);
+        argv[n++] = (char *)"deploy/remote-deploy.sh";
+        argv[n++] = (char *)"--host";   argv[n++] = host;
+        if (server[0]) { argv[n++] = (char *)"--server"; argv[n++] = server; }
+        if (arch[0])   { argv[n++] = (char *)"--arch";   argv[n++] = arch; }
+        if (fqdn[0])   { argv[n++] = (char *)"--fqdn";   argv[n++] = fqdn; }
+        argv[n++] = (char *)"--op"; argv[n++] = operator_;
+        argv[n]   = NULL;
+        st = ctlSpawnDetached(argv, logpath);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "deploy spawn failed");
+        solariLogf(SOLARI_LOG_INFO, "ctl: deploy launched host=%s op=%s -> %s",
+                   host, operator_, logpath);
+        (void)snprintf(extra, sizeof extra, "log=%s status=deploying", logpath);
+        return ctlReplyOk(replyOut, replyCap, extra);
     }
 
     /* ---- broadcast survey (non-destructive) ---- */

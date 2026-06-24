@@ -105,6 +105,54 @@ return static function (Router $router): void {
         $fields = SolariCtl::call('SURVEY', $args);
         Response::ok(['survey' => $fields['survey'] ?? 'sent']);
     });
+
+    // --- POST /api/control/deploy ----------------------------------------
+    // body: { host:"[user@]host", server?, arch?, fqdn? }
+    // Deploys the client agent to a remote host via the C bridge (which detaches
+    // remote-deploy.sh and logs to run/deploy-<host>.log). Privileged: the deploy
+    // installs software + signs a cert. Returns immediately; poll the GET below.
+    $router->post('/api/control/deploy', static function (): void {
+        $b   = solari_json_body();
+        $op  = Operator::requireOperator();              // 403 unless operator/admin
+        $host = (string) ($b['host'] ?? '');
+        if (preg_match('/^[A-Za-z0-9._@-]{1,120}$/', $host) !== 1) {
+            Response::error('bad_request', 'host must be "[user@]hostname".', 400);
+        }
+        $args = ['host' => $host, 'op' => $op];
+        if (isset($b['server']) && preg_match('#^tls\+tcp://[A-Za-z0-9._:-]+$#', $b['server']) === 1) {
+            $args['server'] = $b['server'];
+        }
+        if (isset($b['arch']) && in_array($b['arch'], ['arm64', 'arm32', 'amd64', 'x86_64'], true)) {
+            $args['arch'] = $b['arch'];
+        }
+        if (isset($b['fqdn']) && preg_match('/^[A-Za-z0-9._-]{1,160}$/', (string) $b['fqdn']) === 1) {
+            $args['fqdn'] = $b['fqdn'];
+        }
+        $reply = SolariCtl::call('DEPLOY', $args);
+        Response::ok(['host' => $host, 'status' => 'deploying', 'log' => $reply['log'] ?? null]);
+    });
+
+    // --- GET /api/control/deploy?host= -----------------------------------
+    // Tail the deploy log for a host (read-only; the bridge owns the deploy).
+    $router->get('/api/control/deploy', static function (): void {
+        $host = (string) ($_GET['host'] ?? '');
+        if (preg_match('/^[A-Za-z0-9._@-]{1,120}$/', $host) !== 1) {
+            Response::error('bad_request', 'host query param required.', 400);
+        }
+        $sanit  = preg_replace('/[^A-Za-z0-9._-]/', '_', $host);
+        $sock   = getenv('SOLARI_CTL_SOCK') ?: '/run/solari/solariCtl.sock';
+        $logf   = dirname($sock) . '/deploy-' . $sanit . '.log';
+        $log    = is_readable($logf) ? (string) file_get_contents($logf) : '';
+        $done   = strpos($log, '[deploy] done.') !== false || strpos($log, 'node should appear') !== false;
+        $failed = strpos($log, '[deploy][error]') !== false;
+        Response::ok([
+            'host'    => $host,
+            'log'     => $log,
+            'running' => $log !== '' && !$done && !$failed,
+            'done'    => $done,
+            'failed'  => $failed,
+        ]);
+    });
 };
 
 /* ---- shared validators / mappers ------------------------------------- */

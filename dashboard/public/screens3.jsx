@@ -231,6 +231,43 @@
     const drifted = S.nodes.filter((n) => !n.converged);
     const converged = S.nodes.length - drifted.length;
 
+    // ---- remote client deployment ----
+    const [dHost, setDHost] = useState("");
+    const [dServer, setDServer] = useState("");
+    const [dLog, setDLog] = useState("");
+    const [dBusy, setDBusy] = useState(false);
+    const stripAnsi = (s) => (s || "").replace(/\x1b\[[0-9;]*m/g, "");
+    function pollLog(host, tries) {
+      const a = api();
+      if (!a || !a.deployLog) { setDBusy(false); return; }
+      a.deployLog(host).then(function (r) {
+        setDLog(stripAnsi(r.log || ""));
+        if (r.done || r.failed || tries > 60) {
+          setDBusy(false);
+          if (r.done) { toast("Deploy complete — " + host, "check"); refresh(); }
+          else if (r.failed) toast("Deploy failed — " + host, "close");
+        } else {
+          setTimeout(function () { pollLog(host, tries + 1); }, 3000);
+        }
+      }).catch(function () { setDBusy(false); });
+    }
+    function deploy() {
+      const host = dHost.trim();
+      if (!/^[A-Za-z0-9._@-]{1,120}$/.test(host)) { toast("Enter a target as user@host", "close"); return; }
+      const a = api();
+      if (!a || !a.deployClient) { toast("Deploy unavailable (offline)", "close"); return; }
+      const body = { host: host };
+      if (dServer.trim()) body.server = dServer.trim();
+      setDBusy(true); setDLog("starting deploy…");
+      a.deployClient(body).then(function () {
+        toast("Deploying client to " + host, "provision");
+        pollLog(host, 0);
+      }).catch(function (e) {
+        setDBusy(false); setDLog("");
+        toast("Deploy failed: " + (e && e.message || "error"), "close");
+      });
+    }
+
     // approve (sign CSR) — POST /api/enrollments/{enrId}/approve via the adapter.
     // Destructive: the adapter sends confirm:true; the bridge signs via the CA.
     function approve(e) {
@@ -276,6 +313,26 @@
       <div className="page">
         <div className="page-head">
           <div><h1 className="page-title">Provisioning</h1><div className="page-sub">enrollment · binary deploy · config convergence</div></div>
+        </div>
+
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <div className="panel__head"><Icon name="provision" size={16} /><h3>Deploy client to a host</h3></div>
+          <div className="panel__body">
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <input value={dHost} onChange={(e) => setDHost(e.target.value)} placeholder="user@host (e.g. pi@10.0.0.254)"
+                onKeyDown={(e) => { if (e.key === "Enter") deploy(); }}
+                style={{ flex: "1 1 220px", minWidth: 200, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13 }} />
+              <input value={dServer} onChange={(e) => setDServer(e.target.value)} placeholder="server URL (optional)"
+                style={{ flex: "1 1 240px", minWidth: 200, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13 }} />
+              <button className="btn-primary" disabled={dBusy} onClick={deploy}>
+                <Icon name="provision" size={14} />{dBusy ? "Deploying…" : "Deploy"}
+              </button>
+            </div>
+            {dLog ? <pre style={{ marginTop: 12, maxHeight: 220, overflow: "auto", background: "rgba(0,0,0,0.30)", padding: 10, borderRadius: 8, fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap", fontFamily: "var(--mono)" }}>{dLog}</pre> : null}
+            <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+              Needs key-based SSH + passwordless sudo on the target. The CA signs the client cert; arm hosts need a binary built via <code>deploy/cross-build-client.sh</code> first.
+            </div>
+          </div>
         </div>
 
         <div className="kpis">
