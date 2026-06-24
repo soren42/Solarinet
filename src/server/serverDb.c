@@ -792,26 +792,129 @@ static int dbMinDiskFreePct(const solariClientReport *rep)
     return minPct;
 }
 
+/* Append a JSON-escaped string (no surrounding quotes) into dst at *off. */
+static void dbJsonEsc(char *dst, size_t cap, size_t *off, const char *s)
+{
+    size_t o = *off;
+    for (; s && *s && o + 7 < cap; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') { dst[o++] = '\\'; dst[o++] = (char)c; }
+        else if (c < 0x20)         { o += (size_t)snprintf(dst + o, cap - o, "\\u%04x", c); }
+        else                        dst[o++] = (char)c;
+    }
+    *off = o;
+}
+
+/* per-core load: [m0,m1,...] (milli). */
+static void dbJsonCpu(const solariClientReport *r, char *buf, size_t cap)
+{
+    size_t o = 1; uint8_t i;
+    buf[0] = '[';
+    for (i = 0; i < r->coreCount && i < SOLARI_MAX_CORES && o < cap - 16; i++)
+        o += (size_t)snprintf(buf + o, cap - o, "%s%u", i ? "," : "", (unsigned)r->cpuLoadMilli[i]);
+    snprintf(buf + o, cap - o, "]");
+}
+
+/* disks: [{"mount":..,"totalKb":..,"usedKb":..},...]. */
+static void dbJsonDisks(const solariClientReport *r, char *buf, size_t cap)
+{
+    size_t o = 1; uint8_t i;
+    buf[0] = '[';
+    for (i = 0; i < r->diskCount && i < SOLARI_MAX_DISKS && o < cap - 160; i++) {
+        const solariDiskEntry *d = &r->disks[i];
+        unsigned long long used = d->totalKb > d->freeKb ? d->totalKb - d->freeKb : 0ULL;
+        o += (size_t)snprintf(buf + o, cap - o, "%s{\"mount\":\"", i ? "," : "");
+        dbJsonEsc(buf, cap, &o, d->mount);
+        o += (size_t)snprintf(buf + o, cap - o, "\",\"totalKb\":%llu,\"usedKb\":%llu}",
+                              (unsigned long long)d->totalKb, used);
+    }
+    snprintf(buf + o, cap - o, "]");
+}
+
+/* ifaces: [{"name":..,"rxKbps":..,"txKbps":..,"speedMbps":..},...]. */
+static void dbJsonIfaces(const solariClientReport *r, char *buf, size_t cap)
+{
+    size_t o = 1; uint8_t i;
+    buf[0] = '[';
+    for (i = 0; i < r->ifaceCount && i < SOLARI_MAX_IFACES && o < cap - 160; i++) {
+        const solariIfaceEntry *f = &r->ifaces[i];
+        o += (size_t)snprintf(buf + o, cap - o, "%s{\"name\":\"", i ? "," : "");
+        dbJsonEsc(buf, cap, &o, f->name);
+        o += (size_t)snprintf(buf + o, cap - o,
+                              "\",\"rxKbps\":%llu,\"txKbps\":%llu,\"speedMbps\":%llu}",
+                              (unsigned long long)f->rxKbps, (unsigned long long)f->txKbps,
+                              (unsigned long long)(f->capacityKbps / 1000ULL));
+    }
+    snprintf(buf + o, cap - o, "]");
+}
+
+/* Refresh procCurrent for a node within the open txn: clear then re-insert. */
+static solariStatus dbWriteProcs(MYSQL *conn, unsigned long long *vNode,
+                                 const solariClientReport *rep)
+{
+    static const char *SQL_INS =
+        "INSERT INTO procCurrent "
+        "  (nodeId, procName, pid, runState, nFiles, nSockets, rssKb, sampledAt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())";
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[7];
+    uint8_t     i;
+    solariStatus rc;
+
+    rc = dbStmtPrepare(conn, "DELETE FROM procCurrent WHERE nodeId=?", &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], vNode);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    if (rc != SOLARI_OK) return rc;
+
+    for (i = 0; i < rep->procCount && i < SOLARI_MAX_PROCS; i++) {
+        const solariProcEntry *p = &rep->procs[i];
+        char rstate[2]; int vpid, vnf, vns; unsigned long long vrss;
+        unsigned long lname, lstate;
+        rstate[0] = p->state ? (char)p->state : '?'; rstate[1] = '\0';
+        vpid = p->pid; vnf = (int)p->nFiles; vns = (int)p->nSockets; vrss = p->rssKb;
+        rc = dbStmtPrepare(conn, SQL_INS, &st);
+        if (rc != SOLARI_OK) return rc;
+        dbBindU64(&b[0], vNode);
+        dbBindStr(&b[1], p->name, &lname);
+        dbBindI32(&b[2], &vpid);
+        dbBindStr(&b[3], rstate, &lstate);
+        dbBindI32(&b[4], &vnf);
+        dbBindI32(&b[5], &vns);
+        dbBindU64(&b[6], &vrss);
+        rc = dbStmtRunWrite(st, b, 7);
+        mysql_stmt_close(st);
+        if (rc != SOLARI_OK) return rc;
+    }
+    return SOLARI_OK;
+}
+
 solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
                                        const solariClientReport *rep)
 {
     static const char *SQL_CUR =
         "INSERT INTO hostCurrent "
-        "  (nodeId, sampledAt, ramUsedKb, ramTotalKb, swapUsedKb, swapTotalKb) "
-        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?) "
+        "  (nodeId, sampledAt, cpuLoadMilli, ramUsedKb, ramTotalKb, "
+        "   swapUsedKb, swapTotalKb, disks, ifaces, usbBuses) "
+        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON DUPLICATE KEY UPDATE "
-        "  sampledAt=UTC_TIMESTAMP(), ramUsedKb=VALUES(ramUsedKb), "
-        "  ramTotalKb=VALUES(ramTotalKb), swapUsedKb=VALUES(swapUsedKb), "
-        "  swapTotalKb=VALUES(swapTotalKb)";
+        "  sampledAt=UTC_TIMESTAMP(), cpuLoadMilli=VALUES(cpuLoadMilli), "
+        "  ramUsedKb=VALUES(ramUsedKb), ramTotalKb=VALUES(ramTotalKb), "
+        "  swapUsedKb=VALUES(swapUsedKb), swapTotalKb=VALUES(swapTotalKb), "
+        "  disks=VALUES(disks), ifaces=VALUES(ifaces), usbBuses=VALUES(usbBuses)";
     static const char *SQL_HIST =
         "INSERT INTO hostHistory "
         "  (nodeId, sampledAt, cpuAvgMilli, ramUsedKb, swapUsedKb, diskMinFreePct) "
         "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?)";
     MYSQL      *conn;
     MYSQL_STMT *st;
-    MYSQL_BIND  b[6];
+    MYSQL_BIND  b[10];
     unsigned long long vNode, vRamU, vRamT, vSwapU, vSwapT;
     int cpuAvg, diskMin;
+    unsigned long lCpu, lDisks, lIfaces, lUsb;
+    char cpuJson[512], disksJson[4096], ifacesJson[2048];
+    static const char *usbJson = "[]";
     solariStatus rc;
 
     if (!ctx || !ctx->db || !rep) return ERR_INVALID_ARG;
@@ -823,19 +926,29 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     vSwapU = rep->swapUsedKb; vSwapT = rep->swapTotalKb;
     cpuAvg = (int)dbAvgCpuMilli(rep);
     diskMin = dbMinDiskFreePct(rep);
+    dbJsonCpu(rep, cpuJson, sizeof cpuJson);
+    dbJsonDisks(rep, disksJson, sizeof disksJson);
+    dbJsonIfaces(rep, ifacesJson, sizeof ifacesJson);
 
-    /* One transaction: upsert current + append history (§9.1). */
+    /* One transaction: upsert current (+ JSON detail) + procs + history (§9.1). */
     if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
 
     rc = dbStmtPrepare(conn, SQL_CUR, &st);
     if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
     dbBindU64(&b[0], &vNode);
-    dbBindU64(&b[1], &vRamU);
-    dbBindU64(&b[2], &vRamT);
-    dbBindU64(&b[3], &vSwapU);
-    dbBindU64(&b[4], &vSwapT);
-    rc = dbStmtRunWrite(st, b, 5);
+    dbBindStr(&b[1], cpuJson,   &lCpu);
+    dbBindU64(&b[2], &vRamU);
+    dbBindU64(&b[3], &vRamT);
+    dbBindU64(&b[4], &vSwapU);
+    dbBindU64(&b[5], &vSwapT);
+    dbBindStr(&b[6], disksJson,  &lDisks);
+    dbBindStr(&b[7], ifacesJson, &lIfaces);
+    dbBindStr(&b[8], usbJson,    &lUsb);
+    rc = dbStmtRunWrite(st, b, 9);
     mysql_stmt_close(st);
+    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+
+    rc = dbWriteProcs(conn, &vNode, rep);
     if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
 
     rc = dbStmtPrepare(conn, SQL_HIST, &st);

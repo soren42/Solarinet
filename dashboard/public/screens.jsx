@@ -244,7 +244,8 @@
   /* ===================== NODE DETAIL ===================== */
   function NodeDetail({ node, onBack, onSurvey }) {
     const [metric, setMetric] = useState("cpu");
-    const n = node;
+    // Re-resolve from the live model so periodic polls refresh the open detail.
+    const n = (S.nodes || S.fleet || []).find((x) => x.nodeId === node.nodeId) || node;
     const nodeAlerts = S.alerts.filter((a) => a.nodeId === n.nodeId && !a.cleared);
     const nodeProbes = S.probes.filter((p) => p.hostNode === n.nodeId);
     const metricMap = {

@@ -75,20 +75,15 @@
       return () => window.removeEventListener("keydown", onKey);
     }, []);
 
-    // live tick — gentle moving sparklines + jittered load
+    // live poll — re-fetch the model from the API on an interval so every metric
+    // (CPU, RAM, disk, net, procs, probe state) reflects real data. Falls back to
+    // a re-render when the adapter is offline (fixture mode).
     useEffect(() => {
       const iv = setInterval(() => {
-        S.nodes.forEach((n) => {
-          if (n.state === "down") return;
-          const base = n.cpuPct;
-          let nv = base + (Math.random() - 0.5) * 9;
-          nv = Math.max(0, Math.min(100, nv));
-          n.hist.cpu = [...n.hist.cpu.slice(1), Math.round(nv)];
-          n.hist.net = [...n.hist.net.slice(1), Math.max(0, Math.min(100, n.hist.net[n.hist.net.length - 1] + (Math.random() - 0.5) * 16))];
-          n.cpuPct = Math.round(nv);
-        });
-        force((x) => x + 1);
-      }, 5000);
+        const api = S.api;
+        if (api && api.refresh) api.refresh().then(() => force((x) => x + 1)).catch(() => {});
+        else force((x) => x + 1);
+      }, 10000);
       return () => clearInterval(iv);
     }, []);
 
