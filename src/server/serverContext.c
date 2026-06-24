@@ -119,6 +119,7 @@ void serverConfigDefaults(serverConfig *out)
     serverStrCpy(out->controlUrl, sizeof out->controlUrl, "tls+tcp://0.0.0.0:7702");
     out->useTls = true;
     serverStrCpy(out->ctlSocket,  sizeof out->ctlSocket,  "/run/solari/solariCtl.sock");
+    serverStrCpy(out->caMode,     sizeof out->caMode,      "local");
 
     /* database (MariaDB / Connector-C) */
     serverStrCpy(out->dbHost, sizeof out->dbHost, "127.0.0.1");
@@ -182,6 +183,18 @@ solariStatus serverConfigFromFile(const char *path, serverConfig *out)
                  serverCfgStr(c, "tls", "bind", "certFile", out->certFile));
     serverStrCpy(out->keyFile,  sizeof out->keyFile,
                  serverCfgStr(c, "tls", "bind", "keyFile",  out->keyFile));
+
+    /* internal CA (signs node certs; relocatable — see serverConfig). The CA
+     * cert defaults to the verify root (caFile); the CA key has no default (must
+     * be set explicitly to enable signing). caMode "local" signs here. */
+    serverStrCpy(out->caMode, sizeof out->caMode,
+                 solariConfigGetStr(c, "ca", "mode", out->caMode[0] ? out->caMode : "local"));
+    serverStrCpy(out->caCertFile, sizeof out->caCertFile,
+                 solariConfigGetStr(c, "ca", "certFile", out->caFile));
+    serverStrCpy(out->caKeyFile, sizeof out->caKeyFile,
+                 solariConfigGetStr(c, "ca", "keyFile", out->caKeyFile));
+    serverStrCpy(out->caUrl, sizeof out->caUrl,
+                 solariConfigGetStr(c, "ca", "url", out->caUrl));
 
     /* failover / lease */
     out->leaseRenewSec = (uint32_t)solariConfigGetInt(c, "lease", "leaseRenewSec",

@@ -83,13 +83,15 @@
 #  include <mbedtls/pk.h>
 #  include <mbedtls/ctr_drbg.h>
 #  include <mbedtls/entropy.h>
+#  include <mbedtls/base64.h>
+#  include <mbedtls/version.h>
 #endif
 
 /* Largest single operator request line we will read in one poll. The PHP layer
  * frames one request per line; anything larger is a malformed/abusive caller. */
 #define CTL_REQ_CAP   4096
 /* Largest reply line we assemble. */
-#define CTL_REPLY_CAP 1024
+#define CTL_REPLY_CAP 16384   /* large enough to return a URL-encoded signed cert */
 /* Max accepted-but-unserviced backlog on the listening socket. */
 #define CTL_LISTEN_BACKLOG 8
 /* Cap on a held CSR / issued cert PEM threaded through the signer. */
@@ -103,8 +105,10 @@ struct serverCtl {
     serverContext *ctx;
     int            listenFd;                 /* -1 until bound                  */
     char           sockPath[SERVER_PATH_MAX];/* for unlink on close            */
-    char           caFile[SERVER_PATH_MAX];  /* internal CA root cert (PEM)     */
-    char           caKeyFile[SERVER_PATH_MAX];/* CA private key (PEM)           */
+    char           caFile[SERVER_PATH_MAX];  /* CA cert that issues leaf certs  */
+    char           caKeyFile[SERVER_PATH_MAX];/* CA private key (signing)        */
+    char           caMode[8];                /* "local" | "remote"              */
+    char           caUrl[SERVER_URL_MAX];    /* remote CA endpoint (caMode=remote) */
     bool           bound;                    /* listenFd is a real bound socket */
 };
 
@@ -150,6 +154,31 @@ static void ctlPctDecode(char *s)
         }
     }
     *w = '\0';
+}
+
+/* URL-encode `in` into `out` (cap incl. NUL): keep the bare-token set, %XX the
+ * rest. Used to return a signed cert PEM (newlines/+/=) as a single reply line.
+ * Returns the bytes written (excluding NUL), or 0 if it would overflow. */
+static size_t ctlPctEncode(const char *in, char *out, size_t cap)
+{
+    static const char *hex = "0123456789ABCDEF";
+    size_t o = 0;
+    for (; in && *in; in++) {
+        unsigned char c = (unsigned char)*in;
+        int bare = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+                   c == ':' || c == '/' || c == '@' || c == '-';
+        if (bare) {
+            if (o + 1 >= cap) return 0;
+            out[o++] = (char)c;
+        } else {
+            if (o + 3 >= cap) return 0;
+            out[o++] = '%'; out[o++] = hex[c >> 4]; out[o++] = hex[c & 0xF];
+        }
+    }
+    if (o >= cap) return 0;
+    out[o] = '\0';
+    return o;
 }
 
 static solariStatus ctlArgStr(const char *args, const char *key,
@@ -273,7 +302,10 @@ static size_t ctlReplyOk(char *out, size_t cap, const char *extra)
  * Pure. */
 static bool ctlVerbIsDestructive(const char *verb)
 {
-    return strcmp(verb, "DECOMMISSION") == 0 || strcmp(verb, "RETIRE") == 0;
+    /* SIGN mints a trusted certificate — privileged, so it requires a named
+     * operator just like the teardown verbs. */
+    return strcmp(verb, "DECOMMISSION") == 0 || strcmp(verb, "RETIRE") == 0 ||
+           strcmp(verb, "SIGN") == 0;
 }
 
 /* RBAC gate for destructive verbs: every destructive request must name the
@@ -354,6 +386,31 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
             return ctlReplyErr(replyOut, replyCap, st, "scan failed");
         (void)snprintf(extra, sizeof extra, "found=%zu", found);
         return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- sign a CSR with the internal CA (operator-gated) ---- */
+    if (strcmp(verb, "SIGN") == 0) {
+        char  *csr   = (char *)malloc(CTL_REQ_CAP);
+        char  *cert  = (char *)malloc(8192);
+        char  *extra = (char *)malloc(CTL_REPLY_CAP);
+        size_t ret;
+        if (!csr || !cert || !extra) {
+            free(csr); free(cert); free(extra);
+            return ctlReplyErr(replyOut, replyCap, ERR_PLATFORM, "oom");
+        }
+        if (ctlArgStr(args, "csr", csr, CTL_REQ_CAP) != SOLARI_OK || !csr[0]) {
+            free(csr); free(cert); free(extra);
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "csr required");
+        }
+        st = serverCtlSignCsr(ctl, csr, cert, 8192);
+        if (st == SOLARI_OK) {
+            size_t n = (size_t)snprintf(extra, CTL_REPLY_CAP, "cert=");
+            if (ctlPctEncode(cert, extra + n, CTL_REPLY_CAP - n) == 0) st = ERR_BUFFER_FULL;
+        }
+        ret = (st == SOLARI_OK) ? ctlReplyOk(replyOut, replyCap, extra)
+                                : ctlReplyErr(replyOut, replyCap, st, "sign failed");
+        free(csr); free(cert); free(extra);
+        return ret;
     }
 
     /* ---- broadcast survey (non-destructive) ---- */
@@ -634,8 +691,15 @@ solariStatus serverCtlOpen(const serverConfig *cfg, serverContext *ctx,
     /* Copy the CA material paths so the handle is self-contained; the web tier
      * never receives these (they live only in the server config + this fd). */
     (void)snprintf(ctl->sockPath,  sizeof ctl->sockPath,  "%s", cfg->ctlSocket);
-    (void)snprintf(ctl->caFile,    sizeof ctl->caFile,    "%s", cfg->caFile);
-    (void)snprintf(ctl->caKeyFile, sizeof ctl->caKeyFile, "%s", cfg->keyFile);
+    /* CA cert + key for signing — separate from the server's own TLS material
+     * (cfg->certFile/keyFile) so the CA can relocate. caCertFile defaults to the
+     * verify root when unset (handled by the config loader). */
+    (void)snprintf(ctl->caFile,    sizeof ctl->caFile,    "%s",
+                   cfg->caCertFile[0] ? cfg->caCertFile : cfg->caFile);
+    (void)snprintf(ctl->caKeyFile, sizeof ctl->caKeyFile, "%s", cfg->caKeyFile);
+    (void)snprintf(ctl->caMode,    sizeof ctl->caMode,    "%s",
+                   cfg->caMode[0] ? cfg->caMode : "local");
+    (void)snprintf(ctl->caUrl,     sizeof ctl->caUrl,     "%s", cfg->caUrl);
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -809,9 +873,19 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
         solariLogf(SOLARI_LOG_ERROR, "ctl: sign refused; payload is not a CSR PEM");
         return ERR_TLS;
     }
+    /* Modularity seam: when the CA is relocated to a dedicated host, caMode is
+     * "remote" and we forward the CSR to ctl->caUrl instead of signing here.
+     * Not yet implemented — fail closed so we never mint an unsigned cert. */
+    if (strcmp(ctl->caMode, "remote") == 0) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "ctl: caMode=remote (caUrl=%s) not yet implemented; sign refused",
+                   ctl->caUrl[0] ? ctl->caUrl : "(unset)");
+        return ERR_TLS;
+    }
     if (ctl->caKeyFile[0] == '\0' || ctl->caFile[0] == '\0') {
         solariLogf(SOLARI_LOG_ERROR,
-                   "ctl: sign refused; CA material not configured");
+                   "ctl: sign refused; CA material not configured "
+                   "(set [ca] keyFile + certFile)");
         return ERR_TLS;
     }
 
@@ -828,6 +902,7 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
         mbedtls_entropy_context  entropy;
         mbedtls_mpi serial;
         char  subjName[256];
+        char  issName[256];
         int   rc;
         solariStatus st = ERR_TLS;
         static const char *pers = "solariCtl-csr-sign";
@@ -856,27 +931,31 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
 #endif
             if (mbedtls_x509_dn_gets(subjName, sizeof subjName,
                                      &csr.subject) < 0) break;
+            /* Issuer must be the CA cert's actual subject DN (not a literal) or
+             * the chain won't verify against the configured CA root. */
+            if (mbedtls_x509_dn_gets(issName, sizeof issName,
+                                     &caCrt.subject) < 0) break;
 
             mbedtls_x509write_crt_set_subject_key(&crt, &csr.pk);
             mbedtls_x509write_crt_set_issuer_key(&crt, &caKey);
             if (mbedtls_x509write_crt_set_subject_name(&crt, subjName) != 0) break;
-            if (mbedtls_x509write_crt_set_issuer_name(
-                    &crt, "CN=SolariNet Internal CA") != 0) break;
+            if (mbedtls_x509write_crt_set_issuer_name(&crt, issName) != 0) break;
             mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
             mbedtls_x509write_crt_set_md_alg(&crt, MBEDTLS_MD_SHA256);
-            /* Serial derived from a SHA-256 over the CSR for reproducibility. */
+            /* Serial: the first 20 bytes of SHA-256(CSR) (reproducible), forced
+             * positive and non-zero per RFC 5280. (A full 32-byte digest does
+             * not fit a 20-octet serial, which previously yielded a zero/invalid
+             * serial and an unparsable cert.) */
             {
-                uint8_t dg[32];
+                uint8_t dg[32], sbin[20];
                 solariSha256(csrPem, strlen(csrPem), dg);
-                if (mbedtls_mpi_read_binary(&serial, dg, sizeof dg) != 0) break;
+                memcpy(sbin, dg, sizeof sbin);
+                sbin[0] &= 0x7F;                 /* clear sign bit -> positive */
+                if (sbin[0] == 0) sbin[0] = 0x01;/* no leading-zero / non-zero */
 #if MBEDTLS_VERSION_MAJOR >= 3
-                {
-                    uint8_t sbin[20];
-                    (void)mbedtls_mpi_write_binary(&serial, sbin, sizeof sbin);
-                    if (mbedtls_x509write_crt_set_serial_raw(
-                            &crt, sbin, sizeof sbin) != 0) break;
-                }
+                if (mbedtls_x509write_crt_set_serial_raw(&crt, sbin, sizeof sbin) != 0) break;
 #else
+                if (mbedtls_mpi_read_binary(&serial, sbin, sizeof sbin) != 0) break;
                 if (mbedtls_x509write_crt_set_serial(&crt, &serial) != 0) break;
 #endif
             }

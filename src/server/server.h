@@ -56,9 +56,18 @@ typedef struct {
     char     controlUrl[SERVER_URL_MAX];     /* REP/PUB for control + lease  */
     char     pubUrl[SERVER_URL_MAX];         /* PUB bind (alerts -> ntfy)    */
     bool     useTls;
-    char     caFile[SERVER_PATH_MAX];        /* internal CA root             */
-    char     certFile[SERVER_PATH_MAX];
-    char     keyFile[SERVER_PATH_MAX];
+    char     caFile[SERVER_PATH_MAX];        /* internal CA root (verify peers) */
+    char     certFile[SERVER_PATH_MAX];      /* this server's TLS cert          */
+    char     keyFile[SERVER_PATH_MAX];       /* this server's TLS key           */
+
+    /* internal CA (signs node certs). Deliberately separate from the server's
+     * own TLS material so the signing CA can be relocated to a dedicated host:
+     * caMode "local" signs here with caKeyFile; "remote" delegates to caUrl (a
+     * future CA service). caCertFile defaults to caFile when unset. (§15.1) */
+    char     caCertFile[SERVER_PATH_MAX];    /* CA cert that issues leaf certs  */
+    char     caKeyFile[SERVER_PATH_MAX];     /* CA private key (signing); never on web tier */
+    char     caMode[8];                      /* "local" | "remote" (default local) */
+    char     caUrl[SERVER_URL_MAX];          /* remote CA signer endpoint (caMode=remote) */
 
     /* database (MariaDB / Connector-C) */
     char     dbHost[SERVER_URL_MAX];

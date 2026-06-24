@@ -8,10 +8,10 @@
 # + the CA/cert/key, installs a systemd unit, and starts it. The host then
 # self-registers (HELLO) and reports host metrics + listening services.
 #
-# Why a directly-issued cert (not enrollment): the server's CSR-signing CA path
-# is still a fail-closed stub, so — like the local client — we mint the client
-# cert here from the internal CA. Swap to the token/CSR enrollment flow
-# (deploy/enrollment/solari-enroll.sh) once server-side signing is wired.
+# Certs are issued via CSR signing: a key + CSR are generated for the target and
+# the CSR is signed by the server's internal CA over the solariCtl SIGN verb. The
+# CA private key never touches this script (it stays in the CA/server process),
+# so the CA can later relocate to a dedicated host (server [ca] mode=remote).
 #
 # Usage:
 #   deploy/remote-deploy.sh --host [user@]HOST [options]
@@ -42,6 +42,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 HOST=""; SERVER_URL=""; FQDN=""; CA_DIR="${REPO_ROOT}/run/pki"; BIN=""
 CONF_DIR="/etc/solari"; REMOTE_BIN="/usr/local/bin/solariClient"; INTERVAL=15; DRY=0
+CTL_SOCK="${REPO_ROOT}/run/solariCtl.sock"; OP="${USER:-deploy}"
 
 log()  { printf '\033[1;36m[deploy]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[deploy][warn]\033[0m %s\n' "$*" >&2; }
@@ -57,6 +58,8 @@ while [ $# -gt 0 ]; do
     --conf-dir)   CONF_DIR="${2:?}"; shift ;;
     --remote-bin) REMOTE_BIN="${2:?}"; shift ;;
     --interval)   INTERVAL="${2:?}"; shift ;;
+    --ctl-sock)   CTL_SOCK="${2:?}"; shift ;;
+    --op)         OP="${2:?}"; shift ;;
     --dry-run)    DRY=1 ;;
     -h|--help)    grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
@@ -66,7 +69,11 @@ done
 
 [ -n "${HOST}" ] || die "--host is required (try --help)"
 command -v openssl >/dev/null 2>&1 || die "openssl is required locally"
-[ -f "${CA_DIR}/ca.pem" ] && [ -f "${CA_DIR}/ca.key" ] || die "CA not found in ${CA_DIR} (need ca.pem + ca.key)"
+command -v python3 >/dev/null 2>&1 || die "python3 is required locally (for the CA SIGN call)"
+# Only the CA ROOT cert is needed here (to ship to the client so it trusts the
+# server). The CA PRIVATE key never touches this script — the server's CA signs
+# the CSR over the solariCtl socket (SIGN verb).
+[ -f "${CA_DIR}/ca.pem" ] || die "CA root not found: ${CA_DIR}/ca.pem"
 [ "${SERVER_URL}" ] || SERVER_URL="tls+tcp://$(hostname -f 2>/dev/null || hostname):7701"
 
 SSH() { ssh -o BatchMode=yes "${HOST}" "$@"; }
@@ -102,17 +109,36 @@ if [ -z "${BIN}" ]; then
 fi
 log "binary: ${BIN}"
 
-# ---- issue a per-host client cert from the internal CA --------------------
+# ---- key + CSR locally; CA signs it over solariCtl (SIGN) -----------------
+# The CA private key stays in the CA/server process; we only send a CSR and get
+# a signed cert back. (Swap CTL_SOCK for a remote CA endpoint when the CA moves.)
 TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 umask 077
 openssl ecparam -name prime256v1 -genkey -noout -out "${TMP}/node.key"
 openssl req -new -key "${TMP}/node.key" -subj "/CN=client.${FQDN}/O=SolariNet/OU=client" -out "${TMP}/node.csr"
-openssl x509 -req -in "${TMP}/node.csr" -CA "${CA_DIR}/ca.pem" -CAkey "${CA_DIR}/ca.key" \
-  -CAcreateserial -days 825 -sha256 \
-  -extfile <(printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\nsubjectAltName=DNS:%s\n' "${FQDN}") \
-  -out "${TMP}/node.pem" 2>/dev/null
 cp "${CA_DIR}/ca.pem" "${TMP}/ca.pem"
-log "issued client cert CN=client.${FQDN}"
+
+[ -S "${CTL_SOCK}" ] || die "solariCtl socket not found: ${CTL_SOCK} (is the server running? pass --ctl-sock)"
+log "requesting cert from CA via ${CTL_SOCK} (op=${OP})"
+SIGN_RC=0
+python3 - "${CTL_SOCK}" "${TMP}/node.csr" "${TMP}/node.pem" "${OP}" <<'PY' || SIGN_RC=$?
+import sys, socket, urllib.parse
+sock, csrf, outf, op = sys.argv[1:5]
+csr = open(csrf).read()
+s = socket.socket(socket.AF_UNIX); s.connect(sock)
+s.sendall(("SIGN op=%s csr=%s\n" % (op, urllib.parse.quote(csr, safe=""))).encode())
+buf = b""
+while b"\n" not in buf:
+    d = s.recv(65536)
+    if not d: break
+    buf += d
+reply = buf.decode(errors="replace").rstrip("\n")
+if not reply.startswith("OK cert="):
+    sys.stderr.write("CA SIGN failed: %s\n" % reply); sys.exit(2)
+open(outf, "w").write(urllib.parse.unquote(reply[len("OK cert="):]))
+PY
+[ "${SIGN_RC}" -eq 0 ] && [ -s "${TMP}/node.pem" ] || die "CA did not return a signed certificate (RC=${SIGN_RC})"
+log "CA signed cert CN=client.${FQDN}"
 
 # ---- render client.conf + unit --------------------------------------------
 cat > "${TMP}/client.conf" <<EOF

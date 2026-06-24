@@ -70,6 +70,22 @@ if(MARIADB_INCS)
 endif()
 target_link_libraries(servercore PUBLIC solari ${MARIADB_LIBS})
 
+# Enable real CSR signing (serverCtlSignCsr) when the mbedTLS x509 writer headers
+# are available. solari already links mbedx509/mbedcrypto transitively under
+# SOLARI_WITH_IO; ensure the x509 lib is present for the writer symbols.
+if(SOLARI_WITH_IO)
+  include(CheckIncludeFile)
+  check_include_file("mbedtls/x509_csr.h" SOLARI_HAVE_X509_HDR)
+  if(SOLARI_HAVE_X509_HDR)
+    target_compile_definitions(servercore PRIVATE SOLARI_HAVE_MBEDTLS_X509=1)
+    find_library(MBEDX509_LIB NAMES mbedx509)
+    if(MBEDX509_LIB)
+      target_link_libraries(servercore PUBLIC ${MBEDX509_LIB})
+    endif()
+    message(STATUS "solariServer: CSR signing enabled (mbedTLS x509)")
+  endif()
+endif()
+
 add_executable(solariServer main.c)
 target_link_libraries(solariServer PRIVATE servercore)
 
