@@ -54,6 +54,7 @@
  */
 #include "server.h"
 #include "serverScan.h"
+#include "serverAssets.h"
 
 #include "solari/solariCrypto.h"
 #include "solari/solariError.h"
@@ -397,17 +398,115 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         return ctlReplyErr(replyOut, replyCap, st, "provision failed");
     }
 
-    /* ---- adopt a discovered entity as a probe target ---- */
+    /* ---- adopt a discovered entity into a monitored asset ---- */
     if (strcmp(verb, "ADOPT") == 0) {
-        uint64_t discId = 0;
-        char spec[CTL_REQ_CAP];
-        if (ctlArgU64(args, "disc", &discId) != SOLARI_OK || discId == 0)
+        serverAdoptOpts o;
+        uint64_t hb = 1, assetId = 0;
+        char extra[64];
+        memset(&o, 0, sizeof o);
+        if (ctlArgU64(args, "disc", &o.discId) != SOLARI_OK || o.discId == 0)
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad disc id");
-        if (ctlArgStr(args, "spec", spec, sizeof spec) != SOLARI_OK) spec[0] = '\0';
-        st = serverProvisionAdoptTarget(ctl->ctx, discId,
-                                        spec[0] ? spec : NULL);
+        (void)ctlArgU64(args, "pool", &o.poolId);
+        if (ctlArgU64(args, "heartbeat", &hb) != SOLARI_OK) hb = 1;
+        o.heartbeat = (hb != 0);
+        (void)ctlArgStr(args, "name",     o.displayName, sizeof o.displayName);
+        (void)ctlArgStr(args, "class",    o.className,   sizeof o.className);
+        (void)ctlArgStr(args, "tags",     o.tagsJson,    sizeof o.tagsJson);
+        (void)ctlArgStr(args, "notes",    o.notes,       sizeof o.notes);
+        (void)ctlArgStr(args, "services", o.servicesCsv, sizeof o.servicesCsv);
+        st = serverAssetsAdopt(ctl->ctx, &o, &assetId);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "adopt failed");
+        (void)snprintf(extra, sizeof extra, "assetId=%llu", (unsigned long long)assetId);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- update a monitored asset's metadata (keyed by ip) ---- */
+    if (strcmp(verb, "ASSET_SET") == 0) {
+        char ip[64], name[128], cls[32], tags[256], notes[256];
+        uint64_t poolId = 0, hb = 1;
+        if (ctlArgStr(args, "ip", ip, sizeof ip) != SOLARI_OK || !ip[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "ip required");
+        (void)ctlArgU64(args, "pool", &poolId);
+        if (ctlArgU64(args, "heartbeat", &hb) != SOLARI_OK) hb = 1;
+        if (ctlArgStr(args, "name",  name,  sizeof name)  != SOLARI_OK) name[0]  = '\0';
+        if (ctlArgStr(args, "class", cls,   sizeof cls)   != SOLARI_OK) cls[0]   = '\0';
+        if (ctlArgStr(args, "tags",  tags,  sizeof tags)  != SOLARI_OK) tags[0]  = '\0';
+        if (ctlArgStr(args, "notes", notes, sizeof notes) != SOLARI_OK) notes[0] = '\0';
+        st = serverAssetsSetMeta(ctl->ctx, ip, name, cls, poolId, tags, notes, hb != 0);
         if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
-        return ctlReplyErr(replyOut, replyCap, st, "adopt failed");
+        return ctlReplyErr(replyOut, replyCap, st, "asset update failed");
+    }
+
+    /* ---- create a functional pool ---- */
+    if (strcmp(verb, "POOL_NEW") == 0) {
+        char name[64], desc[256], color[16], extra[48];
+        uint64_t poolId = 0;
+        if (ctlArgStr(args, "name", name, sizeof name) != SOLARI_OK || !name[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "name required");
+        if (ctlArgStr(args, "desc",  desc,  sizeof desc)  != SOLARI_OK) desc[0]  = '\0';
+        if (ctlArgStr(args, "color", color, sizeof color) != SOLARI_OK) color[0] = '\0';
+        st = serverDbCreatePool(ctl->ctx->db, name, desc[0] ? desc : NULL,
+                                color[0] ? color : NULL, &poolId);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "pool create failed");
+        (void)snprintf(extra, sizeof extra, "poolId=%llu", (unsigned long long)poolId);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- update a functional pool ---- */
+    if (strcmp(verb, "POOL_SET") == 0) {
+        char name[64], desc[256], color[16];
+        uint64_t poolId = 0;
+        if (ctlArgU64(args, "pool", &poolId) != SOLARI_OK || poolId == 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad pool id");
+        if (ctlArgStr(args, "name",  name,  sizeof name)  != SOLARI_OK) name[0]  = '\0';
+        if (ctlArgStr(args, "desc",  desc,  sizeof desc)  != SOLARI_OK) desc[0]  = '\0';
+        if (ctlArgStr(args, "color", color, sizeof color) != SOLARI_OK) color[0] = '\0';
+        st = serverDbUpdatePool(ctl->ctx->db, poolId, name[0] ? name : NULL,
+                                desc[0] ? desc : NULL, color[0] ? color : NULL);
+        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
+        return ctlReplyErr(replyOut, replyCap, st, "pool update failed");
+    }
+
+    /* ---- persist the fleet-wide config document ---- */
+    if (strcmp(verb, "CONFIG_SET") == 0) {
+        char *cfg = (char *)malloc(CTL_REQ_CAP);
+        char  op[64], extra[48];
+        uint64_t epoch = 0;
+        if (!cfg) return ctlReplyErr(replyOut, replyCap, ERR_PLATFORM, "oom");
+        if (ctlArgStr(args, "cfg", cfg, CTL_REQ_CAP) != SOLARI_OK || !cfg[0]) {
+            free(cfg);
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "cfg required");
+        }
+        if (ctlArgStr(args, "op", op, sizeof op) != SOLARI_OK) op[0] = '\0';
+        st = serverDbSetGlobalConfig(ctl->ctx->db, cfg, op[0] ? op : NULL, &epoch);
+        free(cfg);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "config set failed");
+        (void)snprintf(extra, sizeof extra, "epoch=%llu", (unsigned long long)epoch);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- edit an alert rule ---- */
+    if (strcmp(verb, "RULE_SET") == 0) {
+        serverAlertRuleEdit e;
+        uint64_t ruleId = 0, vU = 0;
+        char buf[64];
+        memset(&e, 0, sizeof e);
+        if (ctlArgU64(args, "rule", &ruleId) != SOLARI_OK || ruleId == 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad rule id");
+        e.ruleId = (int)ruleId;
+        if (ctlArgU64(args, "enabled", &vU) == SOLARI_OK) { e.hasEnabled = true; e.enabled = (vU != 0); }
+        if (ctlArgStr(args, "threshold", buf, sizeof buf) == SOLARI_OK) { e.hasThreshold = true; e.threshold = atof(buf); }
+        if (ctlArgU64(args, "forSeconds", &vU) == SOLARI_OK) { e.hasForSeconds = true; e.forSeconds = (int)vU; }
+        if (ctlArgStr(args, "op", e.op, sizeof e.op) == SOLARI_OK && e.op[0]) e.hasOp = true;
+        if (ctlArgStr(args, "severity", e.severity, sizeof e.severity) == SOLARI_OK && e.severity[0]) e.hasSeverity = true;
+        if (ctlArgStr(args, "metric", e.metric, sizeof e.metric) == SOLARI_OK && e.metric[0]) e.hasMetric = true;
+        if (ctlArgStr(args, "scope", e.scope, sizeof e.scope) == SOLARI_OK && e.scope[0]) e.hasScope = true;
+        st = serverDbUpdateAlertRule(ctl->ctx->db, &e);
+        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
+        return ctlReplyErr(replyOut, replyCap, st, "rule update failed");
     }
 
     /* ---- suppress a discovered candidate ---- */

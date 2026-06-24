@@ -28,32 +28,21 @@ return static function (Router $router): void {
     });
 
     // --- POST /api/config ------------------------------------------------
-    // Accepts a (partial or full) global config document, validates the numeric
-    // ranges, PERSISTS it (globalConfig), and pushes it to every active node via
-    // the operator bridge (PROVISION node= epoch= cfg=), which both writes
-    // nodeConfig and emits the control frame. Replaces the prior no-op that
-    // forwarded the blob to SURVEY (which ignores it).
+    // Validate the (partial or full) global config, then hand the write to the C
+    // bridge (CONFIG_SET) which persists globalConfig + bumps the epoch. PHP does
+    // no DB write — it reads the current doc, merges, validates, and marshals.
     $router->post('/api/config', static function (): void {
         $body   = solari_json_body();
         $merged = config_merge(config_current_view(), $body);
         config_validate($merged);                       // emits 400 on bad ranges
+        unset($merged['epoch']);                        // derived; not part of the doc
 
-        $op    = Operator::name();
-        $epoch = config_persist_global($merged, $op);   // store + bump epoch
+        $args = ['cfg' => json_encode($merged)];
+        $op = Operator::name();
+        if ($op !== '') $args['op'] = $op;
+        $reply = SolariCtl::call('CONFIG_SET', $args);  // C writes; returns epoch=
 
-        // Push to the fleet. Each non-retired node is provisioned with the new
-        // global doc at the new epoch; the bridge persists nodeConfig and emits
-        // the directive (a deferred send for an offline node still persists).
-        $pushed = 0; $failed = 0;
-        foreach (Db::rows("SELECT nodeId FROM node WHERE state <> 'retired'") as $n) {
-            $args = ['node' => (string) $n['nodeId'], 'epoch' => (string) $epoch,
-                     'cfg' => json_encode($merged)];
-            if ($op !== '') $args['op'] = $op;
-            try { SolariCtl::call('PROVISION', $args); $pushed++; }
-            catch (Throwable $e) { $failed++; error_log('[solari-config] push to ' . $n['nodeId'] . ' failed: ' . $e->getMessage()); }
-        }
-
-        Response::ok($merged + ['epoch' => $epoch, 'pushed' => $pushed, 'failed' => $failed]);
+        Response::ok($merged + ['epoch' => isset($reply['epoch']) ? (int) $reply['epoch'] : null]);
     });
 
     // --- GET /api/nodes/{id}/config -------------------------------------
@@ -123,61 +112,54 @@ return static function (Router $router): void {
             Response::error('not_found', "No alert rule $ruleId", 404);
         }
 
-        // Build a whitelisted SET clause; never interpolate column names from input.
-        $set    = [];
-        $params = [':id' => $ruleId];
+        // Validate + marshal whitelisted fields to the bridge (RULE_SET). The
+        // write happens in C; PHP validates input and forwards only known fields.
+        $args = ['rule' => (string) $ruleId];
         if (array_key_exists('enabled', $body)) {
-            $set[] = 'enabled = :enabled';
-            $params[':enabled'] = $body['enabled'] ? 1 : 0;
+            $args['enabled'] = $body['enabled'] ? '1' : '0';
         }
         if (array_key_exists('threshold', $body)) {
             if (!is_numeric($body['threshold'])) {
                 Response::error('bad_request', 'threshold must be numeric.', 400);
             }
-            $set[] = 'threshold = :threshold';
-            $params[':threshold'] = (float) $body['threshold'];
+            $args['threshold'] = (string) (float) $body['threshold'];
         }
         if (array_key_exists('forSeconds', $body)) {
             if (!is_int($body['forSeconds']) && !ctype_digit((string) $body['forSeconds'])) {
                 Response::error('bad_request', 'forSeconds must be an integer.', 400);
             }
-            $set[] = 'forSeconds = :forSeconds';
-            $params[':forSeconds'] = (int) $body['forSeconds'];
+            $args['forSeconds'] = (string) (int) $body['forSeconds'];
         }
         if (array_key_exists('op', $body)) {
             if (!in_array($body['op'], ['gt', 'lt', 'eq', 'transition'], true)) {
                 Response::error('bad_request', "op must be one of: gt, lt, eq, transition", 400);
             }
-            $set[] = 'op = :op';
-            $params[':op'] = $body['op'];
+            $args['op'] = (string) $body['op'];
         }
         if (array_key_exists('severity', $body)) {
             if (!in_array($body['severity'], ['info', 'warn', 'crit'], true)) {
                 Response::error('bad_request', "severity must be one of: info, warn, crit", 400);
             }
-            $set[] = 'severity = :severity';
-            $params[':severity'] = $body['severity'];
+            $args['severity'] = (string) $body['severity'];
         }
         if (array_key_exists('metric', $body)) {
             if (!is_string($body['metric']) || $body['metric'] === '' || strlen($body['metric']) > 64) {
                 Response::error('bad_request', 'metric must be a 1–64 char string.', 400);
             }
-            $set[] = 'metric = :metric';
-            $params[':metric'] = $body['metric'];
+            $args['metric'] = (string) $body['metric'];
         }
         if (array_key_exists('scope', $body)) {
             if (!in_array($body['scope'], ['host', 'probe'], true)) {
                 Response::error('bad_request', "scope must be 'host' or 'probe'", 400);
             }
-            $set[] = 'scope = :scope';
-            $params[':scope'] = $body['scope'];
+            $args['scope'] = (string) $body['scope'];
         }
 
-        if ($set === []) {
+        if (count($args) === 1) {   // only 'rule' present
             Response::error('bad_request', 'No editable rule fields supplied.', 400);
         }
 
-        Db::exec('UPDATE alertRule SET ' . implode(', ', $set) . ' WHERE ruleId = :id', $params);
+        SolariCtl::call('RULE_SET', $args);   // C performs the UPDATE
 
         $row = Db::row(
             'SELECT ruleId, scope, metric, op, threshold, forSeconds, severity, enabled
@@ -247,31 +229,6 @@ function config_current_view(): array
     }
 
     return $cfg;
-}
-
-/**
- * Persist the merged global config document and bump its epoch. Returns the new
- * epoch. The document is stored verbatim (minus volatile/derived keys) so reads
- * reflect exactly what was pushed.
- *
- * @param array<string,mixed> $merged
- */
-function config_persist_global(array $merged, string $operator): int
-{
-    // Don't store derived/volatile fields back into the document.
-    unset($merged['epoch']);
-
-    $prev  = (int) (Db::scalar('SELECT epoch FROM globalConfig WHERE id = 1') ?? 0);
-    $epoch = $prev + 1;
-    Db::exec(
-        'INSERT INTO globalConfig (id, configBlob, epoch, updatedAt, updatedBy)
-              VALUES (1, :blob, :epoch, UTC_TIMESTAMP(), :by)
-         ON DUPLICATE KEY UPDATE
-              configBlob = VALUES(configBlob), epoch = VALUES(epoch),
-              updatedAt  = VALUES(updatedAt),  updatedBy = VALUES(updatedBy)',
-        [':blob' => json_encode($merged), ':epoch' => $epoch, ':by' => ($operator !== '' ? $operator : null)]
-    );
-    return $epoch;
 }
 
 /** Validate + return a positive node id, or emit 400. */

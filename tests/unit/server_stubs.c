@@ -12,6 +12,7 @@
  * they exercise the real static code, not these stubs.
  */
 #include "server.h"
+#include "serverAssets.h"
 
 #define WEAK __attribute__((weak))
 
@@ -82,6 +83,9 @@ WEAK solariStatus serverAlertEvalMonitor(serverContext *c, uint64_t n,
     const solariMonitorReport *r, bool u) { (void)c;(void)n;(void)r;(void)u; return SOLARI_OK; }
 WEAK solariStatus serverMasterReconcile(serverContext *c, uint64_t n,
     const solariMonitorReport *r) { (void)c;(void)n;(void)r; return SOLARI_OK; }
+WEAK solariStatus serverMasterAcceptHello(serverContext *c, const solariFrameHeader *h,
+    const solariHello *hello, const char *cn, uint8_t *o, size_t cap, size_t *ol, uint16_t *tc)
+{ (void)c;(void)h;(void)hello;(void)cn;(void)o;(void)cap; if(ol)*ol=0; if(tc)*tc=0; return SOLARI_OK; }
 WEAK solariStatus serverControlOnResult(serverContext *c, uint64_t n, uint32_t cor,
     const uint8_t *p, size_t l) { (void)c;(void)n;(void)cor;(void)p;(void)l; return SOLARI_OK; }
 WEAK solariStatus serverControlOnSurveyResp(serverContext *c, uint64_t n,
@@ -118,5 +122,33 @@ WEAK solariStatus serverProvisionAdoptTarget(serverContext *c, uint64_t id, cons
 WEAK solariStatus serverScanRun(serverContext *c, const char *cidr,
     const char *ports, size_t *found)
 { (void)c;(void)cidr;(void)ports; if(found)*found=0; return SOLARI_OK; }
+WEAK solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *tid,
+    const char *host, int port, const char *proto, int repl,
+    const char *label, const char *seg, uint64_t asset)
+{ (void)db;(void)tid;(void)host;(void)port;(void)proto;(void)repl;(void)label;(void)seg;(void)asset; return SOLARI_OK; }
+WEAK solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *tid)
+{ (void)db;(void)tid; return SOLARI_OK; }
+WEAK solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
+    const char *dn, const char *cls, uint64_t pool, const char *tags,
+    const char *notes, bool mon, uint64_t *aid)
+{ (void)db;(void)ip;(void)host;(void)dn;(void)cls;(void)pool;(void)tags;(void)notes;(void)mon; if(aid)*aid=0; return SOLARI_OK; }
+WEAK solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *aid)
+{ (void)db;(void)ip; if(aid)*aid=0; return SOLARI_OK; }
+WEAK solariStatus serverDbCreatePool(serverDb *db, const char *n, const char *d,
+    const char *c, uint64_t *pid)
+{ (void)db;(void)n;(void)d;(void)c; if(pid)*pid=0; return SOLARI_OK; }
+WEAK solariStatus serverDbUpdatePool(serverDb *db, uint64_t pid, const char *n,
+    const char *d, const char *c)
+{ (void)db;(void)pid;(void)n;(void)d;(void)c; return SOLARI_OK; }
+WEAK solariStatus serverDbSetGlobalConfig(serverDb *db, const char *cfg,
+    const char *by, uint64_t *epoch)
+{ (void)db;(void)cfg;(void)by; if(epoch)*epoch=0; return SOLARI_OK; }
+WEAK solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e)
+{ (void)db;(void)e; return SOLARI_OK; }
+WEAK solariStatus serverAssetsAdopt(serverContext *c, const serverAdoptOpts *o, uint64_t *aid)
+{ (void)c;(void)o; if(aid)*aid=0; return SOLARI_OK; }
+WEAK solariStatus serverAssetsSetMeta(serverContext *c, const char *ip, const char *dn,
+    const char *cls, uint64_t pool, const char *tags, const char *notes, bool mon)
+{ (void)c;(void)ip;(void)dn;(void)cls;(void)pool;(void)tags;(void)notes;(void)mon; return SOLARI_OK; }
 WEAK solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csr, char *b, size_t c)
 { (void)ctl;(void)csr; if(b&&c)b[0]='\0'; return ERR_TLS; }

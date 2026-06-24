@@ -1,0 +1,31 @@
+; SolariNet SCP server (ingest/control + solariCtl bridge) as a systemd unit.
+;
+; Runs as the repo owner so the solariCtl socket and PKI it creates are owned
+; consistently with the php-fpm pool that connects to them. The DB password is
+; supplied out-of-band via an EnvironmentFile (KEY=VALUE, mode 0600) so it is
+; not baked into the unit.
+;
+; Install:
+;   # create the env file (NOT committed): printf 'SOLARI_DB_PASS=…\n' > run/server.env ; chmod 600 run/server.env
+;   sudo cp deploy/dashboard/solarinet-server.service /etc/systemd/system/
+;   sudo systemctl daemon-reload && sudo systemctl enable --now solarinet-server
+;
+; Adjust paths/User to your host.
+
+[Unit]
+Description=SolariNet SCP server (ingest/control + solariCtl bridge)
+After=network-online.target mariadb.service
+Wants=network-online.target mariadb.service
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet
+EnvironmentFile=/home/jason/Code/Solarinet/run/server.env
+ExecStart=/home/jason/Code/Solarinet/build-io/src/server/solariServer --config /home/jason/Code/Solarinet/run/server.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

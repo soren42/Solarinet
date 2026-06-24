@@ -558,6 +558,23 @@ solariStatus serverProvisionRetire(serverContext *ctx, uint64_t nodeId)
 /* Probe-target adoption: CTRL_ADOPT_TARGET (§7.4)                        */
 /* ===================================================================== */
 
+/* First TCP port mentioned in a services blob like ["ssh:22","https:443"];
+ * returns 0 if none is present (caller then falls back to an ICMP target). */
+static int provFirstPort(const char *services)
+{
+    const char *p;
+    if (!services) return 0;
+    for (p = services; *p; p++) {
+        if (*p == ':' && p[1] >= '0' && p[1] <= '9') {
+            int port = 0;
+            const char *q = p + 1;
+            while (*q >= '0' && *q <= '9') { port = port * 10 + (*q - '0'); q++; }
+            if (port > 0 && port <= 65535) return port;
+        }
+    }
+    return 0;
+}
+
 solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
                                         const char *probeSpec)
 {
@@ -597,6 +614,27 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
                    "provision/adopt: discovered %llu has no addressable target",
                    (unsigned long long)discId);
         return ERR_INVALID_ARG;
+    }
+
+    /* Catalog the adopted entity as a probe target NOW (before dispatch), so it
+     * is immediately visible in /api/probes and assignable to monitors even if
+     * the owning monitor is currently unreachable or none is enrolled yet. The
+     * proto/port are derived from the first discovered service; a host with no
+     * known TCP service falls back to an ICMP reachability target. */
+    {
+        int         port  = provFirstPort(ent.servicesJson);
+        const char *proto = port ? "tcp" : "icmp";
+        const char *label = ent.host[0] ? ent.host : ent.ip;
+        char        targetId[160];
+        solariStatus prc;
+        if (port) (void)snprintf(targetId, sizeof targetId, "tcp:%s:%d", ent.ip, port);
+        else      (void)snprintf(targetId, sizeof targetId, "icmp:%s", ent.ip);
+        prc = serverDbUpsertProbeTarget(ctx->db, targetId, ent.ip, port, proto,
+                                        2 /* replFactor */, label, ent.segId, 0);
+        if (prc != SOLARI_OK)
+            solariLogf(SOLARI_LOG_WARN,
+                       "provision/adopt: probeTarget upsert for disc %llu failed: %s "
+                       "(continuing)", (unsigned long long)discId, solariStrError(prc));
     }
 
     /* Mark the row as adopting before dispatch so a concurrent re-advert does

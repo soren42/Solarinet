@@ -2,11 +2,13 @@
    SolariNet — screens3: Discovery, Provisioning, Config & Rules
    ============================================================ */
 (function () {
-  const { useState } = React;
+  const { useState, useEffect } = React;
   const Icon = window.Icon;
   const { StatusDot } = window;
   const S = window.SOLARI;
   const fmt = S.fmt;
+  const STATE_DOT = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)", unknown: "var(--unknown)" };
+  const dotStyle = (state, sz) => ({ background: STATE_DOT[state] || "var(--unknown)", width: sz || 9, height: sz || 9, display: "inline-block", borderRadius: "50%" });
 
   function toast(msg, icon) { if (window.__solariToast) window.__solariToast(msg, icon); }
   // adapter handle (live mutations); null/offline-safe
@@ -19,26 +21,19 @@
     const [auto, setAuto] = useState(S.config.autoDiscover);
     const [cidr, setCidr] = useState("");
     const [scanning, setScanning] = useState(false);
+    const [adoptDisc, setAdoptDisc] = useState(null);   // discovered entity in the adopt dialog
     const items = S.discovered;
     const active = items.filter((d) => staged[d.host] !== "ignored");
     const byVia = {};
     items.forEach((d) => { byVia[d.via] = (byVia[d.via] || 0) + 1; });
 
-    // adopt (monitor) — POST /api/discovery/{discId}/adopt via the adapter
-    function stage(d) {
-      setStaged((s) => ({ ...s, [d.host]: "staged" }));   // optimistic
-      const a = api();
-      if (a && a.adoptDiscovered && d.discId != null) {
-        a.adoptDiscovered(d.discId).then(function () {
-          toast(`Adopting ${d.host} → solariCtl (probe target)`, "shield");
-          refresh();
-        }).catch(function (e) {
-          setStaged((s) => { const n = { ...s }; delete n[d.host]; return n; });
-          toast(`Adopt failed: ${e && e.message || "error"}`, "close");
-        });
-      } else {
-        toast(`Enrollment token issued → ${d.host}`, "shield");
-      }
+    // "+ Monitor" opens the adopt dialog (pick services, heartbeat, name, pool).
+    function stage(d) { setAdoptDisc(d); }
+    // called by the dialog on a successful adopt
+    function onAdopted(host) {
+      setStaged((s) => ({ ...s, [host]: "staged" }));   // optimistic remove
+      setAdoptDisc(null);
+      refresh();
     }
     // ignore — POST /api/discovery/{discId}/ignore via the adapter
     function ignore(d) {
@@ -127,6 +122,104 @@
             </div>
           );
         })}
+
+        {adoptDisc && <AdoptModal disc={adoptDisc} onClose={() => setAdoptDisc(null)}
+                                  onAdopted={onAdopted} />}
+      </div>
+    );
+  }
+
+  /* ===================== ADOPT DIALOG ===================== */
+  // Turn a discovered host into a monitored asset: choose which services to probe,
+  // toggle the ICMP host heartbeat, name + classify it, and assign a pool.
+  function AdoptModal({ disc, onClose, onAdopted }) {
+    const pools = S.pools || [];
+    const svcList = (disc.services || []).map(function (s) {
+      const parts = String(s).split(":");
+      return { label: String(s), port: parseInt(parts[1] || parts[0], 10) };
+    }).filter(function (x) { return x.port > 0 && x.port <= 65535; });
+
+    const [name, setName] = useState(disc.host || disc.ip || "");
+    const [cls, setCls] = useState("server");
+    const [poolId, setPoolId] = useState(pools.length ? String(pools[0].poolId) : "1");
+    const [heartbeat, setHeartbeat] = useState(true);
+    const [sel, setSel] = useState(function () { const m = {}; svcList.forEach(function (s) { m[s.port] = true; }); return m; });
+    const [busy, setBusy] = useState(false);
+
+    const fld = { width: "100%", boxSizing: "border-box", padding: "8px 10px", marginTop: 4, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13 };
+    const lbl = { fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", opacity: 0.6, marginTop: 14, display: "block" };
+
+    function submit() {
+      const a = api();
+      if (!a || !a.adoptDiscovered) { toast("Adopt unavailable (offline)", "close"); return; }
+      const ports = svcList.filter(function (s) { return sel[s.port]; }).map(function (s) { return s.port; });
+      setBusy(true);
+      a.adoptDiscovered(disc.discId, {
+        displayName: name.trim() || disc.ip,
+        class: cls,
+        poolId: Number(poolId),
+        heartbeat: heartbeat,
+        services: ports,
+      }).then(function () {
+        toast(`Adopted ${name.trim() || disc.ip} — ${ports.length + (heartbeat ? 1 : 0)} target(s)`, "shield");
+        onAdopted(disc.host);
+      }).catch(function (e) {
+        toast(`Adopt failed: ${e && e.message || "error"}`, "close");
+        setBusy(false);
+      });
+    }
+
+    return (
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: 460, maxHeight: "86vh", overflowY: "auto", background: "var(--panel, #0c1118)", border: "1px solid var(--line-glow, rgba(255,255,255,0.12))", borderRadius: 14, padding: 22, boxShadow: "0 16px 56px rgba(0,0,0,0.5)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+            <Icon name="shield" size={22} style={{ color: "var(--teal)" }} />
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Monitor system</div>
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>{disc.host} · {disc.ip}</div>
+
+          <label style={lbl}>Display name</label>
+          <input style={fld} value={name} onChange={(e) => setName(e.target.value)} placeholder={disc.ip} />
+
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={lbl}>Classification</label>
+              <select style={fld} value={cls} onChange={(e) => setCls(e.target.value)}>
+                {["server", "appliance", "network", "iot", "host", "other"].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={lbl}>Pool</label>
+              <select style={fld} value={poolId} onChange={(e) => setPoolId(e.target.value)}>
+                {pools.length === 0 && <option value="1">Unassigned</option>}
+                {pools.map((p) => <option key={p.poolId} value={String(p.poolId)}>{p.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <label style={lbl}>Services to monitor</label>
+          {svcList.length === 0 && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>No TCP services discovered — heartbeat only.</div>}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+            {svcList.map((s) => (
+              <label key={s.port} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 8, cursor: "pointer", border: "1px solid " + (sel[s.port] ? "var(--teal)" : "var(--line-glow, rgba(255,255,255,0.14))"), background: sel[s.port] ? "rgba(53,224,208,0.10)" : "transparent", fontSize: 12 }}>
+                <input type="checkbox" checked={!!sel[s.port]} onChange={(e) => setSel(Object.assign({}, sel, { [s.port]: e.target.checked }))} />
+                {s.label}
+              </label>
+            ))}
+          </div>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, cursor: "pointer", fontSize: 13 }}>
+            <input type="checkbox" checked={heartbeat} onChange={(e) => setHeartbeat(e.target.checked)} />
+            Host heartbeat (ICMP ping) — monitor the system itself
+          </label>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22 }}>
+            <button className="btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+            <button className="btn-primary" onClick={submit} disabled={busy}>
+              <Icon name="plus" size={14} />{busy ? "Adopting…" : "Monitor system"}
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -542,5 +635,237 @@
     );
   }
 
-  Object.assign(window, { Discovery, Provisioning, ConfigScreen });
+  /* ===================== POOL CARDS (top-level dashboard) ===================== */
+  // Operator-defined functional pools with per-pool health rollups.
+  function PoolCards({ onOpen }) {
+    const pools = S.pools || [];
+    if (!pools.length) return null;
+    return (
+      <div className="kpis" style={{ marginBottom: 18 }}>
+        {pools.map(function (p) {
+          const h = p.health || {};
+          const total = p.assetCount || 0;
+          const accent = p.color ||
+            (h.down > 0 ? "var(--red)" : h.degraded > 0 ? "var(--amber)" : h.up > 0 ? "var(--ok)" : "var(--muted)");
+          return (
+            <div className="kpi" key={p.poolId}
+                 style={{ cursor: onOpen ? "pointer" : "default", borderLeft: "3px solid " + accent }}
+                 onClick={() => onOpen && onOpen(p)}>
+              <div className="kpi__k">{p.name}</div>
+              <div className="kpi__v">{total}</div>
+              <div className="kpi__sub">
+                {h.up > 0 && <span style={{ color: "var(--ok)" }}>{h.up} up </span>}
+                {h.degraded > 0 && <span style={{ color: "var(--amber)" }}>{h.degraded} deg </span>}
+                {h.down > 0 && <span style={{ color: "var(--red)" }}>{h.down} down </span>}
+                {h.unknown > 0 && <span className="muted">{h.unknown} unknown</span>}
+                {total === 0 && <span className="muted">no systems yet</span>}
+              </div>
+              <div className="kpi__bar" style={{ background: accent }} />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  /* ===================== ASSETS (monitored systems) ===================== */
+  function Assets({ onOpenNode }) {
+    const [assets, setAssets] = useState(S.assets || []);
+    const [, force] = useState(0);
+    const pools = S.pools || [];
+    const dot = { up: "var(--ok)", degraded: "var(--amber)", down: "var(--red)", unknown: "var(--muted)" };
+
+    function newPool() {
+      const name = window.prompt("New pool name (e.g. DNS, Core infra):", "");
+      if (name == null || name.trim() === "") return;
+      const a = api();
+      if (!a || !a.createPool) { toast("Pool creation unavailable (offline)", "close"); return; }
+      a.createPool({ name: name.trim() })
+        .then(function () { toast("Pool created: " + name.trim(), "check"); return a.refresh ? a.refresh() : null; })
+        .then(function () { force(function (n) { return n + 1; }); })
+        .catch(function (e) { toast("Create failed: " + (e && e.message || "error"), "close"); });
+    }
+
+    function patch(asset, body, msg) {
+      const a = api();
+      if (!a || !a.updateAsset) { toast("Edit unavailable (offline)", "close"); return; }
+      a.updateAsset(asset.assetId, body).then(function () {
+        setAssets(function (prev) {
+          return prev.map(function (x) { return x.assetId === asset.assetId ? Object.assign({}, x, body) : x; });
+        });
+        if (msg) toast(msg, "check");
+      }).catch(function (e) { toast("Update failed: " + (e && e.message || "error"), "close"); });
+    }
+    function reassign(asset, poolId) {
+      const pn = (pools.find(function (p) { return p.poolId === Number(poolId); }) || {}).name || null;
+      patch(asset, { poolId: Number(poolId), poolName: pn }, `Moved ${asset.displayName} → ${pn}`);
+    }
+    function rename(asset) {
+      const v = window.prompt("Rename system", asset.displayName);
+      if (v != null && v.trim() !== "") patch(asset, { displayName: v.trim() }, "Renamed");
+    }
+
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div><h1 className="page-title">Systems</h1><div className="page-sub">{assets.length} monitored · {pools.length} pool(s)</div></div>
+          <div className="page-head__right">
+            <button className="btn-primary" onClick={newPool}><Icon name="plus" size={14} />New pool</button>
+          </div>
+        </div>
+        <PoolCards />
+        {assets.length === 0 && (
+          <div className="muted" style={{ padding: "24px 4px" }}>No systems yet. Adopt hosts from <b>Discovery</b> to monitor them.</div>
+        )}
+        {assets.length > 0 && (
+          <div className="tablewrap"><table className="grid">
+            <thead><tr>
+              <th>System</th><th>IP</th><th>Class</th><th>State</th><th>Targets</th><th>Pool</th><th>Heartbeat</th>
+            </tr></thead>
+            <tbody>
+              {assets.map(function (as) {
+                return (
+                  <tr key={as.assetId}>
+                    <td><span style={{ cursor: "pointer" }} onClick={() => rename(as)} title="Rename">{as.displayName} <Icon name="settings" size={11} style={{ opacity: 0.4, verticalAlign: "-1px" }} /></span></td>
+                    <td className="td-mono muted">{as.ip}</td>
+                    <td>{as.class}</td>
+                    <td><span className="dot" style={{ background: dot[as.state] || "var(--muted)", width: 9, height: 9, display: "inline-block", borderRadius: "50%" }} /> {as.state}</td>
+                    <td className="td-mono">{as.targetCount}</td>
+                    <td>
+                      <select value={String(as.poolId || "")} onChange={(e) => reassign(as, e.target.value)}
+                              style={{ background: "rgba(255,255,255,0.04)", color: "inherit", border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", borderRadius: 6, padding: "3px 6px", fontFamily: "inherit", fontSize: 12 }}>
+                        {pools.map((p) => <option key={p.poolId} value={String(p.poolId)}>{p.name}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <button className={"switch" + (as.monitorHost ? " on" : "")} onClick={() => patch(as, { monitorHost: !as.monitorHost }, (as.monitorHost ? "Heartbeat off" : "Heartbeat on") + " — " + as.displayName)}><i /></button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table></div>
+        )}
+      </div>
+    );
+  }
+
+  /* ===================== PER-SERVER (ASSET) DETAIL ===================== */
+  function AssetDetail({ assetId, onBack, onOpenService, toast }) {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState(null);
+    const pools = S.pools || [];
+
+    function load() {
+      const a = api();
+      if (a && a.asset) {
+        a.asset(assetId).then(setData).catch((e) => setErr((e && e.message) || "load failed"));
+      } else {
+        const found = (S.assets || []).find((x) => x.assetId === assetId);
+        setData(found ? Object.assign({ targets: [] }, found) : null);
+      }
+    }
+    useEffect(load, [assetId]);
+
+    function patch(body, msg) {
+      const a = api();
+      if (!a || !a.updateAsset) { toast && toast("Edit unavailable (offline)", "close"); return; }
+      a.updateAsset(assetId, body).then(() => { toast && toast(msg || "Updated", "check"); load(); if (a.refresh) a.refresh(); })
+        .catch((e) => toast && toast("Update failed: " + (e && e.message || "error"), "close"));
+    }
+    function rename() { const v = window.prompt("Rename system", data.displayName); if (v != null && v.trim() !== "") patch({ displayName: v.trim() }, "Renamed"); }
+
+    if (err) return (<div className="page"><button className="btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14} />Back</button><div className="muted" style={{ marginTop: 16 }}>Couldn't load system: {err}</div></div>);
+    if (!data) return (<div className="page"><div className="muted">Loading…</div></div>);
+    const targets = data.targets || [];
+    const sel = { background: "rgba(255,255,255,0.04)", color: "inherit", border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", borderRadius: 6, padding: "3px 6px", fontFamily: "inherit", fontSize: 13 };
+
+    return (
+      <div className="page">
+        <button className="btn-ghost" onClick={onBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back</button>
+        <div className="page-head">
+          <div>
+            <h1 className="page-title"><span style={dotStyle(data.state, 11)} />&nbsp;{data.displayName} <Icon name="settings" size={13} style={{ opacity: 0.4, cursor: "pointer" }} onClick={rename} /></h1>
+            <div className="page-sub">{data.ip}{data.host ? " · " + data.host : ""} · {data.class} · {data.poolName || "Unassigned"}</div>
+          </div>
+        </div>
+
+        <div className="kpis" style={{ marginBottom: 18 }}>
+          <div className="kpi"><div className="kpi__k">State</div><div className="kpi__v" style={{ color: STATE_DOT[data.state] }}>{data.state}</div></div>
+          <div className="kpi"><div className="kpi__k">Targets</div><div className="kpi__v">{targets.length}</div></div>
+          <div className="kpi"><div className="kpi__k">Class</div><div className="kpi__v" style={{ fontSize: 15 }}>
+            <select value={data.class} onChange={(e) => patch({ class: e.target.value }, "Reclassified")} style={sel}>
+              {["server", "appliance", "network", "iot", "host", "other"].map((c) => <option key={c} value={c}>{c}</option>)}
+            </select></div></div>
+          <div className="kpi"><div className="kpi__k">Pool</div><div className="kpi__v" style={{ fontSize: 15 }}>
+            <select value={String(data.poolId || "")} onChange={(e) => patch({ poolId: Number(e.target.value) }, "Moved pool")} style={sel}>
+              {pools.map((p) => <option key={p.poolId} value={String(p.poolId)}>{p.name}</option>)}
+            </select></div></div>
+          <div className="kpi"><div className="kpi__k">Heartbeat</div><div className="kpi__v">
+            <button className={"switch" + (data.monitorHost ? " on" : "")} onClick={() => patch({ monitorHost: !data.monitorHost }, data.monitorHost ? "Heartbeat off" : "Heartbeat on")}><i /></button></div></div>
+        </div>
+
+        <div className="page-sub" style={{ margin: "4px 0 10px" }}>Monitored targets — click for per-service detail</div>
+        {targets.length === 0 && <div className="muted">No targets yet. Enable the heartbeat or adopt services for this system.</div>}
+        {targets.length > 0 && (
+          <div className="tablewrap"><table className="grid">
+            <thead><tr><th>Target</th><th>Proto</th><th>Port</th><th>State</th><th>Vantages</th></tr></thead>
+            <tbody>
+              {targets.map((t) => (
+                <tr key={t.targetId} style={{ cursor: "pointer" }} onClick={() => onOpenService(t.targetId)}>
+                  <td>{t.label || t.targetId}</td>
+                  <td>{t.proto}</td>
+                  <td className="td-mono">{t.port || "—"}</td>
+                  <td><span style={dotStyle(t.state)} /> {t.state}</td>
+                  <td className="td-mono">{t.vantages}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+        <div className="muted" style={{ marginTop: 18, fontSize: 12 }}>
+          {data.nodeId ? "Agent linked — host metrics available." : "No agent deployed on this system — reachability only. Deploy a SolariNet client to collect CPU / RAM / disk metrics."}
+        </div>
+      </div>
+    );
+  }
+
+  /* ===================== PER-SERVICE (TARGET) DETAIL ===================== */
+  function ServiceDetail({ targetId, onBack }) {
+    const probe = (S.probes || []).find((p) => p.targetId === targetId);
+    if (!probe) return (<div className="page"><button className="btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14} />Back</button><div className="muted" style={{ marginTop: 16 }}>Target not found.</div></div>);
+    const rtt = (us) => (fmt && fmt.rtt) ? fmt.rtt(us) : (us ? (us / 1000).toFixed(1) + " ms" : "—");
+    return (
+      <div className="page">
+        <button className="btn-ghost" onClick={onBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back</button>
+        <div className="page-head">
+          <div>
+            <h1 className="page-title"><span style={dotStyle(probe.state, 11)} />&nbsp;{probe.label || probe.targetId}</h1>
+            <div className="page-sub">{probe.proto}{probe.port ? ":" + probe.port : ""} · {probe.host} · state {probe.state}</div>
+          </div>
+        </div>
+        <div className="page-sub" style={{ margin: "4px 0 10px" }}>Vantages ({probe.vantages.length})</div>
+        {probe.vantages.length === 0 && <div className="muted">No monitor has probed this target yet. Deploy or assign a monitor to collect reachability, RTT, and loss.</div>}
+        {probe.vantages.length > 0 && (
+          <div className="tablewrap"><table className="grid">
+            <thead><tr><th>Monitor</th><th>Outcome</th><th>RTT</th><th>Jitter</th><th>Loss</th><th>Seen</th></tr></thead>
+            <tbody>
+              {probe.vantages.map((v, i) => (
+                <tr key={i}>
+                  <td>{v.monitorName || v.monitorNode}</td>
+                  <td><span style={{ background: v.outcome === "ok" ? "var(--ok)" : "var(--crit)", width: 9, height: 9, display: "inline-block", borderRadius: "50%" }} /> {v.outcome}</td>
+                  <td className="td-mono">{rtt(v.rttMicros)}</td>
+                  <td className="td-mono">{(v.jitterMicros / 1000).toFixed(1)} ms</td>
+                  <td className="td-mono">{(v.lossPermille / 10).toFixed(1)}%</td>
+                  <td className="td-mono muted">{v.sampledMin}m ago</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+      </div>
+    );
+  }
+
+  Object.assign(window, { Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail });
 })();

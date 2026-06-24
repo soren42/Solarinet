@@ -24,7 +24,8 @@
     ), [fleet, stateFilter, roleFilter]);
 
     const roll = S.fleetRoll;
-    const avgCpu = Math.round(fleet.filter((n) => n.state !== "down").reduce((a, n) => a + n.cpuPct, 0) / Math.max(1, fleet.filter((n) => n.state !== "down").length));
+    const cpuNodes = fleet.filter((n) => !n.isAsset && n.state !== "down");
+    const avgCpu = Math.round(cpuNodes.reduce((a, n) => a + n.cpuPct, 0) / Math.max(1, cpuNodes.length));
     const monsUp = fleet.filter((n) => n.role === "monitor" && n.state === "up").length;
     const monsTotal = fleet.filter((n) => n.role === "monitor").length;
 
@@ -98,31 +99,38 @@
   }
 
   function HeatView({ nodes, dense, onOpenNode }) {
+    // One block (network segment, or a functional pool for agent-less systems).
+    const block = (key, title, sub, segNodes) => {
+      if (!segNodes.length) return null;
+      const roll = { up: 0, degraded: 0, down: 0, unknown: 0 };
+      segNodes.forEach((n) => roll[n.state]++);
+      return (
+        <div className="segment-block" key={key}>
+          <div className="segment-head">
+            <h3>{title}</h3>
+            <span className="cidr">{sub}</span>
+            <span className="rule" />
+            <div className="roll">
+              {roll.down > 0 && <span className="roll-pip"><span className="dot down" />{roll.down}</span>}
+              {roll.degraded > 0 && <span className="roll-pip"><span className="dot degraded" />{roll.degraded}</span>}
+              <span className="roll-pip"><span className="dot up" />{roll.up}</span>
+            </div>
+          </div>
+          <div className={"heat" + (dense ? "" : " cozy")}>
+            {segNodes.map((n) => <Cell key={n.nodeId} n={n} dense={dense} onOpenNode={onOpenNode} />)}
+          </div>
+        </div>
+      );
+    };
+    // Adopted systems carry no network segment; group them by pool so they still
+    // appear in the heatmap (not just the table).
+    const knownSeg = {}; S.segments.forEach((s) => { knownSeg[s.id] = true; });
+    const pools = {};
+    nodes.forEach((n) => { if (!knownSeg[n.segId]) { const k = n.segName || "Other"; (pools[k] = pools[k] || []).push(n); } });
     return (
       <div>
-        {S.segments.map((seg) => {
-          const segNodes = nodes.filter((n) => n.segId === seg.id);
-          if (!segNodes.length) return null;
-          const roll = { up: 0, degraded: 0, down: 0, unknown: 0 };
-          segNodes.forEach((n) => roll[n.state]++);
-          return (
-            <div className="segment-block" key={seg.id}>
-              <div className="segment-head">
-                <h3>{seg.name}</h3>
-                <span className="cidr">{seg.cidr}</span>
-                <span className="rule" />
-                <div className="roll">
-                  {roll.down > 0 && <span className="roll-pip"><span className="dot down" />{roll.down}</span>}
-                  {roll.degraded > 0 && <span className="roll-pip"><span className="dot degraded" />{roll.degraded}</span>}
-                  <span className="roll-pip"><span className="dot up" />{roll.up}</span>
-                </div>
-              </div>
-              <div className={"heat" + (dense ? "" : " cozy")}>
-                {segNodes.map((n) => <Cell key={n.nodeId} n={n} dense={dense} onOpenNode={onOpenNode} />)}
-              </div>
-            </div>
-          );
-        })}
+        {S.segments.map((seg) => block(seg.id, seg.name, seg.cidr, nodes.filter((n) => n.segId === seg.id)))}
+        {Object.keys(pools).map((k) => block("pool:" + k, k, "systems", pools[k]))}
       </div>
     );
   }
@@ -185,45 +193,50 @@
   }
 
   function CardsView({ nodes, onOpenNode }) {
-    return (
-      <div className="cards">
-        {S.segments.map((seg) => {
-          const segNodes = nodes.filter((n) => n.segId === seg.id);
-          if (!segNodes.length) return null;
-          const roll = { total: segNodes.length, up: 0, degraded: 0, down: 0, unknown: 0 };
-          segNodes.forEach((n) => roll[n.state]++);
-          const avgCpu = Math.round(segNodes.reduce((a, n) => a + n.cpuPct, 0) / segNodes.length);
-          const avgRam = Math.round(segNodes.reduce((a, n) => a + n.ramPct, 0) / segNodes.length);
-          return (
-            <div className="scard" key={seg.id}>
-              <div className="scard__head">
-                <Icon name="arch" size={16} style={{ color: "var(--teal)" }} />
-                <span className="scard__title">{seg.name}</span>
-                <span className="scard__cidr" style={{ marginLeft: "auto" }}>{seg.cidr}</span>
-              </div>
-              <div className="scard__body">
-                <div className="donut-row">
-                  <HealthDonut roll={roll} />
-                  <div style={{ flex: 1 }}>
-                    <div className="scard__stats">
-                      <div className="scard__stat"><div className="k">Up</div><div className="v" style={{ color: "var(--ok)" }}>{roll.up}</div></div>
-                      <div className="scard__stat"><div className="k">Issues</div><div className="v" style={{ color: roll.down ? "var(--crit)" : "var(--warn)" }}>{roll.down + roll.degraded}</div></div>
-                      <div className="scard__stat"><div className="k">Avg CPU</div><div className="v" style={{ color: metricColor(avgCpu) }}>{avgCpu}%</div></div>
-                      <div className="scard__stat"><div className="k">Avg RAM</div><div className="v" style={{ color: metricColor(avgRam) }}>{avgRam}%</div></div>
-                    </div>
-                  </div>
+    const card = (key, title, sub, desc, segNodes) => {
+      if (!segNodes.length) return null;
+      const roll = { total: segNodes.length, up: 0, degraded: 0, down: 0, unknown: 0 };
+      segNodes.forEach((n) => roll[n.state]++);
+      const metricNodes = segNodes.filter((n) => !n.isAsset);  // agent-less systems have no CPU/RAM
+      const avgCpu = metricNodes.length ? Math.round(metricNodes.reduce((a, n) => a + n.cpuPct, 0) / metricNodes.length) : 0;
+      const avgRam = metricNodes.length ? Math.round(metricNodes.reduce((a, n) => a + n.ramPct, 0) / metricNodes.length) : 0;
+      return (
+        <div className="scard" key={key}>
+          <div className="scard__head">
+            <Icon name="arch" size={16} style={{ color: "var(--teal)" }} />
+            <span className="scard__title">{title}</span>
+            <span className="scard__cidr" style={{ marginLeft: "auto" }}>{sub}</span>
+          </div>
+          <div className="scard__body">
+            <div className="donut-row">
+              <HealthDonut roll={roll} />
+              <div style={{ flex: 1 }}>
+                <div className="scard__stats">
+                  <div className="scard__stat"><div className="k">Up</div><div className="v" style={{ color: "var(--ok)" }}>{roll.up}</div></div>
+                  <div className="scard__stat"><div className="k">Issues</div><div className="v" style={{ color: roll.down ? "var(--crit)" : "var(--warn)" }}>{roll.down + roll.degraded}</div></div>
+                  <div className="scard__stat"><div className="k">Avg CPU</div><div className="v" style={{ color: metricColor(avgCpu) }}>{metricNodes.length ? avgCpu + "%" : "—"}</div></div>
+                  <div className="scard__stat"><div className="k">Avg RAM</div><div className="v" style={{ color: metricColor(avgRam) }}>{metricNodes.length ? avgRam + "%" : "—"}</div></div>
                 </div>
-                <div className="minigrid">
-                  {segNodes.map((n) => (
-                    <div key={n.nodeId} className="minicell" title={`${n.name} — ${n.state}`} onClick={() => onOpenNode(n)}
-                      style={{ background: STATE_COLOR[n.state], boxShadow: n.state === "down" ? "0 0 7px var(--crit)" : "none", opacity: n.state === "unknown" ? 0.5 : 1 }} />
-                  ))}
-                </div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-faint)", marginTop: 10 }}>{seg.desc}</div>
               </div>
             </div>
-          );
-        })}
+            <div className="minigrid">
+              {segNodes.map((n) => (
+                <div key={n.nodeId} className="minicell" title={`${n.name} — ${n.state}`} onClick={() => onOpenNode(n)}
+                  style={{ background: STATE_COLOR[n.state], boxShadow: n.state === "down" ? "0 0 7px var(--crit)" : "none", opacity: n.state === "unknown" ? 0.5 : 1 }} />
+              ))}
+            </div>
+            {desc && <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-faint)", marginTop: 10 }}>{desc}</div>}
+          </div>
+        </div>
+      );
+    };
+    const knownSeg = {}; S.segments.forEach((s) => { knownSeg[s.id] = true; });
+    const pools = {};
+    nodes.forEach((n) => { if (!knownSeg[n.segId]) { const k = n.segName || "Other"; (pools[k] = pools[k] || []).push(n); } });
+    return (
+      <div className="cards">
+        {S.segments.map((seg) => card(seg.id, seg.name, seg.cidr, seg.desc, nodes.filter((n) => n.segId === seg.id)))}
+        {Object.keys(pools).map((k) => card("pool:" + k, k, "systems", "monitored systems", pools[k]))}
       </div>
     );
   }

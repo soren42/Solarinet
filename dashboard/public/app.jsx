@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail } = window;
 
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
@@ -92,9 +92,20 @@
       return () => clearInterval(iv);
     }, []);
 
+    const scrollTop = () => { const c = document.querySelector(".content"); if (c) c.scrollTop = 0; };
     const openNode = useCallback((nodeOrId) => {
-      const node = typeof nodeOrId === "string" ? S.nodes.find((n) => n.nodeId === nodeOrId) : nodeOrId;
-      if (node) { setRoute({ name: "node", node }); document.querySelector(".content") && (document.querySelector(".content").scrollTop = 0); }
+      const node = typeof nodeOrId === "string"
+        ? ((S.fleet || S.nodes).find((n) => n.nodeId === nodeOrId)) : nodeOrId;
+      if (!node) return;
+      // Adopted systems (no agent) get the asset detail page, not the metric-heavy
+      // agent NodeDetail (which assumes host telemetry and would blank out).
+      if (node.isAsset) setRoute({ name: "asset", assetId: node.assetId });
+      else setRoute({ name: "node", node });
+      scrollTop();
+    }, []);
+    const openService = useCallback((targetId, backRoute) => {
+      setRoute({ name: "service", targetId, backRoute: backRoute || { name: "reachability" } });
+      scrollTop();
     }, []);
 
     const go = useCallback((id) => {
@@ -131,6 +142,7 @@
         { id: "go-alerts", group: "Navigate", label: "Alerts & Tolerances", icon: "alerts", action: () => go("alerts"), sub: `${S.activeCrit + S.activeWarn} active` },
         { id: "go-reach", group: "Navigate", label: "Reachability Matrix", icon: "reachability", action: () => go("reachability") },
         { id: "go-topo", group: "Navigate", label: "Topology Map", icon: "topology", action: () => go("topology") },
+        { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${(S.assets || []).length} monitored` },
         { id: "go-disc", group: "Navigate", label: "Discovery", icon: "discovery", action: () => go("discovery"), sub: `${S.discovered.length} new` },
         { id: "go-prov", group: "Navigate", label: "Provisioning", icon: "provision", action: () => go("provision"), sub: `${S.enrollments.length} pending` },
         { id: "go-cfg", group: "Navigate", label: "Config & Rules", icon: "settings", action: () => go("settings") },
@@ -156,6 +168,11 @@
 
     return (
       <div className="app">
+        {S.source === "offline" && (
+          <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "var(--amber, #ffb23d)", color: "#05080e", textAlign: "center", fontSize: 12, fontWeight: 600, padding: "5px 10px", letterSpacing: "0.02em" }}>
+            ⚠ DEMO DATA — live API unreachable{S.offlineReason ? " (" + S.offlineReason + ")" : ""}; showing the offline fixture, not your fleet.
+          </div>
+        )}
         {!navHidden && window.innerWidth <= 980 && <div className="scrim" onClick={() => setNavHidden(true)} />}
         <Sidebar active={route.name === "node" ? "fleet" : route.name}
           onNav={go} collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} hidden={navHidden} summary={S.summary} activeCrit={S.activeCrit} />
@@ -164,8 +181,12 @@
             onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
             server={S.server} onSurvey={() => survey(null)} />
           <div className="content">
-            {route.name === "fleet" && <FleetOverview onOpenNode={openNode} view={fleetView} setView={setFleetView} fleet={S.nodes} />}
+            {route.name === "fleet" && PoolCards && <PoolCards onOpen={() => go("assets")} />}
+            {route.name === "fleet" && <FleetOverview onOpenNode={openNode} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
+            {route.name === "assets" && Assets && <Assets onOpenNode={openNode} />}
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
+            {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}
+            {route.name === "service" && ServiceDetail && <ServiceDetail targetId={route.targetId} onBack={() => setRoute(route.backRoute)} />}
             {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} rules={rules} setRules={setRules} toast={toast} />}
             {route.name === "reachability" && <Reachability onOpenNode={openNode} />}
             {route.name === "topology" && <Topology onOpenNode={openNode} />}

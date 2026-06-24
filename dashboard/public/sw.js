@@ -5,19 +5,21 @@
    last C2 view during a server blip. No build step; plain SW.
 
    Strategy:
-     - app shell + vendored React/Babel + fonts/icons/styles + the
-       .jsx sources: cache-first (precached on install, served offline).
-       This is what makes the C2 keep painting when the server is down.
-     - /api/* reads: network-first with a cache fallback, so a live
-       server always wins but the last successful payload survives a
-       blip (the adapter's offline fixture is the deeper fallback).
+     - app code (index.html, *.jsx, styles.css): NETWORK-FIRST with a cache
+       fallback. The intranet server is normally up, so an operator always
+       gets the freshly deployed code; the cache only serves during a server
+       blip (so the C2 keeps painting offline). This avoids the stale-bundle
+       trap where a redeploy was masked by a cache-first shell.
+     - vendored libs + fonts + icons: cache-first (immutable; rarely change).
+     - /api/* reads: network-first with a cache fallback (live wins; last
+       good payload survives a blip; the adapter fixture is the deeper fallback).
      - everything else: network, falling back to cache.
 
-   Bump CACHE_VERSION on any shell/vendor change to evict the old set.
+   Bump CACHE_VERSION on any vendor/asset change to evict the old set.
    ============================================================ */
 "use strict";
 
-const CACHE_VERSION = "solari-v2";
+const CACHE_VERSION = "solari-v3";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
 const API_CACHE = CACHE_VERSION + "-api";
 
@@ -95,23 +97,31 @@ self.addEventListener("fetch", function (event) {
 
   // API reads: network-first, fall back to last good cached response.
   if (url.pathname.indexOf("/api/") === 0) {
-    event.respondWith(networkFirst(req));
+    event.respondWith(networkFirst(req, API_CACHE));
     return;
   }
 
-  // Shell / assets: cache-first, fall back to network, then to index.html
-  // (so a deep route still paints the SPA shell offline).
-  event.respondWith(cacheFirst(req));
+  // Immutable-ish assets (vendored libs, fonts, icons): cache-first.
+  if (/\/(vendor|fonts|icons)\//.test(url.pathname)) {
+    event.respondWith(cacheFirst(req));
+    return;
+  }
+
+  // App code (html / css / jsx): network-first so a redeploy is picked up
+  // immediately when online; the cached copy is the offline fallback.
+  event.respondWith(networkFirst(req, SHELL_CACHE));
 });
 
-function networkFirst(req) {
-  return caches.open(API_CACHE).then(function (cache) {
+function networkFirst(req, cacheName) {
+  return caches.open(cacheName).then(function (cache) {
     return fetch(req).then(function (resp) {
-      if (resp && resp.ok) cache.put(req, resp.clone());
+      if (resp && resp.ok && resp.type === "basic") cache.put(req, resp.clone());
       return resp;
     }).catch(function () {
       return cache.match(req).then(function (hit) {
-        return hit || new Response(
+        if (hit) return hit;
+        if (req.mode === "navigate") return caches.match("index.html");
+        return new Response(
           JSON.stringify({ ok: false, error: { code: "OFFLINE", message: "no network and no cached response" } }),
           { status: 503, headers: { "Content-Type": "application/json" } }
         );

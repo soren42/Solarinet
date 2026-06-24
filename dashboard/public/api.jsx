@@ -151,6 +151,10 @@
     enrReject:    function (id) { return "/api/enrollments/" + encodeURIComponent(id) + "/reject"; },
     builds:       "/api/builds",
     config:       "/api/config",
+    pools:        "/api/pools",
+    pool:         function (id) { return "/api/pools/" + encodeURIComponent(id); },
+    assets:       "/api/assets",
+    asset:        function (id) { return "/api/assets/" + encodeURIComponent(id); },
     provision:    "/api/control/provision",
     decommission: "/api/control/decommission",
     survey:       "/api/control/survey",
@@ -336,6 +340,26 @@
     return r;
   }
 
+  // Synthesize a node-shaped row for a monitored asset (no agent), so adopted
+  // systems appear in the Fleet Overview alongside enrolled nodes. Host metrics
+  // are blank (reachability-only); state comes from its probe-target rollup.
+  function mapAssetNode(a) {
+    return {
+      nodeId: "asset-" + a.assetId, assetId: a.assetId, isAsset: true,
+      sym: "", name: a.displayName || a.ip, hostFqdn: a.host || a.ip, ip: a.ip,
+      role: "system", segId: a.poolId, segName: a.poolName || "—", cidr: "",
+      osName: a.class, arch: "", state: a.state || "unknown",
+      lastSeenMin: 0, enrolledDaysAgo: 0, configEpoch: 0, converged: true,
+      cpuPct: 0, cores: [], ramPct: 0, ramUsedKb: 0, ramTotalKb: 0,
+      swapPct: 0, swapUsedKb: 0, swapTotalKb: 0,
+      disks: [], ifaces: [], procs: [], diskMaxPct: 0,
+      netTotalMbps: 0, netCapMbps: 0, alertsCount: 0,
+      hist: { cpu: [], ram: [], net: [], disk: [] }, uptimeDays: 0,
+      uplink: null, uplinkPort: null, linkType: null, linkSpeedMbps: 0, lldp: false,
+      targetCount: a.targetCount, tags: a.tags || [], pool: a.poolName,
+    };
+  }
+
   // =====================================================================
   // assemble window.SOLARI live (parallel fetch of the §6/§11.2 reads)
   // =====================================================================
@@ -352,18 +376,29 @@
       getJSON(EP.builds),
       getJSON(EP.config),
       getJSON(EP.netgear),
+      // new operator-config reads; tolerate failure so they never force the
+      // whole dashboard into the offline fixture.
+      getJSON(EP.pools).catch(function () { return []; }),
+      getJSON(EP.assets).catch(function () { return []; }),
     ]).then(function (res) {
+      // Defensive unpack: a list endpoint that unexpectedly returns an object
+      // must degrade that one section to empty, never throw — a throw here would
+      // drop the WHOLE dashboard to the offline fixture.
+      var A = function (v) { return Array.isArray(v) ? v : []; };
       var summaryW = res[0] || {};
-      var nodesW = res[1] || [];
-      var segsW = res[2] || [];
-      var probesW = res[3] || [];
-      var alertsW = res[4] || [];
-      var rulesW = res[5] || [];
-      var discW = res[6] || [];
-      var enrW = res[7] || [];
-      var buildsW = res[8] || [];
+      var nodesW = A(res[1]);
+      var segsW = A(res[2]);
+      var probesW = A(res[3]);
+      var alertsW = A(res[4]);
+      var rulesW = A(res[5]);
+      var discW = A(res[6]);
+      var enrW = A(res[7]);
+      // /api/builds returns { builds:[], nodeVersionDist:[] } — take the array.
+      var buildsW = (res[8] && Array.isArray(res[8].builds)) ? res[8].builds : A(res[8]);
       var configW = res[9] || {};
-      var gearW = res[10] || [];
+      var gearW = A(res[10]);
+      var poolsW = A(res[11]);
+      var assetsW = A(res[12]);
       // /api/summary carries the lease/failover state (§6) — no separate call.
       var leaseW = (summaryW && summaryW.lease) || {};
       var countsW = (summaryW && summaryW.counts) || {};
@@ -398,8 +433,12 @@
 
       var monitors = nodes.filter(function (n) { return n.role === "monitor"; });
 
-      // rollups
-      var fleetRoll = rollup(nodes);
+      // adopted systems (assets) appear in the fleet view as reachability-only rows
+      var systemNodes = assetsW.map(mapAssetNode);
+      var allFleet = nodes.concat(systemNodes);
+
+      // rollups (over nodes + systems so the overview tiles count everything)
+      var fleetRoll = rollup(allFleet);
       var segRollups = {};
       segments.forEach(function (s) {
         segRollups[s.id] = rollup(nodes.filter(function (n) { return n.segId === s.id; }));
@@ -440,6 +479,8 @@
         nodes: nodes, segments: segments, segRollups: segRollups, fleetRoll: fleetRoll, summary: summary,
         probes: probes, rules: rules, alerts: alerts, discovered: discovered,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
+        pools: poolsW, assets: assetsW,
+        systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
         activeCrit: alerts.filter(function (a) { return !a.cleared && a.severity === "crit"; }).length,
@@ -493,6 +534,13 @@
     discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
     ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },
+    // pools + assets (operator config; writes go to the C bridge server-side)
+    pools: function () { return getJSON(EP.pools); },
+    createPool: function (body) { return post(EP.pools, body || {}); },
+    updatePool: function (id, body) { return post(EP.pool(id), body || {}); },
+    assets: function () { return getJSON(EP.assets); },
+    asset: function (id) { return getJSON(EP.asset(id)); },
+    updateAsset: function (id, body) { return post(EP.asset(id), body || {}); },
 
     // enrollment — approve is destructive (signs a cert) so it carries the
     // explicit double-confirm the PHP layer + solariCtl demand.

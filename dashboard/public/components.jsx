@@ -174,6 +174,7 @@
     { id: "topology", label: "Topology Map", icon: "topology" },
     { id: "alerts", label: "Alerts", icon: "alerts", badge: "alerts" },
     { group: "Manage" },
+    { id: "assets", label: "Systems", icon: "host" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
     { id: "settings", label: "Config & Rules", icon: "settings" },
