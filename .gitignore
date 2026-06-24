@@ -58,3 +58,4 @@ __pycache__/
 /deploy/dist/
 /build-arm64/
 /build-arm32/
+/build-amd64/

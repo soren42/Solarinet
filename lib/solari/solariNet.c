@@ -271,12 +271,19 @@ solariStatus solariConnRecv(solariConn *c, const uint8_t **frame, size_t *len)
 
 solariStatus solariConnPeerCn(solariConn *c, char *buf, size_t cap)
 {
-    char *cn = NULL;
-    int   rv;
-
     if (buf && cap > 0) buf[0] = '\0';
     if (!c || !buf || cap == 0) return ERR_INVALID_ARG;
     if (c->rxmsg == NULL) return ERR_CONN_RETRY;   /* no frame received yet */
+
+#ifndef NNG_OPT_TLS_PEER_CN
+    /* nng predates the peer-CN option (added after 1.5.x — e.g. Debian bookworm
+     * ships 1.5.2). Only the server tier extracts the peer CN and it is built
+     * against a newer nng; clients never call this, so degrade to "no CN". */
+    (void)c;
+    return ERR_TLS;
+#else
+    char *cn = NULL;
+    int   rv;
 
     /* The peer CN is a property of the pipe the last message arrived on. On a
      * plaintext transport (or an unverified peer) nng has no CN to report. */
@@ -297,6 +304,7 @@ solariStatus solariConnPeerCn(solariConn *c, char *buf, size_t cap)
     }
     nng_strfree(cn);
     return SOLARI_OK;
+#endif /* NNG_OPT_TLS_PEER_CN */
 }
 
 void solariConnClose(solariConn *c)

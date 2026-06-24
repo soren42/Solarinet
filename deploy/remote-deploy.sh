@@ -40,7 +40,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-HOST=""; SERVER_URL=""; FQDN=""; CA_DIR="${REPO_ROOT}/run/pki"; BIN=""
+HOST=""; SERVER_URL=""; SERVER_IP=""; FQDN=""; CA_DIR="${REPO_ROOT}/run/pki"; BIN=""
 CONF_DIR="/etc/solari"; REMOTE_BIN="/usr/local/bin/solariClient"; INTERVAL=15; DRY=0
 CTL_SOCK="${REPO_ROOT}/run/solariCtl.sock"; OP="${USER:-deploy}"
 
@@ -52,6 +52,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --host)       HOST="${2:?}"; shift ;;
     --server)     SERVER_URL="${2:?}"; shift ;;
+    --server-ip)  SERVER_IP="${2:?}"; shift ;;
     --fqdn)       FQDN="${2:?}"; shift ;;
     --ca-dir)     CA_DIR="${2:?}"; shift ;;
     --bin)        BIN="${2:?}"; shift ;;
@@ -74,7 +75,15 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required locally (for the 
 # server). The CA PRIVATE key never touches this script — the server's CA signs
 # the CSR over the solariCtl socket (SIGN verb).
 [ -f "${CA_DIR}/ca.pem" ] || die "CA root not found: ${CA_DIR}/ca.pem"
-[ "${SERVER_URL}" ] || SERVER_URL="tls+tcp://$(hostname -f 2>/dev/null || hostname):7701"
+# Dial the server by NAME, not IP: older mbedTLS (e.g. 2.28 on Debian bookworm /
+# UniFiOS / many appliances) does NOT match IP-address SANs, so an IP URL fails
+# TLS on those clients. Default to the server hostname (which is in the cert SAN)
+# and pin it -> the server's LAN IP in the target's /etc/hosts below, so it
+# resolves regardless of LAN DNS. Override the name with --server, the pinned IP
+# with --server-ip.
+[ "${SERVER_URL}" ] || SERVER_URL="tls+tcp://$(hostname):7701"
+SERVER_HOST="${SERVER_URL#*://}"; SERVER_HOST="${SERVER_HOST%%:*}"
+[ -n "${SERVER_IP}" ] || SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
 SSH() { ssh -o BatchMode=yes "${HOST}" "$@"; }
 
@@ -182,7 +191,35 @@ do_push() {  # localfile remotepath mode
 }
 do_remote() { if [ "${DRY}" -eq 1 ]; then echo "  ssh ${HOST} sudo $*"; else SSH "sudo $*"; fi; }
 
-log "deploying to ${HOST}${DRY:+ (dry-run)}"
+# ---- preflight: target must be a writable, systemd host --------------------
+# Immutable appliances (e.g. ZimaOS) mount /usr, /etc, /opt read-only and lack a
+# package manager / the client's shared libs, so the binary+unit deploy can't
+# work. Probe with a real write (test -w can't see a read-only *mount*) and fail
+# early with guidance instead of a cryptic mid-deploy "install:" error.
+if [ "${DRY}" -ne 1 ]; then
+  SSH "command -v systemctl >/dev/null 2>&1" \
+    || die "no systemd (systemctl) on ${HOST}; cannot install a service unit."
+  for d in "$(dirname "${REMOTE_BIN}")" "${CONF_DIR}" /etc/systemd/system /var/lib; do
+    SSH "sudo sh -c 'mkdir -p \"$d\" 2>/dev/null; t=\"$d/.solari_wt\"; touch \"\$t\" 2>/dev/null && rm -f \"\$t\"'" \
+      || die "remote path is read-only: $d on ${HOST}. This looks like an immutable
+   appliance OS. Use writable --remote-bin/--conf-dir if available, or run the
+   client as a container (docker is present on ZimaOS; /DATA/AppData is writable)."
+  done
+fi
+
+log "deploying to ${HOST}$([ "${DRY}" -eq 1 ] && printf ' (dry-run)')"
+
+# Pin the server name -> IP in the target's /etc/hosts when the server is dialed
+# by name (so resolution is guaranteed and older mbedTLS verifies the DNS SAN).
+case "${SERVER_HOST}" in
+  ""|*[!0-9.]*)  # a hostname (or empty) — not a bare IPv4 literal
+    if [ -n "${SERVER_IP}" ] && [ -n "${SERVER_HOST}" ]; then
+      log "pinning ${SERVER_HOST} -> ${SERVER_IP} in ${HOST}:/etc/hosts (TLS SAN)"
+      do_remote "sh -c 'sed -i \"/[[:space:]]${SERVER_HOST}\\$/d\" /etc/hosts 2>/dev/null; printf \"%s %s\\n\" \"${SERVER_IP}\" \"${SERVER_HOST}\" >> /etc/hosts'"
+    fi ;;
+  *) warn "server dialed by IP (${SERVER_HOST}); clients with older mbedTLS (no IP-SAN match) will fail TLS — prefer a --server name in the cert SAN." ;;
+esac
+
 do_push "${BIN}"                          "${REMOTE_BIN}"               0755
 do_push "${TMP}/ca.pem"                   "${CONF_DIR}/ca.pem"          0644
 do_push "${TMP}/node.pem"                 "${CONF_DIR}/node.pem"        0644
@@ -194,7 +231,10 @@ do_remote "mkdir -p /var/lib/solari"
 # Debian/Ubuntu releases (mbedTLS soname package name varies); harmless if absent.
 do_remote "sh -c 'command -v apt-get >/dev/null && (apt-get update -y >/dev/null 2>&1; apt-get install -y libnng1 libsqlite3-0 libcjson1 libmbedtls14 2>/dev/null || apt-get install -y libnng1 libsqlite3-0 libcjson1 libmbedtls12 2>/dev/null) || true'"
 do_remote "systemctl daemon-reload"
-do_remote "systemctl enable --now solarinet-client"
+do_remote "systemctl enable solarinet-client"
+# restart (not just enable --now): on a re-deploy the service is already running,
+# and --now won't restart it, so it would keep using the OLD config/cert.
+do_remote "systemctl restart solarinet-client"
 
 log "done. On ${HOST}: systemctl status solarinet-client ; journalctl -u solarinet-client -f"
 log "the node should appear in the dashboard within one sample interval (${INTERVAL}s)."
