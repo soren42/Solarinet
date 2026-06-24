@@ -1,0 +1,22 @@
+; SolariNet client agent — reports this host's metrics to the server ingest.
+; Runs as the repo owner; reads its config (server URL + TLS cert/key) from
+; client.conf. For a REMOTE host, enroll first to obtain a client cert:
+;   deploy/enrollment/solari-enroll.sh --role client --token <token>
+; then point client.conf at the server and install this unit. Adjust paths/User.
+
+[Unit]
+Description=SolariNet client agent (host metrics -> server ingest)
+After=network-online.target solarinet-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet
+ExecStart=/home/jason/Code/Solarinet/build-io/src/client/solariClient --config /home/jason/Code/Solarinet/run/client.conf --loop
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

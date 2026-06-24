@@ -83,6 +83,9 @@ WEAK solariStatus serverAlertEvalMonitor(serverContext *c, uint64_t n,
     const solariMonitorReport *r, bool u) { (void)c;(void)n;(void)r;(void)u; return SOLARI_OK; }
 WEAK solariStatus serverMasterReconcile(serverContext *c, uint64_t n,
     const solariMonitorReport *r) { (void)c;(void)n;(void)r; return SOLARI_OK; }
+WEAK solariStatus serverMasterAcceptHello(serverContext *c, const solariFrameHeader *h,
+    const solariHello *hello, const char *cn, uint8_t *o, size_t cap, size_t *ol, uint16_t *tc)
+{ (void)c;(void)h;(void)hello;(void)cn;(void)o;(void)cap; if(ol)*ol=0; if(tc)*tc=0; return SOLARI_OK; }
 WEAK solariStatus serverControlOnResult(serverContext *c, uint64_t n, uint32_t cor,
     const uint8_t *p, size_t l) { (void)c;(void)n;(void)cor;(void)p;(void)l; return SOLARI_OK; }
 WEAK solariStatus serverControlOnSurveyResp(serverContext *c, uint64_t n,

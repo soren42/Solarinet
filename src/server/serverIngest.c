@@ -278,6 +278,13 @@ static solariStatus serverIngestClientReport(serverContext *ctx,
         return rc;
     }
 
+    /* A client that just reported is, by definition, reachable: mark it up and
+     * advance lastSeenAt so the dashboard reflects a live agent (best-effort;
+     * derived health for probe targets is reconciled separately). */
+    (void)serverDbSetNodeState(ctx->db, hdr->sourceNodeId, "up");
+    (void)serverDbTouchNode(ctx->db, hdr->sourceNodeId,
+                            hdr->sendTimeUnixMs ? hdr->sendTimeUnixMs : solariNowUnixMs());
+
     rc = serverAlertEvalClient(ctx, hdr->sourceNodeId, &rep, urgent);
     if (rc != SOLARI_OK)
         solariLogf(SOLARI_LOG_WARN, "ingest CLIENT_REPORT alert eval src=0x%llx: %s",
@@ -368,6 +375,24 @@ solariStatus serverIngestDispatch(serverContext *ctx,
     case SCP_MSG_CONTROL_RESULT:
         return serverControlOnResult(ctx, hdr->sourceNodeId,
                                      hdr->correlationId, payload, len);
+
+    case SCP_MSG_HELLO: {
+        /* A node that pushes HELLO over the one-way ingest (rather than the
+         * control REQ/REP) still registers/refreshes its node row. WELCOME can't
+         * be returned here (PULL is one-way); the node converges via control. */
+        solariHello hello;
+        uint8_t     wbuf[1024];
+        size_t      wlen = 0;
+        uint16_t    wtc = 0;
+        solariStatus rc = solariMsgParseHello(payload, len, &hello);
+        if (rc != SOLARI_OK) {
+            solariLogf(SOLARI_LOG_WARN, "ingest HELLO parse failed src=0x%llx: %s",
+                       (unsigned long long)hdr->sourceNodeId, solariStrError(rc));
+            return rc;
+        }
+        return serverMasterAcceptHello(ctx, hdr, &hello, NULL,
+                                       wbuf, sizeof wbuf, &wlen, &wtc);
+    }
 
     default:
         solariLogf(SOLARI_LOG_WARN,

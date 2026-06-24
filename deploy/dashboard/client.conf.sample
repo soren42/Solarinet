@@ -1,0 +1,29 @@
+# SolariNet client agent config (sample). Copy to a host-local path and edit.
+# The client dials the server's ingest listener over mutual TLS and pushes
+# CLIENT_REPORT (host metrics) + a HELLO that registers the node.
+#
+# Use a hostname that matches the server cert's SAN (e.g. the server's FQDN or
+# 'localhost' for a same-host agent) so the TLS verification succeeds.
+
+[identity]
+hostFqdn = my-host
+# nodeId omitted -> derived FNV-1a-64(fqdn|ROLE_CLIENT)
+
+[server]
+primaryUrl = tls+tcp://solari.example.intranet:7701
+# failoverUrl = tls+tcp://solari-2.example.intranet:7701
+
+[tls]
+# From enrollment (deploy/enrollment/solari-enroll.sh) or your internal CA.
+caFile   = /etc/solari/ca.pem
+certFile = /etc/solari/node.pem
+keyFile  = /etc/solari/node.key
+
+[schedule]
+sampleIntervalSec = 15
+
+[watch]
+spoolDb = /var/lib/solari/client-spool.db
+# processes to watch (optional):
+# process = sshd
+# process = nginx

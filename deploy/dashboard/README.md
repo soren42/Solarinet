@@ -67,6 +67,22 @@ sudo a2ensite solarinet && sudo apache2ctl configtest && sudo systemctl reload a
 Browse to `https://<host>:9443/` and sign in. Re-run step 6's `cp` after any SPA
 change (Apache serves a copy). API (PHP) edits are live from the repo.
 
+## 7. Client agents (host metrics)
+
+A `solariClient` reports a host's CPU/RAM/disk/process metrics to the server's
+ingest listener; its HELLO registers the node, and reports populate `hostCurrent`
+so the host appears in Fleet Overview / NodeDetail with live metrics.
+
+- **Same-host (self-monitoring):** copy `client.conf.sample` to `run/client.conf`,
+  point `primaryUrl` at `tls+tcp://localhost:7701`, use the local `client.*` cert,
+  install `solarinet-client.service`, `systemctl enable --now solarinet-client`.
+- **Remote host:** cross-build `solariClient`, enroll to get a client cert —
+  `deploy/enrollment/solari-enroll.sh --role client --token <token>` — drop a
+  `client.conf` pointing at the server's FQDN (must match the server cert SAN),
+  and install the unit. The node self-registers via HELLO on first connect.
+
+A reporting client is marked `up` and its `lastSeenAt` advances each cycle.
+
 ## Gotchas
 - **`<LocationMatch "^/api/">` needs the trailing slash** — `^/api` also matches
   the SPA's `/api.jsx` adapter and would route it to PHP, breaking the app.
