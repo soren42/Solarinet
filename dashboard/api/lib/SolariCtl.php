@@ -35,7 +35,7 @@ final class SolariCtl
     private const TIMEOUT_SEC = 5;
 
     /** Largest reply line we will read (matches CTL_REPLY_CAP in solariCtl.c). */
-    private const REPLY_CAP = 1024;
+    private const REPLY_CAP = 16384;
 
     /**
      * Send one VERB request to the bridge and return the parsed reply.

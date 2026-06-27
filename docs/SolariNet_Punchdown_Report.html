@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet Punchdown Report</title>
+<style>
+  :root {
+    --bg: #0b1117;
+    --panel: #111923;
+    --panel2: #16212e;
+    --ink: #e2e8f0;
+    --muted: #93a4b8;
+    --line: #263447;
+    --cyan: #42c8d9;
+    --green: #67d391;
+    --amber: #e7b04d;
+    --red: #ef6b73;
+    --violet: #a78bfa;
+    --blue: #7db7ff;
+    --mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+    --sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(66, 200, 217, .11), transparent 34rem),
+      linear-gradient(180deg, #0b1117 0%, #0d121a 56%, #0a0f15 100%);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+  }
+  a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid rgba(66, 200, 217, .35); }
+  code { font-family: var(--mono); font-size: .9em; color: #c7dcff; background: rgba(125, 183, 255, .1); padding: 1px 5px; border-radius: 5px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 42px 24px 86px; }
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) 360px;
+    gap: 26px;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 28px;
+  }
+  h1 { font-size: clamp(32px, 5vw, 58px); line-height: 1.02; margin: 0 0 12px; letter-spacing: 0; }
+  .lede { color: var(--muted); font-size: 17px; max-width: 780px; margin: 0 0 18px; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(17, 25, 35, .72);
+    color: var(--muted);
+    padding: 5px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .pill strong { color: var(--ink); }
+  .panel {
+    background: rgba(17, 25, 35, .82);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .heroCard { padding: 16px; }
+  .heroCard h2 { margin: 0 0 12px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-family: var(--mono); }
+  .bars { display: grid; gap: 10px; }
+  .bar { display: grid; grid-template-columns: 88px 1fr 34px; gap: 10px; align-items: center; font-family: var(--mono); font-size: 12px; }
+  .track { height: 8px; background: #0a1017; border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
+  .fill { display: block; height: 100%; border-radius: 99px; }
+  .ok { color: var(--green); } .warn { color: var(--amber); } .bad { color: var(--red); } .info { color: var(--cyan); }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 22px 0; }
+  .stat { padding: 16px; }
+  .stat .k { color: var(--muted); font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; }
+  .stat .v { font-size: 36px; font-weight: 700; margin-top: 3px; }
+  .stat p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  h2.section { margin: 36px 0 10px; font-size: 24px; }
+  .sectionNote { color: var(--muted); max-width: 900px; margin: 0 0 16px; }
+  .controls {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 12px 0;
+    margin-top: 18px;
+    background: rgba(11, 17, 23, .94);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(38, 52, 71, .72);
+  }
+  button.filter {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    border-radius: 7px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font: 600 12px var(--mono);
+  }
+  button.filter.active { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 0 1px rgba(66, 200, 217, .18) inset; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 26px; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: 10px 12px; }
+  th { background: var(--panel2); color: var(--cyan); font: 700 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+  td { background: rgba(17, 25, 35, .72); }
+  tr.hide { display: none; }
+  .prio { font: 800 12px var(--mono); border-radius: 5px; padding: 3px 7px; display: inline-block; min-width: 34px; text-align: center; }
+  .p0 { background: rgba(239, 107, 115, .16); color: var(--red); border: 1px solid rgba(239, 107, 115, .4); }
+  .p1 { background: rgba(231, 176, 77, .14); color: var(--amber); border: 1px solid rgba(231, 176, 77, .38); }
+  .p2 { background: rgba(66, 200, 217, .13); color: var(--cyan); border: 1px solid rgba(66, 200, 217, .35); }
+  .tag { display: inline-block; font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; margin: 2px 4px 2px 0; }
+  .itemTitle { font-weight: 750; color: #f5f9ff; margin-bottom: 4px; }
+  .evidence { color: var(--muted); font-size: 12.5px; }
+  .payoff { color: #cbd7e6; }
+  .callout {
+    margin: 20px 0;
+    border-left: 3px solid var(--cyan);
+    padding: 13px 16px;
+    background: rgba(17, 25, 35, .74);
+    border-radius: 0 8px 8px 0;
+  }
+  .callout strong { color: #fff; }
+  .foot { margin-top: 38px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  svg text { font-family: var(--mono); }
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; }
+    .grid3 { grid-template-columns: 1fr; }
+    table { font-size: 13px; }
+    th:nth-child(2), td:nth-child(2) { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <div>
+      <h1>SolariNet Punchdown Report</h1>
+      <p class="lede">A code-and-documentation punchdown for bringing the application fully online, split into two actionable lists: improvements to existing code, and incomplete or non-functional features. This report was generated by inspecting the repository on 2026-06-27.</p>
+      <div class="meta">
+        <span class="pill"><strong>Scope</strong> C99 core, server, client, monitor, PHP dashboard, MCP, deploy scripts</span>
+        <span class="pill"><strong>Basis</strong> docs plus source inspection</span>
+        <span class="pill"><strong>Tests</strong> not rerun for this report</span>
+      </div>
+    </div>
+    <div class="panel heroCard">
+      <h2>Readiness Signal</h2>
+      <svg viewBox="0 0 320 120" width="100%" height="120" role="img" aria-label="Readiness bars">
+        <rect x="16" y="18" width="288" height="18" rx="4" fill="#0a1017" stroke="#263447"/>
+        <rect x="16" y="18" width="250" height="18" rx="4" fill="#67d391"/>
+        <text x="16" y="13" fill="#93a4b8" font-size="11">Core/server/MCP</text>
+        <text x="276" y="32" fill="#e2e8f0" font-size="11">high</text>
+        <rect x="16" y="58" width="288" height="18" rx="4" fill="#0a1017" stroke="#263447"/>
+        <rect x="16" y="58" width="172" height="18" rx="4" fill="#e7b04d"/>
+        <text x="16" y="53" fill="#93a4b8" font-size="11">Live dashboard/control acceptance</text>
+        <text x="198" y="72" fill="#e2e8f0" font-size="11">partial</text>
+        <rect x="16" y="96" width="288" height="18" rx="4" fill="#0a1017" stroke="#263447"/>
+        <rect x="16" y="96" width="116" height="18" rx="4" fill="#ef6b73"/>
+        <text x="16" y="91" fill="#93a4b8" font-size="11">Heterogeneous fleet coverage</text>
+        <text x="142" y="110" fill="#e2e8f0" font-size="11">blocked</text>
+      </svg>
+      <div class="bars" aria-hidden="true">
+        <div class="bar"><span>existing</span><span class="track"><i class="fill" style="width:75%;background:var(--green)"></i></span><span>18</span></div>
+        <div class="bar"><span>missing</span><span class="track"><i class="fill" style="width:63%;background:var(--amber)"></i></span><span>15</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid3">
+    <div class="panel stat"><div class="k">Highest-risk code issue</div><div class="v bad">P0</div><p>PHP bridge reply buffer can truncate C bridge replies that include signed cert material.</p></div>
+    <div class="panel stat"><div class="k">Main online blocker</div><div class="v warn">Ctl</div><p>Live solariCtl round-trip and browser/SSE acceptance remain explicitly pending in Phase 7 docs.</p></div>
+    <div class="panel stat"><div class="k">Portability blocker</div><div class="v info">PAL</div><p>Linux is the only implemented agent PAL; static musl and container paths remain unfinished.</p></div>
+  </div>
+
+  <div class="controls" aria-label="Filters">
+    <button class="filter active" data-filter="all">All</button>
+    <button class="filter" data-filter="P0">P0</button>
+    <button class="filter" data-filter="P1">P1</button>
+    <button class="filter" data-filter="P2">P2</button>
+    <button class="filter" data-filter="portability">Portability</button>
+    <button class="filter" data-filter="dashboard">Dashboard</button>
+    <button class="filter" data-filter="control">Control</button>
+    <button class="filter" data-filter="ops">Ops</button>
+  </div>
+
+  <h2 class="section" id="improvements">Punchdown List 1: Improvements To Existing Code</h2>
+  <p class="sectionNote">These items improve performance, portability, ease of use, maintainability, and expansion without changing the product direction.</p>
+  <table>
+    <thead><tr><th>Priority</th><th>Area</th><th>Improvement</th><th>Action</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr data-priority="P0" data-tags="control dashboard">
+        <td><span class="prio p0">P0</span></td><td><span class="tag">control</span><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Fix PHP bridge reply-size mismatch.</div><div class="payoff">Prevents truncating large bridge replies, especially signed certificate PEMs.</div></td>
+        <td>Set `dashboard/api/lib/SolariCtl.php` reply cap to match the C `CTL_REPLY_CAP` of 16384, or read until newline with a larger hard cap.</td>
+        <td class="evidence">`src/server/solariCtl.c:61` defines `CTL_REPLY_CAP 16384`; `dashboard/api/lib/SolariCtl.php:37-38` says it matches but uses `1024`.</td>
+      </tr>
+      <tr data-priority="P0" data-tags="control">
+        <td><span class="prio p0">P0</span></td><td><span class="tag">control</span></td>
+        <td><div class="itemTitle">Add an automated live solariCtl integration test.</div><div class="payoff">Closes the largest remaining confidence gap for mutating operations.</div></td>
+        <td>Start `solariServer` with a test socket and DB, then drive `PING`, `SURVEY`, `APPROVE`, `DECOMMISSION` first-step, and error paths through the real AF_UNIX socket.</td>
+        <td class="evidence">Phase 7 says mutating actions were validated only to the bridge boundary and a live round-trip remains pending (`docs/PHASE7_REPORT.html:238-259`).</td>
+      </tr>
+      <tr data-priority="P1" data-tags="dashboard">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Add dashboard browser smoke tests.</div><div class="payoff">Catches blank pages, auth-loop issues, layout regressions, and broken endpoint adapters before operator acceptance.</div></td>
+        <td>Use a lightweight browser verification job against the PHP built-in server plus demo DB seed; assert login, fleet, node detail, discovery, provisioning, SSE connection, and offline banner behavior.</td>
+        <td class="evidence">Phase 6 and Phase 7 docs both call browser visual/SSE acceptance an operator step, not an automated gate.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="dashboard">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Make the REST route contract generated or checked.</div><div class="payoff">Reduces drift between `api.jsx`, PHP routes, MCP tools, and docs.</div></td>
+        <td>Introduce a small route manifest checked by PHP tests and consumed by docs/API adapter, or add a contract test comparing `dashboard/public/api.jsx` endpoint constants with registered PHP routes.</td>
+        <td class="evidence">Endpoint constants live in `dashboard/public/api.jsx:126-162`; PHP routes are scattered across `dashboard/api/routes/*.php` and `routes_mutations.php`.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="portability ops">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">portability</span><span class="tag">ops</span></td>
+        <td><div class="itemTitle">Upgrade client build strategy from distro-dynamic to static artifact lanes.</div><div class="payoff">Makes appliance installs predictable and removes many runtime library failures.</div></td>
+        <td>Add reproducible static musl builds for x86_64, arm64, arm32, mips, and mipsel with vendored nng, mbedTLS, SQLite, and cJSON.</td>
+        <td class="evidence">`deploy/remote-deploy.sh:178` warns musl/no-package-manager hosts need static builds; handoff docs name static musl as the next recommended step.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="ops">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">ops</span></td>
+        <td><div class="itemTitle">Add shellcheck and deploy-script test fixtures.</div><div class="payoff">Hardens the riskiest operational code without changing runtime architecture.</div></td>
+        <td>Run shellcheck in CI for `deploy/*.sh` and `deploy/enrollment/*.sh`; add dry-run fixture tests for systemd, procd, sysvinit, cron, readonly FS, musl, and missing package manager cases.</td>
+        <td class="evidence">Phase 7 explicitly says shellcheck was not run and only `bash -n` passed (`docs/PHASE7_REPORT.html:250-251`).</td>
+      </tr>
+      <tr data-priority="P1" data-tags="dashboard performance">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">performance</span><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Reduce production dashboard startup cost.</div><div class="payoff">Improves first paint on low-power C2 hardware and older admin laptops.</div></td>
+        <td>Keep the no-cloud policy, but add a release-time precompiled JS artifact or a documented production mode that does not ship and execute Babel on every page load.</td>
+        <td class="evidence">The dashboard uses vendored React plus in-browser Babel; reconciliation docs accept this but note first-paint latency.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="control maintainability">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">control</span><span class="tag">maintainability</span></td>
+        <td><div class="itemTitle">Promote WELCOME schedule TLVs into shared protocol constants.</div><div class="payoff">Makes server/client schedule convergence easier to extend and test.</div></td>
+        <td>Move `TLV_SCHED_SAMPLE_SEC`, `TLV_SCHED_PROBE_SEC`, and `TLV_ASSIGNED_ROLE` from `serverMaster.c` into `include/solari/solariTlv.h` once client parsing is added.</td>
+        <td class="evidence">`src/server/serverMaster.c:45-63` says the node-side WELCOME parser and frozen schedule-TLV contract are still pending.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="dashboard security">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">security</span><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Finish production authentication integration or document local-only boundaries.</div><div class="payoff">Avoids accidental deployment of single-file auth as an enterprise identity layer.</div></td>
+        <td>Implement LDAP/AD in `Auth::directoryAuthenticate()` or document local auth as intentionally small-scope with rotation and backup procedures.</td>
+        <td class="evidence">`dashboard/api/lib/Auth.php:145-150` is a fail-closed directory-service stub.</td>
+      </tr>
+      <tr data-priority="P2" data-tags="maintainability">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">maintainability</span></td>
+        <td><div class="itemTitle">Reconcile stale phase-status docs.</div><div class="payoff">Reduces onboarding confusion and prevents agents from following old phase states.</div></td>
+        <td>Add a short `CURRENT_STATUS.html` or update `README.html` to point readers to the latest Phase 7 and handoff docs when statuses conflict.</td>
+        <td class="evidence">`README.html` still marks several phases pending/in progress while Phase 7 reports them complete with remaining gaps.</td>
+      </tr>
+      <tr data-priority="P2" data-tags="portability">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">portability</span></td>
+        <td><div class="itemTitle">Make CMake dependency modes clearer.</div><div class="payoff">Improves contributor experience on machines with partial system dependencies.</div></td>
+        <td>Emit explicit configure diagnostics for system-vs-vendored nng, mbedTLS, SQLite, cJSON, MariaDB, and missing x509 writer support.</td>
+        <td class="evidence">Several options are off by default; signing can fail closed when mbedTLS x509 writer support is unavailable.</td>
+      </tr>
+      <tr data-priority="P2" data-tags="dashboard">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Improve deploy-form affordances.</div><div class="payoff">Prevents TLS name mistakes and makes long remote installs easier to monitor.</div></td>
+        <td>Prefill server URL from a SAN-valid name, validate it before submit, and surface the running deploy log as a first-class panel.</td>
+        <td class="evidence">Handoff docs call out the free-text server URL and insufficient log prominence (`docs/SolariNet_Handoff_2026-06-26.html:153-155`).</td>
+      </tr>
+      <tr data-priority="P2" data-tags="ops">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">ops</span></td>
+        <td><div class="itemTitle">Document the discovery scan cap in operator docs.</div><div class="payoff">Avoids surprise when large CIDRs are rejected or clipped.</div></td>
+        <td>Add the roughly /20, 4096-host cap and expected scan behavior to the Status and Operations guide.</td>
+        <td class="evidence">The 2026-06-26 handoff lists the cap documentation as outstanding.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 class="section" id="missing">Punchdown List 2: Incomplete, Non-functional, Or Not-started Features</h2>
+  <p class="sectionNote">These items are product functionality needed to bring the full application online across the intended fleet and operator workflows.</p>
+  <table>
+    <thead><tr><th>Priority</th><th>Feature</th><th>Status</th><th>Finish Criteria</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr data-priority="P0" data-tags="control dashboard">
+        <td><span class="prio p0">P0</span></td><td><span class="tag">control</span></td>
+        <td><div class="itemTitle">Live control-plane round trip.</div><div class="payoff">Dashboard and MCP mutations are not fully accepted until a real server bridge dispatch is exercised.</div></td>
+        <td>With a running server, prove approve/reject, provision, adopt/ignore, survey, deploy, decommission first/final step, and failure paths all complete or fail correctly.</td>
+        <td class="evidence">Phase 7 says control was validated only to the bridge boundary and live round-trip remains pending.</td>
+      </tr>
+      <tr data-priority="P0" data-tags="dashboard">
+        <td><span class="prio p0">P0</span></td><td><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Browser visual acceptance and SSE behavior.</div><div class="payoff">The application cannot be considered online for operators until the actual SPA is loaded and driven.</div></td>
+        <td>Run the dashboard against demo and live DB data, confirm auth, navigation, polling, SSE events, responsive layout, service worker registration, and no console errors.</td>
+        <td class="evidence">`docs/PHASE7_REPORT.html:238-243` calls pixel-level SPA rendering and SSE a remaining operator step.</td>
+      </tr>
+      <tr data-priority="P0" data-tags="portability ops">
+        <td><span class="prio p0">P0</span></td><td><span class="tag">portability</span><span class="tag">ops</span></td>
+        <td><div class="itemTitle">Static musl build matrix for appliances.</div><div class="payoff">Required for MIPS, musl, and library-less network appliances.</div></td>
+        <td>Publish tested x86_64, arm64, arm32, mips, and mipsel static agents and have `remote-deploy.sh` select them automatically.</td>
+        <td class="evidence">Handoff names static musl as recommended next; deploy script warns current glibc dynamic binaries will not run on musl/no-package-manager hosts.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="portability">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">portability</span></td>
+        <td><div class="itemTitle">macOS and Windows client/monitor PALs.</div><div class="payoff">Current cross-platform CI proves portable core only, not agent functionality.</div></td>
+        <td>Implement `platMacos.c` and `platWindows.c`, then enable agent builds and PAL tests in those CI jobs.</td>
+        <td class="evidence">`src/client/CMakeLists.txt:10-26` skips absent PALs; Phase 7 says macOS/Windows agents remain unwritten.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="ops portability">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">ops</span><span class="tag">portability</span></td>
+        <td><div class="itemTitle">Container-agent deployment path.</div><div class="payoff">Unblocks immutable but container-capable appliances such as ZimaOS.</div></td>
+        <td>Build an agent image with host `/proc`, host networking, and writable config/cert volume support; add a dashboard/CLI deploy path.</td>
+        <td class="evidence">Handoff lists container agent as tier 2 for immutable container hosts (`docs/SolariNet_Handoff_2026-06-26.html:145`).</td>
+      </tr>
+      <tr data-priority="P1" data-tags="ops">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">ops</span></td>
+        <td><div class="itemTitle">Agentless managed-node polling.</div><div class="payoff">Needed for devices that cannot run a SolariNet binary or container.</div></td>
+        <td>Add SNMP, SSH-exec, or vendor API polling and model the result as a managed node or asset class distinct from reporting agents.</td>
+        <td class="evidence">Handoff lists SNMP/SSH/UniFi-controller API polling as tier 3 for closed devices.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="control">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">control</span></td>
+        <td><div class="itemTitle">Client-side WELCOME parser and schedule/config convergence.</div><div class="payoff">Makes server-assigned epoch and schedule meaningful on nodes.</div></td>
+        <td>Parse WELCOME TLVs, update runtime schedule, detect assigned-role mismatch, and request/apply config convergence when epoch drifts.</td>
+        <td class="evidence">`serverMaster.c` emits schedule TLVs while noting the node-side parser is still future work.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="control ops">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">control</span></td>
+        <td><div class="itemTitle">Asynchronous CSR approval delivery for enrollment script.</div><div class="payoff">Completes the token/CSR enrollment lifecycle without manual cert handoff.</div></td>
+        <td>After approval, store signed cert, let enrolling node retrieve it, verify chain, and write nodeId/config atomically.</td>
+        <td class="evidence">Handoff says approve/sign works but async approve-to-client retrieval remains outstanding.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="control">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">control</span></td>
+        <td><div class="itemTitle">Remote CA forwarding.</div><div class="payoff">Allows the CA to move off the C2 host without breaking enrollment.</div></td>
+        <td>Implement `caMode=remote` CSR forwarding, authentication, timeout/error handling, and audit logging.</td>
+        <td class="evidence">`src/server/solariCtl.c:949-951` refuses `caMode=remote` as not implemented.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="ops">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">topology</span></td>
+        <td><div class="itemTitle">Real SNMP/LLDP-MIB backend for deep gear discovery.</div><div class="payoff">Turns tested normalizers into live topology enrichment.</div></td>
+        <td>Implement `topoSnmpFetchLldpImpl`, add opt-in dependency handling, credentials/config, live integration tests, and operator docs.</td>
+        <td class="evidence">`src/server/serverTopology.c:512` returns `ERR_PLATFORM` without `SOLARI_WITH_SNMP`; Phase 7 says live SNMP backend is not done.</td>
+      </tr>
+      <tr data-priority="P1" data-tags="dashboard">
+        <td><span class="prio p1">P1</span></td><td><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Node history chart verification with real history data.</div><div class="payoff">The UI has code for history; the older handoff called the charts unwired, so this needs acceptance against live `hostHistory` rows.</div></td>
+        <td>Seed or collect history, load `NodeDetail`, verify CPU/RAM/net/disk series scale correctly and refresh without dropping state.</td>
+        <td class="evidence">Handoff listed NodeDetail history as outstanding; current `api.jsx` and `nodes.php` implement loaders, so this is now an acceptance item.</td>
+      </tr>
+      <tr data-priority="P2" data-tags="dashboard">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">dashboard</span></td>
+        <td><div class="itemTitle">Directory-service authentication.</div><div class="payoff">Required for multi-operator environments that do not want local JSON credentials.</div></td>
+        <td>Implement LDAP/AD bind, role mapping, error handling, and tests while keeping local auth as fallback.</td>
+        <td class="evidence">`dashboard/api/lib/Auth.php` exposes the config surface but always denies directory auth.</td>
+      </tr>
+      <tr data-priority="P2" data-tags="ops portability">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">ops</span></td>
+        <td><div class="itemTitle">MIPS and mipsel remote deploy artifacts.</div><div class="payoff">Installer already recognizes these arches, but no binary path exists yet.</div></td>
+        <td>Build, smoke-test, and publish `deploy/dist/mips/solariClient` and `deploy/dist/mipsel/solariClient` or static equivalents.</td>
+        <td class="evidence">`remote-deploy.sh` normalizes MIPS arches but `cross-build-client.sh` supports only arm64, arm32, and x86_64.</td>
+      </tr>
+      <tr data-priority="P2" data-tags="dashboard ops">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">dashboard</span><span class="tag">ops</span></td>
+        <td><div class="itemTitle">Production-ready remote deploy UX.</div><div class="payoff">Makes dashboard-based installs usable without falling back to terminal logs.</div></td>
+        <td>Show active job state, streaming/tailing log, failure reason, chosen binary, target probe results, and next action.</td>
+        <td class="evidence">Current PHP route starts deploy and exposes a log tail endpoint; handoff says log visibility needs improvement.</td>
+      </tr>
+      <tr data-priority="P2" data-tags="ops">
+        <td><span class="prio p2">P2</span></td><td><span class="tag">ops</span></td>
+        <td><div class="itemTitle">End-to-end production install runbook validation.</div><div class="payoff">Confirms the full app comes online from fresh host to live dashboard.</div></td>
+        <td>Automate or document a fresh install that applies schema/migrations, starts services, creates admin credentials, deploys one client, and verifies dashboard/MCP/API health.</td>
+        <td class="evidence">Docs provide pieces, but remaining acceptance items are still described as operator steps across Phase 6 and Phase 7.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>Recommended order:</strong> fix the PHP/C bridge cap, add a live solariCtl round-trip test, then perform browser/SSE acceptance against a seeded live stack. After that, work the static musl/container/agentless path so the intended heterogeneous fleet can actually run or be represented.
+  </div>
+
+  <p class="foot">Primary documents inspected: `README.html`, `docs/PHASE6_REPORT.html`, `docs/PHASE7_REPORT.html`, `docs/SolariNet_Status_and_Operations.html`, `docs/SolariNet_Handoff_2026-06-26.html`, and `dashboard/API_RECONCILIATION.html`. Primary code inspected: server control/topology/master paths, client/monitor CMake, dashboard API adapter/routes/auth/control, deploy scripts, and CI workflow.</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var buttons = Array.prototype.slice.call(document.querySelectorAll("button.filter"));
+  var rows = Array.prototype.slice.call(document.querySelectorAll("tbody tr[data-priority]"));
+  function apply(filter) {
+    rows.forEach(function (row) {
+      var p = row.getAttribute("data-priority");
+      var tags = row.getAttribute("data-tags") || "";
+      var show = filter === "all" || p === filter || tags.indexOf(filter) !== -1;
+      row.classList.toggle("hide", !show);
+    });
+    buttons.forEach(function (btn) {
+      btn.classList.toggle("active", btn.getAttribute("data-filter") === filter);
+    });
+  }
+  buttons.forEach(function (btn) {
+    btn.addEventListener("click", function () { apply(btn.getAttribute("data-filter")); });
+  });
+})();
+</script>
+</body>
+</html>

@@ -245,6 +245,7 @@
   function NodeDetail({ node, onBack, onSurvey }) {
     const [metric, setMetric] = useState("cpu");
     const [detail, setDetail] = useState(null);
+    const [history, setHistory] = useState(null);
     // Fetch the full node detail (real current CPU cores / RAM / disks / ifaces /
     // procs from hostCurrent) and refresh on the poll interval. The list entry
     // only carries identity + state, so without this the gauges read zero.
@@ -252,20 +253,34 @@
       const api = S.api;
       if (!api || !api.node) return undefined;
       let live = true;
-      const load = function () { api.node(node.nodeId).then(function (d) { if (live) setDetail(d); }).catch(function () {}); };
+      const load = function () {
+        api.node(node.nodeId).then(function (d) {
+          if (!live) return;
+          setDetail(d);
+          if (!api.nodeHistory) return;
+          Promise.all([
+            api.nodeHistory(node.nodeId, "cpu"),
+            api.nodeHistory(node.nodeId, "ram", { totalKb: d.ramTotalKb }),
+            api.nodeHistory(node.nodeId, "disk"),
+          ]).then(function (h) {
+            if (live) setHistory({ cpu: h[0], ram: h[1], disk: h[2] });
+          }).catch(function () {});
+        }).catch(function () {});
+      };
       load();
       const iv = setInterval(load, 10000);
       return function () { live = false; clearInterval(iv); };
     }, [node.nodeId]);
     // Prefer fetched detail; fall back to the live list entry, then the passed node.
     const n = detail || (S.nodes || S.fleet || []).find((x) => x.nodeId === node.nodeId) || node;
+    const hist = history ? Object.assign({}, n.hist || {}, history) : (n.hist || { cpu: [], ram: [], net: [], disk: [] });
     const nodeAlerts = S.alerts.filter((a) => a.nodeId === n.nodeId && !a.cleared);
     const nodeProbes = S.probes.filter((p) => p.hostNode === n.nodeId);
     const metricMap = {
-      cpu: { data: n.hist.cpu, color: "var(--teal)", label: "CPU %", max: 100 },
-      ram: { data: n.hist.ram, color: "var(--violet)", label: "RAM %", max: 100 },
-      net: { data: n.hist.net, color: "var(--ok)", label: "Net Mb/s", max: 100 },
-      disk: { data: n.hist.disk, color: "var(--warn)", label: "Disk %", max: 100 },
+      cpu: { data: hist.cpu, color: "var(--teal)", label: "CPU %", max: 100 },
+      ram: { data: hist.ram, color: "var(--violet)", label: "RAM %", max: 100 },
+      net: { data: hist.net, color: "var(--ok)", label: "Net Mb/s", max: 100 },
+      disk: { data: hist.disk, color: "var(--warn)", label: "Disk %", max: 100 },
     };
     const cur = metricMap[metric];
 
