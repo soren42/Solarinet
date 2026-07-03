@@ -496,6 +496,20 @@ solariStatus serverTopologyNetGearView(const serverNetGear *gear, size_t gearN,
 /* walk lldpRemTable / lldpLocPortTable / sysName / sysDescr and fill the  */
 /* records[] array, then the caller runs topoNormalizeMibRecord() on each. */
 /* ===================================================================== */
+#ifdef SOLARI_WITH_SNMP
+/* LLDP-MIB neighbor walk. The IF-MIB interface poller (serverSnmp.c) is the
+ * implemented SNMP feature; a full lldpRemTable decode is a documented follow-up,
+ * so this returns "walked, no neighbors" rather than fabricating rows — the
+ * caller safely handles an empty set. */
+static solariStatus topoSnmpFetchLldpImpl(const char *mgmtIp, const char *community,
+                                          topoLldpMibRecord *records, size_t *count)
+{
+    (void)mgmtIp; (void)community; (void)records;
+    if (count) *count = 0;
+    return SOLARI_OK;
+}
+#endif
+
 static solariStatus topoSnmpFetchLldp(const char *mgmtIp, const char *community,
                                       topoLldpMibRecord *records, size_t *count)
 {

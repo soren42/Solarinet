@@ -61,6 +61,10 @@ static MYSQL *dbConn(serverDb *db)
     return db->conns[0];
 }
 
+/* Public accessor for server-tier modules that issue their own SQL (serverSnmp).
+ * Same single-connection contract as dbConn. */
+MYSQL *serverDbConn(serverDb *db) { return dbConn(db); }
+
 /* ===================================================================== */
 /* Pure value helpers (no connection touched - unit-testable)             */
 /* ===================================================================== */

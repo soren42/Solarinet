@@ -132,4 +132,13 @@ if(TARGET servercore)
     ${CMAKE_SOURCE_DIR}/src/server)
   target_link_libraries(test_server_db_live PRIVATE servercore unity)
   add_test(NAME test_server_db_live COMMAND test_server_db_live)
+
+  # Pure SNMP IF-MIB parse/merge (serverSnmp.c). Links servercore for the
+  # symbols; touches no DB or SNMP backend at runtime.
+  add_executable(test_server_snmp unit/test_server_snmp.c)
+  target_include_directories(test_server_snmp PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/server)
+  target_link_libraries(test_server_snmp PRIVATE servercore unity)
+  add_test(NAME test_server_snmp COMMAND test_server_snmp)
 endif()

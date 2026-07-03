@@ -2,9 +2,9 @@
    SolariNet — screens2: Reachability matrix, Topology map
    ============================================================ */
 (function () {
-  const { useState, useMemo } = React;
+  const { useState, useMemo, useEffect } = React;
   const Icon = window.Icon;
-  const { StatusDot, RTTBars, metricColor } = window;
+  const { StatusDot, Sparkline, RTTBars, metricColor } = window;
   const S = window.SOLARI;
   const fmt = S.fmt;
 
@@ -144,6 +144,77 @@
               </div>
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ============ MANAGED GEAR — SNMP interface throughput ============ */
+  /* Read-only surface over the /api/gear tier: lists each managed device's
+     interfaces with an inline Sparkline of recent inRateKbps. Fetches lazily
+     via the live API; renders nothing when the SNMP tier is unavailable
+     (offline fixture, or no gear polled yet), so it never disrupts Topology. */
+  function GearThroughput() {
+    const api = window.SolariAPI;
+    const [gears, setGears] = useState([]);
+    const [ifaces, setIfaces] = useState({}); // gearId -> [interface rows]
+    const [sparks, setSparks] = useState({}); // "gearId:ifIndex" -> [numbers]
+
+    useEffect(() => {
+      if (!api || !api.gearList) return;
+      let alive = true;
+      api.gearList().then((gs) => {
+        if (!alive) return;
+        setGears(gs || []);
+        (gs || []).forEach((g) => {
+          api.gearInterfaces(g.gearId).then((rows) => {
+            if (!alive) return;
+            setIfaces((prev) => Object.assign({}, prev, { [g.gearId]: rows }));
+            (rows || []).forEach((f) => {
+              api.gearHistory(g.gearId, f.ifIndex, "inRateKbps").then((data) => {
+                if (!alive) return;
+                setSparks((prev) => Object.assign({}, prev, { [g.gearId + ":" + f.ifIndex]: data }));
+              }).catch(() => {});
+            });
+          }).catch(() => {});
+        });
+      }).catch(() => {});
+      return () => { alive = false; };
+    }, []);
+
+    if (!gears.length) return null;
+
+    return (
+      <div className="panel" style={{ marginTop: 16 }}>
+        <div className="panel__head">
+          <Icon name="bandwidth" size={16} /><h3>Managed gear — interface throughput</h3>
+          <div className="right">{gears.length} SNMP device{gears.length === 1 ? "" : "s"}</div>
+        </div>
+        <div className="panel__body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {gears.map((g) => {
+            const rows = ifaces[g.gearId] || [];
+            return (
+              <div key={g.gearId}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <span className="td-mono" style={{ fontWeight: 600 }}>
+                    <Icon name={GEAR_ICON[g.kind] || "netswitch"} size={13} style={{ color: GEAR_FILL[g.kind] || "var(--teal)", marginRight: 6 }} />
+                    {g.name}<span className="muted" style={{ marginLeft: 6, fontWeight: 400 }}>{g.model || g.kind}</span>
+                  </span>
+                  <span className="td-mono muted" style={{ fontSize: 11 }}>{g.upCount}/{g.ifCount} up · ↓{fmt.mbps(Math.round((g.totalInRateKbps || 0) / 1000))} ↑{fmt.mbps(Math.round((g.totalOutRateKbps || 0) / 1000))}</span>
+                </div>
+                {rows.length === 0
+                  ? <div className="td-mono muted" style={{ fontSize: 11, padding: "4px 0" }}>no interface samples</div>
+                  : rows.map((f) => (
+                    <div key={f.ifIndex} style={{ display: "flex", alignItems: "center", gap: 10, padding: "3px 0" }}>
+                      <span className="dot" style={{ background: f.operStatus === 1 ? "var(--ok)" : "var(--crit)", flex: "0 0 auto" }} />
+                      <span className="td-mono" style={{ flex: "0 0 96px", fontSize: 12 }}>{f.ifName || ("if" + f.ifIndex)}</span>
+                      <Sparkline data={sparks[g.gearId + ":" + f.ifIndex] || []} w={140} h={24} />
+                      <span className="td-mono muted" style={{ marginLeft: "auto", fontSize: 11 }}>↓{fmt.mbps(Math.round((f.inRateKbps || 0) / 1000))} ↑{fmt.mbps(Math.round((f.outRateKbps || 0) / 1000))}</span>
+                    </div>
+                  ))}
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -377,9 +448,13 @@
 
           {!sel && <div className="topo-hint"><Icon name="topology" size={14} />Tap any node, device, or connection to inspect</div>}
         </div>
+
+        {/* SNMP-managed gear throughput (read-only). Renders under the LAN
+            hierarchy view where the network devices live. */}
+        {view === "lan" && <GearThroughput />}
       </div>
     );
   }
 
-  Object.assign(window, { Reachability, Topology });
+  Object.assign(window, { Reachability, Topology, GearThroughput });
 })();

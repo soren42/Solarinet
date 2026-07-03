@@ -142,6 +142,12 @@
     segments:     "/api/segments",
     topology:     function (view) { return "/api/topology?view=" + encodeURIComponent(view || "monitoring"); },
     netgear:      "/api/netgear",
+    gear:         "/api/gear",
+    gearInterfaces: function (id) { return "/api/gear/" + encodeURIComponent(id) + "/interfaces"; },
+    gearHistory:  function (id, ifIndex, metric) {
+      return "/api/gear/" + encodeURIComponent(id) + "/history?ifIndex=" + encodeURIComponent(ifIndex) +
+             "&metric=" + encodeURIComponent(metric || "inRateKbps");
+    },
     discovery:    "/api/discovery",         // ?status=new|all
     discScan:     "/api/discovery/scan",     // POST {cidr, ports?}
     discAdopt:    function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/adopt"; },
@@ -566,6 +572,24 @@
     node: loadNode,
     nodeHistory: loadNodeHistory,
     topology: loadTopology,
+
+    // SNMP-managed gear (read-only tier) — list, per-gear interfaces, and an
+    // interface time series. gearHistory returns the raw {series:[{ts,value}]}
+    // Kbps points (Sparkline auto-scales, so no unit conversion needed here).
+    gearList: function () { return getJSON(EP.gear); },
+    gearInterfaces: function (id) {
+      return getJSON(EP.gearInterfaces(id)).then(function (w) {
+        return Array.isArray(w) ? w : ((w && w.interfaces) || []);
+      });
+    },
+    gearHistory: function (id, ifIndex, metric) {
+      return getJSON(EP.gearHistory(id, ifIndex, metric)).then(function (w) {
+        var series = Array.isArray(w) ? w : ((w && w.series) || []);
+        return series.map(function (p) {
+          return (p && typeof p === "object" && "value" in p) ? Number(p.value || 0) : Number(p || 0);
+        });
+      });
+    },
 
     // discovery
     discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
