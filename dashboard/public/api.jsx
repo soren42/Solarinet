@@ -523,6 +523,7 @@
       ram: "ramUsedKb",
       swap: "swapUsedKb",
       disk: "diskMinFreePct",
+      net: "netKbps",
     };
     return map[metric] || metric || "cpuAvgMilli";
   }
@@ -534,6 +535,7 @@
     if (metric === "ramUsedKb") return pct(v, opts.totalKb || opts.ramTotalKb || 0);
     if (metric === "swapUsedKb") return pct(v, opts.totalKb || opts.swapTotalKb || 0);
     if (metric === "diskMinFreePct") return Math.max(0, Math.min(100, 100 - v));
+    if (metric === "netKbps") return Math.round(v / 1000 * 10) / 10;  // Kbps -> Mbps
     return v;
   }
 

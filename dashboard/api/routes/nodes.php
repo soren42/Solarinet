@@ -26,9 +26,9 @@ return static function (Router $router): void {
         // for shape). One windowed query grabs the last N samples per node.
         $spark = [];
         $hrows = Db::rows(
-            'SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct
+            'SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct, netKbps
                FROM (
-                 SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct, sampledAt,
+                 SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct, netKbps, sampledAt,
                         ROW_NUMBER() OVER (PARTITION BY nodeId ORDER BY sampledAt DESC) AS rn
                    FROM hostHistory
                ) t
@@ -44,6 +44,7 @@ return static function (Router $router): void {
             $spark[$id]['cpu'][]  = Coerce::int($h['cpuAvgMilli']);
             $spark[$id]['ram'][]  = Coerce::int($h['ramUsedKb']);
             $spark[$id]['disk'][] = max(0, 100 - Coerce::int($h['diskMinFreePct']));
+            $spark[$id]['net'][]  = Coerce::int($h['netKbps']);
         }
 
         $out = array_map(static function (array $r) use ($spark): array {
@@ -170,6 +171,7 @@ return static function (Router $router): void {
             'ramUsedKb'      => 'ramUsedKb',
             'swapUsedKb'     => 'swapUsedKb',
             'diskMinFreePct' => 'diskMinFreePct',
+            'netKbps'        => 'netKbps',
         ];
         $metric = (string) ($_GET['metric'] ?? 'cpuAvgMilli');
         if (!isset($allowed[$metric])) {
