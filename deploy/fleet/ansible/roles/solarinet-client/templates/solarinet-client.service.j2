@@ -1,0 +1,34 @@
+{# Rendered by SolariNet fleet provisioning (solarinet-client role). #}
+# SolariNet monitoring client - MANAGED BY ANSIBLE.
+[Unit]
+Description=SolariNet Monitoring Client
+Documentation=https://github.com/soren42/Solarinet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ solari_client_user }}
+Group={{ solari_client_group }}
+ExecStart={{ solari_client_bin_dest }} --config {{ solari_conf_dir }}/client.conf --loop
+Restart=on-failure
+RestartSec=2
+
+# --- writable state --------------------------------------------------------
+StateDirectory=solari
+StateDirectoryMode=0750
+RuntimeDirectory=solari
+RuntimeDirectoryMode=0750
+ReadWritePaths={{ solari_client_spool_db | dirname }}
+
+# --- baseline hardening (client needs no special capabilities) -------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

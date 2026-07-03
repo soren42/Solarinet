@@ -1,0 +1,30 @@
+{# Rendered by SolariNet fleet provisioning (solarinet-client role). #}
+{# Mirrors deploy/dashboard/client.conf.sample - keep sections in sync. #}
+# SolariNet client agent config - MANAGED BY ANSIBLE. Do not edit by hand.
+# The client dials the server's ingest listener over mutual TLS and pushes
+# CLIENT_REPORT (host metrics) plus a HELLO that registers the node.
+
+[identity]
+hostFqdn = {{ solari_hostname | default(ansible_fqdn) | default(inventory_hostname) }}
+# nodeId omitted -> derived FNV-1a-64(fqdn|ROLE_CLIENT)
+
+[server]
+primaryUrl = {{ solari_server_url }}
+{% if solari_failover_url is defined and solari_failover_url | length > 0 %}
+failoverUrl = {{ solari_failover_url }}
+{% endif %}
+
+[tls]
+# Installed from enrollment material (deploy/enrollment/solari-enroll.sh).
+caFile   = {{ solari_conf_dir }}/ca.pem
+certFile = {{ solari_conf_dir }}/node.pem
+keyFile  = {{ solari_conf_dir }}/node.key
+
+[schedule]
+sampleIntervalSec = {{ solari_client_sample_interval_sec }}
+
+[watch]
+spoolDb = {{ solari_client_spool_db }}
+{% for proc in (solari_watch_processes | default([])) %}
+process = {{ proc }}
+{% endfor %}

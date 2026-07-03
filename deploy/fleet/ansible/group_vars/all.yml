@@ -1,0 +1,112 @@
+# =============================================================================
+# SolariNet Fleet Provisioning - THE SHARED CONTRACT
+# =============================================================================
+# This file is the single source of truth for "the software default stack and
+# core package list is the same across distributions and architectures."
+#
+# The logical package list (solari_core_packages) is applied IDENTICALLY on
+# every target. Where a package's real name differs between the Debian/Ubuntu
+# world and openSUSE, solari_pkg_map translates the logical name to the correct
+# per-family name at runtime. Architecture (x86_64 / arm64 / arm32) never
+# changes package names, so it needs no mapping here.
+#
+# Precedence reminder: anything set in inventory host_vars (what the dashboard
+# injects per host) overrides these defaults. Keep host-specific values OUT of
+# this file.
+# -----------------------------------------------------------------------------
+
+# ---- Base OS configuration knobs -------------------------------------------
+solari_timezone: "Etc/UTC"
+solari_locale:   "en_US.UTF-8"
+
+# Administrative login created/managed on every host. SSH key auth only.
+solari_admin_user: "solari-admin"
+solari_admin_groups_debian: "sudo"     # Debian/Ubuntu sudoers group
+solari_admin_groups_suse:   "wheel"    # openSUSE sudoers group
+# Public keys authorized for the admin user. The dashboard may append per-host
+# keys via host_vars; list the fleet-wide operator keys here.
+solari_admin_authorized_keys: []
+#   - "ssh-ed25519 AAAA... operator@benzene"
+
+# sshd hardening: keep key auth working, forbid root password logins.
+solari_sshd_permit_root_login: "prohibit-password"   # key-only root, no password
+solari_sshd_password_auth: false                      # force key auth fleet-wide
+
+# journald caps so long-lived nodes do not fill their disks.
+solari_journald_max_use: "200M"
+solari_journald_max_file_size: "20M"
+
+# Automatic *security* updates. Off by default; the dashboard can flip per host.
+solari_auto_security_updates: false
+
+# ---- SolariNet enrollment / server contact ---------------------------------
+# Safe placeholders - the dashboard overrides these per host at provision time.
+solari_server_url: "tls+tcp://solari.example.intranet:7701"   # -> [server] primaryUrl
+solari_op:         "dashboard"        # operator id recorded with the enrollment
+solari_ca_hint:    ""                 # optional CA root fingerprint hint (SPKI)
+
+# mbedTLS on older nodes verifies the server cert against a DNS SAN, never a raw
+# IP. When both are set, the server name is pinned to its IP in /etc/hosts so
+# primaryUrl can use the SAN name while still reaching a fixed address.
+solari_server_name: ""                # e.g. solari.example.intranet
+solari_server_ip:   ""                # e.g. 192.0.2.1
+
+# TLS material layout on the managed node (populated by the enrollment copy).
+solari_conf_dir: "/etc/solari"
+solari_client_bin_dest: "/usr/local/bin/solariClient"
+solari_client_sample_interval_sec: 15
+solari_client_spool_db: "/var/lib/solari/client-spool.db"
+
+# =============================================================================
+# THE LOGICAL CORE PACKAGE SET  (identical on every distro + arch)
+# =============================================================================
+# These are LOGICAL names. Names that are identical everywhere are installed
+# as-is; names that differ per family are translated through solari_pkg_map
+# below by the common-stack role.
+solari_core_packages:
+  - sudo
+  - curl
+  - wget
+  - ca-certificates
+  - gnupg
+  - htop
+  - tmux
+  - git
+  - vim
+  - rsync
+  - jq
+  - unzip
+  - lsof
+  - chrony              # time sync (mapped; openSUSE also ships chrony)
+  - python3             # mapped: python3 (Debian) vs python3 (SUSE) - same, kept explicit
+  - netcat              # mapped: netcat-openbsd (Debian) vs netcat-openbsd (SUSE)
+  - iproute2            # mapped: iproute2 (Debian) vs iproute2 (SUSE)
+  - net-tools
+  - openssh-server      # mapped: openssh-server (Debian) vs openssh (SUSE)
+
+# =============================================================================
+# PER-FAMILY PACKAGE-NAME MAP
+# =============================================================================
+# Only list logical names whose REAL package name differs (or is worth pinning)
+# across families. common-stack looks each logical name up here for the target's
+# family (from ansible_os_family: "Debian" | "Suse"); anything not present in
+# the map is installed under its logical name unchanged.
+#
+# ansible_os_family is "Debian" for both Debian and Ubuntu, and "Suse" for
+# openSUSE/SLES - so a two-key map (Debian/Suse) covers all target families.
+solari_pkg_map:
+  chrony:
+    Debian: chrony
+    Suse:   chrony
+  python3:
+    Debian: python3
+    Suse:   python3
+  netcat:
+    Debian: netcat-openbsd
+    Suse:   netcat-openbsd
+  openssh-server:
+    Debian: openssh-server
+    Suse:   openssh          # openSUSE ships client+server in one 'openssh'
+  iproute2:
+    Debian: iproute2
+    Suse:   iproute2

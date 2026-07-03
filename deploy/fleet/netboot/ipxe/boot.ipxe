@@ -1,0 +1,191 @@
+#!ipxe
+# =============================================================================
+# SolariNet Fleet Provisioning - top-level iPXE boot script
+# =============================================================================
+#
+# This is the entry point every PXE/iPXE client chains to. On host `benzene`
+# it lives (rendered) at:
+#     /srv/solari-provision/netboot/http/ipxe/boot.ipxe
+# and is served over HTTP by nginx at:
+#     @@HTTP_BASE@@/ipxe/boot.ipxe        (e.g. http://10.5.2.50:8080/ipxe/boot.ipxe)
+#
+# HOW A MACHINE GETS HERE
+# -----------------------
+#   1. Firmware PXE (BIOS or UEFI) does DHCP. proxyDHCP / the UniFi DHCP scope
+#      advertises next-server = benzene and a boot filename:
+#         - BIOS  clients  -> undionly.kpxe   (iPXE built for legacy NICs)
+#         - UEFI  clients  -> ipxe.efi / snponly.efi
+#         - arm64 UEFI     -> ipxe-arm64.efi
+#      Those small iPXE binaries live in the TFTP root
+#      (/srv/solari-provision/netboot/tftp/). Vanilla firmware that is NOT iPXE
+#      loads iPXE first (TFTP), then iPXE re-does DHCP and is handed THIS URL
+#      as its boot script (DHCP option 67 when user-class = "iPXE").
+#   2. iPXE fetches this script over HTTP and runs it.
+#
+# NOTE ON @@PLACEHOLDERS@@
+# ------------------------
+# This file is a TEMPLATE. The integrator's render step substitutes the tokens
+# below (see deploy/fleet/netboot/README.md for the full manifest). The most
+# important one here is @@HTTP_BASE@@, the nginx base URL. Everything else in
+# this menu is static iPXE logic.
+# =============================================================================
+
+# ---- global settings --------------------------------------------------------
+# ${base} is the HTTP root for every provisioning artifact. Keeping it in one
+# variable means the render step only rewrites @@HTTP_BASE@@ in one place and
+# the rest of the script composes URLs from it.
+set base @@HTTP_BASE@@
+
+# Shared kernel command-line fragments, defined here so they are in scope by the
+# time any :label runs 'kernel'.
+#   cmdline_common : send installer output to BOTH the VGA console and serial
+#                    ttyS0 so headless machines can be watched over IPMI/serial.
+#   debian_cmdline : debian-installer non-interactive knobs (fully automated,
+#                    only critical questions, English/US defaults).
+set cmdline_common console=tty0 console=ttyS0,115200n8
+set debian_cmdline auto=true priority=critical locale=en_US.UTF-8 keymap=us
+
+# A friendly banner. ${net0/mac} and ${net0/mac:hexhyp} are populated by iPXE
+# from the booting interface; hexhyp is the colon-free, hyphen-joined,
+# lowercase form (aa-bb-cc-dd-ee-ff) we use for per-MAC filenames.
+echo
+echo ================================================================
+echo  SolariNet Fleet Provisioning
+echo  host mac : ${net0/mac}
+echo  client   : ${ip} / ${netmask}  via ${gateway}
+echo  server   : ${base}
+echo ================================================================
+echo
+
+# =============================================================================
+# STAGE 1 - per-MAC auto-install staging (dashboard-driven)
+# =============================================================================
+# The dashboard can "pre-stage" a machine to auto-install on its next boot by
+# dropping a rendered script at:
+#     @@HTTP_BASE@@/ipxe/mac-<aa-bb-cc-dd-ee-ff>.ipxe
+# (rendered from ipxe/mac-profile.ipxe.tmpl). We try to chain to it FIRST.
+#
+# --autofree lets iPXE reclaim the buffer; the trailing '||' means "if the
+# fetch/label fails (HTTP 404 -> no profile staged for this MAC), do not error
+# out, just fall through to the interactive menu below". This is the whole
+# safety model: no staged profile == no unattended wipe.
+echo Checking for a staged install profile for ${net0/mac} ...
+chain --autofree ${base}/ipxe/mac-${net0/mac:hexhyp}.ipxe || goto menu
+
+# If the per-MAC script returns here (some of them intentionally "exit" back),
+# fall through to the menu as well.
+goto menu
+
+# =============================================================================
+# STAGE 2 - interactive menu (operator at the console)
+# =============================================================================
+:menu
+menu SolariNet Provisioning - select an action
+item --gap --                   Unattended installs (WIPES the target disk):
+item debian-amd64    Debian 12 (bookworm)      x86_64
+item debian-arm64    Debian 12 (bookworm)      arm64
+item ubuntu-amd64    Ubuntu 24.04 (noble)      x86_64
+item ubuntu-arm64    Ubuntu 24.04 (noble)      arm64
+item suse-amd64      openSUSE Leap 15          x86_64
+item suse-arm64      openSUSE Leap 15          arm64
+item --gap --                   Utilities:
+item shell           iPXE interactive shell
+item reboot          Reboot
+item --gap --                   Safe default:
+item local           Boot from local disk (default)
+choose --default local --timeout 15000 target && goto ${target} || goto local
+
+# -----------------------------------------------------------------------------
+# Menu targets. Each one calls a helper label that composes the kernel/initrd
+# URL for that distro+arch and points the installer at its rendered, per-host
+# unattended-install config under @@HTTP_BASE@@/configs/.
+#
+# We key the config file name on the MAC (aa-bb-cc-dd-ee-ff) so the same menu
+# works for any machine without operator typing. The render step is expected to
+# have written configs/<mac>.<ext> for a machine that is being installed
+# interactively, OR the operator can override ${cfgkey} in the iPXE shell.
+# -----------------------------------------------------------------------------
+set cfgkey ${net0/mac:hexhyp}
+
+:debian-amd64
+set arch amd64
+set installer ${base}/installers/debian/amd64
+kernel ${installer}/linux ${cmdline_common} ${debian_cmdline} \
+    preseed/url=${base}/configs/${cfgkey}.preseed || goto retry
+initrd ${installer}/initrd.gz || goto retry
+boot || goto retry
+
+:debian-arm64
+set arch arm64
+set installer ${base}/installers/debian/arm64
+kernel ${installer}/linux ${cmdline_common} ${debian_cmdline} \
+    preseed/url=${base}/configs/${cfgkey}.preseed || goto retry
+initrd ${installer}/initrd.gz || goto retry
+boot || goto retry
+
+:ubuntu-amd64
+set arch amd64
+set installer ${base}/installers/ubuntu/amd64
+# Ubuntu (subiquity/cloud-init) takes the autoinstall config via the
+# autoinstall + ds=nocloud-net cmdline. 's=' MUST end with a trailing slash;
+# subiquity fetches user-data and meta-data from that directory.
+kernel ${installer}/vmlinuz ${cmdline_common} autoinstall \
+    "ds=nocloud-net;s=${base}/configs/ubuntu/${cfgkey}/" || goto retry
+initrd ${installer}/initrd || goto retry
+boot || goto retry
+
+:ubuntu-arm64
+set arch arm64
+set installer ${base}/installers/ubuntu/arm64
+kernel ${installer}/vmlinuz ${cmdline_common} autoinstall \
+    "ds=nocloud-net;s=${base}/configs/ubuntu/${cfgkey}/" || goto retry
+initrd ${installer}/initrd || goto retry
+boot || goto retry
+
+:suse-amd64
+set arch amd64
+set installer ${base}/installers/opensuse/amd64
+# AutoYaST is pointed at its control file via autoyast=. install= gives linuxrc
+# the repo to pull the rest of the installation system from.
+kernel ${installer}/linux ${cmdline_common} \
+    install=${base}/installers/opensuse/amd64/repo \
+    autoyast=${base}/configs/${cfgkey}.xml || goto retry
+initrd ${installer}/initrd || goto retry
+boot || goto retry
+
+:suse-arm64
+set arch arm64
+set installer ${base}/installers/opensuse/arm64
+kernel ${installer}/linux ${cmdline_common} \
+    install=${base}/installers/opensuse/arm64/repo \
+    autoyast=${base}/configs/${cfgkey}.xml || goto retry
+initrd ${installer}/initrd || goto retry
+boot || goto retry
+
+# =============================================================================
+# Utility labels
+# =============================================================================
+:shell
+echo Dropping to iPXE shell. Type 'exit' to return to the menu.
+shell
+goto menu
+
+:reboot
+reboot
+
+:retry
+echo
+echo Boot step FAILED. Returning to menu in 10s ...
+sleep 10
+goto menu
+
+# =============================================================================
+# STAGE 3 - safe default: boot from local disk
+# =============================================================================
+# Reached on menu timeout, on any failure, and whenever no profile is staged.
+# We try the normal firmware boot order by exiting iPXE (UEFI) or chaining the
+# next BIOS device. 'sanboot --no-describe --drive 0x80' boots the first BIOS
+# HDD; 'exit 1' hands control back to firmware for UEFI NVRAM boot entries.
+:local
+echo Booting from local disk ...
+sanboot --no-describe --drive 0x80 || exit 1

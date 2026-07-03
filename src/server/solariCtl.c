@@ -304,9 +304,12 @@ static size_t ctlReplyOk(char *out, size_t cap, const char *extra)
 static bool ctlVerbIsDestructive(const char *verb)
 {
     /* SIGN mints a trusted certificate and DEPLOY runs a remote install — both
-     * privileged, so they require a named operator like the teardown verbs. */
+     * privileged, so they require a named operator like the teardown verbs.
+     * FLEET_PROVISION stages a bare-metal OS install and FLEET_IMAGE builds a
+     * bootable image; both mint enrollment certs, so they are gated the same. */
     return strcmp(verb, "DECOMMISSION") == 0 || strcmp(verb, "RETIRE") == 0 ||
-           strcmp(verb, "SIGN") == 0 || strcmp(verb, "DEPLOY") == 0;
+           strcmp(verb, "SIGN") == 0 || strcmp(verb, "DEPLOY") == 0 ||
+           strcmp(verb, "FLEET_PROVISION") == 0 || strcmp(verb, "FLEET_IMAGE") == 0;
 }
 
 /* Sanitize an arbitrary string into a safe filename fragment ([A-Za-z0-9._-]). */
@@ -478,6 +481,86 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         solariLogf(SOLARI_LOG_INFO, "ctl: deploy launched host=%s op=%s -> %s",
                    host, operator_, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=deploying", logpath);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- fleet provisioning: stage a bare-metal OS install (detached) ----
+     * Renders the unattended-install config + per-MAC netboot entry on the
+     * provisioning host and mints the node's enrollment cert. The heavy lifting
+     * (ssh to benzene, rsync trees, cert signing) lives in the forked script so
+     * the server loop never blocks. */
+    if (strcmp(verb, "FLEET_PROVISION") == 0) {
+        char target[128], distro[24], arch[16], profile[48], hostname[160];
+        char role[32], server[256], ip[64], sanit[160], logpath[256], extra[300];
+        char *argv[28];
+        int   n = 0;
+        if (ctlArgStr(args, "target", target, sizeof target) != SOLARI_OK || !target[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "target required");
+        if (ctlArgStr(args, "distro", distro, sizeof distro) != SOLARI_OK || !distro[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "distro required");
+        if (ctlArgStr(args, "arch", arch, sizeof arch) != SOLARI_OK || !arch[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "arch required");
+        if (ctlArgStr(args, "hostname", hostname, sizeof hostname) != SOLARI_OK || !hostname[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "hostname required");
+        if (ctlArgStr(args, "profile", profile, sizeof profile) != SOLARI_OK) profile[0] = '\0';
+        if (ctlArgStr(args, "role", role, sizeof role) != SOLARI_OK) role[0] = '\0';
+        if (ctlArgStr(args, "server", server, sizeof server) != SOLARI_OK) server[0] = '\0';
+        if (ctlArgStr(args, "ip", ip, sizeof ip) != SOLARI_OK) ip[0] = '\0';
+        ctlSanitizeName(hostname, sanit, sizeof sanit);
+        (void)snprintf(logpath, sizeof logpath, "run/provision-%s.log", sanit);
+        argv[n++] = (char *)"deploy/fleet/fleet-provision.sh";
+        argv[n++] = (char *)"--target";   argv[n++] = target;
+        argv[n++] = (char *)"--distro";   argv[n++] = distro;
+        argv[n++] = (char *)"--arch";     argv[n++] = arch;
+        argv[n++] = (char *)"--hostname"; argv[n++] = hostname;
+        if (profile[0]) { argv[n++] = (char *)"--profile"; argv[n++] = profile; }
+        if (role[0])    { argv[n++] = (char *)"--role";    argv[n++] = role; }
+        if (server[0])  { argv[n++] = (char *)"--server";  argv[n++] = server; }
+        if (ip[0])      { argv[n++] = (char *)"--server-ip"; argv[n++] = ip; }
+        argv[n++] = (char *)"--op"; argv[n++] = operator_;
+        argv[n]   = NULL;
+        st = ctlSpawnDetached(argv, logpath);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "provision spawn failed");
+        solariLogf(SOLARI_LOG_INFO, "ctl: fleet provision target=%s distro=%s arch=%s op=%s -> %s",
+                   target, distro, arch, operator_, logpath);
+        (void)snprintf(extra, sizeof extra, "log=%s status=provisioning", logpath);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- fleet imaging: build a bootable image (Raspberry Pi etc., detached) ---- */
+    if (strcmp(verb, "FLEET_IMAGE") == 0) {
+        char hostname[160], arch[16], distro[24], profile[48], role[32];
+        char server[256], ip[64], sanit[160], logpath[256], extra[300];
+        char *argv[26];
+        int   n = 0;
+        if (ctlArgStr(args, "hostname", hostname, sizeof hostname) != SOLARI_OK || !hostname[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "hostname required");
+        if (ctlArgStr(args, "arch", arch, sizeof arch) != SOLARI_OK || !arch[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "arch required");
+        if (ctlArgStr(args, "distro", distro, sizeof distro) != SOLARI_OK) (void)snprintf(distro, sizeof distro, "raspios");
+        if (ctlArgStr(args, "profile", profile, sizeof profile) != SOLARI_OK) profile[0] = '\0';
+        if (ctlArgStr(args, "role", role, sizeof role) != SOLARI_OK) role[0] = '\0';
+        if (ctlArgStr(args, "server", server, sizeof server) != SOLARI_OK) server[0] = '\0';
+        if (ctlArgStr(args, "ip", ip, sizeof ip) != SOLARI_OK) ip[0] = '\0';
+        ctlSanitizeName(hostname, sanit, sizeof sanit);
+        (void)snprintf(logpath, sizeof logpath, "run/image-%s.log", sanit);
+        argv[n++] = (char *)"deploy/fleet/fleet-image.sh";
+        argv[n++] = (char *)"--hostname"; argv[n++] = hostname;
+        argv[n++] = (char *)"--arch";     argv[n++] = arch;
+        argv[n++] = (char *)"--distro";   argv[n++] = distro;
+        if (profile[0]) { argv[n++] = (char *)"--profile"; argv[n++] = profile; }
+        if (role[0])    { argv[n++] = (char *)"--role";    argv[n++] = role; }
+        if (server[0])  { argv[n++] = (char *)"--server";  argv[n++] = server; }
+        if (ip[0])      { argv[n++] = (char *)"--server-ip"; argv[n++] = ip; }
+        argv[n++] = (char *)"--op"; argv[n++] = operator_;
+        argv[n]   = NULL;
+        st = ctlSpawnDetached(argv, logpath);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "image spawn failed");
+        solariLogf(SOLARI_LOG_INFO, "ctl: fleet image hostname=%s arch=%s op=%s -> %s",
+                   hostname, arch, operator_, logpath);
+        (void)snprintf(extra, sizeof extra, "log=%s status=imaging", logpath);
         return ctlReplyOk(replyOut, replyCap, extra);
     }
 

@@ -268,6 +268,68 @@
       });
     }
 
+    // ---- fleet provisioning (bare-metal OS install + Pi imaging) ----
+    const [cat, setCat] = useState(null);
+    const [fMode, setFMode] = useState("install");     // "install" | "image"
+    const [fDistro, setFDistro] = useState("debian");
+    const [fArch, setFArch] = useState("x86_64");
+    const [fTarget, setFTarget] = useState("");
+    const [fHostname, setFHostname] = useState("");
+    const [fRole, setFRole] = useState("sensor");
+    const [fProfile, setFProfile] = useState("standard");
+    const [fLog, setFLog] = useState("");
+    const [fBusy, setFBusy] = useState(false);
+    useEffect(function () {
+      const a = api();
+      if (!a || !a.fleetCatalog) return undefined;
+      let live = true;
+      a.fleetCatalog().then(function (c) { if (live) setCat(c); }).catch(function () {});
+      return function () { live = false; };
+    }, []);
+    // distros available for the chosen mode: image builds are Pi (raspios) only
+    const fDistros = (cat && cat.distros ? cat.distros : []).filter(function (d) {
+      return fMode === "image" ? d.install === "image" : d.install !== "image";
+    });
+    const fArches = (function () {
+      const d = (cat && cat.distros || []).find(function (x) { return x.id === fDistro; });
+      return (d && d.arches) || (fMode === "image" ? ["arm64", "arm32"] : ["x86_64", "arm64", "arm32"]);
+    })();
+    function pollProvision(hostname, isImage, tries) {
+      const a = api();
+      if (!a || !a.provisionLog) { setFBusy(false); return; }
+      a.provisionLog(hostname, isImage).then(function (r) {
+        setFLog(stripAnsi(r.log || ""));
+        if (r.done || r.failed || tries > 200) {
+          setFBusy(false);
+          if (r.done) { toast((isImage ? "Image built — " : "Provisioning staged — ") + hostname, "check"); refresh(); }
+          else if (r.failed) toast("Provisioning failed — " + hostname, "close");
+        } else {
+          setTimeout(function () { pollProvision(hostname, isImage, tries + 1); }, 3000);
+        }
+      }).catch(function () { setFBusy(false); });
+    }
+    function provisionSubmit() {
+      const host = fHostname.trim();
+      if (!/^[A-Za-z0-9._-]{1,160}$/.test(host)) { toast("Enter a valid hostname", "close"); return; }
+      const a = api();
+      const isImage = fMode === "image";
+      if (!a || (isImage ? !a.buildImage : !a.provision)) { toast("Provisioning unavailable (offline)", "close"); return; }
+      const body = { hostname: host, arch: fArch, distro: fDistro, role: fRole, profile: fProfile };
+      if (!isImage) {
+        if (!/^[A-Za-z0-9._:@-]{1,120}$/.test(fTarget.trim())) { toast("Enter the target MAC or host", "close"); return; }
+        body.target = fTarget.trim();
+      }
+      setFBusy(true); setFLog(isImage ? "building image…" : "staging install…");
+      (isImage ? a.buildImage(body) : a.provision(body)).then(function () {
+        toast((isImage ? "Building image for " : "Staging install for ") + host, "provision");
+        pollProvision(host, isImage, 0);
+      }).catch(function (e) {
+        setFBusy(false); setFLog("");
+        toast("Failed: " + (e && e.message || "error"), "close");
+      });
+    }
+    const fieldStyle = { flex: "1 1 160px", minWidth: 140, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13 };
+
     // approve (sign CSR) — POST /api/enrollments/{enrId}/approve via the adapter.
     // Destructive: the adapter sends confirm:true; the bridge signs via the CA.
     function approve(e) {
@@ -331,6 +393,50 @@
             {dLog ? <pre style={{ marginTop: 12, maxHeight: 220, overflow: "auto", background: "rgba(0,0,0,0.30)", padding: 10, borderRadius: 8, fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap", fontFamily: "var(--mono)" }}>{dLog}</pre> : null}
             <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
               Needs key-based SSH + passwordless sudo on the target. The CA signs the client cert; arm hosts need a binary built via <code>deploy/cross-build-client.sh</code> first.
+            </div>
+          </div>
+        </div>
+
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <div className="panel__head">
+            <Icon name="provision" size={16} /><h3>Provision a new system</h3>
+            <div className="right" style={{ display: "flex", gap: 6 }}>
+              <button className={fMode === "install" ? "chip on" : "chip"} onClick={() => setFMode("install")}>OS install</button>
+              <button className={fMode === "image" ? "chip on" : "chip"} onClick={() => setFMode("image")}>Pi image</button>
+            </div>
+          </div>
+          <div className="panel__body">
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <select value={fDistro} onChange={(e) => setFDistro(e.target.value)} style={fieldStyle}>
+                {fDistros.length
+                  ? fDistros.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)
+                  : <option value={fDistro}>{fDistro}</option>}
+              </select>
+              <select value={fArch} onChange={(e) => setFArch(e.target.value)} style={fieldStyle}>
+                {fArches.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+              <select value={fRole} onChange={(e) => setFRole(e.target.value)} style={fieldStyle}>
+                {(cat && cat.roles ? cat.roles : [{ id: "sensor", label: "Sensor" }]).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
+              <select value={fProfile} onChange={(e) => setFProfile(e.target.value)} style={fieldStyle}>
+                {(cat && cat.profiles ? cat.profiles : [{ id: "standard", label: "Standard" }]).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+              {fMode === "install"
+                ? <input value={fTarget} onChange={(e) => setFTarget(e.target.value)} placeholder="target MAC (aa:bb:cc:..) or host" style={fieldStyle} />
+                : null}
+              <input value={fHostname} onChange={(e) => setFHostname(e.target.value)} placeholder="new hostname"
+                onKeyDown={(e) => { if (e.key === "Enter") provisionSubmit(); }} style={fieldStyle} />
+              <button className="btn-primary" disabled={fBusy} onClick={provisionSubmit}>
+                <Icon name="provision" size={14} />{fBusy ? (fMode === "image" ? "Building…" : "Staging…") : (fMode === "image" ? "Build image" : "Stage install")}
+              </button>
+            </div>
+            {fLog ? <pre style={{ marginTop: 12, maxHeight: 220, overflow: "auto", background: "rgba(0,0,0,0.30)", padding: 10, borderRadius: 8, fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap", fontFamily: "var(--mono)" }}>{fLog}</pre> : null}
+            <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+              {fMode === "install"
+                ? <span>Renders an unattended install (same core package stack across distros) + stages a per-MAC netboot entry on <code>benzene</code>. The machine installs on its next network boot. <b>Live PXE activates once the DHCP switch is flipped</b> — until then, entries are staged.</span>
+                : <span>Builds a customized Raspberry Pi OS image (hostname, SSH key, core stack, SolariNet enrollment) on <code>benzene</code> for flashing to SD/USB. Pi 5 can also native-netboot once PXE is live.</span>}
             </div>
           </div>
         </div>

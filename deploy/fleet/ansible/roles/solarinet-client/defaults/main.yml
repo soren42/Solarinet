@@ -1,0 +1,24 @@
+# solarinet-client role defaults.
+# The dashboard supplies the *_src paths and server vars per host; these
+# fallbacks keep the role runnable and make the "skip gracefully" paths explicit.
+---
+solari_conf_dir: "/etc/solari"
+solari_client_bin_dest: "/usr/local/bin/solariClient"
+solari_client_sample_interval_sec: 15
+solari_client_spool_db: "/var/lib/solari/client-spool.db"
+solari_server_url: "tls+tcp://solari.example.intranet:7701"
+
+# System account the agent runs as (mirrors deploy/systemd/solari-client.service).
+solari_client_user: "solari"
+solari_client_group: "solari"
+
+# Control-node source paths. Undefined by default -> the role installs the unit
+# but leaves the agent inert until material is placed. The dashboard sets these.
+# solari_client_bin_src: /srv/solari-provision/artifacts/<arch>/solariClient
+# solari_ca_src:   /srv/solari-provision/enroll/<host>/ca.pem
+# solari_cert_src: /srv/solari-provision/enroll/<host>/node.pem
+# solari_key_src:  /srv/solari-provision/enroll/<host>/node.key
+
+# Optional server DNS-SAN -> IP pin for /etc/hosts (older mbedTLS needs a name).
+solari_server_name: ""
+solari_server_ip: ""

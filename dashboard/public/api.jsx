@@ -159,6 +159,9 @@
     decommission: "/api/control/decommission",
     survey:       "/api/control/survey",
     deploy:       "/api/control/deploy",
+    fleetCatalog: "/api/control/fleet-catalog",
+    provision:    "/api/control/fleet-provision",
+    image:        "/api/control/fleet-image",
     stream:       "/api/stream",
     login:        "/api/auth/login",
     logout:       "/api/auth/logout",
@@ -514,11 +517,36 @@
       return mapNode(flat, segIndex);
     });
   }
-  function loadNodeHistory(id, metric) {
-    // server downsamples; wire is {points:[..]} or a bare array. Return the spark array.
-    return getJSON(EP.nodeHistory(id, metric)).then(function (w) {
-      if (Array.isArray(w)) return w;
-      return (w && w.points) || [];
+  function historyMetric(metric) {
+    var map = {
+      cpu: "cpuAvgMilli",
+      ram: "ramUsedKb",
+      swap: "swapUsedKb",
+      disk: "diskMinFreePct",
+    };
+    return map[metric] || metric || "cpuAvgMilli";
+  }
+
+  function historyValue(raw, metric, opts) {
+    var v = Number(raw || 0);
+    opts = opts || {};
+    if (metric === "cpuAvgMilli") return milliToPct(v);
+    if (metric === "ramUsedKb") return pct(v, opts.totalKb || opts.ramTotalKb || 0);
+    if (metric === "swapUsedKb") return pct(v, opts.totalKb || opts.swapTotalKb || 0);
+    if (metric === "diskMinFreePct") return Math.max(0, Math.min(100, 100 - v));
+    return v;
+  }
+
+  function loadNodeHistory(id, metric, opts) {
+    // server returns {series:[{ts,value},...]} today; tolerate {points:[..]} and
+    // bare arrays so older fixtures still render. Return the UI spark array.
+    var wireMetric = historyMetric(metric);
+    return getJSON(EP.nodeHistory(id, wireMetric)).then(function (w) {
+      var series = Array.isArray(w) ? w : ((w && (w.series || w.points)) || []);
+      return series.map(function (p) {
+        var raw = (p && typeof p === "object" && "value" in p) ? p.value : p;
+        return historyValue(raw, wireMetric, opts);
+      });
     });
   }
   function loadTopology(view) { return getJSON(EP.topology(view)); }
@@ -567,6 +595,13 @@
     // remote client deployment (server-side, via the bridge; poll the log)
     deployClient: function (body) { return post(EP.deploy, body || {}); },
     deployLog: function (host) { return getJSON(EP.deploy + "?host=" + encodeURIComponent(host)); },
+    // fleet provisioning (bare-metal OS install + Pi imaging), server-side via bridge
+    fleetCatalog: function () { return getJSON(EP.fleetCatalog); },
+    provision: function (body) { return post(EP.provision, body || {}); },
+    buildImage: function (body) { return post(EP.image, body || {}); },
+    provisionLog: function (hostname, isImage) {
+      return getJSON(EP.provision + "?hostname=" + encodeURIComponent(hostname) + (isImage ? "&image=1" : ""));
+    },
     saveRule: function (ruleId, patch) { return post(EP.rule(ruleId), patch); },
     toggleRule: function (ruleId, enabled) { return post(EP.rule(ruleId), { enabled: enabled }); },
 

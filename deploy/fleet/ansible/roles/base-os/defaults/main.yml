@@ -1,0 +1,15 @@
+# base-os role defaults.
+# Real values live in group_vars/all.yml (the shared contract); these are only
+# fallbacks so the role is runnable stand-alone during development.
+---
+solari_timezone: "Etc/UTC"
+solari_locale: "en_US.UTF-8"
+solari_admin_user: "solari-admin"
+solari_admin_authorized_keys: []
+solari_sshd_permit_root_login: "prohibit-password"
+solari_sshd_password_auth: false
+solari_journald_max_use: "200M"
+solari_journald_max_file_size: "20M"
+solari_auto_security_updates: false
+# solari_hostname is intentionally undefined by default; when the dashboard sets
+# it per host we apply it, otherwise we leave the existing hostname alone.

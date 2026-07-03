@@ -153,6 +153,142 @@ return static function (Router $router): void {
             'failed'  => $failed,
         ]);
     });
+
+    // --- GET /api/control/fleet-catalog ----------------------------------
+    // Read-only reference data for the provisioning UI (distros, arches, roles,
+    // profiles, the shared core package stack, netboot staging status). Served
+    // from a local JSON file with an inline fallback so the UI always renders.
+    $router->get('/api/control/fleet-catalog', static function (): void {
+        $cat = null;
+        $candidates = array_filter([
+            getenv('SOLARI_FLEET_CATALOG') ?: null,
+            __DIR__ . '/../fleet-catalog.json',
+            dirname(getenv('SOLARI_CTL_SOCK') ?: '') . '/../deploy/fleet/catalog.json',
+        ]);
+        foreach ($candidates as $f) {
+            if ($f && is_readable($f)) {
+                $j = json_decode((string) file_get_contents($f), true);
+                if (is_array($j)) { $cat = $j; break; }
+            }
+        }
+        if ($cat === null) {
+            $cat = [
+                'distros' => [
+                    ['id' => 'debian',   'label' => 'Debian 12',        'arches' => ['x86_64', 'arm64', 'arm32'], 'install' => 'preseed'],
+                    ['id' => 'ubuntu',   'label' => 'Ubuntu 24.04',     'arches' => ['x86_64', 'arm64'],          'install' => 'autoinstall'],
+                    ['id' => 'opensuse', 'label' => 'openSUSE Leap 15', 'arches' => ['x86_64', 'arm64'],          'install' => 'autoyast'],
+                    ['id' => 'raspios',  'label' => 'Raspberry Pi OS',  'arches' => ['arm64', 'arm32'],           'install' => 'image'],
+                ],
+                'arches'  => [
+                    ['id' => 'x86_64', 'label' => 'x86 (64-bit)'],
+                    ['id' => 'arm64',  'label' => 'ARM64'],
+                    ['id' => 'arm32',  'label' => 'ARM32 (Pi)'],
+                ],
+                'roles'    => [['id' => 'sensor', 'label' => 'Sensor / client'], ['id' => 'edge', 'label' => 'Edge node'], ['id' => 'appliance', 'label' => 'Appliance']],
+                'profiles' => [['id' => 'standard', 'label' => 'Standard stack'], ['id' => 'minimal', 'label' => 'Minimal']],
+                'netboot'  => ['httpBase' => 'http://benzene.akoria.net:8080', 'liveStatus' => 'staged'],
+            ];
+        }
+        Response::ok($cat);
+    });
+
+    // --- POST /api/control/provision -------------------------------------
+    // body: { target:"MAC|host", distro, arch, hostname, profile?, role?, server?, ip? }
+    // Stages a bare-metal OS install via the C bridge (FLEET_PROVISION -> detaches
+    // deploy/fleet/fleet-provision.sh, logs to run/provision-<hostname>.log). Mints
+    // the node's enrollment cert. Privileged. Returns immediately; poll the GET.
+    $router->post('/api/control/fleet-provision', static function (): void {
+        $b    = solari_json_body();
+        $op   = Operator::requireOperator();
+        $target   = (string) ($b['target'] ?? '');
+        $distro   = (string) ($b['distro'] ?? '');
+        $arch     = (string) ($b['arch'] ?? '');
+        $hostname = (string) ($b['hostname'] ?? '');
+        if (preg_match('/^[A-Za-z0-9._:@-]{1,120}$/', $target) !== 1) {
+            Response::error('bad_request', 'target must be a MAC or hostname.', 400);
+        }
+        if (!in_array($distro, ['debian', 'ubuntu', 'opensuse', 'raspios'], true)) {
+            Response::error('bad_request', 'unsupported distro.', 400);
+        }
+        if (!in_array($arch, ['x86_64', 'arm64', 'arm32'], true)) {
+            Response::error('bad_request', 'unsupported arch.', 400);
+        }
+        if (preg_match('/^[A-Za-z0-9._-]{1,160}$/', $hostname) !== 1) {
+            Response::error('bad_request', 'hostname required (letters, digits, . _ -).', 400);
+        }
+        $args = ['target' => $target, 'distro' => $distro, 'arch' => $arch, 'hostname' => $hostname, 'op' => $op];
+        if (isset($b['profile']) && preg_match('/^[A-Za-z0-9._-]{1,48}$/', (string) $b['profile']) === 1) {
+            $args['profile'] = (string) $b['profile'];
+        }
+        if (isset($b['role']) && preg_match('/^[A-Za-z0-9._-]{1,32}$/', (string) $b['role']) === 1) {
+            $args['role'] = (string) $b['role'];
+        }
+        if (isset($b['server']) && preg_match('#^tls\+tcp://[A-Za-z0-9._:-]+$#', (string) $b['server']) === 1) {
+            $args['server'] = (string) $b['server'];
+        }
+        if (isset($b['ip']) && filter_var($b['ip'], FILTER_VALIDATE_IP) !== false) {
+            $args['ip'] = (string) $b['ip'];
+        }
+        $reply = SolariCtl::call('FLEET_PROVISION', $args);
+        Response::ok(['hostname' => $hostname, 'status' => 'provisioning', 'log' => $reply['log'] ?? null]);
+    });
+
+    // --- POST /api/control/image -----------------------------------------
+    // body: { hostname, arch, distro?, profile?, role?, server?, ip? }
+    // Builds a bootable image (Raspberry Pi USB/SD) via FLEET_IMAGE.
+    $router->post('/api/control/fleet-image', static function (): void {
+        $b    = solari_json_body();
+        $op   = Operator::requireOperator();
+        $hostname = (string) ($b['hostname'] ?? '');
+        $arch     = (string) ($b['arch'] ?? '');
+        if (preg_match('/^[A-Za-z0-9._-]{1,160}$/', $hostname) !== 1) {
+            Response::error('bad_request', 'hostname required.', 400);
+        }
+        if (!in_array($arch, ['arm64', 'arm32'], true)) {
+            Response::error('bad_request', 'image builds are arm64/arm32 (Pi) only.', 400);
+        }
+        $args = ['hostname' => $hostname, 'arch' => $arch, 'op' => $op];
+        foreach (['distro' => '/^[A-Za-z0-9._-]{1,24}$/', 'profile' => '/^[A-Za-z0-9._-]{1,48}$/', 'role' => '/^[A-Za-z0-9._-]{1,32}$/'] as $k => $re) {
+            if (isset($b[$k]) && preg_match($re, (string) $b[$k]) === 1) {
+                $args[$k] = (string) $b[$k];
+            }
+        }
+        if (isset($b['server']) && preg_match('#^tls\+tcp://[A-Za-z0-9._:-]+$#', (string) $b['server']) === 1) {
+            $args['server'] = (string) $b['server'];
+        }
+        if (isset($b['ip']) && filter_var($b['ip'], FILTER_VALIDATE_IP) !== false) {
+            $args['ip'] = (string) $b['ip'];
+        }
+        $reply = SolariCtl::call('FLEET_IMAGE', $args);
+        Response::ok(['hostname' => $hostname, 'status' => 'imaging', 'log' => $reply['log'] ?? null]);
+    });
+
+    // --- GET /api/control/provision?hostname= (or ?image=1) --------------
+    // Tail the provision/image log for a hostname (read-only).
+    $router->get('/api/control/fleet-provision', static function (): void {
+        $hostname = (string) ($_GET['hostname'] ?? '');
+        if (preg_match('/^[A-Za-z0-9._-]{1,160}$/', $hostname) !== 1) {
+            Response::error('bad_request', 'hostname query param required.', 400);
+        }
+        $kind   = (isset($_GET['image']) && $_GET['image']) ? 'image' : 'provision';
+        $sanit  = preg_replace('/[^A-Za-z0-9._-]/', '_', $hostname);
+        $sock   = getenv('SOLARI_CTL_SOCK') ?: '/run/solari/solariCtl.sock';
+        $logf   = dirname($sock) . '/' . $kind . '-' . $sanit . '.log';
+        $log    = is_readable($logf) ? (string) file_get_contents($logf) : '';
+        // strip ANSI so the [fleet]-prefixed status markers match (the color
+        // reset code sits between "[fleet]" and the word "staged"/"done").
+        $plain  = preg_replace('/\x1b\[[0-9;]*m/', '', $log);
+        $done   = strpos($plain, '[fleet] done.') !== false || strpos($plain, '[fleet] staged.') !== false;
+        $failed = strpos($plain, '[fleet][error]') !== false;
+        Response::ok([
+            'hostname' => $hostname,
+            'kind'     => $kind,
+            'log'      => $log,
+            'running'  => $log !== '' && !$done && !$failed,
+            'done'     => $done,
+            'failed'   => $failed,
+        ]);
+    });
 };
 
 /* ---- shared validators / mappers ------------------------------------- */

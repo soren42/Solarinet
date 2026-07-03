@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet Handoff - Remediation Pass 2026-06-27</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #111923;
+    --panel2: #162232;
+    --ink: #dce6f2;
+    --muted: #9aaabb;
+    --line: #263648;
+    --cyan: #42c8d9;
+    --green: #67d391;
+    --amber: #e7b04d;
+    --red: #ef6b73;
+    --mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+    --sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.58; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 44px 26px 88px; }
+  h1 { margin: 0 0 6px; font-size: clamp(31px, 5vw, 48px); line-height: 1.05; letter-spacing: 0; }
+  .sub { color: var(--muted); margin: 0 0 26px; font-size: 16px; }
+  h2 { margin: 38px 0 10px; font-size: 24px; border-bottom: 1px solid var(--line); padding-bottom: 7px; }
+  h3 { margin: 24px 0 6px; font-size: 17px; color: #eef6ff; }
+  p { margin: 0 0 13px; }
+  code { font-family: var(--mono); font-size: .88em; color: #c9ddff; background: rgba(125,183,255,.1); padding: 1px 5px; border-radius: 4px; }
+  pre { overflow-x: auto; background: #091018; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font: 12.5px/1.55 var(--mono); color: #c9d7e8; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); text-align: left; vertical-align: top; padding: 9px 11px; }
+  th { background: var(--panel2); color: var(--cyan); font: 700 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+  td { background: var(--panel); }
+  ul { padding-left: 22px; }
+  li { margin: 5px 0; }
+  .note, .gap { margin: 16px 0; padding: 12px 15px; border-radius: 0 8px 8px 0; background: var(--panel); }
+  .note { border-left: 3px solid var(--cyan); }
+  .gap { border-left: 3px solid var(--amber); }
+  .ok { color: var(--green); font-weight: 700; }
+  .warn { color: var(--amber); font-weight: 700; }
+  .bad { color: var(--red); font-weight: 700; }
+  .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); font: 11px var(--mono); margin: 2px 4px 2px 0; }
+  .footer { margin-top: 42px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Remediation Handoff</h1>
+  <p class="sub">SolariNet Monitoring - remediation pass from the punchdown report - 2026-06-27</p>
+
+  <div class="note">
+    <strong>Scope of this pass.</strong> This pass remediated concrete defects and acceptance gaps that were practical inside the current repository without inventing new platform ports or appliance build infrastructure. Larger product tracks remain listed below with clear next steps.
+  </div>
+
+  <h2>What Changed</h2>
+  <table>
+    <thead><tr><th>Area</th><th>Files</th><th>Change</th><th>Impact</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Operator bridge</td>
+        <td><code>dashboard/api/lib/SolariCtl.php</code></td>
+        <td>Raised PHP's bridge reply cap from <code>1024</code> to <code>16384</code>, matching C's <code>CTL_REPLY_CAP</code>.</td>
+        <td>Prevents truncating large one-line bridge replies, including URL-encoded signed certificate PEMs from enrollment approval/signing paths.</td>
+      </tr>
+      <tr>
+        <td>Dashboard history adapter</td>
+        <td><code>dashboard/public/api.jsx</code></td>
+        <td>Made <code>nodeHistory()</code> accept the actual PHP response shape <code>{series:[{ts,value}]}</code>, while preserving support for old <code>points</code> and bare arrays. Added metric alias conversion from UI names to wire names.</td>
+        <td>Fixes the mismatch that could leave NodeDetail trend charts empty despite the server returning history rows.</td>
+      </tr>
+      <tr>
+        <td>NodeDetail trend panel</td>
+        <td><code>dashboard/public/screens.jsx</code></td>
+        <td>NodeDetail now requests CPU, RAM, and disk history when detail loads and on the existing 10s refresh cadence. Returned raw history is scaled into UI percentages.</td>
+        <td>Closes the "history charts not wired" gap for metrics backed by <code>hostHistory</code>. Net history still depends on adding net counters to history storage.</td>
+      </tr>
+      <tr>
+        <td>Dashboard PHP tests</td>
+        <td><code>tests/dashboard/test_solari_ctl.php</code></td>
+        <td>Added a no-framework PHP test for <code>SolariCtl</code> reply cap and reply parsing, including URL-decoded cert fields and ERR parsing.</td>
+        <td>Creates a repeatable guard for the cap mismatch regression without requiring PHPUnit.</td>
+      </tr>
+      <tr>
+        <td>CI</td>
+        <td><code>.github/workflows/ci.yml</code></td>
+        <td>Added a dashboard/ops job that lints PHP, runs the new bridge test, and checks deploy script shell syntax.</td>
+        <td>Keeps dashboard API and deployment-script guardrails in the published GitHub workflow.</td>
+      </tr>
+      <tr>
+        <td>Punchdown artifact</td>
+        <td><code>docs/SolariNet_Punchdown_Report.html</code></td>
+        <td>Added the self-contained punchdown report requested before this remediation pass.</td>
+        <td>Provides the source list of improvements and incomplete features that drove this pass.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Validation Performed</h2>
+  <table>
+    <thead><tr><th>Gate</th><th>Command</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>C/full server build and tests</td><td><code>cmake -S . -B build -DSOLARI_BUILD_TESTS=ON &amp;&amp; cmake --build build -j &amp;&amp; ctest --test-dir build --output-on-failure</code></td><td class="ok">23/23 passed</td></tr>
+      <tr><td>MCP suite</td><td><code>cd integrations/mcp &amp;&amp; .venv/bin/python -m pytest -q</code></td><td class="ok">81 passed</td></tr>
+      <tr><td>PHP syntax</td><td><code>find dashboard/api -name '*.php' -print | sort | xargs -n1 php -l</code></td><td class="ok">All dashboard API PHP files passed lint</td></tr>
+      <tr><td>New PHP bridge test</td><td><code>php tests/dashboard/test_solari_ctl.php</code></td><td class="ok">Passed</td></tr>
+      <tr><td>Deploy shell syntax</td><td><code>bash -n deploy/bootstrap-xenon.sh deploy/cross-build-client.sh deploy/remote-deploy.sh deploy/enrollment/solari-enroll.sh deploy/enrollment/solari-decommission.sh</code></td><td class="ok">Passed</td></tr>
+      <tr><td>Shellcheck</td><td><code>shellcheck deploy/*.sh deploy/enrollment/*.sh</code></td><td class="warn">Not run: <code>shellcheck</code> is not installed in this environment</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Resolved Punchdown Items</h2>
+  <ul>
+    <li><span class="pill">P0</span><strong>PHP/C bridge reply cap mismatch:</strong> resolved and covered by <code>tests/dashboard/test_solari_ctl.php</code>.</li>
+    <li><span class="pill">P1</span><strong>NodeDetail history wiring:</strong> remediated for CPU, RAM, and disk series. The adapter now consumes the route's actual <code>series</code> envelope.</li>
+    <li><span class="pill">P1</span><strong>Dashboard API contract drift:</strong> partially remediated for the history endpoint by making adapter and PHP response shape agree.</li>
+    <li><span class="pill">P1</span><strong>Deploy script validation gap:</strong> partially remediated with syntax validation. Full shellcheck remains blocked by missing local tool.</li>
+  </ul>
+
+  <h2>Still Outstanding</h2>
+  <div class="gap">
+    <ul>
+      <li><strong>Live dashboard/browser/SSE acceptance:</strong> the code now builds and PHP routes lint, but a real browser-driven pass was not performed in this CLI environment. Next step: run the SPA against a seeded live DB and verify console, layout, auth, NodeDetail trends, and EventSource updates.</li>
+      <li><strong>Live solariCtl round-trip acceptance:</strong> C and PHP tests are green, and the cap bug is fixed, but a running server plus real AF_UNIX bridge mutation round-trip should still be driven end to end before calling operator control fully accepted.</li>
+      <li><strong>Network throughput history:</strong> NodeDetail still shows live throughput, but historical net series is not stored in <code>hostHistory</code>. Add rx/tx history columns or a derived history endpoint before marking net trends complete.</li>
+      <li><strong>Static musl/MIPS build matrix:</strong> remains a product-build track. Current changes do not add static x86_64/arm64/arm32/mips/mipsel artifacts.</li>
+      <li><strong>Container agent and agentless polling:</strong> still not implemented. These are needed for immutable appliances and fully closed devices.</li>
+      <li><strong>macOS/Windows PALs:</strong> still unwritten; CI validates the portable core on those platforms, not running agents.</li>
+      <li><strong>Remote CA forwarding:</strong> <code>caMode=remote</code> remains fail-closed in <code>solariCtl.c</code>.</li>
+      <li><strong>SNMP deep topology backend:</strong> normalization is present and tested, but live SNMP fetch remains off-by-default and unimplemented.</li>
+      <li><strong>Directory-service auth:</strong> local JSON auth works; LDAP/AD remains a fail-closed stub.</li>
+    </ul>
+  </div>
+
+  <h2>Operator Notes</h2>
+  <ul>
+    <li>The PHP bridge can now receive the full C bridge reply size, but deployments should still monitor web-server/FPM timeouts for long mutation paths.</li>
+    <li>NodeDetail history now issues three additional history calls per viewed node on load and every 10 seconds. The calls are bounded by the existing history route limit and only run on the detail screen.</li>
+    <li>The dashboard still gracefully falls back to offline fixture mode when the live API is unreachable; authentication failures continue to show the login gate instead of silently serving demo data.</li>
+  </ul>
+
+  <p class="footer">Generated after remediation and validation on 2026-06-27. Use this handoff together with <code>docs/SolariNet_Punchdown_Report.html</code> for the remaining roadmap.</p>
+</div>
+</body>
+</html>

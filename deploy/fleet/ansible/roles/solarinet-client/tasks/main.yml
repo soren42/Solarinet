@@ -1,0 +1,156 @@
+# =============================================================================
+# solarinet-client role - install, configure, enroll, and supervise the agent.
+# =============================================================================
+# The agent binary and TLS material are produced OUT OF BAND (a cross-compiled
+# binary per arch; enrollment certs from deploy/enrollment/solari-enroll.sh) and
+# delivered here from control-node paths given by vars. The role always installs
+# the config + systemd unit; it only *starts* the agent once enrollment material
+# is present, so a half-provisioned host is left in a clean, resumable state.
+---
+
+# ---- Service account (mirrors deploy/systemd/solari-client.service) ----------
+- name: Create solari system group
+  ansible.builtin.group:
+    name: "{{ solari_client_group }}"
+    system: true
+
+- name: Create solari system user
+  ansible.builtin.user:
+    name: "{{ solari_client_user }}"
+    group: "{{ solari_client_group }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    home: /var/lib/solari
+
+# ---- Directories -------------------------------------------------------------
+- name: Ensure config directory exists
+  ansible.builtin.file:
+    path: "{{ solari_conf_dir }}"
+    state: directory
+    owner: root
+    group: "{{ solari_client_group }}"
+    mode: "0750"
+
+- name: Ensure state directory exists (spool DB lives here)
+  ansible.builtin.file:
+    path: "{{ solari_client_spool_db | dirname }}"
+    state: directory
+    owner: "{{ solari_client_user }}"
+    group: "{{ solari_client_group }}"
+    mode: "0750"
+
+# ---- Server DNS-SAN pin (older mbedTLS verifies a name, never a raw IP) ------
+- name: Pin SolariNet server name to its IP in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ solari_server_name | regex_escape }}(\s|$)'
+    line: "{{ solari_server_ip }} {{ solari_server_name }}"
+    state: present
+  when:
+    - solari_server_name | length > 0
+    - solari_server_ip | length > 0
+
+# ---- Agent binary (out-of-band, per-arch) -----------------------------------
+- name: Install solariClient binary
+  ansible.builtin.copy:
+    src: "{{ solari_client_bin_src }}"
+    dest: "{{ solari_client_bin_dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: solari_client_bin_src is defined and solari_client_bin_src | length > 0
+  notify: Restart solarinet-client
+
+- name: Note missing agent binary
+  ansible.builtin.debug:
+    msg: >-
+      solari_client_bin_src not set; skipping binary install. Place the correct
+      per-arch solariClient at {{ solari_client_bin_dest }} to complete setup.
+  when: solari_client_bin_src is not defined or solari_client_bin_src | length == 0
+
+# ---- Enrollment material (ca / node cert / node key) ------------------------
+# All three must be present to arm the agent. Copy them if the dashboard wired
+# up the enrollment hook; otherwise install the unit but leave the agent inert.
+- name: Determine whether enrollment material is available
+  ansible.builtin.set_fact:
+    solari_enroll_ready: >-
+      {{ (solari_ca_src   is defined and solari_ca_src   | length > 0)
+         and (solari_cert_src is defined and solari_cert_src | length > 0)
+         and (solari_key_src  is defined and solari_key_src  | length > 0) }}
+
+- name: Install CA root
+  ansible.builtin.copy:
+    src: "{{ solari_ca_src }}"
+    dest: "{{ solari_conf_dir }}/ca.pem"
+    owner: root
+    group: "{{ solari_client_group }}"
+    mode: "0644"
+  when: solari_enroll_ready | bool
+  notify: Restart solarinet-client
+
+- name: Install node certificate
+  ansible.builtin.copy:
+    src: "{{ solari_cert_src }}"
+    dest: "{{ solari_conf_dir }}/node.pem"
+    owner: root
+    group: "{{ solari_client_group }}"
+    mode: "0644"
+  when: solari_enroll_ready | bool
+  notify: Restart solarinet-client
+
+- name: Install node private key
+  ansible.builtin.copy:
+    src: "{{ solari_key_src }}"
+    dest: "{{ solari_conf_dir }}/node.key"
+    owner: root
+    group: "{{ solari_client_group }}"
+    mode: "0640"
+  when: solari_enroll_ready | bool
+  notify: Restart solarinet-client
+
+- name: Note missing enrollment material
+  ansible.builtin.debug:
+    msg: >-
+      enrollment material not provided; agent will start once certs are placed
+      at {{ solari_conf_dir }}/{ca.pem,node.pem,node.key}.
+  when: not (solari_enroll_ready | bool)
+
+# ---- Config -----------------------------------------------------------------
+- name: Render client.conf
+  ansible.builtin.template:
+    src: client.conf.j2
+    dest: "{{ solari_conf_dir }}/client.conf"
+    owner: root
+    group: "{{ solari_client_group }}"
+    mode: "0640"
+  notify: Restart solarinet-client
+
+# ---- systemd unit -----------------------------------------------------------
+- name: Install solarinet-client systemd unit
+  ansible.builtin.template:
+    src: solarinet-client.service.j2
+    dest: /etc/systemd/system/solarinet-client.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart solarinet-client
+
+- name: Flush handlers so the unit is reloaded before we enable it
+  ansible.builtin.meta: flush_handlers
+
+# Enable the unit unconditionally so it survives reboots...
+- name: Enable solarinet-client at boot
+  ansible.builtin.systemd:
+    name: solarinet-client.service
+    enabled: true
+
+# ...but only *start* it now when enrollment material is in place; otherwise it
+# would crash-loop on missing certs. It will start on the next run once armed.
+- name: Start solarinet-client (enrollment ready only)
+  ansible.builtin.systemd:
+    name: solarinet-client.service
+    state: started
+  when: solari_enroll_ready | bool

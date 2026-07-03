@@ -1,0 +1,80 @@
+#!ipxe
+# =============================================================================
+# SolariNet Fleet Provisioning - per-MAC auto-install profile (TEMPLATE)
+# =============================================================================
+#
+# The dashboard "pre-stages" a machine for unattended install by rendering this
+# template and writing it to:
+#     /srv/solari-provision/netboot/http/ipxe/mac-@@MAC@@.ipxe
+# where @@MAC@@ is the booting NIC's MAC in lowercase hyphen form
+# (aa-bb-cc-dd-ee-ff), matching iPXE's ${net0/mac:hexhyp}.
+#
+# boot.ipxe chains to this file FIRST. If it exists, the machine installs
+# @@DISTRO@@/@@ARCH@@ unattended on next boot. If it does NOT exist (the common
+# case), the chain 404s and boot.ipxe falls through to its interactive menu and
+# then to "boot local disk" - so an un-staged machine is never wiped.
+#
+# ONE-SHOT SEMANTICS
+# ------------------
+# This script itself cannot delete its own file from the HTTP server. To make
+# the auto-install fire exactly once, the integrator SHOULD remove (or the
+# dashboard should un-stage) this file after the target's firstboot callback
+# reports success. Until then, re-booting the machine will re-install it. The
+# firstboot marker /etc/solari/PENDING_ENROLLMENT is the signal to un-stage.
+#
+# TOKENS rendered into this file (see netboot/README.md for the full manifest):
+#   @@HTTP_BASE@@  @@MAC@@  @@HOSTNAME@@  @@DISTRO@@  @@ARCH@@
+# =============================================================================
+
+set base @@HTTP_BASE@@
+set cfgkey @@MAC@@
+set arch @@ARCH@@
+
+# Shared cmdline fragments (kept identical to boot.ipxe).
+set cmdline_common console=tty0 console=ttyS0,115200n8
+set debian_cmdline auto=true priority=critical locale=en_US.UTF-8 keymap=us
+
+echo
+echo ================================================================
+echo  SolariNet: STAGED unattended install
+echo  hostname : @@HOSTNAME@@
+echo  distro   : @@DISTRO@@ / @@ARCH@@
+echo  mac      : ${net0/mac}
+echo ================================================================
+echo  This machine was pre-staged from the dashboard and will be
+echo  INSTALLED NOW. The target disk will be ERASED.
+echo ================================================================
+echo Continuing in 10 seconds (power off to abort) ...
+sleep 10
+
+# Distro dispatch. The render step fills exactly one of these in via @@DISTRO@@;
+# the '||' chain jumps to the matching label. If @@DISTRO@@ is somehow unknown
+# we fail safe by exiting back to boot.ipxe (which then boots local disk).
+iseq @@DISTRO@@ debian   && goto debian   ||
+iseq @@DISTRO@@ ubuntu   && goto ubuntu   ||
+iseq @@DISTRO@@ opensuse && goto opensuse ||
+goto giveup
+
+:debian
+kernel ${base}/installers/debian/${arch}/linux ${cmdline_common} ${debian_cmdline} \
+    preseed/url=${base}/configs/${cfgkey}.preseed || goto giveup
+initrd ${base}/installers/debian/${arch}/initrd.gz || goto giveup
+boot || goto giveup
+
+:ubuntu
+kernel ${base}/installers/ubuntu/${arch}/vmlinuz ${cmdline_common} autoinstall \
+    "ds=nocloud-net;s=${base}/configs/ubuntu/${cfgkey}/" || goto giveup
+initrd ${base}/installers/ubuntu/${arch}/initrd || goto giveup
+boot || goto giveup
+
+:opensuse
+kernel ${base}/installers/opensuse/${arch}/linux ${cmdline_common} \
+    install=${base}/installers/opensuse/${arch}/repo \
+    autoyast=${base}/configs/${cfgkey}.xml || goto giveup
+initrd ${base}/installers/opensuse/${arch}/initrd || goto giveup
+boot || goto giveup
+
+# Fail safe: return control to boot.ipxe, which will boot the local disk.
+:giveup
+echo Staged install could not start; returning to firmware/local boot.
+exit 1

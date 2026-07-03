@@ -78,6 +78,29 @@ jobs:
           ctest --test-dir build-server --output-on-failure -R 'test_net_loopback' \
             || echo "::warning::transport loopback not green (best-effort stage)"
 
+  # ---- dashboard API + operational script guardrails ----------------------
+  dashboard:
+    name: dashboard API + ops scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PHP CLI
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y php-cli
+      - name: PHP syntax
+        run: find dashboard/api -name '*.php' -print | sort | xargs -n1 php -l
+      - name: PHP bridge tests
+        run: php tests/dashboard/test_solari_ctl.php
+      - name: Deploy script syntax
+        run: |
+          bash -n \
+            deploy/bootstrap-xenon.sh \
+            deploy/cross-build-client.sh \
+            deploy/remote-deploy.sh \
+            deploy/enrollment/solari-enroll.sh \
+            deploy/enrollment/solari-decommission.sh
+
   # ---- cross matrix (§12 toolchains) + qemu-user smoke ---------------------
   cross:
     name: cross ${{ matrix.target }}

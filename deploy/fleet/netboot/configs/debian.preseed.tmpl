@@ -1,0 +1,130 @@
+# =============================================================================
+# SolariNet Fleet Provisioning - Debian 12 (bookworm) preseed  (TEMPLATE)
+# =============================================================================
+# Rendered per-host and served at:
+#     @@HTTP_BASE@@/configs/<mac-or-host>.preseed
+# debian-installer fetches it via the boot.ipxe kernel arg:
+#     preseed/url=@@HTTP_BASE@@/configs/<mac>.preseed  auto=true priority=critical
+#
+# TOKENS (see netboot/README.md manifest):
+#   @@HOSTNAME@@ @@FQDN@@ @@DOMAIN@@ @@TIMEZONE@@
+#   @@ADMIN_USER@@ @@ADMIN_PWHASH@@ @@SSH_PUBKEY@@
+#   @@DISK@@ @@PACKAGES@@
+#   @@HTTP_BASE@@ @@ARCH@@ @@SERVER_URL@@ @@SERVER_NAME@@ @@SERVER_IP@@
+#
+# Reference: https://www.debian.org/releases/bookworm/example-preseed.txt
+# =============================================================================
+
+# ---- localization -----------------------------------------------------------
+d-i debian-installer/locale        string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+
+# ---- network ----------------------------------------------------------------
+# DHCP on the provisioning link; hostname/domain come from the tokens, not DHCP.
+d-i netcfg/choose_interface        select auto
+d-i netcfg/get_hostname            string @@HOSTNAME@@
+d-i netcfg/get_domain              string @@DOMAIN@@
+d-i netcfg/hostname                string @@HOSTNAME@@
+# Don't let a slow/absent DHCP answer wedge the install.
+d-i netcfg/dhcp_timeout            string 60
+
+# ---- apt mirror -------------------------------------------------------------
+d-i mirror/country                 string manual
+d-i mirror/http/hostname           string deb.debian.org
+d-i mirror/http/directory          string /debian
+d-i mirror/http/proxy              string
+
+# ---- clock / time zone ------------------------------------------------------
+d-i clock-setup/utc                boolean true
+d-i time/zone                      string @@TIMEZONE@@
+d-i clock-setup/ntp                boolean true
+
+# ---- accounts ---------------------------------------------------------------
+# Root login is locked; the admin user gets passwordless sudo (configured in the
+# late_command below). @@ADMIN_PWHASH@@ is a crypt(3) hash (mkpasswd -m sha-512).
+d-i passwd/root-login              boolean false
+d-i passwd/user-fullname           string SolariNet Admin
+d-i passwd/username                string @@ADMIN_USER@@
+d-i passwd/user-password-crypted   password @@ADMIN_PWHASH@@
+d-i user-setup/allow-password-weak boolean false
+d-i user-setup/encrypt-home        boolean false
+
+# =============================================================================
+# PARTITIONING  (conservative, single-root)
+# =============================================================================
+# Deliberately simple and safe: one primary ext4 root filling @@DISK@@ plus swap,
+# using the whole disk with a regular (non-LVM, non-encrypted) layout. This is
+# the least surprising choice for fleet servers/appliances and is trivial to
+# grow later. Change to the "atomic" or LVM recipes only with intent.
+#
+# WARNING: this ERASES @@DISK@@ without prompting. The disk is named explicitly
+# (rather than "the first disk") so we never wipe the wrong device on a machine
+# with multiple disks.
+d-i partman-auto/disk              string @@DISK@@
+d-i partman-auto/method            string regular
+d-i partman-auto/expert_recipe     string                             \
+      solari-root ::                                                   \
+              1024 1024 1024 linux-swap                                \
+                      method{ swap } format{ }                         \
+              .                                                        \
+              4096 8000 -1 ext4                                        \
+                      method{ format } format{ }                       \
+                      use_filesystem{ } filesystem{ ext4 }             \
+                      mountpoint{ / }                                  \
+              .
+d-i partman-auto/choose_recipe     select solari-root
+# Auto-confirm the destructive steps (unattended install).
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition       select finish
+d-i partman/confirm                boolean true
+d-i partman/confirm_nooverwrite    boolean true
+# For UEFI machines, let partman create the ESP automatically.
+d-i partman-efi/non_efi_system     boolean true
+
+# ---- base system + bootloader ----------------------------------------------
+d-i base-installer/install-recommends boolean false
+d-i grub-installer/only_debian     boolean true
+# Install GRUB to the disk we just partitioned (works for BIOS; UEFI uses ESP).
+d-i grub-installer/bootdev         string @@DISK@@
+
+# ---- package selection ------------------------------------------------------
+tasksel tasksel/first              multiselect standard, ssh-server
+# @@PACKAGES@@ is a space-separated list; openssh-server/sudo/curl are ensured
+# regardless so firstboot + enrollment work.
+d-i pkgsel/include                 string openssh-server sudo curl ca-certificates @@PACKAGES@@
+d-i pkgsel/upgrade                 select safe-upgrade
+popularity-contest popularity-contest/participate boolean false
+
+# ---- finish -----------------------------------------------------------------
+d-i finish-install/reboot_in_progress note
+
+# =============================================================================
+# LATE COMMAND  (runs in /target near the end, before first reboot)
+# =============================================================================
+# Everything here runs with the installed system mounted at /target. We:
+#   1. Install the admin user's SSH key + passwordless sudo.
+#   2. Fetch solari-firstboot.sh and run it CHROOTED with the SolariNet tokens
+#      passed as env vars, so the agent + enrollment marker are staged.
+# in-target runs a command inside the /target chroot. The '; \' continuations
+# keep this a single preseed directive.
+d-i preseed/late_command string \
+    set -e ; \
+    mkdir -p /target/home/@@ADMIN_USER@@/.ssh ; \
+    echo '@@SSH_PUBKEY@@' > /target/home/@@ADMIN_USER@@/.ssh/authorized_keys ; \
+    in-target chown -R @@ADMIN_USER@@:@@ADMIN_USER@@ /home/@@ADMIN_USER@@/.ssh ; \
+    in-target chmod 700 /home/@@ADMIN_USER@@/.ssh ; \
+    in-target chmod 600 /home/@@ADMIN_USER@@/.ssh/authorized_keys ; \
+    printf '@@ADMIN_USER@@ ALL=(ALL) NOPASSWD:ALL\n' > /target/etc/sudoers.d/010-solari-admin ; \
+    in-target chmod 440 /etc/sudoers.d/010-solari-admin ; \
+    in-target sh -c 'command -v curl >/dev/null || (apt-get update && apt-get install -y curl)' ; \
+    in-target sh -c 'curl --fail --silent --show-error --location @@HTTP_BASE@@/installers/solari-firstboot.sh -o /usr/local/sbin/solari-firstboot.sh' ; \
+    in-target chmod 0755 /usr/local/sbin/solari-firstboot.sh ; \
+    in-target env \
+        SOLARI_HTTP_BASE='@@HTTP_BASE@@' \
+        SOLARI_ARCH='@@ARCH@@' \
+        SOLARI_HOSTNAME='@@HOSTNAME@@' \
+        SOLARI_FQDN='@@FQDN@@' \
+        SOLARI_SERVER_URL='@@SERVER_URL@@' \
+        SOLARI_SERVER_NAME='@@SERVER_NAME@@' \
+        SOLARI_SERVER_IP='@@SERVER_IP@@' \
+        sh /usr/local/sbin/solari-firstboot.sh
