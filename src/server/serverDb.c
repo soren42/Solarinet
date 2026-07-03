@@ -61,6 +61,10 @@ static MYSQL *dbConn(serverDb *db)
     return db->conns[0];
 }
 
+/* Public accessor for server-tier modules that issue their own SQL (serverSnmp).
+ * Same single-connection contract as dbConn. */
+MYSQL *serverDbConn(serverDb *db) { return dbConn(db); }
+
 /* ===================================================================== */
 /* Pure value helpers (no connection touched - unit-testable)             */
 /* ===================================================================== */
@@ -792,6 +796,19 @@ static int dbMinDiskFreePct(const solariClientReport *rep)
     return minPct;
 }
 
+/* Aggregate network throughput across reported interfaces (sum of rx+tx Kbps).
+ * The agent already reports per-iface rates; this reduces them to one scalar for
+ * the hostHistory net trend. Pure helper; 0 when no ifaces reported. */
+static unsigned long long dbSumNetKbps(const solariClientReport *rep)
+{
+    unsigned long long sum = 0;
+    uint8_t i;
+    if (!rep) return 0;
+    for (i = 0; i < rep->ifaceCount && i < SOLARI_MAX_IFACES; i++)
+        sum += rep->ifaces[i].rxKbps + rep->ifaces[i].txKbps;
+    return sum;
+}
+
 /* Append a JSON-escaped string (no surrounding quotes) into dst at *off. */
 static void dbJsonEsc(char *dst, size_t cap, size_t *off, const char *s)
 {
@@ -905,12 +922,12 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
         "  disks=VALUES(disks), ifaces=VALUES(ifaces), usbBuses=VALUES(usbBuses)";
     static const char *SQL_HIST =
         "INSERT INTO hostHistory "
-        "  (nodeId, sampledAt, cpuAvgMilli, ramUsedKb, swapUsedKb, diskMinFreePct) "
-        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?)";
+        "  (nodeId, sampledAt, cpuAvgMilli, ramUsedKb, swapUsedKb, diskMinFreePct, netKbps) "
+        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?)";
     MYSQL      *conn;
     MYSQL_STMT *st;
     MYSQL_BIND  b[10];
-    unsigned long long vNode, vRamU, vRamT, vSwapU, vSwapT;
+    unsigned long long vNode, vRamU, vRamT, vSwapU, vSwapT, vNet;
     int cpuAvg, diskMin;
     unsigned long lCpu, lDisks, lIfaces, lUsb;
     char cpuJson[512], disksJson[4096], ifacesJson[2048];
@@ -926,6 +943,7 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     vSwapU = rep->swapUsedKb; vSwapT = rep->swapTotalKb;
     cpuAvg = (int)dbAvgCpuMilli(rep);
     diskMin = dbMinDiskFreePct(rep);
+    vNet = dbSumNetKbps(rep);
     dbJsonCpu(rep, cpuJson, sizeof cpuJson);
     dbJsonDisks(rep, disksJson, sizeof disksJson);
     dbJsonIfaces(rep, ifacesJson, sizeof ifacesJson);
@@ -958,7 +976,8 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbBindU64(&b[2], &vRamU);
     dbBindU64(&b[3], &vSwapU);
     dbBindI32(&b[4], &diskMin);
-    rc = dbStmtRunWrite(st, b, 5);
+    dbBindU64(&b[5], &vNet);
+    rc = dbStmtRunWrite(st, b, 6);
     mysql_stmt_close(st);
     if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
 

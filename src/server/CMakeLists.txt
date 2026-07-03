@@ -49,6 +49,7 @@ set(SERVER_CORE_SOURCES
   serverScan.c
   serverAssets.c
   serverTopology.c
+  serverSnmp.c
   solariCtl.c
 )
 
@@ -60,6 +61,14 @@ add_library(servercore STATIC ${SERVER_CORE_SOURCES})
 option(SOLARI_WITH_DISCOVERY_TOOLS "Enrich discovery scans via host avahi/SNMP tools" OFF)
 if(SOLARI_WITH_DISCOVERY_TOOLS)
   target_compile_definitions(servercore PRIVATE SOLARI_WITH_DISCOVERY_TOOLS=1)
+endif()
+
+# SNMP polling tier (serverSnmp.c). OFF -> the IF-MIB walk is a no-op (ERR_PLATFORM)
+# and the pure parser is still unit-tested. ON shells out to the net-snmp CLI
+# (snmpbulkwalk) at runtime — no libnetsnmp link, so the core stays dependency-free.
+option(SOLARI_WITH_SNMP "Enable the SNMP gear-polling walk (needs net-snmp CLI at runtime)" OFF)
+if(SOLARI_WITH_SNMP)
+  target_compile_definitions(servercore PUBLIC SOLARI_WITH_SNMP=1)
 endif()
 target_include_directories(servercore PUBLIC
   ${CMAKE_SOURCE_DIR}/include
@@ -88,5 +97,9 @@ endif()
 
 add_executable(solariServer main.c)
 target_link_libraries(solariServer PRIVATE servercore)
+
+# solariSnmpPoll — standalone SNMP polling driver (systemd-timer friendly).
+add_executable(solariSnmpPoll snmpPollMain.c)
+target_link_libraries(solariSnmpPoll PRIVATE servercore)
 
 message(STATUS "solariServer: MariaDB libs=${MARIADB_LIBS}")

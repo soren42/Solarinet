@@ -262,8 +262,9 @@
             api.nodeHistory(node.nodeId, "cpu"),
             api.nodeHistory(node.nodeId, "ram", { totalKb: d.ramTotalKb }),
             api.nodeHistory(node.nodeId, "disk"),
+            api.nodeHistory(node.nodeId, "net"),
           ]).then(function (h) {
-            if (live) setHistory({ cpu: h[0], ram: h[1], disk: h[2] });
+            if (live) setHistory({ cpu: h[0], ram: h[1], disk: h[2], net: h[3] });
           }).catch(function () {});
         }).catch(function () {});
       };

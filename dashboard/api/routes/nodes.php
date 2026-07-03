@@ -20,9 +20,37 @@ return static function (Router $router): void {
                FROM node
               ORDER BY role, hostFqdn'
         );
-        $out = array_map(static function (array $r): array {
+
+        // Recent sparkline history per node so the fleet/heat/card views render
+        // trend graphs (Sparkline auto-scales, so raw hostHistory values are fine
+        // for shape). One windowed query grabs the last N samples per node.
+        $spark = [];
+        $hrows = Db::rows(
+            'SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct, netKbps
+               FROM (
+                 SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct, netKbps, sampledAt,
+                        ROW_NUMBER() OVER (PARTITION BY nodeId ORDER BY sampledAt DESC) AS rn
+                   FROM hostHistory
+               ) t
+              WHERE rn <= :n
+              ORDER BY nodeId, sampledAt ASC',
+            [':n' => 40]
+        );
+        foreach ($hrows as $h) {
+            $id = Coerce::id($h['nodeId']);
+            if (!isset($spark[$id])) {
+                $spark[$id] = ['cpu' => [], 'ram' => [], 'net' => [], 'disk' => []];
+            }
+            $spark[$id]['cpu'][]  = Coerce::int($h['cpuAvgMilli']);
+            $spark[$id]['ram'][]  = Coerce::int($h['ramUsedKb']);
+            $spark[$id]['disk'][] = max(0, 100 - Coerce::int($h['diskMinFreePct']));
+            $spark[$id]['net'][]  = Coerce::int($h['netKbps']);
+        }
+
+        $out = array_map(static function (array $r) use ($spark): array {
+            $id = Coerce::id($r['nodeId']);
             return [
-                'nodeId'       => Coerce::id($r['nodeId']),
+                'nodeId'       => $id,
                 'role'         => $r['role'],
                 'hostFqdn'     => $r['hostFqdn'],
                 'state'        => $r['state'],
@@ -33,6 +61,7 @@ return static function (Router $router): void {
                 'uplinkGearId' => $r['uplinkGearId'],
                 'enrolledAt'   => Coerce::iso($r['enrolledAt']),
                 'configEpoch'  => Coerce::id($r['configEpoch']),
+                'hist'         => $spark[$id] ?? ['cpu' => [], 'ram' => [], 'net' => [], 'disk' => []],
             ];
         }, $rows);
         Response::ok($out);
@@ -142,6 +171,7 @@ return static function (Router $router): void {
             'ramUsedKb'      => 'ramUsedKb',
             'swapUsedKb'     => 'swapUsedKb',
             'diskMinFreePct' => 'diskMinFreePct',
+            'netKbps'        => 'netKbps',
         ];
         $metric = (string) ($_GET['metric'] ?? 'cpuAvgMilli');
         if (!isset($allowed[$metric])) {

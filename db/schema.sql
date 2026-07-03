@@ -40,6 +40,7 @@ CREATE TABLE hostHistory (
   sampledAt     DATETIME NOT NULL,
   cpuAvgMilli   INT UNSIGNED, ramUsedKb BIGINT UNSIGNED,
   swapUsedKb    BIGINT UNSIGNED, diskMinFreePct SMALLINT,
+  netKbps       BIGINT UNSIGNED,             -- aggregate iface rx+tx throughput
   PRIMARY KEY(id, sampledAt), INDEX(nodeId, sampledAt)
 ) ENGINE=InnoDB
   PARTITION BY RANGE (TO_DAYS(sampledAt)) (

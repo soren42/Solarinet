@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Monitoring Overhaul</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;--warm:#e0a458;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:920px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:18px;margin:24px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}.warn{color:var(--warn);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 8px;border-radius:20px;border:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Monitoring Overhaul</h1>
+  <p class="sub">SolariNet Monitoring · why the graphs were blank, and a robust four-tier monitoring infrastructure · 2026-07-03</p>
+
+  <div class="note">
+    <strong>Headline.</strong> The dashboard's graphs "never showed data" for two unrelated reasons — one on the
+    read path (fixed) and one because an entire monitoring tier was never producing rows (now producing). Host
+    metrics were always being stored; the fleet sparklines just weren't served them, and the reachability tier
+    had no reporting vantage. Both are resolved, plus network-throughput history and a portable remote-outpost
+    tier now live on xenon + benzene.
+  </div>
+
+  <h2>Deep-dive: why graphs were blank</h2>
+  <p>A workflow of parallel readers traced the full path (collect → transmit → ingest → schema → API → charts).
+     The leading "nothing is persisted" hypothesis was <em>refuted</em> for host metrics and <em>confirmed</em>
+     for probes:</p>
+  <table>
+    <tr><th>Symptom</th><th>Root cause</th><th>Fix</th></tr>
+    <tr><td>Primary dashboard fleet/heat sparklines blank</td><td><code>/api/nodes</code> returned no <code>hist</code>; every sparkline bound to <code>[]</code> (100k+ hostHistory rows existed, just weren't served)</td><td class="ok">List endpoint embeds a 40-sample cpu/ram/disk/net series per node (one windowed query)</td></tr>
+    <tr><td>Node-detail cpu/ram/disk charts blank</td><td>The merged detail-fetch code (<code>screens.jsx</code>) was <b>stale in the web root</b> — never deployed</td><td class="ok">Deployed; detail page fetches per-metric history (network-first SW serves it fresh)</td></tr>
+    <tr><td>"Net" trend permanently empty</td><td>Empty by construction — agent reported iface rx/tx but hostHistory had no network column</td><td class="ok">New <code>hostHistory.netKbps</code> (migration 005) aggregated server-side, whitelisted + charted</td></tr>
+    <tr><td>Reachability / RTT / loss graphs empty</td><td><b>Blocker:</b> probeHistory = 0 — 18 targets configured but no monitor vantage was reporting</td><td class="ok">Monitor outposts on xenon + benzene now report; 2 vantages × 18 targets</td></tr>
+  </table>
+
+  <h2>The four monitoring tiers</h2>
+  <table>
+    <tr><th>Tier</th><th>What</th><th>State</th></tr>
+    <tr><td>On-host agent</td><td><code>solariClient</code> → host metrics (cpu/ram/disk/net/procs/services) → hostCurrent + hostHistory</td><td class="ok">live; net history added</td></tr>
+    <tr><td>Orchestrator</td><td><code>solariServer</code> ingest → MariaDB (append-only history), alerts, lease/failover</td><td class="ok">live; net aggregation added</td></tr>
+    <tr><td>Remote outposts</td><td><code>solariMonitor</code> vantages → ICMP/TCP/UDP reachability (RTT/jitter/loss) → probeCurrent/probeHistory</td><td class="ok">live on xenon + benzene; portable</td></tr>
+    <tr><td>SNMP</td><td>poll managed network gear IF-MIB interface counters -> gearInterface{Current,History}</td><td class="ok">live (solariSnmpPoll timer); needs SNMP enabled on the device</td></tr>
+  </table>
+
+  <h2>Remote monitoring outposts</h2>
+  <p>A monitor "outpost" is a portable prober that checks reachability from its vantage and reports to the
+     server over mutual TLS. Multiple vantages give path-diverse reachability (a target down from one outpost but
+     up from another localizes the fault).</p>
+  <pre># build a portable outpost bundle (monitor + matched TLS libnng) for an arch
+deploy/build-outpost.sh x86_64        # or: arm64  (Pi Zero 2 W-class)
+
+# deploy an outpost (local, or --host user@remote)
+deploy/deploy-monitor.sh --name benzene-mon --host jason@benzene.akoria.net \
+    --server tls+tcp://xenon:7701 --server-ip 10.0.0.20 --op admin</pre>
+  <ul>
+    <li><b>Enrollment:</b> each outpost gets a cert with CN <code>monitor.&lt;name&gt;</code> — the server derives
+        role from the CN and <em>only</em> a monitor may send <code>MONITOR_REPORT</code> (a <code>client.*</code>
+        CN is rejected <code>ERR_AUTH_ROLE</code>). Signed via the bridge <code>SIGN</code>; the CA key never leaves the server.</li>
+    <li><b>Targets:</b> pulled from the <code>probeTarget</code> table into <code>monitor.conf</code>
+        (<code>target = icmp:host</code> / <code>proto:host:port</code>). ICMP works unprivileged on Linux.</li>
+    <li><b>Portability:</b> the outpost carries its own TLS-enabled <code>libnng.so.1</code> and
+        <code>LD_LIBRARY_PATH</code>s it — some distros (openSUSE) ship an nng whose TLS transport is
+        ABI-incompatible, which is exactly why benzene initially spooled instead of reporting. Built on a
+        debian:bookworm glibc floor so the same binary runs on Pi OS / appliances.</li>
+    <li><b>Mesh (available, not yet enabled):</b> the <code>[peer]</code> gossip + rendezvous-hash ownership lets
+        N outposts split targets so they don't all probe everything — useful as the fleet of Pi outposts grows.</li>
+  </ul>
+
+  <h2>SNMP tier (managed gear)</h2>
+  <p>The server polls each <code>networkGear</code>'s IF-MIB interface counters by <b>numeric OID</b> via the
+     net-snmp CLI (<code>snmpbulkwalk</code>) — no MIB files and no <code>libnetsnmp</code> link, so the core stays
+     dependency-free (gated by <code>SOLARI_WITH_SNMP</code>). In/out throughput rates are computed server-side from
+     the octet deltas between samples and stored in <code>gearInterfaceCurrent</code> + <code>gearInterfaceHistory</code>.</p>
+  <ul>
+    <li><b>Driver:</b> <code>solariSnmpPoll</code> run by <code>solarinet-snmp.timer</code> every 60s — deliberately
+        OUT of the failover-critical server loop.</li>
+    <li><b>Per-gear community:</b> <code>networkGear.snmpCommunity</code> (falls back to the poller default).</li>
+    <li><b>Dashboard:</b> <code>/api/gear</code>, <code>/api/gear/{id}/interfaces</code>,
+        <code>/api/gear/{id}/history</code> + a managed-gear throughput panel.</li>
+    <li><b>Verified</b> end-to-end against a local <code>snmpd</code> test target (real interface rates). Live data
+        from your gear needs SNMP enabled on the device (e.g. the UniFi controller) and its community set.</li>
+    <li><b>Follow-up:</b> LLDP-over-SNMP neighbor discovery (the <code>topoSnmpFetchLldp</code> seam) is stubbed;
+        the IF-MIB interface poller is the implemented feature.</li>
+  </ul>
+
+  <h2>Configuration surfaces</h2>
+  <table>
+    <tr><th>Where</th><th>Knobs</th></tr>
+    <tr><td>client.conf</td><td><code>[schedule] sampleIntervalSec</code>, watched processes/logs, spool db</td></tr>
+    <tr><td>monitor.conf (<code>deploy/monitor.conf.sample</code>)</td><td><code>[probe] roundIntervalSec</code>, <code>target=</code> list, <code>[server] primaryUrl/failoverUrl</code>, <code>[peer]</code> mesh, spool db</td></tr>
+    <tr><td>server.conf</td><td>ingest/control/pub bind URLs, <code>[ca]</code> block</td></tr>
+    <tr><td>probeTarget table</td><td>the canonical reachability target set (host/port/proto/replFactor) — outposts render from it</td></tr>
+  </table>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Fleet sparklines: <code>/api/nodes</code> returns 40-point cpu/ram/disk/net series per node.</li>
+    <li>Net history: <code>netKbps</code> writes per report (xenon ~1320 Kbps) and serves via <code>/history?metric=netKbps</code>.</li>
+    <li>Reachability: <code>probeCurrent</code> = 2 vantages × 18 targets; <code>probeHistory</code> accumulating; <code>/api/probes</code> returns per-target multi-vantage RTT/loss.</li>
+    <li>Server unit tests: 23/23. PHP lint + JSX transpile clean.</li>
+  </ul>
+
+  <h2>Follow-ups (scoped, not yet built)</h2>
+  <div class="gap">These came out of the deep-dive and are the next increments toward "robust":</div>
+  <ul>
+    <li><b>SNMP LLDP discovery</b> — the IF-MIB interface poller is built; the LLDP-over-SNMP neighbor walk (topology auto-discovery of managed gear) remains a stub to implement.</li>
+    <li><b>Ingest timestamp from frame header</b> — stamp hostHistory/probeHistory <code>sampledAt</code> from the frame's <code>sendTimeUnixMs</code> so store-and-forward spool replays land on the real sample time.</li>
+    <li><b>History self-maintenance</b> — systemd timers for <code>roll_history.sql</code> (monthly partition creation) + <code>retention.sql</code> (nightly prune); surface retention as a server.conf knob.</li>
+    <li><b>Read-path downsampling</b> — the <code>/history</code> endpoint truncates wide windows to the first N; bucket/downsample over the requested range instead. Give Sparkline an explicit empty/collecting state.</li>
+    <li><b>One-click target adoption</b> — wire <code>CTRL_ADOPT_TARGET</code> so dashboard-added probe targets start producing series without redeploying outposts.</li>
+    <li><b>Pi-Zero outpost fleet</b> — the arm64 bundle is built; deploy to the low-power Pis and enable the <code>[peer]</code> mesh so they split target ownership.</li>
+    <li><b>Infra self-monitoring</b> — alert on ingest lag, stalled series, spool depth, partition health, vantage quorum, so a silent write-side failure surfaces instead of manifesting as blank graphs.</li>
+  </ul>
+
+  <p class="footer">SolariNet Monitoring Overhaul — 2026-07-03. Graphs across the primary dashboard and detail pages
+     now present data; reachability outposts live on xenon + benzene and portable to Pi Zero 2 W-class hosts.</p>
+</div>
+</body>
+</html>

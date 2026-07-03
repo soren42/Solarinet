@@ -1,0 +1,42 @@
+# SolariNet monitor outpost config (sample). A monitor is a portable "outpost"
+# that probes reachability targets (ICMP/TCP/UDP) from its vantage point and
+# reports RTT/jitter/loss to the server over mutual TLS. Copy to a host-local
+# path and edit, or let deploy/deploy-monitor.sh render it.
+#
+# The monitor's cert CN MUST be "monitor.<fqdn>" — the server derives the role
+# from the CN and only a monitor role may send MONITOR_REPORT.
+
+[identity]
+hostFqdn = my-outpost
+# nodeId omitted -> derived FNV-1a-64(fqdn); give each outpost a distinct fqdn
+# so its vantage shows separately (e.g. xenon-mon, benzene-mon, pi0-garage).
+
+[server]
+primaryUrl = tls+tcp://solari.example.intranet:7701
+# failoverUrl = tls+tcp://solari-2.example.intranet:7701
+# Dial by a NAME in the server cert SAN (older mbedTLS won't match IP SANs);
+# deploy/deploy-monitor.sh pins the name in the target's /etc/hosts.
+
+[tls]
+caFile   = /etc/solari/ca.pem
+certFile = /etc/solari/node.pem      # CN=monitor.<fqdn>, signed by the server CA
+keyFile  = /etc/solari/node.key
+
+[probe]
+roundIntervalSec = 30
+spoolDb = /var/lib/solari/monitor-spool.db
+# Targets to probe each round. Format:
+#   target = icmp:<host>              (ICMP echo; works unprivileged on Linux)
+#   target = tcp:<host>:<port>        (TCP connect RTT)
+#   target = udp:<host>:<port>
+target = icmp:10.0.0.1
+target = tcp:10.0.0.1:53
+# ... deploy/deploy-monitor.sh can fill these from the probeTarget table.
+
+# Optional peer mesh: multiple outposts split target ownership by rendezvous
+# hashing and gossip liveness, so N vantages don't all probe every target.
+[peer]
+# gossipUrl = tls+tcp://0.0.0.0:7704
+# gossipIntervalSec = 20
+# peerTtlSec = 90
+# peer = tls+tcp://other-outpost:7704
