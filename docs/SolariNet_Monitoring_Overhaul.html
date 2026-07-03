@@ -64,7 +64,7 @@
     <tr><td>On-host agent</td><td><code>solariClient</code> → host metrics (cpu/ram/disk/net/procs/services) → hostCurrent + hostHistory</td><td class="ok">live; net history added</td></tr>
     <tr><td>Orchestrator</td><td><code>solariServer</code> ingest → MariaDB (append-only history), alerts, lease/failover</td><td class="ok">live; net aggregation added</td></tr>
     <tr><td>Remote outposts</td><td><code>solariMonitor</code> vantages → ICMP/TCP/UDP reachability (RTT/jitter/loss) → probeCurrent/probeHistory</td><td class="ok">live on xenon + benzene; portable</td></tr>
-    <tr><td>SNMP</td><td>poll managed network gear (interface counters, status, uptime)</td><td class="warn">follow-up (seam only today)</td></tr>
+    <tr><td>SNMP</td><td>poll managed network gear IF-MIB interface counters -> gearInterface{Current,History}</td><td class="ok">live (solariSnmpPoll timer); needs SNMP enabled on the device</td></tr>
   </table>
 
   <h2>Remote monitoring outposts</h2>
@@ -91,6 +91,23 @@ deploy/deploy-monitor.sh --name benzene-mon --host jason@benzene.akoria.net \
         N outposts split targets so they don't all probe everything — useful as the fleet of Pi outposts grows.</li>
   </ul>
 
+  <h2>SNMP tier (managed gear)</h2>
+  <p>The server polls each <code>networkGear</code>'s IF-MIB interface counters by <b>numeric OID</b> via the
+     net-snmp CLI (<code>snmpbulkwalk</code>) — no MIB files and no <code>libnetsnmp</code> link, so the core stays
+     dependency-free (gated by <code>SOLARI_WITH_SNMP</code>). In/out throughput rates are computed server-side from
+     the octet deltas between samples and stored in <code>gearInterfaceCurrent</code> + <code>gearInterfaceHistory</code>.</p>
+  <ul>
+    <li><b>Driver:</b> <code>solariSnmpPoll</code> run by <code>solarinet-snmp.timer</code> every 60s — deliberately
+        OUT of the failover-critical server loop.</li>
+    <li><b>Per-gear community:</b> <code>networkGear.snmpCommunity</code> (falls back to the poller default).</li>
+    <li><b>Dashboard:</b> <code>/api/gear</code>, <code>/api/gear/{id}/interfaces</code>,
+        <code>/api/gear/{id}/history</code> + a managed-gear throughput panel.</li>
+    <li><b>Verified</b> end-to-end against a local <code>snmpd</code> test target (real interface rates). Live data
+        from your gear needs SNMP enabled on the device (e.g. the UniFi controller) and its community set.</li>
+    <li><b>Follow-up:</b> LLDP-over-SNMP neighbor discovery (the <code>topoSnmpFetchLldp</code> seam) is stubbed;
+        the IF-MIB interface poller is the implemented feature.</li>
+  </ul>
+
   <h2>Configuration surfaces</h2>
   <table>
     <tr><th>Where</th><th>Knobs</th></tr>
@@ -111,7 +128,7 @@ deploy/deploy-monitor.sh --name benzene-mon --host jason@benzene.akoria.net \
   <h2>Follow-ups (scoped, not yet built)</h2>
   <div class="gap">These came out of the deep-dive and are the next increments toward "robust":</div>
   <ul>
-    <li><b>SNMP tier</b> — enable <code>SOLARI_WITH_SNMP</code>, poll <code>networkGear</code> (ifHCIn/OutOctets, sysUpTime, status) into a partitioned gear-interface history table + dashboard charts.</li>
+    <li><b>SNMP LLDP discovery</b> — the IF-MIB interface poller is built; the LLDP-over-SNMP neighbor walk (topology auto-discovery of managed gear) remains a stub to implement.</li>
     <li><b>Ingest timestamp from frame header</b> — stamp hostHistory/probeHistory <code>sampledAt</code> from the frame's <code>sendTimeUnixMs</code> so store-and-forward spool replays land on the real sample time.</li>
     <li><b>History self-maintenance</b> — systemd timers for <code>roll_history.sql</code> (monthly partition creation) + <code>retention.sql</code> (nightly prune); surface retention as a server.conf knob.</li>
     <li><b>Read-path downsampling</b> — the <code>/history</code> endpoint truncates wide windows to the first N; bucket/downsample over the requested range instead. Give Sparkline an explicit empty/collecting state.</li>
