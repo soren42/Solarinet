@@ -1,0 +1,117 @@
+#cloud-config
+# =============================================================================
+# SolariNet Fleet Provisioning - Ubuntu 24.04 (noble) autoinstall  (TEMPLATE)
+# =============================================================================
+# This is the cloud-init "user-data" file consumed by Ubuntu's subiquity
+# installer. Rendered per-host and served as a DIRECTORY datasource:
+#
+#     @@HTTP_BASE@@/configs/ubuntu/<mac-or-host>/user-data     <- THIS FILE
+#     @@HTTP_BASE@@/configs/ubuntu/<mac-or-host>/meta-data     <- see note below
+#     @@HTTP_BASE@@/configs/ubuntu/<mac-or-host>/vendor-data   <- optional, empty
+#
+# boot.ipxe points the installer at that directory with:
+#     autoinstall  "ds=nocloud-net;s=@@HTTP_BASE@@/configs/ubuntu/<mac>/"
+# The trailing slash is REQUIRED; nocloud-net appends user-data/meta-data to it.
+#
+# meta-data NOTE:
+#   nocloud REQUIRES a meta-data file to exist (it may be empty). The render
+#   step MUST also write a sibling meta-data containing at least:
+#       instance-id: solari-@@HOSTNAME@@
+#       local-hostname: @@HOSTNAME@@
+#   An empty/absent meta-data makes subiquity hang waiting for the datasource.
+#
+# TOKENS (see netboot/README.md manifest):
+#   @@HOSTNAME@@ @@FQDN@@ @@TIMEZONE@@
+#   @@ADMIN_USER@@ @@ADMIN_PWHASH@@ @@SSH_PUBKEY@@
+#   @@DISK@@ @@PACKAGES@@
+#   @@HTTP_BASE@@ @@ARCH@@ @@SERVER_URL@@ @@SERVER_NAME@@ @@SERVER_IP@@
+#
+# Reference: https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html
+# =============================================================================
+autoinstall:
+  version: 1
+
+  # Interactive sections to skip entirely (fully unattended).
+  interactive-sections: []
+
+  # ---- localization ---------------------------------------------------------
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: @@TIMEZONE@@
+
+  # ---- identity -------------------------------------------------------------
+  # @@ADMIN_PWHASH@@ is a crypt(3) SHA-512 hash (mkpasswd -m sha-512 ...).
+  identity:
+    hostname: @@HOSTNAME@@
+    username: @@ADMIN_USER@@
+    password: "@@ADMIN_PWHASH@@"
+
+  # ---- ssh ------------------------------------------------------------------
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - "@@SSH_PUBKEY@@"
+
+  # ---- networking -----------------------------------------------------------
+  # DHCP on all ethernet links during install; the firstboot script pins the
+  # SolariNet server in /etc/hosts afterwards.
+  network:
+    version: 2
+    ethernets:
+      any-eth:
+        match:
+          name: "en*"
+        dhcp4: true
+
+  # ===========================================================================
+  # STORAGE  (conservative, single-root)
+  # ===========================================================================
+  # "direct" layout = one root filesystem on the whole target disk, no LVM, no
+  # encryption. subiquity auto-creates an ESP on UEFI machines. We pin the disk
+  # by path (@@DISK@@) so multi-disk hosts never get the wrong device wiped.
+  #
+  # WARNING: this ERASES @@DISK@@ unattended.
+  storage:
+    layout:
+      name: direct
+      match:
+        path: @@DISK@@
+
+  # ---- packages -------------------------------------------------------------
+  # @@PACKAGES@@ is a space-separated list; subiquity accepts a YAML list, so the
+  # render step should expand it into "- pkg" lines. curl/sudo/ca-certificates
+  # are ensured so firstboot + enrollment work regardless of @@PACKAGES@@.
+  packages:
+    - openssh-server
+    - sudo
+    - curl
+    - ca-certificates
+    - @@PACKAGES@@
+
+  # Keep the installed system patched to the point-release at install time.
+  updates: security
+
+  # ===========================================================================
+  # LATE COMMANDS  (run in the installer environment; target at /target)
+  # ===========================================================================
+  # curtin exposes the installed system at /target. We:
+  #   1. Grant the admin user passwordless sudo.
+  #   2. Fetch solari-firstboot.sh and run it chrooted with the SolariNet tokens
+  #      as env vars, staging the agent + PENDING_ENROLLMENT marker.
+  # 'curtin in-target' runs a command inside the /target chroot.
+  late-commands:
+    - printf '@@ADMIN_USER@@ ALL=(ALL) NOPASSWD:ALL\n' > /target/etc/sudoers.d/010-solari-admin
+    - curtin in-target --target=/target -- chmod 440 /etc/sudoers.d/010-solari-admin
+    - curtin in-target --target=/target -- sh -c 'curl --fail --silent --show-error --location @@HTTP_BASE@@/installers/solari-firstboot.sh -o /usr/local/sbin/solari-firstboot.sh'
+    - curtin in-target --target=/target -- chmod 0755 /usr/local/sbin/solari-firstboot.sh
+    - curtin in-target --target=/target -- env
+        SOLARI_HTTP_BASE=@@HTTP_BASE@@
+        SOLARI_ARCH=@@ARCH@@
+        SOLARI_HOSTNAME=@@HOSTNAME@@
+        SOLARI_FQDN=@@FQDN@@
+        SOLARI_SERVER_URL=@@SERVER_URL@@
+        SOLARI_SERVER_NAME=@@SERVER_NAME@@
+        SOLARI_SERVER_IP=@@SERVER_IP@@
+        sh /usr/local/sbin/solari-firstboot.sh

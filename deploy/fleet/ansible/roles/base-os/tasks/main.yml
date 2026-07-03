@@ -1,0 +1,148 @@
+# =============================================================================
+# base-os role - make a fresh box unmistakably "ours".
+# =============================================================================
+# Everything here is family-conditional on ansible_os_family ("Debian" covers
+# Debian + Ubuntu; "Suse" covers openSUSE/SLES) and architecture-agnostic.
+# Order: identity -> time -> locale -> admin user -> sshd -> journald.
+---
+
+# ---- Hostname ---------------------------------------------------------------
+# Only touch the hostname when the dashboard explicitly provides one; otherwise
+# leave whatever the image booted with untouched.
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ solari_hostname }}"
+  when: solari_hostname is defined and solari_hostname | length > 0
+
+# ---- Time sync (chrony) -----------------------------------------------------
+# Time must be correct before TLS enrollment, so we install+enable chrony here
+# in base-os rather than waiting for the common-stack pass. Re-declaring the
+# same package later is idempotent. Package + service names differ per family.
+- name: Install chrony (time sync, needed before TLS enrollment)
+  ansible.builtin.package:
+    name: "{{ (solari_pkg_map.chrony[ansible_os_family] | default('chrony')) }}"
+    state: present
+
+- name: Enable and start chrony
+  ansible.builtin.service:
+    name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+    enabled: true
+    state: started
+
+# ---- Timezone ---------------------------------------------------------------
+# Managed via the /etc/localtime symlink (works on every systemd distro and is
+# fully idempotent); /etc/timezone is additionally kept in sync on Debian.
+- name: Set timezone via /etc/localtime symlink
+  ansible.builtin.file:
+    src: "/usr/share/zoneinfo/{{ solari_timezone }}"
+    dest: /etc/localtime
+    state: link
+    force: true
+
+- name: Record timezone in /etc/timezone (Debian family)
+  ansible.builtin.copy:
+    dest: /etc/timezone
+    content: "{{ solari_timezone }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_os_family == 'Debian'
+
+# ---- Locale -----------------------------------------------------------------
+# systemd reads /etc/locale.conf on both families; on Debian we additionally
+# enable the entry in /etc/locale.gen and regenerate.
+- name: Set system locale in /etc/locale.conf
+  ansible.builtin.copy:
+    dest: /etc/locale.conf
+    content: "LANG={{ solari_locale }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable locale entry in /etc/locale.gen (Debian family)
+  ansible.builtin.lineinfile:
+    path: /etc/locale.gen
+    regexp: "^# *{{ solari_locale }} +UTF-8"
+    line: "{{ solari_locale }} UTF-8"
+    state: present
+  when: ansible_os_family == 'Debian'
+  notify: Generate locales
+
+# ---- Administrative user ----------------------------------------------------
+- name: Create admin user
+  ansible.builtin.user:
+    name: "{{ solari_admin_user }}"
+    groups: "{{ solari_admin_groups_debian if ansible_os_family == 'Debian' else solari_admin_groups_suse }}"
+    append: true
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Install admin authorized SSH keys
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "/home/{{ solari_admin_user }}/.ssh/authorized_keys"
+    owner: "{{ solari_admin_user }}"
+    group: "{{ solari_admin_user }}"
+    mode: "0600"
+  when: solari_admin_authorized_keys | length > 0
+
+- name: Grant passwordless sudo to admin user
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ solari_admin_user }}"
+    content: "{{ solari_admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+# ---- sshd hardening ---------------------------------------------------------
+# Keep public-key auth working; forbid root password logins and (fleet default)
+# disable password auth entirely. Config is validated before a restart fires.
+- name: Harden sshd - PermitRootLogin
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?\s*PermitRootLogin'
+    line: "PermitRootLogin {{ solari_sshd_permit_root_login }}"
+    validate: "sshd -t -f %s"
+  notify: Restart sshd
+
+- name: Harden sshd - PasswordAuthentication
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?\s*PasswordAuthentication'
+    line: "PasswordAuthentication {{ 'yes' if solari_sshd_password_auth else 'no' }}"
+    validate: "sshd -t -f %s"
+  notify: Restart sshd
+
+- name: Harden sshd - PubkeyAuthentication (keep key auth on)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?\s*PubkeyAuthentication'
+    line: "PubkeyAuthentication yes"
+    validate: "sshd -t -f %s"
+  notify: Restart sshd
+
+# ---- journald caps ----------------------------------------------------------
+- name: Cap journald disk usage - SystemMaxUse
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: '^#?\s*SystemMaxUse='
+    line: "SystemMaxUse={{ solari_journald_max_use }}"
+  notify: Restart journald
+
+- name: Cap journald file size - SystemMaxFileSize
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: '^#?\s*SystemMaxFileSize='
+    line: "SystemMaxFileSize={{ solari_journald_max_file_size }}"
+  notify: Restart journald
+
+# ---- Automatic security updates (optional, off by default) ------------------
+- name: Enable unattended security upgrades (Debian family)
+  ansible.builtin.package:
+    name: unattended-upgrades
+    state: present
+  when:
+    - solari_auto_security_updates | bool
+    - ansible_os_family == 'Debian'

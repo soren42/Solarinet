@@ -1,0 +1,21 @@
+# SolariNet Fleet Provisioning - top-level play.
+#
+# Runs the three roles in strict order against a target:
+#   base-os          -> identity, users, sshd, time, journald (host is "ours")
+#   common-stack     -> the identical logical package set (name-mapped per family)
+#   solarinet-client -> install + enroll + supervise the monitoring agent
+#
+# Typical invocation (from /srv/solari-provision/ansible on benzene):
+#   ansible-playbook -i inventory/hosts.yml playbooks/site.yml --limit pi-porch
+---
+- name: Provision SolariNet fleet host
+  hosts: all
+  become: true
+  gather_facts: true      # need ansible_os_family / ansible_architecture early
+  roles:
+    - role: base-os
+      tags: [base]
+    - role: common-stack
+      tags: [stack]
+    - role: solarinet-client
+      tags: [client]

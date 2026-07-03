@@ -1,0 +1,46 @@
+# =============================================================================
+# common-stack role - install THE identical logical package set everywhere.
+# =============================================================================
+# solari_core_packages is the same on every host. The only per-family variation
+# is the real package NAME, resolved through solari_pkg_map. Any logical name
+# absent from the map installs unchanged. ansible.builtin.package dispatches to
+# apt (Debian family) or zypper (Suse family) automatically, so we never invoke
+# a package manager by name for the install itself.
+---
+
+# ---- Refresh package metadata (family-appropriate, time-boxed) --------------
+- name: Update apt cache (Debian family)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600     # skip if refreshed within the last hour
+  when: ansible_os_family == 'Debian'
+
+- name: Refresh zypper metadata (Suse family)
+  ansible.builtin.command:
+    cmd: zypper --non-interactive --gpg-auto-import-keys refresh
+  changed_when: false          # a metadata refresh is not a system change
+  when: ansible_os_family == 'Suse'
+
+# ---- Resolve logical names -> real per-family names -------------------------
+# Build the concrete package list for THIS host's family. For each logical name,
+# take solari_pkg_map[name][family] when present, else the logical name itself.
+- name: Resolve family-specific package names
+  ansible.builtin.set_fact:
+    solari_resolved_packages: >-
+      {{
+        solari_resolved_packages | default([])
+        + [ solari_pkg_map[item][ansible_os_family] | default(item) ]
+      }}
+  loop: "{{ solari_core_packages }}"
+  loop_control:
+    label: "{{ item }} -> {{ solari_pkg_map[item][ansible_os_family] | default(item) }}"
+
+- name: Show resolved core stack for this host
+  ansible.builtin.debug:
+    var: solari_resolved_packages
+
+# ---- Install the resolved core stack in one transaction ---------------------
+- name: Install SolariNet core package stack (identical across the fleet)
+  ansible.builtin.package:
+    name: "{{ solari_resolved_packages }}"
+    state: present

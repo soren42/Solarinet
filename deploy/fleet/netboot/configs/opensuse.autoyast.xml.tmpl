@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  SolariNet Fleet Provisioning - openSUSE Leap/Tumbleweed AutoYaST (TEMPLATE)
+  ===========================================================================
+  Rendered per-host and served at:
+      @@HTTP_BASE@@/configs/<mac-or-host>.xml
+  linuxrc is pointed at it via the boot.ipxe kernel arg:
+      autoyast=@@HTTP_BASE@@/configs/<mac>.xml  install=@@HTTP_BASE@@/.../repo
+
+  TOKENS (see netboot/README.md manifest):
+    @@HOSTNAME@@ @@FQDN@@ @@DOMAIN@@ @@TIMEZONE@@
+    @@ADMIN_USER@@ @@ADMIN_PWHASH@@ @@SSH_PUBKEY@@
+    @@DISK@@ @@PACKAGES@@
+    @@HTTP_BASE@@ @@ARCH@@ @@SERVER_URL@@ @@SERVER_NAME@@ @@SERVER_IP@@
+
+  Reference: https://doc.opensuse.org/projects/autoyast/
+  ===========================================================================
+-->
+<profile xmlns="http://www.suse.com/1.0/yast2ns"
+         xmlns:config="http://www.suse.com/1.0/configns">
+
+  <!-- ==== language / keyboard / timezone ================================= -->
+  <language>
+    <language>en_US</language>
+    <languages></languages>
+  </language>
+  <keyboard>
+    <keymap>english-us</keymap>
+  </keyboard>
+  <timezone>
+    <hwclock>UTC</hwclock>
+    <timezone>@@TIMEZONE@@</timezone>
+  </timezone>
+
+  <!-- ==== networking ===================================================== -->
+  <!-- DHCP on the provisioning link; set the real hostname from the token.  -->
+  <networking>
+    <keep_install_network config:type="boolean">true</keep_install_network>
+    <dns>
+      <hostname>@@HOSTNAME@@</hostname>
+    </dns>
+  </networking>
+
+  <!-- ==== bootloader ===================================================== -->
+  <bootloader>
+    <loader_type>grub2</loader_type>
+  </bootloader>
+
+  <!-- ===================================================================== -->
+  <!-- PARTITIONING  (conservative, single-root)                            -->
+  <!-- ===================================================================== -->
+  <!-- One btrfs root filling @@DISK@@ plus a small swap. use_snapshots is on -->
+  <!-- (Leap default) for rollback safety. The disk is named explicitly so a -->
+  <!-- multi-disk host never gets the wrong device wiped.                    -->
+  <!--                                                                       -->
+  <!-- WARNING: initialize=true ERASES @@DISK@@ unattended.                  -->
+  <partitioning config:type="list">
+    <drive>
+      <device>@@DISK@@</device>
+      <initialize config:type="boolean">true</initialize>
+      <use>all</use>
+      <partitions config:type="list">
+        <!-- swap: 1 GiB -->
+        <partition>
+          <mount>swap</mount>
+          <filesystem config:type="symbol">swap</filesystem>
+          <size>1G</size>
+        </partition>
+        <!-- root: remainder of the disk -->
+        <partition>
+          <mount>/</mount>
+          <filesystem config:type="symbol">btrfs</filesystem>
+          <size>max</size>
+        </partition>
+      </partitions>
+    </drive>
+  </partitioning>
+
+  <!-- ==== software ======================================================= -->
+  <!-- base + minimal server patterns; @@PACKAGES@@ expands to <package>     -->
+  <!-- entries (the render step turns the space-separated list into lines).  -->
+  <!-- openssh/sudo/curl/ca-certificates are ensured so firstboot works.     -->
+  <software>
+    <install_recommended config:type="boolean">false</install_recommended>
+    <patterns config:type="list">
+      <pattern>base</pattern>
+      <pattern>enhanced_base</pattern>
+      <pattern>minimal_base</pattern>
+    </patterns>
+    <packages config:type="list">
+      <package>openssh</package>
+      <package>sudo</package>
+      <package>curl</package>
+      <package>ca-certificates</package>
+      <package>@@PACKAGES@@</package>
+    </packages>
+  </software>
+
+  <!-- ==== services ======================================================= -->
+  <services-manager>
+    <default_target>multi-user</default_target>
+    <services>
+      <service>
+        <service_name>sshd</service_name>
+        <service_status>enable</service_status>
+      </service>
+    </services>
+  </services-manager>
+
+  <!-- ==== accounts ======================================================= -->
+  <!-- root password locked-ish (set to the same hash but SSH is key-only);  -->
+  <!-- admin user gets the SSH key. Passwordless sudo is granted in the      -->
+  <!-- post-install chroot script below. @@ADMIN_PWHASH@@ is a crypt(3) hash.-->
+  <users config:type="list">
+    <user>
+      <username>root</username>
+      <user_password>@@ADMIN_PWHASH@@</user_password>
+      <encrypted config:type="boolean">true</encrypted>
+    </user>
+    <user>
+      <username>@@ADMIN_USER@@</username>
+      <user_password>@@ADMIN_PWHASH@@</user_password>
+      <encrypted config:type="boolean">true</encrypted>
+      <home>/home/@@ADMIN_USER@@</home>
+      <shell>/bin/bash</shell>
+      <authorized_keys config:type="list">
+        <listentry>@@SSH_PUBKEY@@</listentry>
+      </authorized_keys>
+    </user>
+  </users>
+
+  <!-- ===================================================================== -->
+  <!-- POST-INSTALL SCRIPT (runs chrooted in the installed system)          -->
+  <!-- ===================================================================== -->
+  <!-- chrooted=true => runs inside the freshly installed root after the     -->
+  <!-- package install. We grant passwordless sudo, fetch solari-firstboot.sh-->
+  <!-- and run it with the SolariNet tokens as env vars.                     -->
+  <scripts>
+    <chroot-scripts config:type="list">
+      <script>
+        <filename>solari-firstboot</filename>
+        <chrooted config:type="boolean">true</chrooted>
+        <interpreter>shell</interpreter>
+        <source><![CDATA[#!/bin/sh
+set -e
+# passwordless sudo for the admin user
+printf '@@ADMIN_USER@@ ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/010-solari-admin
+chmod 440 /etc/sudoers.d/010-solari-admin
+
+# fetch + run the SolariNet first-boot installer
+curl --fail --silent --show-error --location \
+    @@HTTP_BASE@@/installers/solari-firstboot.sh \
+    -o /usr/local/sbin/solari-firstboot.sh
+chmod 0755 /usr/local/sbin/solari-firstboot.sh
+
+SOLARI_HTTP_BASE='@@HTTP_BASE@@' \
+SOLARI_ARCH='@@ARCH@@' \
+SOLARI_HOSTNAME='@@HOSTNAME@@' \
+SOLARI_FQDN='@@FQDN@@' \
+SOLARI_SERVER_URL='@@SERVER_URL@@' \
+SOLARI_SERVER_NAME='@@SERVER_NAME@@' \
+SOLARI_SERVER_IP='@@SERVER_IP@@' \
+    sh /usr/local/sbin/solari-firstboot.sh
+]]></source>
+      </script>
+    </chroot-scripts>
+  </scripts>
+
+</profile>

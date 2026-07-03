@@ -1,0 +1,34 @@
+{
+  "_comment": "Reference data for the dashboard fleet-provisioning UI. Read-only; served by GET /api/control/fleet-catalog. The coreStack mirrors the Ansible contract in deploy/fleet/ansible/group_vars/all.yml (solari_core_packages).",
+  "distros": [
+    { "id": "debian",   "label": "Debian 12",        "family": "debian", "arches": ["x86_64", "arm64", "arm32"], "install": "preseed" },
+    { "id": "ubuntu",   "label": "Ubuntu 24.04",     "family": "debian", "arches": ["x86_64", "arm64"],          "install": "autoinstall" },
+    { "id": "opensuse", "label": "openSUSE Leap 15",  "family": "suse",   "arches": ["x86_64", "arm64"],          "install": "autoyast" },
+    { "id": "raspios",  "label": "Raspberry Pi OS",   "family": "debian", "arches": ["arm64", "arm32"],           "install": "image" }
+  ],
+  "arches": [
+    { "id": "x86_64", "label": "x86 (64-bit)" },
+    { "id": "arm64",  "label": "ARM64" },
+    { "id": "arm32",  "label": "ARM32 (Pi)" }
+  ],
+  "roles": [
+    { "id": "sensor",    "label": "Sensor / client" },
+    { "id": "edge",      "label": "Edge node" },
+    { "id": "appliance", "label": "Appliance" }
+  ],
+  "profiles": [
+    { "id": "standard", "label": "Standard stack" },
+    { "id": "minimal",  "label": "Minimal" }
+  ],
+  "coreStack": [
+    "sudo", "curl", "wget", "ca-certificates", "gnupg", "htop", "tmux", "git",
+    "vim", "rsync", "jq", "unzip", "lsof", "chrony", "python3", "net-tools", "openssh-server"
+  ],
+  "netboot": {
+    "httpBase": "http://benzene.akoria.net:8080",
+    "provisionHost": "benzene.akoria.net",
+    "liveStatus": "staged",
+    "goLive": "/srv/solari-provision/staging/go-live.sh",
+    "note": "Netboot entries are staged and inert until the DHCP switch is flipped (proxyDHCP on benzene, or next-server/boot-file options on the UniFi DHCP scope)."
+  }
+}

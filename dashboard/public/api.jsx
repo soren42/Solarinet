@@ -159,6 +159,9 @@
     decommission: "/api/control/decommission",
     survey:       "/api/control/survey",
     deploy:       "/api/control/deploy",
+    fleetCatalog: "/api/control/fleet-catalog",
+    provision:    "/api/control/fleet-provision",
+    image:        "/api/control/fleet-image",
     stream:       "/api/stream",
     login:        "/api/auth/login",
     logout:       "/api/auth/logout",
@@ -592,6 +595,13 @@
     // remote client deployment (server-side, via the bridge; poll the log)
     deployClient: function (body) { return post(EP.deploy, body || {}); },
     deployLog: function (host) { return getJSON(EP.deploy + "?host=" + encodeURIComponent(host)); },
+    // fleet provisioning (bare-metal OS install + Pi imaging), server-side via bridge
+    fleetCatalog: function () { return getJSON(EP.fleetCatalog); },
+    provision: function (body) { return post(EP.provision, body || {}); },
+    buildImage: function (body) { return post(EP.image, body || {}); },
+    provisionLog: function (hostname, isImage) {
+      return getJSON(EP.provision + "?hostname=" + encodeURIComponent(hostname) + (isImage ? "&image=1" : ""));
+    },
     saveRule: function (ruleId, patch) { return post(EP.rule(ruleId), patch); },
     toggleRule: function (ruleId, enabled) { return post(EP.rule(ruleId), { enabled: enabled }); },
 

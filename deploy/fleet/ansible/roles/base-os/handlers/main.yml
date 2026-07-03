@@ -1,0 +1,18 @@
+# base-os handlers.
+---
+- name: Restart sshd
+  # Debian/Ubuntu call it "ssh"; openSUSE calls it "sshd". Try the family name.
+  ansible.builtin.service:
+    name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+    state: restarted
+
+- name: Restart journald
+  ansible.builtin.service:
+    name: systemd-journald
+    state: restarted
+
+- name: Generate locales
+  # Debian family only; regenerates glibc locales after /etc/locale.gen changes.
+  ansible.builtin.command:
+    cmd: locale-gen
+  changed_when: true

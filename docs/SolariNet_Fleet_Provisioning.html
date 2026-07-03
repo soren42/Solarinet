@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Fleet Provisioning Subsystem</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;--warm:#e0a458;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:920px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:18px;margin:24px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}.warn{color:var(--warn);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 8px;border-radius:20px;border:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Fleet Provisioning Subsystem</h1>
+  <p class="sub">SolariNet Monitoring · automated OS install + provisioning + enrollment across distros and architectures · built 2026-06-26</p>
+
+  <div class="note">
+    <strong>What this is.</strong> A one-click path from the dashboard to a fully installed, configured,
+    and SolariNet-enrolled machine — bare-metal x86 via netboot, Raspberry Pi via native netboot (Pi 5) or a
+    prebuilt image (Pi 4), across <b>Debian, Ubuntu, and openSUSE</b> on <b>x86_64 / arm64 / arm32</b>, all with
+    the <b>same core software stack</b>. Ansible + netboot infrastructure lives on <code>benzene</code>; the
+    control plane stays in the existing SolariNet server + dashboard on <code>xenon</code>.
+  </div>
+
+  <h2>Status at build time</h2>
+  <table>
+    <tr><th>Piece</th><th>State</th></tr>
+    <tr><td>benzene infra (Ansible, nginx:8080, TFTP, iPXE, staged proxyDHCP)</td><td class="ok">installed, non-destructive</td></tr>
+    <tr><td>Dashboard → bridge → script → benzene path</td><td class="ok">verified end-to-end (staged install + Pi image)</td></tr>
+    <tr><td>Raspberry Pi image build</td><td class="ok">verified (built + served a 3.8 GB Pi OS arm64 image)</td></tr>
+    <tr><td>Live PXE (netboot actually booting machines)</td><td class="warn">STAGED — off until the DHCP switch is flipped (see runbook)</td></tr>
+    <tr><td>Server unit tests</td><td class="ok">23 / 23</td></tr>
+  </table>
+
+  <h2>Architecture</h2>
+  <p>The subsystem obeys the project's firm rule — <b>PHP is read-only; every mutation goes through C via the
+     solariCtl bridge</b>. Two new operator-gated bridge verbs drive it:</p>
+  <table>
+    <tr><th>Verb</th><th>Forks</th><th>Does</th></tr>
+    <tr><td><code>FLEET_PROVISION</code></td><td><code>deploy/fleet/fleet-provision.sh</code></td><td>mints the node cert (SIGN), renders the distro's unattended-install config + a per-MAC iPXE entry, pushes them to benzene</td></tr>
+    <tr><td><code>FLEET_IMAGE</code></td><td><code>deploy/fleet/fleet-image.sh</code></td><td>mints the cert, builds a customized Raspberry Pi image on benzene</td></tr>
+  </table>
+  <p>Both are detached (double-fork) so the server loop never blocks, and both require an <code>op=</code>
+     operator (RBAC). The scripts run on <code>xenon</code>, mint certs against the local CA over the bridge
+     (<b>the CA key never leaves the server</b>), and SSH to <code>benzene</code> to stage artifacts.</p>
+  <pre>Dashboard (Provisioning → "Provision a new system")
+   └─ POST /api/control/fleet-provision   (PHP: validate + marshal, read-only)
+       └─ solariCtl FLEET_PROVISION       (C bridge, operator-gated, detached)
+           └─ deploy/fleet/fleet-provision.sh   (on xenon)
+               ├─ SIGN CSR → ca.pem/node.pem/node.key   (local CA)
+               ├─ render netboot/configs/*.tmpl + ipxe/mac-profile → benzene HTTP root
+               └─ stage per-MAC auto-install (inert until PXE is live)
+  GET /api/control/fleet-provision?hostname=…  tails run/provision-&lt;host&gt;.log</pre>
+
+  <h2>The shared software stack (identical everywhere)</h2>
+  <p>One logical package set in <code>deploy/fleet/ansible/group_vars/all.yml</code>
+     (<code>solari_core_packages</code>) is applied on every distro and arch; a small
+     <code>solari_pkg_map</code> translates the few names that differ between the Debian/Ubuntu and openSUSE
+     families. Core set: <span class="mono-sm">sudo curl wget ca-certificates gnupg htop tmux git vim rsync jq
+     unzip lsof chrony python3 net-tools openssh-server</span> + the SolariNet agent. The same list feeds the
+     netboot unattended installs (<code>@@PACKAGES@@</code>) and the Pi image build, so a machine looks the
+     same however it was provisioned.</p>
+
+  <h2>What lives on benzene</h2>
+  <table>
+    <tr><th>Path / service</th><th>Purpose</th></tr>
+    <tr><td><code>/srv/solari-provision/ansible/</code></td><td>Ansible tree (base-os · common-stack · solarinet-client roles)</td></tr>
+    <tr><td><code>/srv/solari-provision/netboot/http/</code> (nginx :8080)</td><td>iPXE scripts, rendered installer configs, enrollment material, images</td></tr>
+    <tr><td><code>/srv/solari-provision/netboot/tftp/</code></td><td>iPXE binaries (x86_64 UEFI, arm64 UEFI, pxelinux)</td></tr>
+    <tr><td><code>/srv/solari-provision/pi/</code></td><td>Pi image builder + Pi 5 netboot scaffolding</td></tr>
+    <tr><td><code>solari-netboot.service</code> + <code>/etc/solari-provision/dnsmasq-proxy.conf</code></td><td><b>staged, disabled</b> proxyDHCP+TFTP responder (isolated from libvirt's dnsmasq)</td></tr>
+    <tr><td><code>/srv/solari-provision/staging/go-live.sh</code></td><td>one-command flip to activate/deactivate live PXE</td></tr>
+  </table>
+  <div class="note">benzene's existing roles (MariaDB, Redis, Samba, libvirt VMs, desktop) were <b>left untouched</b>
+    — the provisioning stack runs alongside them, and its PXE responder is a <em>separate</em> dnsmasq bound to
+    <code>eno1</code>, never the libvirt one.</div>
+
+  <h2 id="runbook">Go-live runbook (Saturday) — activating live netboot</h2>
+  <p>Everything above is staged and inert. Bare-metal machines only netboot once DHCP tells them where the boot
+     server is. Pick <b>one</b> of these; both coexist with the existing gateway DHCP.</p>
+
+  <h3>Option A — proxyDHCP on benzene (self-contained, reversible)</h3>
+  <p>A dedicated dnsmasq in <em>proxy</em> mode answers only PXE boot requests; it never hands out IP leases, so
+     it does not conflict with the gateway's DHCP.</p>
+  <pre># first, fetch the netboot installer kernels (one-time, ~minutes):
+deploy/fleet/fetch-images.sh --distro all --arch x86_64
+
+# then flip PXE live on benzene:
+/srv/solari-provision/staging/go-live.sh          # enable + open firewall
+/srv/solari-provision/staging/go-live.sh --off    # fully reverse it</pre>
+
+  <h3>Option B — UniFi DHCP options (no responder on benzene)</h3>
+  <p>Add these to the DHCP scope in the UniFi controller (Network → the LAN → DHCP), then leave benzene's
+     responder disabled:</p>
+  <pre>Network boot / PXE:
+  Enabled:      yes
+  Server (next-server):  10.5.2.50        # benzene
+  Filename (BIOS):       pxelinux.0
+  Filename (UEFI x64):   ipxe-x86_64.efi
+  Filename (UEFI arm64): snp-arm64.efi
+# iPXE then chains to  http://10.5.2.50:8080/ipxe/boot.ipxe</pre>
+  <div class="gap"><strong>Network-safety note.</strong> Do not run a second full DHCP <em>server</em> on the flat
+    10.0.0.0/8 — only proxyDHCP (Option A) or the existing UniFi scope (Option B). The user asked to keep the
+    live network undisturbed until Saturday; nothing in tonight's deploy touches DHCP.</div>
+
+  <h2>Provisioning flows</h2>
+  <h3>Bare-metal x86 (Debian / Ubuntu / openSUSE)</h3>
+  <ul>
+    <li>Dashboard → Provisioning → <b>Provision a new system</b> → "OS install", pick distro/arch/role, enter the
+        target's <b>MAC</b> and a hostname → <b>Stage install</b>.</li>
+    <li>The machine auto-installs unattended on its next network boot (per-MAC iPXE profile), runs the common
+        package stack, and enrolls into SolariNet. An un-staged machine is never touched (the per-MAC chain 404s
+        and it boots local disk).</li>
+  </ul>
+  <h3>Raspberry Pi</h3>
+  <ul>
+    <li><b>Pi 5</b> — native netboot (TFTP/HTTP root served from benzene); scaffold with
+        <code>deploy/fleet/pi/pi5-netboot/</code>. Gated behind the same PXE switch.</li>
+    <li><b>Pi 4</b> — dashboard "Pi image" mode builds a customized Pi OS image (hostname, SSH key, core stack,
+        SolariNet firstboot enrollment). Download from <code>http://benzene:8080/images/&lt;host&gt;-&lt;arch&gt;.img</code>
+        and flash to SD/USB. Fully working today, no PXE needed.</li>
+  </ul>
+
+  <h2>Security model</h2>
+  <ul>
+    <li>Both verbs are operator-gated (RBAC); PHP validates every field and holds no CA material.</li>
+    <li>Node certs are minted on xenon via the bridge <code>SIGN</code> — the CA private key never leaves the
+        server process, never touches benzene or the deploy scripts.</li>
+    <li>Enrollment material is staged under an <b>unguessable per-host token dir</b>
+        (<code>…/enroll/&lt;random&gt;/</code>) and is not directory-listed; it should be removed after the node's
+        first boot. <span class="warn">Follow-up:</span> replace with a one-time pull token for defence in depth.</li>
+    <li>Installed hosts get key-only SSH (password auth disabled, admin account with a locked password + the
+        operator's public key).</li>
+  </ul>
+
+  <h2>Outstanding / follow-ups</h2>
+  <ul>
+    <li><b>Flip PXE live</b> Saturday via the runbook, then boot a real target to validate an unattended install
+        end-to-end (only the final bare-metal wipe step is untested — it needs real hardware set to netboot).</li>
+    <li><b>fetch-images.sh</b> URLs (esp. Ubuntu 24.04 netboot) may need adjusting as releases move.</li>
+    <li>arm64 <em>non-Pi</em> netboot installers, and arm32/mips static agent builds, are future work
+        (see the heterogeneous-client roadmap).</li>
+    <li>Enrollment auto-delivery hardening (one-time token) as noted above.</li>
+  </ul>
+
+  <p class="footer">SolariNet Fleet Provisioning — generated 2026-06-26. Infrastructure staged non-destructively;
+     live PXE awaits the Saturday go-live. Ansible + dashboard + Pi imaging verified end-to-end.</p>
+</div>
+</body>
+</html>

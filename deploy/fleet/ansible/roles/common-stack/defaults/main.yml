@@ -1,0 +1,6 @@
+# common-stack role defaults.
+# The authoritative lists live in group_vars/all.yml; these fallbacks keep the
+# role runnable stand-alone during development.
+---
+solari_core_packages: []
+solari_pkg_map: {}
