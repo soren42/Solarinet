@@ -70,20 +70,17 @@ umask 077
 openssl ecparam -name prime256v1 -genkey -noout -out "${TMP}/node.key"
 openssl req -new -key "${TMP}/node.key" -subj "/CN=monitor.${NAME}/O=SolariNet/OU=monitor" -out "${TMP}/node.csr"
 cp "${REPO_ROOT}/run/pki/ca.pem" "${TMP}/ca.pem"
-python3 - "${CTL_SOCK}" "${TMP}/node.csr" "${TMP}/node.pem" "${OP}" <<'PY' || die "CA SIGN failed"
-import sys, socket, urllib.parse
-sock, csrf, outf, op = sys.argv[1:5]
-csr=open(csrf).read()
-s=socket.socket(socket.AF_UNIX); s.connect(sock)
-s.sendall(("SIGN op=%s csr=%s\n"%(op,urllib.parse.quote(csr,safe=""))).encode())
-buf=b""
-while b"\n" not in buf:
-    d=s.recv(65536)
-    if not d: break
-    buf+=d
-r=buf.decode(errors="replace").rstrip("\n")
-sys.exit(0) if r.startswith("OK cert=") and open(outf,"w").write(urllib.parse.unquote(r[len("OK cert="):])) is not None else sys.exit(2)
-PY
+# solariCtlClient (standard C) speaks the SIGN protocol; no python.
+CTL_CLIENT=""
+for c in "${REPO_ROOT}/build-snmp/src/server/solariCtlClient" \
+         "${REPO_ROOT}/build-nosnmp/src/server/solariCtlClient" \
+         "${REPO_ROOT}/build/src/server/solariCtlClient" \
+         "$(command -v solariCtlClient 2>/dev/null || true)"; do
+  [ -n "${c}" ] && [ -x "${c}" ] && CTL_CLIENT="${c}" && break
+done
+[ -n "${CTL_CLIENT}" ] || die "solariCtlClient not found; build the server tree (target solariCtlClient)"
+"${CTL_CLIENT}" --sock "${CTL_SOCK}" sign --op "${OP}" \
+  --csr "${TMP}/node.csr" --out "${TMP}/node.pem" || die "CA SIGN failed"
 [ -s "${TMP}/node.pem" ] || die "no signed cert"
 log "enrolled monitor cert CN=monitor.${NAME}"
 
