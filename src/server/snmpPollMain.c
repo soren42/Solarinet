@@ -29,14 +29,16 @@ static void usage(const char *a0)
 {
     fprintf(stderr,
         "usage: %s --config PATH [--community C] [--interval SEC] [--once|--loop]\n"
-        "  polls networkGear IF-MIB counters into gearInterface{Current,History}\n",
+        "          [--lldp]\n"
+        "  polls networkGear IF-MIB counters into gearInterface{Current,History}\n"
+        "  --lldp  also run the LLDP-over-SNMP neighbour walk (networkGear + lldpEdge)\n",
         a0);
 }
 
 int main(int argc, char **argv)
 {
     const char *cfgPath = NULL, *community = "public";
-    int loop = 0, interval = 60, i;
+    int loop = 0, interval = 60, lldp = 0, i;
     serverConfig cfg;
     serverContext ctx;
     serverDb *db = NULL;
@@ -48,6 +50,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--interval") && i + 1 < argc) interval = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--loop")) loop = 1;
         else if (!strcmp(argv[i], "--once")) loop = 0;
+        else if (!strcmp(argv[i], "--lldp")) lldp = 1;
         else { usage(argv[0]); return 2; }
     }
     if (!cfgPath) { usage(argv[0]); return 2; }
@@ -78,6 +81,13 @@ int main(int argc, char **argv)
             solariLogf(SOLARI_LOG_INFO, "snmp poll: %zu gear polled", polled);
         else
             solariLogf(SOLARI_LOG_WARN, "snmp poll rc=%d (%s)", (int)rc, solariStrError(rc));
+
+        if (lldp) {
+            solariStatus lrc = serverTopologyDeepWalkAll(&ctx, community);
+            if (lrc != SOLARI_OK)
+                solariLogf(SOLARI_LOG_WARN, "lldp walk rc=%d (%s)",
+                           (int)lrc, solariStrError(lrc));
+        }
         if (!loop || g_stop) break;
         {
             int slept = 0;

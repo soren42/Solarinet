@@ -14,9 +14,15 @@
 #include "server.h"
 #include "serverAssets.h"
 
+#include <mariadb/mysql.h>
+
 #define WEAK __attribute__((weak))
 
 /* ---- serverDb.c surface ---- */
+/* Connection accessor used by the SNMP/topology deep-walk drivers. The pure
+ * helper tests never reach the DB path, so a NULL-returning weak stub suffices;
+ * the real serverDb.c definition wins in the full servercore build. */
+WEAK MYSQL *serverDbConn(serverDb *db) { (void)db; return 0; }
 WEAK solariStatus serverDbOpen(const serverConfig *cfg, serverDb **out)
 { (void)cfg; if (out) *out = 0; return ERR_DB; }
 WEAK void serverDbClose(serverDb *db) { (void)db; }

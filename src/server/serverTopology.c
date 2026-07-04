@@ -30,7 +30,13 @@
  * Parsing, field-splitting, gearId derivation, and the edge/gear builders are
  * factored into static pure helpers so they are unit-testable without a live
  * MariaDB; only the upsert calls touch serverDb.
+ *
+ * The deep managed-gear path adds a real LLDP-over-SNMP neighbour walk (behind
+ * SOLARI_WITH_SNMP): a set of pure line parsers/decoders/mergers (unit-tested,
+ * no popen, no DB) feed the tested topoNormalizeMibRecord pipeline, and a thin
+ * popen shell-out to the net-snmp CLI drives them exactly like serverSnmp.c.
  */
+#define _DEFAULT_SOURCE   /* popen/pclose under -std=c99/c11 */
 #include "server.h"
 
 #include "solari/solariTlv.h"
@@ -39,7 +45,14 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <ctype.h>
+
+#include <mariadb/mysql.h>
+
+/* dbConn accessor exposed by serverDb.c for server-tier modules (also used by
+ * serverSnmp.c). The deep-walk driver reads networkGear directly. */
+MYSQL *serverDbConn(serverDb *db);
 
 /* A single report should describe one node's local adjacency; cap the per-frame
  * work so a hostile or runaway producer cannot make us loop unboundedly. */
@@ -49,6 +62,8 @@
 /* Deep managed-gear walk: bound a single device's LLDP-MIB neighbour table so a
  * misbehaving switch cannot make the normalizer loop unboundedly. */
 #define TOPO_MAX_MIB_NEIGH        4096
+/* Local-port name table (lldpLocPortTable) size cap for one device. */
+#define TOPO_MAX_LOC_PORTS        1024
 /* Uplink-chain assembly: cap the hop count so a cyclic uplinkGearId graph (bad
  * data) cannot livelock the walker. */
 #define TOPO_MAX_UPLINK_HOPS      64
@@ -487,6 +502,339 @@ solariStatus serverTopologyNetGearView(const serverNetGear *gear, size_t gearN,
 }
 
 /* ===================================================================== */
+/* Pure LLDP-MIB walk parsing/decoding (SNMP-free, unit-testable).        */
+/*                                                                        */
+/* These turn raw `snmpbulkwalk -Onq` output lines into topoLldpMibRecord  */
+/* rows with no net-snmp dependency, mirroring serverSnmp.c's split of the */
+/* pure line parser from the popen walk. The popen driver (further down,   */
+/* under SOLARI_WITH_SNMP) is the only impure part.                       */
+/* ===================================================================== */
+
+/* Numeric LLDP-MIB column OIDs (no MIB files needed). The lldpRemTable index is
+ * (lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex): three labels trail each
+ * column OID. lldpLocPortId is keyed by lldpLocPortNum (one trailing label). */
+#define OID_LLDP_REM_CHASSIS_ID  ".1.0.8802.1.1.2.1.4.1.1.5"
+#define OID_LLDP_REM_CHASSIS_SUB ".1.0.8802.1.1.2.1.4.1.1.4"
+#define OID_LLDP_REM_PORT_ID     ".1.0.8802.1.1.2.1.4.1.1.7"
+#define OID_LLDP_REM_PORT_SUB    ".1.0.8802.1.1.2.1.4.1.1.6"
+#define OID_LLDP_REM_PORT_DESC   ".1.0.8802.1.1.2.1.4.1.1.8"
+#define OID_LLDP_REM_SYS_NAME    ".1.0.8802.1.1.2.1.4.1.1.9"
+#define OID_LLDP_REM_SYS_DESC    ".1.0.8802.1.1.2.1.4.1.1.10"
+#define OID_LLDP_REM_SYS_CAP     ".1.0.8802.1.1.2.1.4.1.1.12"
+#define OID_LLDP_LOC_PORTID      ".1.0.8802.1.1.2.1.3.7.1.3"
+
+/* Port-id macAddress subtype (LldpPortIdSubtype). Distinct from the chassis MAC
+ * subtype (4): for ports, macAddress == 3 and networkAddress == 4. */
+#define TOPO_PORT_ID_SUB_MAC     3
+
+/* The lldpRemTable columns we walk. Each is a separate snmpbulkwalk pass; the
+ * column identity is known by the caller (as in serverSnmp.c), so the line
+ * parser need not recover it from the OID. */
+typedef enum {
+    TOPO_LLDP_COL_CHASSIS_ID = 0,   /* lldpRemChassisId        */
+    TOPO_LLDP_COL_CHASSIS_SUB,      /* lldpRemChassisIdSubtype */
+    TOPO_LLDP_COL_PORT_ID,          /* lldpRemPortId           */
+    TOPO_LLDP_COL_PORT_SUB,         /* lldpRemPortIdSubtype    */
+    TOPO_LLDP_COL_PORT_DESC,        /* lldpRemPortDesc         */
+    TOPO_LLDP_COL_SYS_NAME,         /* lldpRemSysName          */
+    TOPO_LLDP_COL_SYS_DESC,         /* lldpRemSysDesc          */
+    TOPO_LLDP_COL_CAP_ENABLED       /* lldpRemSysCapEnabled    */
+} topoLldpCol;
+
+/* One raw (pre-decode) lldpRemTable row, keyed by (localPortNum, remIndex). The
+ * chassis/port ids are stored verbatim as the walk returned them; decoding to
+ * MAC/printable form happens in topoLldpFinalize once the subtype column is in. */
+typedef struct {
+    long localPortNum;
+    long remIndex;
+    char rawChassisId[128];
+    int  chassisSub;
+    char rawPortId[128];
+    int  portSub;
+    char portDesc[160];
+    char sysName[96];
+    char sysDesc[160];
+    char rawCaps[64];
+} topoLldpRawNeigh;
+
+/* A resolved local-port name (lldpLocPortId keyed by lldpLocPortNum). */
+typedef struct { long portNum; char name[48]; } topoLldpLocPort;
+
+/* Copy the value that follows the first space of a -Onq line into out, trimming
+ * whitespace/CRLF and a single layer of surrounding double-quotes. */
+static void topoLldpCopyVal(const char *sp, char *val, size_t valCap)
+{
+    const char *v, *end;
+    if (!val || valCap == 0) return;
+    val[0] = '\0';
+    if (!sp) return;
+    v = sp;
+    while (*v == ' ' || *v == '\t') v++;
+    end = v + strlen(v);
+    while (end > v && (end[-1] == '\n' || end[-1] == '\r' ||
+                       end[-1] == ' '  || end[-1] == '\t')) end--;
+    if (end > v && *v == '"' && end[-1] == '"') { v++; end--; }
+    {
+        size_t n = (size_t)(end - v);
+        if (n >= valCap) n = valCap - 1;
+        if (n > 0) memcpy(val, v, n);
+        val[n] = '\0';
+    }
+}
+
+/* Parse one lldpRemTable `-Onq` line:
+ *   "<colOid>.<timeMark>.<localPortNum>.<remIndex> <value>"
+ * Extracts localPortNum + remIndex (the last two of the three index labels) and
+ * the dequoted value. Pure; returns 1 on success, 0 on a malformed line. */
+static int topoLldpParseRemLine(const char *line, long *localPortNum,
+                                long *remIndex, char *val, size_t valCap)
+{
+    const char *sp, *end;
+    long labels[3];
+    int nlab = 0;
+
+    if (val && valCap) val[0] = '\0';
+    if (!line || !localPortNum || !remIndex) return 0;
+    sp = strchr(line, ' ');
+    if (!sp || sp == line) return 0;
+
+    /* Read the last three dotted labels of the OID, right to left. */
+    end = sp;                                   /* exclusive end of current label */
+    while (nlab < 3 && end > line) {
+        const char *start = end;
+        while (start > line && start[-1] != '.') start--;
+        if (start == end) return 0;             /* empty label */
+        labels[nlab++] = strtol(start, NULL, 10);
+        if (start == line) break;
+        end = start - 1;                        /* step over the '.' */
+    }
+    if (nlab < 3) return 0;
+    *remIndex     = labels[0];                  /* rightmost      */
+    *localPortNum = labels[1];                  /* second-right   */
+    /* labels[2] is the timeMark, ignored. */
+    topoLldpCopyVal(sp, val, valCap);
+    return 1;
+}
+
+/* Parse one lldpLocPortTable line: "<oid>.<lldpLocPortNum> <value>". Extracts
+ * the single trailing label (portNum) + dequoted value. Pure; 1 ok / 0 bad. */
+static int topoLldpParseLocLine(const char *line, long *portNum,
+                                char *val, size_t valCap)
+{
+    const char *sp, *start;
+    if (val && valCap) val[0] = '\0';
+    if (!line || !portNum) return 0;
+    sp = strchr(line, ' ');
+    if (!sp || sp == line) return 0;
+    start = sp;
+    while (start > line && start[-1] != '.') start--;
+    if (start == sp) return 0;
+    *portNum = strtol(start, NULL, 10);
+    topoLldpCopyVal(sp, val, valCap);
+    return 1;
+}
+
+/* Format a raw MAC value (any of "AA BB CC DD EE FF", "aabbccddeeff",
+ * "0xAABBCC...", with optional colons/spaces) as lowercase colon-separated
+ * "aa:bb:cc:dd:ee:ff". Collects hex nibbles, pairs them into bytes. Pure. */
+static void topoLldpFormatMac(const char *raw, char *out, size_t cap)
+{
+    char nyb[64];
+    size_t n = 0, i, o = 0;
+
+    if (out && cap) out[0] = '\0';
+    if (!raw || !out || cap == 0) return;
+    if (raw[0] == '0' && (raw[1] == 'x' || raw[1] == 'X')) raw += 2;
+    for (; *raw && n < sizeof nyb; raw++) {
+        char c = *raw;
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+            (c >= 'A' && c <= 'F'))
+            nyb[n++] = (char)tolower((unsigned char)c);
+    }
+    for (i = 0; i + 1 < n; i += 2) {
+        if (i > 0) { if (o + 1 < cap) out[o++] = ':'; else break; }
+        if (o + 2 < cap) { out[o++] = nyb[i]; out[o++] = nyb[i + 1]; }
+        else break;
+    }
+    out[o] = '\0';
+}
+
+/* Copy a value stripping control characters and trimming trailing spaces. */
+static void topoLldpCopyPrintable(const char *raw, char *out, size_t cap)
+{
+    size_t o = 0;
+    if (out && cap) out[0] = '\0';
+    if (!raw || !out || cap == 0) return;
+    for (; *raw && o + 1 < cap; raw++) {
+        unsigned char c = (unsigned char)*raw;
+        if (c >= 0x20 && c != 0x7f) out[o++] = (char)c;
+    }
+    while (o > 0 && out[o - 1] == ' ') o--;
+    out[o] = '\0';
+}
+
+/* Decode an LLDP chassis/port id into printable form. `isMac` means the subtype
+ * denotes a macAddress (chassis subtype 4, port subtype 3): the value is a hex
+ * octet string reformatted to aa:bb:.... All other subtypes (interfaceName,
+ * local, networkAddress, ...) are copied printable/verbatim. Pure. */
+static void topoLldpDecodeId(const char *raw, bool isMac, char *out, size_t cap)
+{
+    if (isMac) topoLldpFormatMac(raw, out, cap);
+    else       topoLldpCopyPrintable(raw, out, cap);
+}
+
+/* Convert a raw lldpRemSysCapEnabled value (a 2-octet BITS string, e.g.
+ * "20 00" = bridge) into the internal TOPO_CAP_* bitmap the normalizer reads.
+ *
+ * BITS bit ordering (RFC 2578 / SMIv2): bit 0 is the MOST-significant bit of the
+ * first octet, so for octet index b and in-octet position p (0=MSB..7=LSB) the
+ * LLDP capability number is (b*8 + p). We map capability number k -> (1<<k),
+ * which is exactly the TOPO_CAP_* enum layout:
+ *   other=bit0=0x01, repeater=bit1=0x02, bridge=bit2=0x04, wlanAP=bit3=0x08,
+ *   router=bit4=0x10, telephone=bit5=0x20, docsis=bit6=0x40, station=bit7=0x80.
+ * Pure. */
+static int topoLldpCapsToBits(const char *raw)
+{
+    unsigned bytes[8];
+    size_t nb = 0, b;
+    int caps = 0;
+    char nyb[16];
+    size_t n = 0, i;
+
+    if (!raw) return 0;
+    if (raw[0] == '0' && (raw[1] == 'x' || raw[1] == 'X')) raw += 2;
+    for (; *raw && n < sizeof nyb; raw++) {
+        char c = *raw;
+        if (c >= '0' && c <= '9')      nyb[n++] = (char)(c - '0');
+        else if (c >= 'a' && c <= 'f') nyb[n++] = (char)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') nyb[n++] = (char)(c - 'A' + 10);
+    }
+    for (i = 0; i + 1 < n && nb < 8; i += 2)
+        bytes[nb++] = (unsigned)((nyb[i] << 4) | nyb[i + 1]);
+
+    for (b = 0; b < nb; b++) {
+        int p;
+        for (p = 0; p < 8; p++) {
+            if (bytes[b] & (0x80u >> p)) {
+                int k = (int)(b * 8) + p;
+                if (k < 31) caps |= (1 << k);
+            }
+        }
+    }
+    return caps;
+}
+
+/* Find (or create) the raw neigh row for (localPortNum, remIndex). */
+static topoLldpRawNeigh *topoLldpFindRaw(topoLldpRawNeigh *rows, size_t *count,
+                                         size_t cap, long lpn, long ri)
+{
+    size_t i;
+    for (i = 0; i < *count; i++)
+        if (rows[i].localPortNum == lpn && rows[i].remIndex == ri)
+            return &rows[i];
+    if (*count >= cap) return NULL;
+    memset(&rows[*count], 0, sizeof rows[*count]);
+    rows[*count].localPortNum = lpn;
+    rows[*count].remIndex = ri;
+    return &rows[(*count)++];
+}
+
+/* Merge one parsed (column, localPortNum, remIndex, value) tuple into rows[],
+ * grouping columns of the same key into one record. Pure; 1 on store, 0 full. */
+static int topoLldpMergeRecord(topoLldpRawNeigh *rows, size_t *count, size_t cap,
+                               topoLldpCol col, long lpn, long ri, const char *val)
+{
+    topoLldpRawNeigh *r;
+    if (!rows || !count || !val) return 0;
+    r = topoLldpFindRaw(rows, count, cap, lpn, ri);
+    if (!r) return 0;
+    switch (col) {
+    case TOPO_LLDP_COL_CHASSIS_ID:  snprintf(r->rawChassisId, sizeof r->rawChassisId, "%s", val); break;
+    case TOPO_LLDP_COL_CHASSIS_SUB: r->chassisSub = (int)strtol(val, NULL, 10); break;
+    case TOPO_LLDP_COL_PORT_ID:     snprintf(r->rawPortId, sizeof r->rawPortId, "%s", val); break;
+    case TOPO_LLDP_COL_PORT_SUB:    r->portSub = (int)strtol(val, NULL, 10); break;
+    case TOPO_LLDP_COL_PORT_DESC:   snprintf(r->portDesc, sizeof r->portDesc, "%s", val); break;
+    case TOPO_LLDP_COL_SYS_NAME:    snprintf(r->sysName, sizeof r->sysName, "%s", val); break;
+    case TOPO_LLDP_COL_SYS_DESC:    snprintf(r->sysDesc, sizeof r->sysDesc, "%s", val); break;
+    case TOPO_LLDP_COL_CAP_ENABLED: snprintf(r->rawCaps, sizeof r->rawCaps, "%s", val); break;
+    }
+    return 1;
+}
+
+/* Record a local-port name (lldpLocPortId), keyed by lldpLocPortNum. Pure. */
+static int topoLldpMergeLocPort(topoLldpLocPort *ports, size_t *count, size_t cap,
+                                long portNum, const char *name)
+{
+    size_t i;
+    if (!ports || !count || !name) return 0;
+    for (i = 0; i < *count; i++)
+        if (ports[i].portNum == portNum) {
+            snprintf(ports[i].name, sizeof ports[i].name, "%s", name);
+            return 1;
+        }
+    if (*count >= cap) return 0;
+    ports[*count].portNum = portNum;
+    snprintf(ports[*count].name, sizeof ports[*count].name, "%s", name);
+    (*count)++;
+    return 1;
+}
+
+/* Look up a local-port name by lldpLocPortNum; "" if unknown. Pure. */
+static const char *topoLldpLocPortName(const topoLldpLocPort *ports, size_t count,
+                                       long portNum)
+{
+    size_t i;
+    for (i = 0; i < count; i++)
+        if (ports[i].portNum == portNum) return ports[i].name;
+    return "";
+}
+
+/* Decode a table of raw lldpRem rows (plus the resolved local-port names) into
+ * normalized topoLldpMibRecord rows the tested normalizer consumes. Pure; returns
+ * the number written (<= cap). mgmtIp is left "" (best-effort: the lldpRemManAddr
+ * table is not walked; the normalizer tolerates an empty mgmtIp). speedMbps is 0
+ * (unknown from LLDP); wireless is derived from the WLAN-AP capability bit. */
+static size_t topoLldpFinalize(const topoLldpRawNeigh *raw, size_t rawN,
+                               const topoLldpLocPort *ports, size_t portN,
+                               topoLldpMibRecord *out, size_t cap)
+{
+    size_t i, n = 0;
+    for (i = 0; i < rawN && n < cap; i++) {
+        topoLldpMibRecord *m = &out[n];
+        const char *lif;
+        memset(m, 0, sizeof *m);
+
+        m->chassisSubtype = raw[i].chassisSub;
+        topoLldpDecodeId(raw[i].rawChassisId,
+                         raw[i].chassisSub == TOPO_ID_SUB_CHASSIS_MAC,
+                         m->chassisId, sizeof m->chassisId);
+
+        m->portSubtype = raw[i].portSub;
+        topoLldpDecodeId(raw[i].rawPortId,
+                         raw[i].portSub == TOPO_PORT_ID_SUB_MAC,
+                         m->portId, sizeof m->portId);
+        /* Fall back to the human port description when portId is empty. portDesc
+         * can exceed portId's width; copy at most portId-1 bytes (explicit
+         * precision keeps the truncation intentional and warning-free). */
+        if (m->portId[0] == '\0' && raw[i].portDesc[0] != '\0')
+            snprintf(m->portId, sizeof m->portId, "%.*s",
+                     (int)(sizeof m->portId - 1), raw[i].portDesc);
+
+        snprintf(m->sysName, sizeof m->sysName, "%s", raw[i].sysName);
+        snprintf(m->sysDesc, sizeof m->sysDesc, "%s", raw[i].sysDesc);
+        m->mgmtIp[0] = '\0';
+        m->capabilities = topoLldpCapsToBits(raw[i].rawCaps);
+        m->wireless = (m->capabilities & TOPO_CAP_WLAN_AP) ? true : false;
+        m->speedMbps = 0;
+
+        lif = topoLldpLocPortName(ports, portN, raw[i].localPortNum);
+        snprintf(m->localIf, sizeof m->localIf, "%s", lif);
+        n++;
+    }
+    return n;
+}
+
+/* ===================================================================== */
 /* SNMP fetch seam - the ONLY place a real net-snmp dependency would live. */
 /*                                                                        */
 /* OFF by default: with SOLARI_WITH_SNMP undefined the build adds ZERO    */
@@ -497,15 +845,110 @@ solariStatus serverTopologyNetGearView(const serverNetGear *gear, size_t gearN,
 /* records[] array, then the caller runs topoNormalizeMibRecord() on each. */
 /* ===================================================================== */
 #ifdef SOLARI_WITH_SNMP
-/* LLDP-MIB neighbor walk. The IF-MIB interface poller (serverSnmp.c) is the
- * implemented SNMP feature; a full lldpRemTable decode is a documented follow-up,
- * so this returns "walked, no neighbors" rather than fabricating rows — the
- * caller safely handles an empty set. */
+/* Only [A-Za-z0-9._:-] survive into the shell command (community + host come
+ * from operator config/DB but are never trusted into popen unescaped). Mirrors
+ * serverSnmp.c's sanitizer. */
+static void topoSnmpSanitize(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (; in && *in && o + 1 < cap; in++) {
+        char c = *in;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == ':' || c == '-')
+            out[o++] = c;
+    }
+    out[o] = '\0';
+}
+
+/* Walk one lldpRemTable column OID; feed each line through the pure rem parser
+ * and merger. Returns rows parsed (>=0), or -1 if popen failed. Flags identical
+ * to serverSnmp.c's IF-MIB walk. */
+static int topoSnmpWalkRemCol(const char *ip, const char *comm, const char *oid,
+                              topoLldpCol col, topoLldpRawNeigh *rows,
+                              size_t *count, size_t cap)
+{
+    char cmd[512], line[700];
+    FILE *f;
+    int got = 0;
+    snprintf(cmd, sizeof cmd,
+             "snmpbulkwalk -v2c -c %s -t 2 -r 1 -Onq %s %s 2>/dev/null",
+             comm, ip, oid);
+    f = popen(cmd, "r");
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        long lpn = 0, ri = 0; char val[256];
+        if (topoLldpParseRemLine(line, &lpn, &ri, val, sizeof val)) {
+            topoLldpMergeRecord(rows, count, cap, col, lpn, ri, val);
+            got++;
+        }
+    }
+    pclose(f);
+    return got;
+}
+
+/* Walk lldpLocPortId to resolve local-port names. Returns rows (>=0) / -1. */
+static int topoSnmpWalkLocPorts(const char *ip, const char *comm,
+                                topoLldpLocPort *ports, size_t *count, size_t cap)
+{
+    char cmd[512], line[700];
+    FILE *f;
+    int got = 0;
+    snprintf(cmd, sizeof cmd,
+             "snmpbulkwalk -v2c -c %s -t 2 -r 1 -Onq %s %s 2>/dev/null",
+             comm, ip, OID_LLDP_LOC_PORTID);
+    f = popen(cmd, "r");
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        long pn = 0; char val[128];
+        if (topoLldpParseLocLine(line, &pn, val, sizeof val)) {
+            topoLldpMergeLocPort(ports, count, cap, pn, val);
+            got++;
+        }
+    }
+    pclose(f);
+    return got;
+}
+
+/* Real LLDP-over-SNMP neighbour walk: snmpbulkwalk each lldpRemTable column into
+ * a raw table keyed by (localPortNum, remIndex), walk lldpLocPortId for the local
+ * interface names, then decode/finalize into topoLldpMibRecord rows (bounded at
+ * *count capacity, itself <= TOPO_MAX_MIB_NEIGH). The first column doubles as the
+ * reachability probe. A reachable device with LLDP disabled yields 0 rows +
+ * SOLARI_OK; popen failure yields ERR_PLATFORM. Not reentrant (static scratch),
+ * matching the single-threaded poll driver. */
 static solariStatus topoSnmpFetchLldpImpl(const char *mgmtIp, const char *community,
                                           topoLldpMibRecord *records, size_t *count)
 {
-    (void)mgmtIp; (void)community; (void)records;
-    if (count) *count = 0;
+    static topoLldpRawNeigh raw[TOPO_MAX_MIB_NEIGH];
+    static topoLldpLocPort  ports[TOPO_MAX_LOC_PORTS];
+    size_t rawN = 0, portN = 0, cap;
+    char ip[128], comm[128];
+    int rc;
+
+    if (!records || !count) return ERR_INVALID_ARG;
+    cap = *count;
+    *count = 0;
+
+    topoSnmpSanitize(mgmtIp, ip, sizeof ip);
+    topoSnmpSanitize((community && community[0]) ? community : "public",
+                     comm, sizeof comm);
+    if (!ip[0]) return ERR_INVALID_ARG;
+
+    rc = topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_CHASSIS_ID,
+                            TOPO_LLDP_COL_CHASSIS_ID, raw, &rawN, TOPO_MAX_MIB_NEIGH);
+    if (rc < 0) return ERR_PLATFORM;    /* popen failed -> no SNMP CLI available */
+
+    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_CHASSIS_SUB, TOPO_LLDP_COL_CHASSIS_SUB, raw, &rawN, TOPO_MAX_MIB_NEIGH);
+    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_ID,     TOPO_LLDP_COL_PORT_ID,     raw, &rawN, TOPO_MAX_MIB_NEIGH);
+    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_SUB,    TOPO_LLDP_COL_PORT_SUB,    raw, &rawN, TOPO_MAX_MIB_NEIGH);
+    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_DESC,   TOPO_LLDP_COL_PORT_DESC,   raw, &rawN, TOPO_MAX_MIB_NEIGH);
+    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_NAME,    TOPO_LLDP_COL_SYS_NAME,    raw, &rawN, TOPO_MAX_MIB_NEIGH);
+    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_DESC,    TOPO_LLDP_COL_SYS_DESC,    raw, &rawN, TOPO_MAX_MIB_NEIGH);
+    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_CAP,     TOPO_LLDP_COL_CAP_ENABLED, raw, &rawN, TOPO_MAX_MIB_NEIGH);
+
+    topoSnmpWalkLocPorts(ip, comm, ports, &portN, TOPO_MAX_LOC_PORTS);
+
+    *count = topoLldpFinalize(raw, rawN, ports, portN, records, cap);
     return SOLARI_OK;
 }
 #endif
@@ -779,5 +1222,50 @@ solariStatus serverTopologyDeepWalk(serverContext *ctx, uint64_t nodeId,
     solariLogf(SOLARI_LOG_INFO,
                "topology: deep walk of %s normalized %u/%zu LLDP-MIB neighbours",
                mgmtIp, (unsigned)persisted, count);
+    return SOLARI_OK;
+}
+
+/* Deep-walk every managed gear that has an mgmtIp (the driver behind the
+ * solariSnmpPoll --lldp flag). Mirrors serverSnmpPollAll's two-phase shape: read
+ * the (gearId, mgmtIp, community) list into a bounded on-stack buffer, free the
+ * result set, THEN walk each gear (each walk issues no DB reads of its own but
+ * does upsert on the same connection). Per-gear failures are non-fatal. nodeId is
+ * 0: the server ran the walk out-of-band, it is not the gear's L2 peer. */
+solariStatus serverTopologyDeepWalkAll(serverContext *ctx, const char *defaultCommunity)
+{
+    MYSQL     *conn;
+    MYSQL_RES *res;
+    MYSQL_ROW  row;
+    struct { char gearId[64], ip[128], comm[128]; } list[128];
+    size_t     n = 0, i, walked = 0;
+
+    if (!ctx || !ctx->db) return ERR_INVALID_ARG;
+    conn = serverDbConn(ctx->db);
+    if (!conn) return ERR_DB;
+
+    if (mysql_query(conn,
+            "SELECT gearId, mgmtIp, COALESCE(snmpCommunity,'') FROM networkGear "
+            "WHERE mgmtIp IS NOT NULL AND mgmtIp <> ''") != 0)
+        return ERR_DB;
+    res = mysql_store_result(conn);
+    if (!res) return ERR_DB;
+    while ((row = mysql_fetch_row(res)) && n < 128) {
+        snprintf(list[n].gearId, sizeof list[n].gearId, "%s", row[0] ? row[0] : "");
+        snprintf(list[n].ip,     sizeof list[n].ip,     "%s", row[1] ? row[1] : "");
+        snprintf(list[n].comm,   sizeof list[n].comm,   "%s",
+                 (row[2] && row[2][0]) ? row[2]
+                                       : (defaultCommunity ? defaultCommunity : ""));
+        n++;
+    }
+    mysql_free_result(res);
+
+    for (i = 0; i < n; i++) {
+        if (list[i].ip[0] == '\0') continue;
+        if (serverTopologyDeepWalk(ctx, 0, list[i].ip, list[i].comm, "") == SOLARI_OK)
+            walked++;
+    }
+
+    solariLogf(SOLARI_LOG_INFO,
+               "topology: deep LLDP walk complete (%zu/%zu gear walked)", walked, n);
     return SOLARI_OK;
 }

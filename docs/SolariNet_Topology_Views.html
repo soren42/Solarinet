@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Dual Topology Views</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;--warm:#e0a458;--crit:#e05252;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:920px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:18px;margin:24px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}.warn{color:var(--warn);font-weight:650}.crit{color:var(--crit);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 8px;border-radius:20px;border:1px solid var(--line)}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:middle;margin-right:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dual Topology Views</h1>
+  <p class="sub">SolariNet · a physical (link-level) map and a monitoring (vantage→target) map, both carrying live node &amp; interconnect health · 2026-07-04</p>
+
+  <div class="note">
+    <strong>Headline.</strong> The spec calls for a <em>dual</em> topology view — one showing the physical
+    L2 interconnects (gateway → switch/AP → host), the other showing the monitoring system and its buckets
+    (server → monitor vantages → probe targets). Both existed as backend projections but the dashboard rendered
+    a <em>hard-coded fixture</em> that never called <code>/api/topology</code> — the same read-layer gap that
+    left the graphs blank. Both views are now <b>live and data-driven</b>, laid out by a ported network-map graph
+    engine, and every node <em>and</em> every interconnect is colored and labelled by real health.
+  </div>
+
+  <h2>What was wrong</h2>
+  <table>
+    <tr><th>Symptom</th><th>Root cause</th><th>Fix</th></tr>
+    <tr><td>Topology map showed a static demo regardless of real fleet</td><td>The <code>Topology</code> component rendered <code>data.jsx</code> fixtures with positions hard-coded to fixture gear ids (<code>sw-core</code>, <code>gw</code>); it never fetched <code>/api/topology</code></td><td class="ok">Component fetches the live endpoint for both views; offline mode synthesizes the same contract shape from fixtures (no hard-coded ids)</td></tr>
+    <tr><td>No health on the wires</td><td>Edges carried only a static kind; no probe outcome, RTT/loss, link operStatus or utilization</td><td class="ok">Both projections decorate every edge with a derived <code>health</code> + human <code>label</code></td></tr>
+    <tr><td>Layout couldn't generalize</td><td>Positions were bespoke per fixture; arbitrary live topology had nowhere to go</td><td class="ok">A ported MST + radial + force-directed engine positions any graph deterministically</td></tr>
+    <tr><td>Gear→gear uplinks were sparse</td><td>The LLDP-over-SNMP walk was a stub (returned zero neighbours)</td><td class="ok">Real <code>lldpRemTable</code> walk by numeric OID feeds the existing (tested) normalizer</td></tr>
+    <tr><td class="crit">Network view returned 6,026 edges / 1.6&nbsp;MB</td><td><code>lldpEdge</code> is append-only; the projection emitted one edge per historical observation</td><td class="ok">Windowed query keeps only the latest row per <code>(nodeId, gearId, localIf)</code> — 6,027 rows → 3 links</td></tr>
+  </table>
+
+  <h2>The two views</h2>
+  <h3>Network — physical interconnects</h3>
+  <p><code>GET /api/topology?view=network</code>. Nodes are <b>network gear</b> (gateway/switch/AP/router) and
+     <b>hosts</b>; edges are gear→gear <code>uplink</code> chains and host→gear <code>attaches</code> links from
+     <code>lldpEdge</code> (with <code>node.uplinkGearId</code> as fallback). Each gear carries an interface
+     rollup (<code>ifUp/ifDown/ifTotal</code>) from <code>gearInterfaceCurrent</code>; each interconnect is
+     matched to its interface (join on <code>gearId</code> and <code>ifName ∈ {peerPort, localIf}</code>) for
+     <code>operStatus</code>, in/out rate, and utilization.</p>
+  <h3>Monitoring — the monitoring system and its buckets</h3>
+  <p><code>GET /api/topology?view=monitoring</code>. Nodes are the fleet (server/monitor/client) plus
+     <b>probe-target</b> pseudo-nodes; edges are <code>monitorNode → target</code> assignments from
+     <code>probeCurrent</code>, decorated with the live <code>outcome</code>, RTT, jitter and loss.</p>
+
+  <h2>Health vocabulary</h2>
+  <p>Both views share one classification, driving both fill (nodes) and stroke (edges):</p>
+  <table>
+    <tr><th>Health</th><th>Node / gear</th><th>Interconnect</th></tr>
+    <tr><td><span class="sw" style="background:var(--ok)"></span><span class="ok">up</span></td><td>state <code>up</code>; all interfaces up; seen &lt; 180s ago</td><td>probe <code>ok</code>; or operStatus 1 &amp; util &lt; 85%</td></tr>
+    <tr><td><span class="sw" style="background:var(--warn)"></span><span class="warn">degraded</span></td><td>mixed interface up/down; or stale &gt; 180s</td><td>refused / tls_fail / proto_err; loss ≥ 10%; or util ≥ 85%</td></tr>
+    <tr><td><span class="sw" style="background:var(--crit)"></span><span class="crit">down</span></td><td>state <code>down</code>; all interfaces down; stale &gt; 900s</td><td>timeout / unreachable / dns_fail; or operStatus 2</td></tr>
+    <tr><td><span class="sw" style="background:var(--ink-dim)"></span>unknown</td><td>never seen / no state</td><td>no probe or interface data to score the link</td></tr>
+  </table>
+  <p>Staleness is computed in SQL with <code>TIMESTAMPDIFF(SECOND, lastSeenAt, NOW())</code> so there is no
+     PHP/DB timezone drift. Interconnect utilization is
+     <code>round(max(inRateKbps, outRateKbps) / (speedMbps·1000) · 100)</code>.</p>
+
+  <h2>Layout engine — reusing network-map</h2>
+  <p>We assessed the <a href="https://github.com/soren42/network-map">network-map</a> project for reuse.
+     Verdict: <b>reuse the layout algorithm and its visual language; do not import the scanner or the 3D
+     renderer.</b></p>
+  <table>
+    <tr><th>network-map piece</th><th>Decision</th><th>Why</th></tr>
+    <tr><td>Kruskal MST + BFS radial + Fruchterman–Reingold force refine (<code>layout.c</code>, <code>graph.c</code>)</td><td class="ok">Port to JS</td><td>Exactly the data-driven positioning the dashboard needed; generalizes to any live topology</td></tr>
+    <tr><td>Host classification &amp; connection-medium colors</td><td class="ok">Adopt language</td><td>Informs the node glyphs and wired/wireless styling</td></tr>
+    <tr><td>C scanner (nmap / ARP / UniFi / mDNS / ICMP)</td><td class="warn">Do not import</td><td>SolariNet already discovers via agent self-report + SNMP; a parallel scanner would be shoehorning</td></tr>
+    <tr><td>3D three.js / WebVR HTML renderer</td><td class="warn">Do not import</td><td>Wrong fit for the read-only React SPA; heavyweight for the primary operator view</td></tr>
+  </table>
+  <p>The port lives in <code>dashboard/public/layout.jsx</code> as
+     <code>window.SolariTopoLayout.compute(nodes, edges, opts)</code> — pure, deterministic (no
+     <code>Math.random</code>), and <code>require()</code>-able for headless tests. MST edge weights prefer L2
+     tree edges (<code>uplink</code>/<code>attaches</code> = 1) over monitoring edges (2); the root is the gateway
+     gear (network) or the server node (monitoring); BFS gives depth, radial placement seeds positions, and ~120
+     force-refine iterations even out spacing with the root pinned.</p>
+
+  <h2>LLDP-over-SNMP topology discovery</h2>
+  <p>The deep managed-gear walk is now implemented (behind <code>SOLARI_WITH_SNMP</code>, numeric OIDs, no
+     libnetsnmp link — mirroring the IF-MIB poller). It walks <code>lldpRemTable</code>
+     (<code>.1.0.8802.1.1.2.1.4.1.1.*</code>) via <code>snmpbulkwalk -v2c -Onq</code>, groups columns by the
+     <code>(localPortNum, remIndex)</code> index tail, decodes chassis/port ids by subtype (MAC → colonated hex),
+     converts the <code>lldpRemSysCapEnabled</code> BITS string to the internal capability bitmap
+     (bridge → switch, WLAN-AP → ap, …), and resolves local interface names from <code>lldpLocPortId</code>.
+     Each neighbour flows through the already-unit-tested <code>topoNormalizeMibRecord</code> into
+     <code>networkGear</code> + <code>lldpEdge</code>. Driver: <code>solariSnmpPoll --lldp</code> reads every gear's
+     <code>mgmtIp</code> (and per-gear <code>snmpCommunity</code>) and deep-walks each.</p>
+  <div class="gap">
+    <strong>Environment note.</strong> Populated gear→gear uplinks require managed devices that answer SNMP with
+    the LLDP-MIB enabled (e.g. UniFi with SNMP + LLDP toggled on). Until then the network view is built from
+    agent self-reported uplinks; the SNMP path enriches it in place via the same upsert key.
+  </div>
+
+  <h2>Surfaces touched</h2>
+  <table>
+    <tr><th>Layer</th><th>Change</th></tr>
+    <tr><td>Backend (C)</td><td><code>serverTopology.c</code> real LLDP-MIB walk + <code>serverTopologyDeepWalkAll</code>; <code>snmpPollMain.c</code> <code>--lldp</code>; new unit suite <code>test_server_topo_snmp</code> (9 tests)</td></tr>
+    <tr><td>API (PHP, read-only)</td><td><code>routes/topology.php</code> — both projections decorate nodes+edges with health/labels; interface joins; append-only <code>lldpEdge</code> collapsed to latest-per-link</td></tr>
+    <tr><td>Dashboard (JSX)</td><td>New <code>layout.jsx</code> engine; <code>screens2.jsx</code> <code>Topology</code> rewritten live + offline-synth; <code>index.html</code> loads the engine; health CSS</td></tr>
+    <tr><td>Tests</td><td>C: 25/25 (SNMP) &amp; server-no-SNMP 25/25. JS: <code>tests/dashboard/test_layout.js</code> (determinism + finite positions). All dashboard JSX transpiles clean.</td></tr>
+  </table>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>SNMP server build — <span class="ok">25/25 ctest</span>; default no-SNMP build — <span class="ok">clean</span>, seam a no-op returning <code>ERR_PLATFORM</code>.</li>
+    <li>Layout engine — <span class="ok">byte-identical positions across repeated calls</span>; all coordinates finite; disconnected nodes ring-placed.</li>
+    <li>Live API against production DB — monitoring: 20 nodes / 36 edges; network: 4 nodes / <b>3</b> edges (post-fix), every node and edge carrying <code>health</code> + <code>label</code>.</li>
+  </ul>
+
+  <div class="footer">
+    SolariNet · <span class="pill">feat/topology-dual-view</span> · standard C backend + PHP/JSX dashboard ·
+    2026-07-04
+  </div>
+</div>
+</body>
+</html>

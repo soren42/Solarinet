@@ -523,6 +523,17 @@ solariStatus serverDiscoveryIgnore(serverContext *ctx, uint64_t discId);
 solariStatus serverTopologyOnReport(serverContext *ctx, uint64_t nodeId,
                                     const uint8_t *payload, size_t len);
 
+/* Deep managed-gear interrogation: LLDP-over-SNMP neighbour walk of `mgmtIp`
+ * (behind SOLARI_WITH_SNMP), normalized into networkGear + lldpEdge rows. nodeId
+ * is the SolariNet node that ran the walk (0 for an out-of-band collector). With
+ * no SNMP backend built in the walk is a clean no-op returning ERR_PLATFORM. */
+solariStatus serverTopologyDeepWalk(serverContext *ctx, uint64_t nodeId,
+                                    const char *mgmtIp, const char *community,
+                                    const char *segId);
+/* Deep-walk every networkGear with an mgmtIp (driver for solariSnmpPoll --lldp).
+ * Best-effort: one gear's failure does not abort the rest. */
+solariStatus serverTopologyDeepWalkAll(serverContext *ctx, const char *defaultCommunity);
+
 /* ===================================================================== */
 /* solariCtl.c - operator bridge over a Unix domain socket (§9.1, §11.1)  */
 /* ===================================================================== */
