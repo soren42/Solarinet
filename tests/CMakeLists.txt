@@ -107,6 +107,7 @@ if(TARGET servercore)
     test_server_provision
     test_server_alert
     test_server_topology
+    test_server_topo_snmp
     test_server_discovery
     test_server_ctl
   )

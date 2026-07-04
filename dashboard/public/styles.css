@@ -699,10 +699,19 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
 .topo-edge.uplink { stroke: var(--violet); opacity: .55; stroke-width: 1.5; }
 .topo-edge.wired { stroke: var(--teal); opacity: .26; }
 .topo-edge.wireless { stroke: var(--warn); opacity: .42; stroke-dasharray: 2 4; }
+/* live dual-view edge kinds — stroke colour is driven inline by health, so
+   these rules only set base opacity + width; .active / .dim still override. */
+.topo-edge.uplink, .topo-edge.attaches { stroke-width: 1.5; opacity: .5; }
+.topo-edge.attaches { opacity: .4; }
+.topo-edge.monitors { stroke-width: 1; opacity: .42; }
 .topo-hit { fill: none; stroke: transparent; stroke-width: 13; pointer-events: stroke; cursor: pointer; }
 .leg-line.wired { border-color: var(--teal); }
 .leg-line.wireless { border-color: var(--warn); border-top-style: dashed; }
 .leg-line.lease { border-color: var(--ok); border-top-style: dashed; }
+.leg-line.uplink { border-color: var(--violet); }
+.leg-line.monitors { border-color: var(--teal); }
+.topo-node.target circle { transition: opacity .15s; }
+.topo-node.target.sel circle { stroke: #fff; }
 .topo-node.gear rect { stroke: rgba(255,255,255,.18); stroke-width: .5; }
 .topo-node.gear.gateway rect { filter: drop-shadow(0 0 6px var(--violet)); }
 .topo-node.gear.switch rect { filter: drop-shadow(0 0 5px var(--teal)); }

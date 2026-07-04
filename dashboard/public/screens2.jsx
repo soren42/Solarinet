@@ -221,208 +221,376 @@
   }
 
   /* ===================== TOPOLOGY MAP ===================== */
-  function NodeGlyph({ p }) {
-    const fill = STATE_COLOR[p.n.state];
-    const role = p.n.role;
-    if (role === "server") return <rect x={-p.r} y={-p.r} width={p.r * 2} height={p.r * 2} rx="3" fill={fill} />;
-    if (role === "monitor") return <rect x={-p.r} y={-p.r} width={p.r * 2} height={p.r * 2} transform="rotate(45)" fill={fill} />;
-    return <circle r={p.r} fill={fill} />;
+  /* Live, data-driven dual view. Fetches the frozen /api/topology?view=...
+     contract ({view,nodes,edges} with per-node + per-edge `health` + `label`),
+     lays it out with window.SolariTopoLayout, and colours every glyph/edge by
+     health. When the API is offline or the fetch fails, an identically-shaped
+     payload is synthesized from the S fixture (no gear ids are hardcoded —
+     roots/hierarchy come from uplink fields inside the layout engine). */
+
+  const HEALTH_COLOR = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)", unknown: "var(--unknown)" };
+
+  // ---- health + label helpers (mirror dashboard/api/routes/topology.php) ----
+  function healthRank(h) { return h === "down" ? 3 : h === "degraded" ? 2 : h === "up" ? 1 : 0; }
+  function worseHealth(a, b) { return healthRank(b) > healthRank(a) ? b : a; }
+  function probeHealth(outcome, loss) {
+    let h;
+    if (outcome === "ok") h = "up";
+    else if (outcome === "timeout" || outcome === "unreachable" || outcome === "dns_fail") h = "down";
+    else if (outcome === "refused" || outcome === "tls_fail" || outcome === "proto_err") h = "degraded";
+    else h = "unknown";
+    if (loss != null && loss >= 100 && h === "up") h = "degraded";
+    return h;
+  }
+  function trimNum(v) { return (Math.round(v * 10) / 10).toString(); }
+  function speedLabel(mbps) {
+    if (mbps == null || mbps <= 0) return null;
+    if (mbps % 1000 === 0) return (mbps / 1000) + "G";
+    if (mbps >= 1000) return trimNum(mbps / 1000) + "G";
+    return mbps + "M";
+  }
+  function monitorLabel(proto, rtt, loss) {
+    const parts = [];
+    if (proto) parts.push(String(proto).toUpperCase());
+    parts.push(rtt != null ? trimNum(rtt / 1000) + "ms" : "—ms");
+    parts.push((loss != null ? trimNum(loss / 10) : "—") + "% loss");
+    return parts.join(" · ");
+  }
+  function attachLabel(linkType, speed, rssi, ifName, util) {
+    const parts = [];
+    if (linkType === "wireless") { parts.push("wireless"); if (rssi != null) parts.push(rssi + "dBm"); }
+    else { const sp = speedLabel(speed); if (sp) parts.push(sp); if (ifName) parts.push(ifName); if (util != null) parts.push(util + "%"); }
+    if (!parts.length) return linkType === "wireless" ? "wireless" : "wired";
+    return parts.join(" · ");
+  }
+  function fmtStale(s) {
+    if (s == null) return "—";
+    if (s < 120) return s + "s";
+    if (s < 7200) return Math.round(s / 60) + "m";
+    return Math.round(s / 3600) + "h";
+  }
+
+  // ---- offline synthesizers: build the SAME contract shape from the fixture -
+  function synthMonitoring() {
+    const F = window.SOLARI || {};
+    const segByNode = {};
+    (F.nodes || []).forEach((n) => { segByNode[n.nodeId] = n.segId; });
+    const nodes = (F.nodes || []).map((n) => ({
+      id: n.nodeId, kind: "node", role: n.role, hostFqdn: n.hostFqdn, state: n.state,
+      segId: n.segId, health: n.state || "unknown",
+      lastSeenAt: null, staleSec: n.lastSeenMin != null ? n.lastSeenMin * 60 : null,
+    }));
+    const targetHealth = {};
+    const edges = [];
+    (F.probes || []).forEach((p) => {
+      (p.vantages || []).forEach((v) => {
+        const h = probeHealth(v.outcome, v.lossPermille);
+        targetHealth[p.targetId] = worseHealth(targetHealth[p.targetId] || "unknown", h);
+        edges.push({
+          from: v.monitorNode, to: "target:" + p.targetId, kind: "monitors",
+          outcome: v.outcome, rttMicros: v.rttMicros, lossPermille: v.lossPermille,
+          jitterMicros: v.jitterMicros, sampledAt: null, health: h,
+          label: monitorLabel(p.proto, v.rttMicros, v.lossPermille),
+        });
+      });
+    });
+    const targets = (F.probes || []).map((p) => ({
+      id: "target:" + p.targetId, kind: "target", label: p.label, proto: p.proto,
+      host: p.host, port: p.port, segId: segByNode[p.hostNode] || null,
+      health: targetHealth[p.targetId] || "unknown",
+    }));
+    return { view: "monitoring", nodes: nodes.concat(targets), edges: edges };
+  }
+
+  function synthNetwork() {
+    const F = window.SOLARI || {};
+    const hosts = F.nodes || [];
+    // gear health derived from attached node states (no SNMP interface data offline).
+    const attachedStates = {};
+    hosts.forEach((n) => { if (n.uplink) { (attachedStates[n.uplink] = attachedStates[n.uplink] || []).push(n.state); } });
+    function gearHealth(gid) {
+      const st = attachedStates[gid] || [];
+      if (!st.length) return "up";
+      if (st.every((s) => s === "up")) return "up";
+      if (st.every((s) => s === "down")) return "down";
+      return "degraded";
+    }
+    const gearNodes = (F.netgear || []).map((g) => ({
+      id: "gear:" + g.id, kind: "gear", gearKind: g.kind, name: g.name, model: g.model,
+      segId: g.seg, uplinkGearId: g.uplink || null, wireless: !!g.wireless, mgmtIp: g.mgmtIp || null,
+      health: gearHealth(g.id), lastSeenAt: null, staleSec: null,
+      ifUp: 0, ifDown: 0, ifTotal: 0, attached: g.attached,
+    }));
+    const hostNodes = hosts.map((n) => ({
+      id: n.nodeId, kind: "node", role: n.role, hostFqdn: n.hostFqdn, state: n.state,
+      segId: n.segId, uplinkGearId: n.uplink || null, health: n.state || "unknown",
+      lastSeenAt: null, staleSec: n.lastSeenMin != null ? n.lastSeenMin * 60 : null,
+    }));
+    const edges = [];
+    (F.netgear || []).forEach((g) => {
+      if (!g.uplink) return;
+      edges.push({
+        from: "gear:" + g.uplink, to: "gear:" + g.id, kind: "uplink",
+        linkType: g.wireless ? "wireless" : "wired", health: "up",
+        operStatus: null, inRateKbps: null, outRateKbps: null, utilPct: null,
+        speedMbps: null, ifName: null, label: g.wireless ? "wireless" : "wired",
+      });
+    });
+    hosts.forEach((n) => {
+      if (!n.uplink) return;
+      edges.push({
+        from: n.nodeId, to: "gear:" + n.uplink, kind: "attaches",
+        localIf: n.uplinkPort || null, peerPort: n.uplinkPort || null,
+        linkType: n.linkType || null, speedMbps: n.linkSpeedMbps || null,
+        rssi: n.rssi != null ? n.rssi : null, viaLldp: !!n.lldp, health: n.state || "unknown",
+        operStatus: null, inRateKbps: null, outRateKbps: null, utilPct: null,
+        label: attachLabel(n.linkType, n.linkSpeedMbps, n.rssi, n.uplinkPort, null),
+      });
+    });
+    return { view: "network", nodes: gearNodes.concat(hostNodes), edges: edges };
+  }
+
+  function synthTopology(view) { return view === "network" ? synthNetwork() : synthMonitoring(); }
+
+  // ---- glyphs: shape by kind/role, FILL by health ---------------------------
+  function radiusOf(nd) {
+    if (nd.kind === "gear") return nd.gearKind === "gateway" ? 16 : 13;
+    if (nd.kind === "target") return 8;
+    if (nd.role === "server") return 13;
+    if (nd.role === "monitor") return 9;
+    return 6;
+  }
+  function TopoGlyph({ nd, r, fill }) {
+    if (nd.kind === "gear") return <rect x={-r} y={-r * 0.72} width={r * 2} height={r * 1.44} rx="3" fill={fill} />;
+    if (nd.kind === "target") return <g><circle r={r} fill="none" stroke={fill} strokeWidth="2" /><circle r={r * 0.42} fill={fill} /></g>;
+    if (nd.role === "server") return <rect x={-r} y={-r} width={r * 2} height={r * 2} rx="3" fill={fill} />;
+    if (nd.role === "monitor") return <rect x={-r} y={-r} width={r * 2} height={r * 2} transform="rotate(45)" fill={fill} />;
+    return <circle r={r} fill={fill} />;
   }
 
   function Topology({ onOpenNode }) {
-    const [view, setView] = useState("infra");
-    const [sel, setSel] = useState(null);
-    const W = 1000;
+    const [view, setView] = useState("monitoring");   // monitoring ≈ old "infra"; network ≈ old "lan"
+    const [payload, setPayload] = useState(null);      // frozen {view,nodes,edges} contract
+    const [status, setStatus] = useState("loading");   // loading | ready
+    const [sel, setSel] = useState(null);              // {kind:"node"|"edge", id|i}
+    const [live, setLive] = useState(false);
 
-    const infra = useMemo(() => {
-      const cx = W / 2, cy = 360, H = 720;
-      const pos = {}; const anchors = [];
-      const servers = S.nodes.filter((n) => n.role === "server");
-      const monitors = S.nodes.filter((n) => n.role === "monitor");
-      servers.forEach((s, i) => { pos[s.nodeId] = { x: cx + (i === 0 ? -26 : 26), y: cy, r: 13, n: s }; });
-      monitors.forEach((m, i) => { const a = (i / monitors.length) * Math.PI * 2 - Math.PI / 2; pos[m.nodeId] = { x: cx + Math.cos(a) * 132, y: cy + Math.sin(a) * 132, r: 8, n: m }; });
-      S.segments.forEach((seg, si) => {
-        const clients = S.nodes.filter((n) => n.role === "client" && n.segId === seg.id);
-        const baseA = (si / S.segments.length) * Math.PI * 2 - Math.PI / 2;
-        const cols = Math.ceil(Math.sqrt(clients.length * 1.6)) || 1;
-        clients.forEach((cn, ci) => {
-          const col = ci % cols, row = Math.floor(ci / cols);
-          const a = baseA + (col / Math.max(1, cols - 1) - 0.5) * 0.52;
-          const rad = 235 + row * 26;
-          pos[cn.nodeId] = { x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad * 0.92, r: 5, n: cn };
-        });
-        anchors.push({ id: seg.id, name: seg.name, x: cx + Math.cos(baseA) * 200, y: cy + Math.sin(baseA) * 188 });
-      });
-      const edges = [];
-      monitors.forEach((m) => { if (pos[m.nodeId] && servers[0]) edges.push({ from: m.nodeId, to: servers[0].nodeId, kind: "report", label: "Telemetry report", sub: "SCP/TLS · PUSH :7701" }); });
-      S.probes.forEach((p) => p.vantages.forEach((v) => {
-        if (pos[v.monitorNode] && pos[p.hostNode]) edges.push({ from: v.monitorNode, to: p.hostNode, kind: "probe", ok: v.outcome === "ok", label: `${p.proto.toUpperCase()} probe · ${p.label}`, sub: `${v.outcome} · ${fmt.rtt(v.rttMicros)}${v.lossPermille ? ` · ${(v.lossPermille / 10).toFixed(0)}% loss` : ""}`, openId: p.hostNode });
-      }));
-      if (servers[1]) edges.push({ from: servers[0].nodeId, to: servers[1].nodeId, kind: "lease", label: "Failover lease", sub: "DB-mediated mutex · TTL 15s" });
-      return { pos, edges, anchors, hub: { x: cx, y: cy }, H, curve: 18 };
-    }, []);
+    // fetch (or synthesize) the contract on mount + every view change.
+    useEffect(() => {
+      let alive = true;
+      setSel(null); setPayload(null); setStatus("loading");
+      const api = window.SolariAPI;
+      const offline = !!(window.SOLARI && window.SOLARI.source === "offline");
+      const fallback = () => { if (alive) { setPayload(synthTopology(view)); setLive(false); setStatus("ready"); } };
+      if (offline || !api || !api.topology) { fallback(); return () => { alive = false; }; }
+      api.topology(view).then((p) => {
+        if (!alive) return;
+        if (p && Array.isArray(p.nodes)) { setPayload(p); setLive(true); setStatus("ready"); }
+        else fallback();
+      }).catch(() => fallback());
+      return () => { alive = false; };
+    }, [view]);
 
-    const lan = useMemo(() => {
-      const pos = {}; const edges = [];
-      const gw = S.netgear.find((g) => g.kind === "gateway");
-      const core = S.netgear.find((g) => g.id === "sw-core");
-      const others = S.netgear.filter((g) => g.id !== gw.id && g.id !== core.id);
-      const mid = Math.floor(others.length / 2);
-      const gearRow = [...others.slice(0, mid), core, ...others.slice(mid)]; // core centered as spine
-      const yGw = 60, yGear = 198, ySys = 288, n = gearRow.length;
-      const margin = 78, span = W - margin * 2;
-      pos["gear:" + gw.id] = { x: W / 2, y: yGw, gear: gw, r: 16 };
-      gearRow.forEach((g, i) => {
-        const x = margin + (n > 1 ? span * (i / (n - 1)) : span / 2);
-        pos["gear:" + g.id] = { x, y: yGear, gear: g, r: g.id === "sw-core" ? 13 : 11 };
-      });
-      gearRow.forEach((g) => {
-        edges.push({ from: "gear:" + g.id, to: "gear:" + g.uplink, kind: "uplink", label: g.id === "sw-core" ? "Core uplink" : g.wireless ? "AP uplink" : "Switch uplink", sub: g.id === "sw-core" ? "40G fiber · LACP" : g.wireless ? "1G PoE+" : "10G SFP+" });
-        const sys = S.nodes.filter((nd) => nd.uplink === g.id);
-        const cols = Math.max(3, Math.round(Math.sqrt(sys.length * 1.3)));
-        const gx = pos["gear:" + g.id].x;
-        const cellW = Math.min(19, (span / n - 8) / cols);
-        sys.forEach((nd, si) => {
-          const col = si % cols, row = Math.floor(si / cols);
-          const sx = gx - (cols - 1) * cellW / 2 + col * cellW;
-          const sy = ySys + row * 21;
-          pos[nd.nodeId] = { x: sx, y: sy, n: nd, r: 5 };
-          edges.push({ from: nd.nodeId, to: "gear:" + g.id, kind: nd.linkType === "wireless" ? "wireless" : "wired", label: nd.linkType === "wireless" ? "Wireless association" : "Wired link", sub: `${fmt.mbps(nd.linkSpeedMbps)} · ${nd.uplinkPort}${nd.linkType === "wireless" ? ` · ${nd.rssi} dBm` : " · LLDP"}`, openId: nd.nodeId });
-        });
-      });
-      let maxY = ySys; Object.values(pos).forEach((p) => { if (p.y > maxY) maxY = p.y; });
-      return { pos, edges, anchors: [], H: Math.max(560, maxY + 50), curve: 0 };
-    }, []);
+    const nodeById = useMemo(() => {
+      const m = {};
+      ((payload && payload.nodes) || []).forEach((nd) => { m[nd.id] = nd; });
+      return m;
+    }, [payload]);
 
-    const L = view === "infra" ? infra : lan;
-    const H = L.H;
+    // run the layout engine, then normalize its arbitrary coords into the viewBox.
+    const layout = useMemo(() => {
+      if (!payload || !payload.nodes || !payload.nodes.length) return null;
+      const engine = window.SolariTopoLayout;
+      if (!engine || !engine.compute) return null;
+      const raw = engine.compute(payload.nodes, payload.edges || [], { view: payload.view || view });
+      const b = raw.bounds || { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      const VBW = 1000, margin = 74;
+      const bw = Math.max(1, b.maxX - b.minX), bh = Math.max(1, b.maxY - b.minY);
+      const scale = (VBW - margin * 2) / bw;
+      const VBH = Math.max(420, bh * scale + margin * 2);
+      const pos = {};
+      payload.nodes.forEach((nd) => {
+        const p = raw.positions[nd.id];
+        if (!p) return;
+        pos[nd.id] = { x: margin + (p.x - b.minX) * scale, y: margin + (p.y - b.minY) * scale };
+      });
+      const edges = (payload.edges || []).filter((e) => pos[e.from] && pos[e.to]);
+      return { pos, edges, VBW, VBH };
+    }, [payload, view]);
 
     const { activeNodes, activeEdge } = useMemo(() => {
-      if (!sel) return { activeNodes: null, activeEdge: null };
-      if (sel.kind === "edge") { const e = L.edges[sel.i]; return e ? { activeNodes: new Set([e.from, e.to]), activeEdge: sel.i } : { activeNodes: null, activeEdge: null }; }
+      if (!sel || !layout) return { activeNodes: null, activeEdge: null };
+      if (sel.kind === "edge") {
+        const e = layout.edges[sel.i];
+        return e ? { activeNodes: new Set([e.from, e.to]), activeEdge: sel.i } : { activeNodes: null, activeEdge: null };
+      }
       const set = new Set([sel.id]);
-      L.edges.forEach((e) => { if (e.from === sel.id) set.add(e.to); if (e.to === sel.id) set.add(e.from); });
+      layout.edges.forEach((e) => { if (e.from === sel.id) set.add(e.to); if (e.to === sel.id) set.add(e.from); });
       return { activeNodes: set, activeEdge: null };
-    }, [sel, L]);
+    }, [sel, layout]);
 
     function edgePath(e) {
-      const a = L.pos[e.from], b = L.pos[e.to]; if (!a || !b) return null;
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - L.curve;
+      const a = layout.pos[e.from], b = layout.pos[e.to]; if (!a || !b) return null;
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 16;
       return `M${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`;
     }
-    function nm(id) { const p = L.pos[id]; return p ? (p.n ? p.n.name : p.gear ? p.gear.name : id) : id; }
+    function labelOf(nd) {
+      if (!nd) return "";
+      if (nd.kind === "gear") return nd.name || String(nd.id);
+      if (nd.kind === "target") return nd.label || nd.host || String(nd.id);
+      return nd.hostFqdn ? nd.hostFqdn.split(".")[0] : String(nd.id);
+    }
+    const nm = (id) => labelOf(nodeById[id]) || String(id);
+    const isNodeRef = (id) => typeof id === "number" || (typeof id === "string" && /^\d+$/.test(id));
 
-    const selNode = sel && sel.kind === "node" ? L.pos[sel.id] : null;
-    const selGear = sel && sel.kind === "gear" ? L.pos[sel.id] : null;
-    const selEdge = sel && sel.kind === "edge" ? L.edges[sel.i] : null;
-    const probeEdges = infra.edges.filter((e) => e.kind === "probe").length;
+    const selNode = sel && sel.kind === "node" ? nodeById[sel.id] : null;
+    const selEdge = sel && sel.kind === "edge" && layout ? layout.edges[sel.i] : null;
+
+    const nCount = payload ? payload.nodes.length : 0;
+    const eCount = payload ? (payload.edges || []).length : 0;
+    const empty = status === "ready" && nCount === 0;
+    const srcTag = live ? "live" : "offline fixture";
 
     return (
       <div className="page">
         <div className="page-head">
           <div>
             <h1 className="page-title">Topology Map</h1>
-            <div className="page-sub">{view === "infra" ? `monitoring C2 view · ${S.nodes.length} nodes · ${probeEdges} probe edges` : `LAN hierarchy · ${S.netgear.length} network devices · LLDP + agent-derived`} · live</div>
+            <div className="page-sub">
+              {view === "monitoring"
+                ? `monitoring view · ${nCount} nodes · ${eCount} probe edges`
+                : `network view · ${nCount} devices + hosts · ${eCount} links`} · {srcTag}
+            </div>
           </div>
           <div className="page-head__right">
             <div className="seg">
-              <button className={view === "infra" ? "on" : ""} onClick={() => { setView("infra"); setSel(null); }}><Icon name="topology" size={14} />Infrastructure</button>
-              <button className={view === "lan" ? "on" : ""} onClick={() => { setView("lan"); setSel(null); }}><Icon name="netswitch" size={14} />LAN hierarchy</button>
+              <button className={view === "network" ? "on" : ""} onClick={() => { setView("network"); }}><Icon name="netswitch" size={14} />Network</button>
+              <button className={view === "monitoring" ? "on" : ""} onClick={() => { setView("monitoring"); }}><Icon name="topology" size={14} />Monitoring</button>
             </div>
           </div>
         </div>
 
         <div className="topo-legend" style={{ marginBottom: 14 }}>
-          <span><span className="dot up" />Up</span><span><span className="dot degraded" />Degraded</span><span><span className="dot down" />Down</span>
-          {view === "infra"
-            ? <><span><i className="leg-line report" />report</span><span><i className="leg-line probe" />probe</span><span><i className="leg-line lease" />lease</span></>
-            : <><span><i className="leg-line wired" />wired</span><span><i className="leg-line wireless" />wireless</span><span><Icon name="gateway" size={13} style={{ color: "var(--violet)" }} />gateway</span><span><Icon name="netswitch" size={13} style={{ color: "var(--teal)" }} />switch</span><span><Icon name="wifi" size={13} style={{ color: "var(--warn)" }} />AP</span></>}
+          <span><span className="dot up" />Up</span>
+          <span><span className="dot degraded" />Degraded</span>
+          <span><span className="dot down" />Down</span>
+          <span><span className="dot unknown" />Unknown</span>
+          {view === "monitoring"
+            ? <span><i className="leg-line monitors" />monitors</span>
+            : <>
+                <span><i className="leg-line uplink" />uplink</span>
+                <span><i className="leg-line wired" />wired</span>
+                <span><i className="leg-line wireless" />wireless</span>
+                <span><Icon name="gateway" size={13} style={{ color: "var(--violet)" }} />gateway</span>
+                <span><Icon name="netswitch" size={13} style={{ color: "var(--teal)" }} />switch</span>
+                <span><Icon name="wifi" size={13} style={{ color: "var(--warn)" }} />AP</span>
+              </>}
         </div>
 
         <div className="panel topo-panel">
-          <svg viewBox={`0 0 ${W} ${H}`} className="topo-svg" onClick={() => setSel(null)} preserveAspectRatio="xMidYMid meet">
-            {L.anchors.map((seg) => <text key={seg.id} x={seg.x} y={seg.y} className="topo-seglabel" textAnchor="middle">{seg.name.toUpperCase()}</text>)}
+          {status === "loading" && <div className="topo-hint" style={{ position: "static", margin: 24 }}><Icon name="topology" size={14} />Loading topology…</div>}
 
-            {/* visible edges */}
-            <g>
-              {L.edges.map((e, i) => {
-                const d = edgePath(e); if (!d) return null;
-                const inActive = activeNodes && activeNodes.has(e.from) && activeNodes.has(e.to);
-                const active = activeEdge === i || (sel && sel.kind === "node" && inActive);
-                const dim = sel && !active;
-                return <path key={i} d={d} fill="none" className={"topo-edge " + e.kind + (e.ok === false ? " bad" : "") + (dim ? " dim" : "") + (active ? " active" : "")} />;
-              })}
-            </g>
-            {/* invisible wide hit-paths for touch */}
-            <g>
-              {L.edges.map((e, i) => {
-                const d = edgePath(e); if (!d) return null;
-                return <path key={i} d={d} className="topo-hit" onClick={(ev) => { ev.stopPropagation(); setSel({ kind: "edge", i }); }} />;
-              })}
-            </g>
-
-            {view === "infra" && <circle cx={L.hub.x} cy={L.hub.y} r="46" className="topo-hub-glow" />}
-
-            {/* nodes + gear */}
-            <g>
-              {Object.entries(L.pos).map(([id, p]) => {
-                const dim = sel && activeNodes && !activeNodes.has(id);
-                const isSel = (selNode && sel.id === id) || (selGear && sel.id === id);
-                if (p.gear) {
-                  return (
-                    <g key={id} className={"topo-node gear " + p.gear.kind + (dim ? " dim" : "") + (isSel ? " sel" : "")} transform={`translate(${p.x},${p.y})`}
-                      onClick={(ev) => { ev.stopPropagation(); setSel(isSel ? null : { kind: "gear", id }); }}>
-                      <rect x={-p.r} y={-p.r * 0.72} width={p.r * 2} height={p.r * 1.44} rx="3" fill={GEAR_FILL[p.gear.kind]} />
-                      <text y={-p.r - 5} className="topo-nodelabel strong" textAnchor="middle">{p.gear.name}</text>
-                    </g>
-                  );
-                }
-                return (
-                  <g key={id} className={"topo-node " + p.n.role + (dim ? " dim" : "") + (isSel ? " sel" : "")} transform={`translate(${p.x},${p.y})`}
-                    onClick={(ev) => { ev.stopPropagation(); setSel(isSel ? null : { kind: "node", id }); }}>
-                    <NodeGlyph p={p} />
-                    {((view === "infra" && p.n.role !== "client") || isSel) && <text y={-p.r - 5} className="topo-nodelabel" textAnchor="middle">{p.n.name}</text>}
-                  </g>
-                );
-              })}
-            </g>
-          </svg>
-
-          {/* NODE card */}
-          {selNode && (
-            <div className="topo-card">
-              <button className="topo-card__close" onClick={() => setSel(null)} aria-label="Close"><Icon name="close" size={14} /></button>
-              <div className="topo-card__head">
-                <Icon name={selNode.n.role === "server" ? "server" : selNode.n.role === "monitor" ? "monitor" : "host"} size={18} style={{ color: "var(--teal)" }} />
-                <div><div style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{selNode.n.name}<span className="muted">.akoria.net</span></div>
-                  <div className="td-mono muted" style={{ fontSize: 11 }}>{selNode.n.role}{selNode.n.label ? " · " + selNode.n.label : ""} · {selNode.n.segName} · {selNode.n.ip}</div></div>
-              </div>
-              <div className="topo-card__stats">
-                <div><div className="kpi__k">CPU</div><div className="td-mono" style={{ color: metricColor(selNode.n.cpuPct) }}>{selNode.n.state === "down" ? "—" : selNode.n.cpuPct + "%"}</div></div>
-                <div><div className="kpi__k">RAM</div><div className="td-mono" style={{ color: metricColor(selNode.n.ramPct) }}>{selNode.n.ramPct}%</div></div>
-                <div><div className="kpi__k">Link</div><div className="td-mono">{fmt.mbps(selNode.n.linkSpeedMbps)}</div></div>
-                <div><div className="kpi__k">Uplink</div><div className="td-mono">{selNode.n.uplink}</div></div>
-              </div>
-              <button className="backbtn" style={{ width: "100%", justifyContent: "center" }} onClick={() => onOpenNode(selNode.n.nodeId)}><Icon name="enter" size={14} />Open node detail</button>
+          {empty && (
+            <div style={{ padding: "48px 24px", textAlign: "center" }}>
+              <div className="td-mono muted" style={{ fontSize: 13 }}><Icon name="topology" size={16} style={{ marginRight: 8, verticalAlign: "middle" }} />No topology data yet for this view.</div>
             </div>
           )}
 
-          {/* GEAR card */}
-          {selGear && (
+          {!empty && layout && (
+            <svg viewBox={`0 0 ${layout.VBW} ${layout.VBH}`} className="topo-svg" onClick={() => setSel(null)} preserveAspectRatio="xMidYMid meet">
+              {/* visible edges — stroke coloured by health */}
+              <g>
+                {layout.edges.map((e, i) => {
+                  const d = edgePath(e); if (!d) return null;
+                  const inActive = activeNodes && activeNodes.has(e.from) && activeNodes.has(e.to);
+                  const active = activeEdge === i || (sel && sel.kind === "node" && inActive);
+                  const dim = sel && !active;
+                  const color = HEALTH_COLOR[e.health] || HEALTH_COLOR.unknown;
+                  const dash = e.linkType === "wireless" ? "3 4"
+                    : (e.kind === "monitors" && (e.health === "down" || e.health === "degraded")) ? "4 4" : undefined;
+                  return <path key={i} d={d} fill="none" className={"topo-edge " + e.kind + (dim ? " dim" : "") + (active ? " active" : "")} style={{ stroke: color, color: color, strokeDasharray: dash }} />;
+                })}
+              </g>
+              {/* invisible wide hit-paths for click/touch selection */}
+              <g>
+                {layout.edges.map((e, i) => {
+                  const d = edgePath(e); if (!d) return null;
+                  return <path key={i} d={d} className="topo-hit" onClick={(ev) => { ev.stopPropagation(); setSel({ kind: "edge", i }); }} />;
+                })}
+              </g>
+              {/* nodes + gear — glyph by kind/role, FILL by health */}
+              <g>
+                {payload.nodes.map((nd) => {
+                  const p = layout.pos[nd.id]; if (!p) return null;
+                  const r = radiusOf(nd);
+                  const fill = HEALTH_COLOR[nd.health] || HEALTH_COLOR.unknown;
+                  const dim = sel && activeNodes && !activeNodes.has(nd.id);
+                  const isSel = sel && sel.kind === "node" && sel.id === nd.id;
+                  const kindCls = nd.kind === "gear" ? "gear " + (nd.gearKind || "other") : nd.kind === "target" ? "target" : (nd.role || "client");
+                  const showLabel = nd.kind === "gear" || nd.kind === "target" || nd.role === "server" || nd.role === "monitor" || isSel;
+                  return (
+                    <g key={nd.id} className={"topo-node " + kindCls + (dim ? " dim" : "") + (isSel ? " sel" : "")} transform={`translate(${p.x},${p.y})`}
+                      onClick={(ev) => { ev.stopPropagation(); setSel(isSel ? null : { kind: "node", id: nd.id }); }}>
+                      <TopoGlyph nd={nd} r={r} fill={fill} />
+                      {showLabel && <text y={-r - 5} className={"topo-nodelabel" + (nd.kind === "gear" ? " strong" : "")} textAnchor="middle">{labelOf(nd)}</text>}
+                    </g>
+                  );
+                })}
+              </g>
+            </svg>
+          )}
+
+          {/* NODE / GEAR / TARGET card */}
+          {selNode && (
             <div className="topo-card">
               <button className="topo-card__close" onClick={() => setSel(null)} aria-label="Close"><Icon name="close" size={14} /></button>
-              <div className="topo-card__head">
-                <Icon name={GEAR_ICON[selGear.gear.kind]} size={18} style={{ color: GEAR_FILL[selGear.gear.kind] }} />
-                <div><div style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{selGear.gear.name}</div>
-                  <div className="td-mono muted" style={{ fontSize: 11 }}>{selGear.gear.kind} · {selGear.gear.model}</div></div>
-              </div>
-              <div className="topo-card__stats">
-                <div><div className="kpi__k">Attached</div><div className="td-mono" style={{ color: "var(--teal)" }}>{selGear.gear.attached}</div></div>
-                <div><div className="kpi__k">Ports</div><div className="td-mono">{selGear.gear.ports || "—"}</div></div>
-                <div><div className="kpi__k">Uplink</div><div className="td-mono">{selGear.gear.uplink || "WAN"}</div></div>
-                <div><div className="kpi__k">Segment</div><div className="td-mono">{selGear.gear.seg}</div></div>
-              </div>
-              <button className="backbtn" style={{ width: "100%", justifyContent: "center" }} onClick={() => window.__solariToast && window.__solariToast(`Port map for ${selGear.gear.name} — ${selGear.gear.attached} active LLDP neighbours`, "netswitch")}><Icon name="link" size={14} />View LLDP neighbours</button>
+              {selNode.kind === "gear" ? (
+                <>
+                  <div className="topo-card__head">
+                    <Icon name={GEAR_ICON[selNode.gearKind] || "netswitch"} size={18} style={{ color: GEAR_FILL[selNode.gearKind] || "var(--teal)" }} />
+                    <div style={{ minWidth: 0 }}><div style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{selNode.name}</div>
+                      <div className="td-mono muted" style={{ fontSize: 11 }}>{selNode.gearKind}{selNode.model ? " · " + selNode.model : ""}</div></div>
+                    <span className={"alert-sev " + (selNode.health === "down" ? "crit" : selNode.health === "degraded" ? "warn" : "info")} style={{ marginLeft: "auto" }}>{selNode.health}</span>
+                  </div>
+                  <div className="topo-card__stats">
+                    <div><div className="kpi__k">Health</div><div className={"td-mono statetext " + selNode.health} style={{ fontWeight: 600 }}>{selNode.health}</div></div>
+                    <div><div className="kpi__k">Interfaces</div><div className="td-mono">{selNode.ifTotal ? `${selNode.ifUp}/${selNode.ifTotal} up` : "—"}</div></div>
+                    <div><div className="kpi__k">Segment</div><div className="td-mono">{selNode.segId || "—"}</div></div>
+                    <div><div className="kpi__k">Uplink</div><div className="td-mono">{selNode.uplinkGearId || "WAN"}</div></div>
+                  </div>
+                </>
+              ) : selNode.kind === "target" ? (
+                <>
+                  <div className="topo-card__head">
+                    <Icon name="reachability" size={18} style={{ color: HEALTH_COLOR[selNode.health] }} />
+                    <div style={{ minWidth: 0 }}><div style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{selNode.label}</div>
+                      <div className="td-mono muted" style={{ fontSize: 11 }}>{selNode.proto} · {selNode.host}{selNode.port ? ":" + selNode.port : ""}</div></div>
+                    <span className={"alert-sev " + (selNode.health === "down" ? "crit" : selNode.health === "degraded" ? "warn" : "info")} style={{ marginLeft: "auto" }}>{selNode.health}</span>
+                  </div>
+                  <div className="topo-card__stats">
+                    <div><div className="kpi__k">Health</div><div className={"td-mono statetext " + selNode.health} style={{ fontWeight: 600 }}>{selNode.health}</div></div>
+                    <div><div className="kpi__k">Proto</div><div className="td-mono">{selNode.proto || "—"}</div></div>
+                    <div><div className="kpi__k">Port</div><div className="td-mono">{selNode.port || "—"}</div></div>
+                    <div><div className="kpi__k">Segment</div><div className="td-mono">{selNode.segId || "—"}</div></div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="topo-card__head">
+                    <Icon name={selNode.role === "server" ? "server" : selNode.role === "monitor" ? "monitor" : "host"} size={18} style={{ color: HEALTH_COLOR[selNode.health] }} />
+                    <div style={{ minWidth: 0 }}><div style={{ fontFamily: "var(--mono)", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{labelOf(selNode)}</div>
+                      <div className="td-mono muted" style={{ fontSize: 11 }}>{selNode.role}{selNode.segId ? " · " + selNode.segId : ""}</div></div>
+                    <span className={"alert-sev " + (selNode.health === "down" ? "crit" : selNode.health === "degraded" ? "warn" : "info")} style={{ marginLeft: "auto" }}>{selNode.health}</span>
+                  </div>
+                  <div className="topo-card__stats">
+                    <div><div className="kpi__k">Health</div><div className={"td-mono statetext " + selNode.health} style={{ fontWeight: 600 }}>{selNode.health}</div></div>
+                    <div><div className="kpi__k">Role</div><div className="td-mono">{selNode.role || "—"}</div></div>
+                    <div><div className="kpi__k">Last seen</div><div className="td-mono">{fmtStale(selNode.staleSec)}</div></div>
+                    <div><div className="kpi__k">Uplink</div><div className="td-mono">{selNode.uplinkGearId || "—"}</div></div>
+                  </div>
+                  <button className="backbtn" style={{ width: "100%", justifyContent: "center" }} onClick={() => onOpenNode(selNode.id)}><Icon name="enter" size={14} />Open node detail</button>
+                </>
+              )}
             </div>
           )}
 
@@ -431,27 +599,30 @@
             <div className="topo-card">
               <button className="topo-card__close" onClick={() => setSel(null)} aria-label="Close"><Icon name="close" size={14} /></button>
               <div className="topo-card__head">
-                <Icon name={selEdge.kind === "probe" ? "reachability" : selEdge.kind === "wireless" ? "wifi" : selEdge.kind === "report" ? "activity" : "link"} size={18} style={{ color: selEdge.ok === false ? "var(--crit)" : "var(--teal)" }} />
-                <div><div style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{selEdge.label}</div>
+                <Icon name={selEdge.kind === "monitors" ? "reachability" : selEdge.linkType === "wireless" ? "wifi" : selEdge.kind === "uplink" ? "activity" : "link"} size={18} style={{ color: HEALTH_COLOR[selEdge.health] }} />
+                <div style={{ minWidth: 0 }}><div style={{ fontFamily: "var(--mono)", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{selEdge.label || selEdge.kind}</div>
                   <div className="td-mono muted" style={{ fontSize: 11 }}>connection · {selEdge.kind}</div></div>
-                <span className={"alert-sev " + (selEdge.ok === false ? "crit" : "info")} style={{ marginLeft: "auto" }}>{selEdge.ok === false ? "fault" : "ok"}</span>
+                <span className={"alert-sev " + (selEdge.health === "down" ? "crit" : selEdge.health === "degraded" ? "warn" : "info")} style={{ marginLeft: "auto" }}>{selEdge.health}</span>
               </div>
               <div className="edge-link">
                 <span className="td-mono">{nm(selEdge.from)}</span>
                 <span className="edge-arrow"><Icon name="chevronRight" size={14} /></span>
                 <span className="td-mono">{nm(selEdge.to)}</span>
               </div>
-              <div className="td-mono muted" style={{ fontSize: 12, margin: "10px 0 12px" }}>{selEdge.sub}</div>
-              {selEdge.openId && <button className="backbtn" style={{ width: "100%", justifyContent: "center" }} onClick={() => onOpenNode(selEdge.openId)}><Icon name="enter" size={14} />Open endpoint host</button>}
+              <div className="td-mono muted" style={{ fontSize: 12, margin: "10px 0 12px" }}>
+                {selEdge.kind === "monitors"
+                  ? `${selEdge.outcome || "—"} · ${selEdge.rttMicros != null ? fmt.rtt(selEdge.rttMicros) : "—"}${selEdge.lossPermille ? ` · ${(selEdge.lossPermille / 10).toFixed(0)}% loss` : ""}`
+                  : `${selEdge.linkType || "wired"}${selEdge.speedMbps ? ` · ${fmt.mbps(selEdge.speedMbps)}` : ""}${selEdge.utilPct != null ? ` · ${selEdge.utilPct}% util` : ""}${selEdge.rssi != null ? ` · ${selEdge.rssi} dBm` : ""}`}
+              </div>
+              {isNodeRef(selEdge.from) && <button className="backbtn" style={{ width: "100%", justifyContent: "center" }} onClick={() => onOpenNode(typeof selEdge.from === "number" ? selEdge.from : Number(selEdge.from))}><Icon name="enter" size={14} />Open endpoint host</button>}
             </div>
           )}
 
-          {!sel && <div className="topo-hint"><Icon name="topology" size={14} />Tap any node, device, or connection to inspect</div>}
+          {!sel && !empty && status === "ready" && <div className="topo-hint"><Icon name="topology" size={14} />Tap any node, device, or connection to inspect</div>}
         </div>
 
-        {/* SNMP-managed gear throughput (read-only). Renders under the LAN
-            hierarchy view where the network devices live. */}
-        {view === "lan" && <GearThroughput />}
+        {/* SNMP-managed gear throughput (read-only) under the Network view. */}
+        {view === "network" && <GearThroughput />}
       </div>
     );
   }
