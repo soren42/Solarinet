@@ -1,0 +1,53 @@
+# Get editor completions based on the config schema
+"$schema" = 'https://starship.rs/config-schema.json'
+
+# Inserts a blank line between shell prompts
+add_newline = true
+
+#format = """$status$username@$directory$sudo$character"""
+format = """$status$username$sudo@$directory$character"""
+
+right_format = """$hostname$cmd_duration"""
+
+continuation_prompt = """▶▶"""
+
+[status]
+style = "bold green"
+symbol = "🔴"
+success_symbol = "🟢"
+format = '[$maybe_int$symbol$signal_name]($style) '
+map_symbol = true
+disabled = false
+
+[username]
+style_user = "white bold"
+style_root = "red bold"
+format = "[$user]($style)"
+disabled = false
+show_always = true
+
+[directory]
+truncation_length = 8
+truncation_symbol = "…/"
+format = "[$path]($style)[$read_only]($read_only_style)"
+
+[character]
+success_symbol = "[>](bold green) "
+error_symbol = "[✗](bold red) "
+
+[hostname]
+ssh_only = false
+ssh_symbol = "⏛"
+format = "[$ssh_symbol](bold blue)[$hostname](bold cyan)"
+#trim_at = ".companyname.com"
+disabled = false
+
+[cmd_duration]
+min_time = 5000
+format = " [$duration](bold blink yellow)"
+
+[sudo]
+style = "bold green"
+symbol = "🧙"
+disabled = false
+format = "[$symbol]()"

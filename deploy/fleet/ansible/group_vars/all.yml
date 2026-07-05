@@ -110,3 +110,28 @@ solari_pkg_map:
   iproute2:
     Debian: iproute2
     Suse:   iproute2
+
+# =============================================================================
+# Directory services - Active Directory enrollment (directory-join role)
+# =============================================================================
+# The SolariNet directory is a Samba AD DC running on radium.akoria.org. Hosts
+# opt in to the domain join by setting `solari_ad_enabled: true` (host_vars or a
+# group), and the join password MUST come from vault/--extra-vars at run time -
+# it is deliberately absent here so no credential ever lands in the repo.
+solari_ad_enabled:   false            # opt-in per host; overridden in host_vars
+solari_ad_realm:     "AKORIA.ORG"     # Kerberos realm (UPPER-CASE)
+solari_ad_domain:    "akoria.org"     # DNS/AD domain (lower-case)
+solari_ad_workgroup: "AKORIA"         # NetBIOS short name
+solari_ad_dc_ip:     "10.1.0.10"      # radium - the DC / DNS server
+solari_ad_join_user: "administrator"  # account authorized to join hosts
+# solari_ad_join_password:  <-- supply via vault/--extra-vars, never commit
+solari_ad_fqn_login:  false           # log in as "jason", not "jason@akoria.org"
+solari_ad_permit_all: true            # any authenticated AD user may log in
+solari_ad_sudo_group: "domain admins" # AD group granted sudo on joined hosts
+
+# ---- dev-tools + shared-home opt-in (per host) ------------------------------
+solari_devtools_enabled: false        # install the CLI toolset + zsh/omz/p10k
+solari_home_enabled:     false        # automount AD-user homes from cesium via NFS
+# When shared-home is used, AD homes live under the automount base, so the
+# directory-join fallback_homedir must match it:
+solari_ad_home_template: "/home/akoria/%u"

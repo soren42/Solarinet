@@ -1,0 +1,19 @@
+# shared-home role defaults.
+# On-demand NFS home directories for directory (AD) users, mounted from the
+# central data host (cesium) via autofs. Pairs with the directory-join role:
+# SSSD's fallback_homedir must point under solari_home_mount_base so a user's
+# home is the autofs-mounted NFS path. Authoritative values in group_vars.
+---
+solari_home_nfs_server: "cesium.akoria.org"   # NFS server exporting the homes
+solari_home_nfs_export: "/export/home"         # export root on that server
+solari_home_mount_base: "/home/akoria"         # local automount base (== SSSD home base)
+solari_home_autofs_timeout: 600                # unmount idle homes after N seconds
+# NFS mount options: NFSv4.x, soft so a dead server can't wedge logins forever.
+solari_home_mount_opts: "-fstype=nfs4,rw,soft,timeo=60,retrans=3,noatime"
+
+solari_home_packages_debian:
+  - autofs
+  - nfs-common
+solari_home_packages_suse:
+  - autofs
+  - nfs-client

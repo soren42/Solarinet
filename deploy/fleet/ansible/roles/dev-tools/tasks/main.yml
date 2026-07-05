@@ -1,0 +1,107 @@
+# =============================================================================
+# dev-tools role - operator CLI toolset + zsh/oh-my-zsh/powerlevel10k shell.
+# =============================================================================
+# The toolset (jq, bat, ripgrep, eza, fd, cloc, starship, thefuck, ...) and a
+# consistent shell are installed fleet-wide. Dotfiles land in /etc/skel so every
+# new directory-user home inherits them, and in named users' homes. oh-my-zsh +
+# powerlevel10k are installed ONCE system-wide (read-only) - the vendored .zshrc
+# points $ZSH there and disables self-update.
+---
+- name: Install core CLI toolset
+  ansible.builtin.package:
+    name: "{{ solari_devtools_packages_debian if ansible_os_family == 'Debian' else solari_devtools_packages_suse }}"
+    state: present
+
+- name: Install optional tools (best-effort)
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ solari_devtools_optional_debian if ansible_os_family == 'Debian' else solari_devtools_optional_suse }}"
+  register: solari_optpkg
+  failed_when: false
+
+# bat + fd ship under alternate binary names on Debian; expose canonical names.
+- name: Give bat/fd their canonical names (Debian)
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+    force: true
+  loop:
+    - { src: /usr/bin/batcat, dest: /usr/local/bin/bat }
+    - { src: /usr/bin/fdfind, dest: /usr/local/bin/fd }
+  when: ansible_os_family == 'Debian'
+  failed_when: false
+
+# ---- oh-my-zsh + powerlevel10k, system-wide (one copy) ----------------------
+- name: Install oh-my-zsh system-wide
+  ansible.builtin.git:
+    repo: "{{ solari_devtools_ohmyzsh_repo }}"
+    dest: "{{ solari_devtools_ohmyzsh_dir }}"
+    depth: 1
+    version: master
+    update: false
+  when: solari_devtools_ohmyzsh | bool
+
+- name: Install powerlevel10k system-wide
+  ansible.builtin.git:
+    repo: "{{ solari_devtools_p10k_repo }}"
+    dest: "{{ solari_devtools_ohmyzsh_dir }}/custom/themes/powerlevel10k"
+    depth: 1
+    version: master
+    update: false
+  when: solari_devtools_ohmyzsh | bool
+
+# ---- starship (single static binary) ----------------------------------------
+- name: Detect starship
+  ansible.builtin.command: command -v starship
+  register: solari_starship
+  changed_when: false
+  failed_when: false
+
+- name: Install starship to /usr/local/bin
+  ansible.builtin.shell:
+    cmd: "curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b /usr/local/bin"
+  when: solari_devtools_starship | bool and solari_starship.rc != 0
+  changed_when: true
+
+# ---- Dotfiles into /etc/skel (new directory-user homes inherit) -------------
+- name: Ensure /etc/skel/.config exists
+  ansible.builtin.file:
+    path: /etc/skel/.config
+    state: directory
+    mode: "0755"
+
+- name: Deploy dotfiles into /etc/skel
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "/etc/skel/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: zshrc, dest: .zshrc }
+    - { src: p10k.zsh, dest: .p10k.zsh }
+    - { src: starship.toml, dest: .config/starship.toml }
+
+# ---- Dotfiles + zsh shell for named existing users --------------------------
+- name: Load passwd database (for named users' home paths)
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Deploy dotfiles to named users
+  ansible.builtin.copy:
+    src: "{{ item.1.src }}"
+    dest: "{{ getent_passwd[item.0][4] }}/{{ item.1.dest }}"
+    owner: "{{ item.0 }}"
+    mode: "0644"
+    remote_src: false
+  loop: "{{ solari_devtools_users | product([{'src': 'zshrc', 'dest': '.zshrc'}, {'src': 'p10k.zsh', 'dest': '.p10k.zsh'}]) | list }}"
+  when: item.0 in getent_passwd
+  failed_when: false
+
+- name: Set zsh as the login shell for named users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    shell: /usr/bin/zsh
+  loop: "{{ solari_devtools_users }}"
+  when: solari_devtools_set_zsh_shell | bool
+  failed_when: false

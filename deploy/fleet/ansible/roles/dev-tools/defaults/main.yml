@@ -1,0 +1,46 @@
+# dev-tools role defaults.
+# The operator CLI toolset + a consistent zsh / oh-my-zsh / powerlevel10k shell
+# environment, laid down fleet-wide. Dotfiles go into /etc/skel so new directory
+# (AD) user homes inherit them, plus any explicitly named existing users.
+---
+# Core toolset - must exist in the distro repos (single transaction).
+solari_devtools_packages_debian:
+  - zsh
+  - git
+  - curl
+  - jq
+  - cloc
+  - bat
+  - ripgrep
+  - fd-find
+  - mlocate
+  - unzip
+  - python3-pip
+solari_devtools_packages_suse:
+  - zsh
+  - git
+  - curl
+  - jq
+  - cloc
+  - bat
+  - ripgrep
+  - fd
+  - mlocate
+  - unzip
+  - python3-pip
+
+# Optional packages - installed best-effort (names/availability vary by release).
+solari_devtools_optional_debian: [eza, thefuck, zsh-autosuggestions, zsh-syntax-highlighting, pipx]
+solari_devtools_optional_suse:   [eza, zsh-autosuggestions, zsh-syntax-highlighting, python3-pipx]
+
+# Shell framework (installed system-wide, single read-only copy).
+solari_devtools_ohmyzsh: true
+solari_devtools_starship: true
+solari_devtools_ohmyzsh_dir: "/usr/share/oh-my-zsh"
+solari_devtools_ohmyzsh_repo: "https://github.com/ohmyzsh/ohmyzsh.git"
+solari_devtools_p10k_repo: "https://github.com/romkatv/powerlevel10k.git"
+
+# Users that get the dotfiles + zsh login shell (in addition to /etc/skel).
+solari_devtools_users:
+  - "{{ solari_admin_user }}"
+solari_devtools_set_zsh_shell: true

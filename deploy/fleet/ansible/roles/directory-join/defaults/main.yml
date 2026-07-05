@@ -1,0 +1,54 @@
+# directory-join role defaults.
+# Enroll a host into the SolariNet Active Directory (Samba AD DC "radium",
+# realm AKORIA.ORG) for central identity + Kerberos SSO. Authoritative values
+# live in group_vars/all.yml; these keep the role runnable stand-alone.
+---
+# ---- Realm identity (must match the DC's provisioned domain) ----------------
+solari_ad_realm: "AKORIA.ORG"          # Kerberos realm (UPPER-CASE)
+solari_ad_domain: "akoria.org"         # DNS/AD domain (lower-case)
+solari_ad_workgroup: "AKORIA"          # NetBIOS short name
+solari_ad_dc_ip: "10.1.0.10"           # domain controller (radium) — the DNS server
+
+# ---- Join credentials (SUPPLY AT RUN TIME — never commit) -------------------
+solari_ad_join_user: "administrator"   # AD account authorized to join hosts
+solari_ad_join_password: ""            # REQUIRED via vault/--extra-vars; no_log'd
+
+# ---- Login + home policy ----------------------------------------------------
+# fqn_login false => users log in as "jason" (short) not "jason@akoria.org".
+# Keep it TRUE on hosts that already have a conflicting local account name.
+solari_ad_fqn_login: false
+solari_ad_home_template: "/home/%u"    # %u expands to the (short or fqn) user
+solari_ad_login_shell: "/bin/bash"
+
+# ---- Access control ---------------------------------------------------------
+# permit_all true  => any authenticated AD user may log in (access_provider=permit)
+# permit_all false => only members of solari_ad_permitted_groups (simple provider)
+solari_ad_permit_all: true
+solari_ad_permitted_groups: []         #   - "linux-users"
+
+# AD group granted sudo on joined hosts (empty string = grant none).
+solari_ad_sudo_group: "domain admins"
+
+# ---- Client package stack (per family; realm join needs all of these) -------
+solari_realmd_packages_debian:
+  - realmd
+  - sssd
+  - sssd-tools
+  - libnss-sss
+  - libpam-sss
+  - adcli
+  - samba-common-bin
+  - oddjob
+  - oddjob-mkhomedir
+  - packagekit
+  - krb5-user
+  - dnsutils
+solari_realmd_packages_suse:
+  - realmd
+  - sssd
+  - sssd-tools
+  - sssd-ad
+  - adcli
+  - samba-client
+  - krb5-client
+  - bind-utils
