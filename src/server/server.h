@@ -260,6 +260,11 @@ typedef struct {
     char     servicesJson[512];          /* ["ssh:22","http:80"]; may be "" */
     char     segId[SERVER_SEGID_MAX];
     char     arch[SOLARI_ARCH_MAX];
+    char     mac[18];
+    char     vendor[64];
+    char     osName[64];
+    char     deviceRole[24];
+    char     sysDescr[256];
 } serverDiscEntity;
 /* Upsert a discovered candidate keyed (ip, kind): insert new or bump seenCount
  * + lastSeenAt. *discId returns the row id. */

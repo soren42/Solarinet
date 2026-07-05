@@ -101,10 +101,18 @@
             <div key={d.host} className="disc-row">
               <Icon name={d.kind === "service" ? "link" : "host"} size={20} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
               <div className="disc-main">
-                <div className="disc-host">{d.host}<span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>{d.ip}</span></div>
+                <div className="disc-host">{d.host}<span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>{d.ip}</span>
+                  {d.deviceRole && <span className="svc-chip" style={{ borderColor: "var(--teal)", color: "var(--teal)", marginLeft: 8 }}>{d.deviceRole}</span>}
+                </div>
                 <div className="disc-svcs">
                   {d.services.map((s) => <span key={s} className="svc-chip">{s}</span>)}
                 </div>
+                {(d.osName || d.vendor) && (
+                  <div className="td-mono muted" style={{ fontSize: 11, marginTop: 3 }}>
+                    {[d.vendor, d.osName].filter(Boolean).join(" · ")}
+                    {d.mac ? <span style={{ opacity: 0.6 }}>{"  " + d.mac}</span> : null}
+                  </div>
+                )}
               </div>
               <div className="disc-meta">
                 <span className="tag">{d.via}</span>
@@ -139,8 +147,16 @@
       return { label: String(s), port: parseInt(parts[1] || parts[0], 10) };
     }).filter(function (x) { return x.port > 0 && x.port <= 65535; });
 
+    // Map the discovered deviceRole (nmap/SNMP/mDNS inference) onto the adopt
+    // classification taxonomy so the operator gets a sensible pre-selection.
+    const ROLE_TO_CLASS = {
+      server: "server", workstation: "host", host: "host",
+      printer: "appliance", nas: "appliance",
+      camera: "iot", iot: "iot",
+      network: "network", ap: "network", gateway: "network",
+    };
     const [name, setName] = useState(disc.host || disc.ip || "");
-    const [cls, setCls] = useState("server");
+    const [cls, setCls] = useState(ROLE_TO_CLASS[disc.deviceRole] || "server");
     const [poolId, setPoolId] = useState(pools.length ? String(pools[0].poolId) : "1");
     const [heartbeat, setHeartbeat] = useState(true);
     const [sel, setSel] = useState(function () { const m = {}; svcList.forEach(function (s) { m[s.port] = true; }); return m; });

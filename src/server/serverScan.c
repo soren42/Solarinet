@@ -20,6 +20,8 @@
 
 #include "serverScan.h"
 
+#include "serverDiscoveryEnrich.h"
+#include "serverOui.h"
 #include "solari/solariLog.h"
 #include "solari/solariTime.h"
 
@@ -153,8 +155,34 @@ static int scanSetNonBlock(int fd)
 
 /* ---- optional enrichment (host tools; OFF unless flag set) --------------- */
 #ifdef SOLARI_WITH_DISCOVERY_TOOLS
-/* Run a command and copy its first non-empty trimmed output line into out.
- * Best-effort: returns 0 on success, -1 otherwise. */
+static void scanSanitize(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (; in && *in && o + 1 < cap; in++) {
+        char c = *in;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+            c == ':' || c == '-')
+            out[o++] = c;
+    }
+    out[o] = '\0';
+}
+
+static void scanTrim(char *s)
+{
+    char *e;
+    if (!s) return;
+    while (*s == ' ' || *s == '\t') memmove(s, s + 1, strlen(s));
+    e = s + strlen(s);
+    while (e > s && (e[-1] == '\n' || e[-1] == '\r' ||
+                     e[-1] == ' ' || e[-1] == '\t'))
+        *--e = '\0';
+    if (s[0] == '"' && e > s + 1 && e[-1] == '"') {
+        memmove(s, s + 1, (size_t)(e - s - 2));
+        s[e - s - 2] = '\0';
+    }
+}
+
 static int scanToolLine(const char *cmd, char *out, size_t cap)
 {
     FILE *f;
@@ -173,15 +201,132 @@ static int scanToolLine(const char *cmd, char *out, size_t cap)
     return -1;
 }
 
-/* SNMP sysName via snmpget v2c (public). Quick-and-dirty enrichment. */
-static void scanEnrichSnmp(const char *ip, char *nameOut, size_t cap)
+static int scanToolAll(const char *cmd, char *out, size_t cap)
+{
+    FILE *f;
+    char chunk[512];
+    size_t off = 0;
+    if (out && cap) out[0] = '\0';
+    if (!out || cap == 0) return -1;
+    f = popen(cmd, "r");
+    if (!f) return -1;
+    while (fgets(chunk, sizeof chunk, f) && off + 1 < cap) {
+        size_t n = strlen(chunk);
+        if (n > cap - 1 - off) n = cap - 1 - off;
+        memcpy(out + off, chunk, n);
+        off += n;
+        out[off] = '\0';
+    }
+    pclose(f);
+    return off > 0 ? 0 : -1;
+}
+
+static void scanEnrichSnmp(const char *ipSafe, char *nameOut, size_t nameCap,
+                           char *descrOut, size_t descrCap)
 {
     char cmd[256];
-    /* -Ovq: value only, no type; short timeout, one retry. */
+    if (nameOut && nameCap) nameOut[0] = '\0';
+    if (descrOut && descrCap) descrOut[0] = '\0';
     snprintf(cmd, sizeof cmd,
              "snmpget -v2c -c public -t 1 -r 1 -Ovq %s SNMPv2-MIB::sysName.0 2>/dev/null",
-             ip);
-    (void)scanToolLine(cmd, nameOut, cap);
+             ipSafe);
+    (void)scanToolLine(cmd, nameOut, nameCap);
+    if (nameOut && nameOut[0]) scanTrim(nameOut);
+
+    snprintf(cmd, sizeof cmd,
+             "snmpget -v2c -c public -t 1 -r 1 -Ovq %s .1.3.6.1.2.1.1.1.0 2>/dev/null",
+             ipSafe);
+    (void)scanToolLine(cmd, descrOut, descrCap);
+    if (descrOut && descrOut[0]) scanTrim(descrOut);
+}
+
+static void scanEnrichNmap(const char *ipSafe, serverDiscEntity *e)
+{
+    char cmd[256], xml[32768], svc[256];
+    snprintf(cmd, sizeof cmd,
+             "nmap -O -sV --host-timeout 30s -Pn -oX - %s 2>/dev/null",
+             ipSafe);
+    if (scanToolAll(cmd, xml, sizeof xml) != 0) return;
+    discoverParseNmapXml(xml, e->mac, sizeof e->mac, e->vendor, sizeof e->vendor,
+                         e->osName, sizeof e->osName, svc, sizeof svc);
+    if (!e->sysDescr[0] && svc[0]) snprintf(e->sysDescr, sizeof e->sysDescr, "%s", svc);
+}
+
+static void scanEnrichArp(const char *ipSafe, serverDiscEntity *e)
+{
+    char arp[32768];
+    if (e->mac[0]) return;
+    if (scanToolAll("cat /proc/net/arp 2>/dev/null", arp, sizeof arp) != 0) return;
+    (void)discoverParseArpMac(arp, ipSafe, e->mac, sizeof e->mac);
+}
+
+static void scanEnrichMdns(const char *ipSafe, serverDiscEntity *e,
+                           char *mdnsTypes, size_t mdnsCap)
+{
+    char cmd[256], line[512], browse[32768];
+    const char *p;
+    if (mdnsTypes && mdnsCap) mdnsTypes[0] = '\0';
+
+    snprintf(cmd, sizeof cmd, "avahi-resolve -a %s 2>/dev/null", ipSafe);
+    if (scanToolLine(cmd, line, sizeof line) == 0) {
+        char addr[128], name[SOLARI_FQDN_MAX];
+        addr[0] = name[0] = '\0';
+        if (sscanf(line, "%127s %255s", addr, name) == 2 && strcmp(addr, ipSafe) == 0 && name[0])
+            snprintf(e->host, sizeof e->host, "%s", name);
+    }
+
+    if (!mdnsTypes || mdnsCap == 0) return;
+    if (scanToolAll("avahi-browse -aprt 2>/dev/null", browse, sizeof browse) != 0) return;
+    p = browse;
+    while ((p = strstr(p, ipSafe)) != NULL) {
+        const char *lineStart = p;
+        const char *lineEnd;
+        const char *semi;
+        while (lineStart > browse && lineStart[-1] != '\n') lineStart--;
+        lineEnd = strchr(p, '\n');
+        if (!lineEnd) lineEnd = p + strlen(p);
+        semi = lineStart;
+        while ((semi = memchr(semi, ';', (size_t)(lineEnd - semi))) != NULL) {
+            const char *next = memchr(semi + 1, ';', (size_t)(lineEnd - semi - 1));
+            size_t n;
+            if (!next) break;
+            if (memchr(semi + 1, '_', (size_t)(next - semi - 1))) {
+                n = (size_t)(next - semi - 1);
+                if (strlen(mdnsTypes) + n + 2 < mdnsCap) {
+                    if (mdnsTypes[0]) strcat(mdnsTypes, ",");
+                    strncat(mdnsTypes, semi + 1, n);
+                }
+                break;
+            }
+            semi = next;
+        }
+        p = lineEnd;
+    }
+}
+
+static void scanEnrichEntity(serverDiscEntity *e)
+{
+    char ipSafe[128], snmpName[SOLARI_FQDN_MAX], snmpDescr[256], mdnsTypes[512];
+    const char *oui;
+
+    scanSanitize(e->ip, ipSafe, sizeof ipSafe);
+    if (!ipSafe[0]) return;
+
+    scanEnrichNmap(ipSafe, e);
+    scanEnrichArp(ipSafe, e);
+
+    scanEnrichSnmp(ipSafe, snmpName, sizeof snmpName, snmpDescr, sizeof snmpDescr);
+    if (!e->host[0] && snmpName[0]) snprintf(e->host, sizeof e->host, "%s", snmpName);
+    if (snmpDescr[0]) snprintf(e->sysDescr, sizeof e->sysDescr, "%s", snmpDescr);
+
+    scanEnrichMdns(ipSafe, e, mdnsTypes, sizeof mdnsTypes);
+
+    if (!e->vendor[0] && e->mac[0]) {
+        oui = lookupOui(e->mac);
+        if (oui && oui[0]) snprintf(e->vendor, sizeof e->vendor, "%s", oui);
+    }
+    snprintf(e->deviceRole, sizeof e->deviceRole, "%s",
+             discoverInferRole(e->servicesJson, e->sysDescr, e->vendor, mdnsTypes));
 }
 #endif /* SOLARI_WITH_DISCOVERY_TOOLS */
 
@@ -230,11 +375,7 @@ static void scanRecordHost(serverContext *ctx, uint32_t hostBE,
     if (host[0]) snprintf(e.host, sizeof e.host, "%s", host);
 
 #ifdef SOLARI_WITH_DISCOVERY_TOOLS
-    if (!e.host[0]) {
-        char snmpName[SOLARI_FQDN_MAX];
-        scanEnrichSnmp(ipstr, snmpName, sizeof snmpName);
-        if (snmpName[0]) snprintf(e.host, sizeof e.host, "%s", snmpName);
-    }
+    scanEnrichEntity(&e);
 #endif
 
     rc = serverDbUpsertDiscovered(ctx->db, &e, solariNowUnixMs(), &discId);

@@ -32,6 +32,7 @@ return static function (Router $router): void {
 
         $rows = Db::rows(
             "SELECT discId, host, ip, kind, via, services, segId, arch,
+                    mac, vendor, osName, deviceRole, sysDescr, enrichedAt,
                     seenCount, firstSeenAt, lastSeenAt, status
                FROM discovered
                $where
@@ -49,6 +50,12 @@ return static function (Router $router): void {
                 'services'    => Coerce::json($r['services']),
                 'segId'       => $r['segId'],
                 'arch'        => $r['arch'],
+                'mac'         => $r['mac'],
+                'vendor'      => $r['vendor'],
+                'osName'      => $r['osName'],
+                'deviceRole'  => $r['deviceRole'],
+                'sysDescr'    => $r['sysDescr'],
+                'enrichedAt'  => Coerce::iso($r['enrichedAt']),
                 'seenCount'   => Coerce::int($r['seenCount']),
                 'firstSeenAt' => Coerce::iso($r['firstSeenAt']),
                 'lastSeenAt'  => Coerce::iso($r['lastSeenAt']),

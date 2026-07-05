@@ -1348,19 +1348,36 @@ solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,
     static const char *SQL =
         "INSERT INTO discovered "
         "  (host, ip, kind, via, services, segId, arch, "
-        "   seenCount, firstSeenAt, lastSeenAt) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 1, "
-        "        FROM_UNIXTIME(? / 1000), FROM_UNIXTIME(? / 1000)) "
+        "   mac, vendor, osName, deviceRole, sysDescr, "
+        "   seenCount, firstSeenAt, lastSeenAt, enrichedAt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, "
+        "        FROM_UNIXTIME(? / 1000), FROM_UNIXTIME(? / 1000), "
+        "        IF(? <> 0, FROM_UNIXTIME(? / 1000), NULL)) "
         "ON DUPLICATE KEY UPDATE "
         "  host=VALUES(host), via=VALUES(via), services=VALUES(services), "
         "  segId=VALUES(segId), arch=VALUES(arch), "
-        "  seenCount = seenCount + 1, lastSeenAt = VALUES(lastSeenAt)";
+        "  mac=IF(VALUES(mac) IS NULL OR VALUES(mac)='', mac, VALUES(mac)), "
+        "  vendor=IF(VALUES(vendor) IS NULL OR VALUES(vendor)='', vendor, VALUES(vendor)), "
+        "  osName=IF(VALUES(osName) IS NULL OR VALUES(osName)='', osName, VALUES(osName)), "
+        "  deviceRole=IF(VALUES(deviceRole) IS NULL OR VALUES(deviceRole)='', deviceRole, VALUES(deviceRole)), "
+        "  sysDescr=IF(VALUES(sysDescr) IS NULL OR VALUES(sysDescr)='', sysDescr, VALUES(sysDescr)), "
+        "  enrichedAt=IF((VALUES(mac) IS NOT NULL AND VALUES(mac)<>'') OR "
+        "                (VALUES(vendor) IS NOT NULL AND VALUES(vendor)<>'') OR "
+        "                (VALUES(osName) IS NOT NULL AND VALUES(osName)<>'') OR "
+        "                (VALUES(deviceRole) IS NOT NULL AND VALUES(deviceRole)<>'') OR "
+        "                (VALUES(sysDescr) IS NOT NULL AND VALUES(sysDescr)<>''), "
+        "                VALUES(enrichedAt), enrichedAt), "
+        "  seenCount = seenCount + 1, lastSeenAt = VALUES(lastSeenAt), "
+        "  discId = LAST_INSERT_ID(discId)";
     MYSQL      *conn = dbConn(db);
     MYSQL_STMT *st;
-    MYSQL_BIND  b[9];
+    MYSQL_BIND  b[16];
     unsigned long long vWhen = whenUnixMs ? whenUnixMs : solariNowUnixMs();
     unsigned long long vWhen2 = vWhen;
+    unsigned long long vWhen3 = vWhen;
+    int vHasEnrich;
     unsigned long lHost, lIp, lKind, lVia, lSvc, lSeg, lArch;
+    unsigned long lMac, lVendor, lOs, lRole, lDescr;
     solariStatus rc;
 
     if (discId) *discId = 0;
@@ -1376,12 +1393,21 @@ solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,
     dbBindStr(&b[4], (e->servicesJson[0]) ? e->servicesJson : NULL, &lSvc);
     dbBindStr(&b[5], (e->segId[0]) ? e->segId : NULL, &lSeg);
     dbBindStr(&b[6], (e->arch[0]) ? e->arch : NULL, &lArch);
-    dbBindU64(&b[7], &vWhen);
-    dbBindU64(&b[8], &vWhen2);
-    rc = dbStmtRunWrite(st, b, 9);
+    dbBindStr(&b[7], (e->mac[0]) ? e->mac : NULL, &lMac);
+    dbBindStr(&b[8], (e->vendor[0]) ? e->vendor : NULL, &lVendor);
+    dbBindStr(&b[9], (e->osName[0]) ? e->osName : NULL, &lOs);
+    dbBindStr(&b[10], (e->deviceRole[0]) ? e->deviceRole : NULL, &lRole);
+    dbBindStr(&b[11], (e->sysDescr[0]) ? e->sysDescr : NULL, &lDescr);
+    dbBindU64(&b[12], &vWhen);
+    dbBindU64(&b[13], &vWhen2);
+    vHasEnrich = (e->mac[0] || e->vendor[0] || e->osName[0] ||
+                  e->deviceRole[0] || e->sysDescr[0]) ? 1 : 0;
+    dbBindI32(&b[14], &vHasEnrich);
+    dbBindU64(&b[15], &vWhen3);
+    rc = dbStmtRunWrite(st, b, 16);
     if (rc == SOLARI_OK && discId) {
         unsigned long long id = mysql_stmt_insert_id(st);
-        *discId = id;   /* 0 on a pure UPDATE; caller may re-resolve by (ip,kind) */
+        *discId = id;   /* insert id, or existing id via LAST_INSERT_ID(discId) */
     }
     mysql_stmt_close(st);
     return rc;
@@ -1456,14 +1482,17 @@ solariStatus serverDbGetDiscovered(serverDb *db, uint64_t discId,
                                    serverDiscEntity *out)
 {
     static const char *SQL =
-        "SELECT host, ip, kind, via, services, segId, arch "
+        "SELECT host, ip, kind, via, services, segId, arch, "
+        "       mac, vendor, osName, deviceRole, sysDescr "
         "FROM discovered WHERE discId = ?";
     MYSQL      *conn = dbConn(db);
     MYSQL_STMT *st;
-    MYSQL_BIND  pin[1], rout[7];
+    MYSQL_BIND  pin[1], rout[12];
     unsigned long long vId = discId;
     unsigned long lHost, lIp, lKind, lVia, lSvc, lSeg, lArch;
+    unsigned long lMac, lVendor, lOs, lRole, lDescr;
     my_bool nHost, nIp, nKind, nVia, nSvc, nSeg, nArch;
+    my_bool nMac, nVendor, nOs, nRole, nDescr;
     int fetch;
     solariStatus rc;
 
@@ -1484,6 +1513,11 @@ solariStatus serverDbGetDiscovered(serverDb *db, uint64_t discId,
     dbBindOutStr(&rout[4], out->servicesJson, sizeof out->servicesJson, &lSvc, &nSvc);
     dbBindOutStr(&rout[5], out->segId, sizeof out->segId, &lSeg, &nSeg);
     dbBindOutStr(&rout[6], out->arch, sizeof out->arch, &lArch, &nArch);
+    dbBindOutStr(&rout[7], out->mac, sizeof out->mac, &lMac, &nMac);
+    dbBindOutStr(&rout[8], out->vendor, sizeof out->vendor, &lVendor, &nVendor);
+    dbBindOutStr(&rout[9], out->osName, sizeof out->osName, &lOs, &nOs);
+    dbBindOutStr(&rout[10], out->deviceRole, sizeof out->deviceRole, &lRole, &nRole);
+    dbBindOutStr(&rout[11], out->sysDescr, sizeof out->sysDescr, &lDescr, &nDescr);
     if (mysql_stmt_bind_result(st, rout) != 0) { mysql_stmt_close(st); return ERR_DB; }
     if (mysql_stmt_store_result(st) != 0)      { mysql_stmt_close(st); return ERR_DB; }
 

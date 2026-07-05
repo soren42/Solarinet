@@ -46,7 +46,9 @@ set(SERVER_CORE_SOURCES
   serverControl.c
   serverProvision.c
   serverDiscovery.c
+  serverDiscoveryEnrich.c
   serverScan.c
+  serverOui.c
   serverAssets.c
   serverTopology.c
   serverSnmp.c
@@ -54,6 +56,9 @@ set(SERVER_CORE_SOURCES
 )
 
 add_library(servercore STATIC ${SERVER_CORE_SOURCES})
+if(NOT SOLARI_WITH_IO)
+  target_sources(servercore PRIVATE serverNetStub.c)
+endif()
 
 # Optional best-effort discovery enrichment via host tools (avahi/SNMP). OFF by
 # default so the core scan stays pure standard C; enable to layer mDNS/SNMP hints
