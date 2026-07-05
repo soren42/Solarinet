@@ -87,10 +87,37 @@
       return () => clearInterval(iv);
     }, []);
 
+    // SSE (§8.4) — near-real-time on top of the poll. Guarded: only when the
+    // adapter is live and EventSource exists; on any failure the browser retries
+    // and the 10s poll above keeps everything correct regardless.
+    useEffect(() => {
+      const api = S.api;
+      if (S.source !== "live" || !api || !api.stream) return undefined;
+      let es = null;
+      const bump = () => { api.refresh().then(() => force((x) => x + 1)).catch(() => {}); };
+      try {
+        es = api.stream((name, data) => {
+          if (name === "alertFired") {
+            const sev = (data && data.severity) || "warn";
+            const what = (data && (data.detail || data.ruleName)) || "Alert fired";
+            const where = data && (data.node || data.hostFqdn) ? " — " + (data.node || String(data.hostFqdn).split(".")[0]) : "";
+            toast(`${sev.toUpperCase()}: ${what}${where}`, "alerts");
+            bump();
+          } else if (name === "nodeStateChange") {
+            bump();
+          }
+        });
+      } catch (_) { es = null; }
+      return () => { if (es && es.close) try { es.close(); } catch (_) {} };
+    }, [toast]);
+
     const scrollTop = () => { const c = document.querySelector(".content"); if (c) c.scrollTop = 0; };
     const openNode = useCallback((nodeOrId) => {
-      const node = typeof nodeOrId === "string"
-        ? ((S.fleet || S.nodes).find((n) => n.nodeId === nodeOrId)) : nodeOrId;
+      // Accept a node object OR a nodeId of any type (fixture ids are numeric,
+      // wire ids may be strings) — resolve ids against the fleet.
+      const node = (nodeOrId && typeof nodeOrId === "object")
+        ? nodeOrId
+        : ((S.fleet || S.nodes).find((n) => String(n.nodeId) === String(nodeOrId)));
       if (!node) return;
       // Adopted systems (no agent) get the asset detail page, not the metric-heavy
       // agent NodeDetail (which assumes host telemetry and would blank out).
@@ -146,11 +173,7 @@
         { id: "view-cards", group: "Actions", label: "Fleet: Cards view", icon: "cards", action: () => { setFleetView("cards"); go("fleet"); } },
         { id: "survey-all", group: "Actions", label: "Survey entire fleet now", icon: "survey", action: () => survey(null) },
         { id: "theme", group: "Actions", label: "Toggle dark / light theme", icon: theme === "dark" ? "sun" : "moon", action: () => setTheme((t) => t === "dark" ? "light" : "dark") },
-        { id: "logout", group: "Actions", label: "Log out", icon: "enter", action: () => {
-            const api = window.SolariAPI;
-            const done = () => window.location.reload();
-            (api && api.logout ? api.logout() : Promise.resolve()).then(done, done);
-        } },
+        { id: "logout", group: "Actions", label: "Log out", icon: "enter", action: () => window.solariLogout() },
       ];
       // node jump targets — prioritise problem nodes, bound the list
       const problem = S.nodes.filter((n) => n.state === "down" || n.state === "degraded");
@@ -170,14 +193,14 @@
         )}
         {!navHidden && window.innerWidth <= 980 && <div className="scrim" onClick={() => setNavHidden(true)} />}
         <Sidebar active={route.name === "node" ? "fleet" : route.name}
-          onNav={go} collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} hidden={navHidden} summary={S.summary} activeCrit={S.activeCrit} />
+          onNav={go} collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} hidden={navHidden} summary={S.summary} activeCrit={S.activeCrit} activeWarn={S.activeWarn} />
         <div className="main">
           <TopBar onMenu={toggleNav} onOpenCmd={() => setCmdOpen(true)} theme={theme}
             onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
-            server={S.server} onSurvey={() => survey(null)} />
+            server={S.server} onSurvey={() => survey(null)} operator={S.operator} />
           <div className="content">
             {route.name === "fleet" && PoolCards && <PoolCards onOpen={() => go("assets")} />}
-            {route.name === "fleet" && <FleetOverview onOpenNode={openNode} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
+            {route.name === "fleet" && <FleetOverview onOpenNode={openNode} onNav={go} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
             {route.name === "assets" && Assets && <Assets onOpenNode={openNode} />}
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
             {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}

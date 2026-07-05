@@ -136,6 +136,7 @@
     nodeHistory:  function (id, metric) { return "/api/nodes/" + encodeURIComponent(id) + "/history?metric=" + encodeURIComponent(metric); },
     nodeConfig:   function (id) { return "/api/nodes/" + encodeURIComponent(id) + "/config"; },
     alerts:       "/api/alerts",            // ?status=active|all
+    alertAck:     function (eventId) { return "/api/alerts/" + encodeURIComponent(eventId) + "/ack"; },
     rules:        "/api/rules",
     rule:         function (id) { return "/api/rules/" + encodeURIComponent(id); },
     probes:       "/api/probes",
@@ -366,7 +367,11 @@
       sym: "", name: a.displayName || a.ip, hostFqdn: a.host || a.ip, ip: a.ip,
       role: "system", segId: a.poolId, segName: a.poolName || "—", cidr: "",
       osName: a.class, arch: "", state: a.state || "unknown",
-      lastSeenMin: 0, enrolledDaysAgo: 0, configEpoch: 0, converged: true,
+      // Reachability-only rows: staleness comes from the probe payload when the
+      // API provides it; otherwise null (the UI renders "—", never "just now").
+      lastSeenMin: a.lastSeenAt != null ? minsSince(a.lastSeenAt)
+        : (a.lastSeenMin != null ? a.lastSeenMin : null),
+      enrolledDaysAgo: 0, configEpoch: 0, converged: true,
       cpuPct: 0, cores: [], ramPct: 0, ramUsedKb: 0, ramTotalKb: 0,
       swapPct: 0, swapUsedKb: 0, swapTotalKb: 0,
       disks: [], ifaces: [], procs: [], diskMaxPct: 0,
@@ -397,6 +402,9 @@
       // whole dashboard into the offline fixture.
       getJSON(EP.pools).catch(function () { return []; }),
       getJSON(EP.assets).catch(function () { return []; }),
+      // whoami — identity chip in the TopBar. Never let it break the boot:
+      // an auth-gated deployment already 401s on the reads above.
+      getJSON(EP.whoami).catch(function () { return null; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -416,6 +424,15 @@
       var gearW = A(res[10]);
       var poolsW = A(res[11]);
       var assetsW = A(res[12]);
+      // whoami -> S.operator {name, role, displayName, source, directoryEnabled}
+      var whoW = res[13];
+      var operator = (whoW && whoW.operator) ? {
+        name: whoW.operator,
+        role: whoW.role || "viewer",
+        displayName: whoW.displayName || whoW.operator,
+        source: whoW.source || "local",
+        directoryEnabled: !!whoW.directoryEnabled,
+      } : null;
       // /api/summary carries the lease/failover state (§6) — no separate call.
       var leaseW = (summaryW && summaryW.lease) || {};
       var countsW = (summaryW && summaryW.counts) || {};
@@ -500,6 +517,7 @@
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
+        operator: operator,
         activeCrit: alerts.filter(function (a) { return !a.cleared && a.severity === "crit"; }).length,
         activeWarn: alerts.filter(function (a) { return !a.cleared && a.severity === "warn"; }).length,
         fmt: fmt,
@@ -652,6 +670,9 @@
       });
     },
 
+    // ---- alert lifecycle ----
+    ackAlert: function (eventId) { return post(EP.alertAck(eventId), {}); },
+
     // ---- authentication (§11.1) ----
     whoami: function () { return getJSON(EP.whoami); },
     login:  function (username, password) { return post(EP.login, { username: username, password: password }); },
@@ -680,6 +701,7 @@
     window.SOLARI.source = "offline";
     window.SOLARI.api = API;            // mutations still callable (will 404 offline, handled by caller)
     window.SOLARI.offlineReason = reason || null;
+    if (window.SOLARI.operator === undefined) window.SOLARI.operator = null;  // no session offline — the profile chip hides
     return window.SOLARI;
   }
 

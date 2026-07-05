@@ -180,7 +180,68 @@
     { id: "settings", label: "Config & Rules", icon: "settings" },
   ];
 
-  function Sidebar({ active, onNav, collapsed, onToggle, hidden, summary, activeCrit }) {
+  // ---------- shared logout (used by the TopBar profile menu AND the command
+  // palette "Log out" action — one code path so they can't drift) ----------
+  function solariLogout() {
+    const api = window.SolariAPI;
+    const done = () => window.location.reload();
+    return (api && api.logout ? api.logout() : Promise.resolve()).then(done, done);
+  }
+
+  // ---------- operator profile chip (TopBar) ----------
+  const ROLE_BADGE = { admin: "violet", operator: "teal", viewer: "muted" };
+  function ProfileChip({ operator }) {
+    const [open, setOpen] = useState(false);
+    useEffect(() => {
+      if (!open) return undefined;
+      function onKey(e) { if (e.key === "Escape") setOpen(false); }
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [open]);
+    if (!operator) return null;
+    const dn = operator.displayName || operator.name || "operator";
+    const initial = (dn.trim().charAt(0) || "?").toUpperCase();
+    const role = operator.role || "viewer";
+    const tone = ROLE_BADGE[role] || "muted";
+    return (
+      <div className="profile">
+        <button className={"profile-chip" + (open ? " open" : "")} onClick={() => setOpen((o) => !o)}
+          aria-haspopup="menu" aria-expanded={open} title={`Signed in as ${dn}`}>
+          <span className={"avatar " + tone}>{initial}</span>
+          <span className="profile-chip__name">{dn}</span>
+          <span className={"role-badge " + tone}>{role}</span>
+        </button>
+        {open && (
+          <>
+            <div className="menu-scrim" onClick={() => setOpen(false)} />
+            <div className="profile-menu" role="menu">
+              <div className="profile-menu__id">
+                <span className={"avatar lg " + tone}>{initial}</span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="profile-menu__name">{dn}</div>
+                  <div className="profile-menu__sub">
+                    {operator.name && operator.name !== dn ? <span className="td-mono">{operator.name} · </span> : null}
+                    <span className={"role-badge " + tone}>{role}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="profile-menu__row">
+                <Icon name="shield" size={14} />
+                <span>{operator.source === "directory" ? "Directory account" : "Local account"}</span>
+              </div>
+              <div className="profile-menu__sep" />
+              <button className="profile-menu__item" role="menuitem"
+                onClick={() => { setOpen(false); solariLogout(); }}>
+                <Icon name="enter" size={15} />Log out
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function Sidebar({ active, onNav, collapsed, onToggle, hidden, summary, activeCrit, activeWarn }) {
     return (
       <aside className={"sidebar" + (collapsed ? " collapsed" : "") + (hidden ? " hidden" : "")}>
         <div className="brand">
@@ -197,8 +258,12 @@
                 <Icon name={item.icon} size={19} className="ico" />
                 <span className="navlabel">{item.label}</span>
                 {item.planned && <span className="nav-item__pill">soon</span>}
-                {item.badge === "alerts" && activeCrit > 0 && <span className="nav-item__count">{activeCrit}</span>}
-                {item.badge === "discovery" && <span className="nav-item__count" style={{ background: "var(--ok-bg)", color: "var(--ok)" }}>{window.SOLARI.discovered.length}</span>}
+                {item.badge === "alerts" && (activeCrit + (activeWarn || 0)) > 0 && (
+                  <span className="nav-item__count" style={activeCrit > 0 ? undefined : { background: "var(--warn-bg)", color: "var(--warn)" }}>
+                    {activeCrit + (activeWarn || 0)}
+                  </span>
+                )}
+                {item.badge === "discovery" && window.SOLARI.discovered.length > 0 && <span className="nav-item__count" style={{ background: "var(--ok-bg)", color: "var(--ok)" }}>{window.SOLARI.discovered.length}</span>}
               </div>
             );
           })}
@@ -220,7 +285,7 @@
   }
 
   // ---------- top bar ----------
-  function TopBar({ onMenu, onOpenCmd, theme, onToggleTheme, server, lastTick, onSurvey }) {
+  function TopBar({ onMenu, onOpenCmd, theme, onToggleTheme, server, lastTick, onSurvey, operator }) {
     return (
       <header className="topbar">
         <button className="iconbtn" onClick={onMenu} aria-label="Toggle navigation"><Icon name="menu" size={20} /></button>
@@ -241,6 +306,7 @@
         <button className="iconbtn" onClick={onToggleTheme} aria-label="Toggle theme">
           <Icon name={theme === "dark" ? "sun" : "moon"} size={19} />
         </button>
+        <ProfileChip operator={operator} />
       </header>
     );
   }
@@ -313,5 +379,6 @@
   Object.assign(window, {
     StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars,
     Sidebar, TopBar, CommandPalette, Toasts, NAV, STATE_LABEL, metricColor,
+    ProfileChip, solariLogout,
   });
 })();
