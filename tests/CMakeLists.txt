@@ -166,4 +166,11 @@ if(TARGET servercore)
     ${CMAKE_SOURCE_DIR}/src/server)
   target_link_libraries(test_server_snmp PRIVATE servercore unity)
   add_test(NAME test_server_snmp COMMAND test_server_snmp)
+
+  add_executable(test_server_discovery_enrich unit/test_server_discovery_enrich.c)
+  target_include_directories(test_server_discovery_enrich PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/server)
+  target_link_libraries(test_server_discovery_enrich PRIVATE servercore unity)
+  add_test(NAME test_server_discovery_enrich COMMAND test_server_discovery_enrich)
 endif()

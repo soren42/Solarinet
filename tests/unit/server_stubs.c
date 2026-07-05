@@ -13,10 +13,14 @@
  */
 #include "server.h"
 #include "serverAssets.h"
+#include "solari/solariNet.h"
 
 #include <mariadb/mysql.h>
 
 #define WEAK __attribute__((weak))
+
+WEAK solariStatus solariConnSend(solariConn *c, const uint8_t *frame, size_t len)
+{ (void)c; (void)frame; (void)len; return SOLARI_OK; }
 
 /* ---- serverDb.c surface ---- */
 /* Connection accessor used by the SNMP/topology deep-walk drivers. The pure

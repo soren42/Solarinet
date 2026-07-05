@@ -267,8 +267,8 @@ solariStatus serverDiscoveryOnAdvert(serverContext *ctx, uint64_t nodeId,
             svcBody[0] = '\0';
             svcLen = 0;
             discSplitField((const char *)val, vlen, 0, cur.ip, sizeof cur.ip);
-            /* field 1 (mac) is not modelled in serverDiscEntity; field 2
-             * (iface) is informational only and likewise not stored. */
+            discSplitField((const char *)val, vlen, 1, cur.mac, sizeof cur.mac);
+            /* field 2 (iface) is informational only and not stored. */
             snprintf(cur.kind, sizeof cur.kind, "%s", kind);
             snprintf(cur.via,  sizeof cur.via,  "%s", via);
             haveEntity = (cur.ip[0] != '\0');

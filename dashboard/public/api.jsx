@@ -310,6 +310,13 @@
       seg: w.segId || w.seg,
       arch: w.arch,
       status: w.status,
+      // enrichment (nmap/SNMP/mDNS/OUI) — any may be null on an un-enriched record
+      mac: w.mac || null,
+      vendor: w.vendor || null,
+      osName: w.osName || null,
+      deviceRole: w.deviceRole || null,
+      sysDescr: w.sysDescr || null,
+      enrichedAt: w.enrichedAt || null,
     };
   }
 
