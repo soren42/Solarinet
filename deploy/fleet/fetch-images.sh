@@ -40,7 +40,11 @@ fetch_one() { # distro arch  kurl iurl  kname iname
 }
 
 DEB=https://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/netboot/debian-installer/amd64
-UBU=https://releases.ubuntu.com/24.04/ubuntu-24.04-netboot-amd64.tar.gz    # note: tarball; see below
+# Ubuntu renames the netboot tarball on every point release (24.04 -> 24.04.N),
+# so resolve the newest matching name from the release index at run time.
+UBU_BASE=https://releases.ubuntu.com/24.04
+UBU_FILE="$(curl -fsL "${UBU_BASE}/" | grep -oE 'ubuntu-24\.04[0-9.]*-netboot-amd64\.tar\.gz' | sort -uV | tail -1)"
+UBU="${UBU_BASE}/${UBU_FILE:-ubuntu-24.04-netboot-amd64.tar.gz}"    # note: tarball; see below
 SUSE=https://download.opensuse.org/distribution/leap/15.6/repo/oss/boot/x86_64/loader
 
 want debian   x86_64 && fetch_one debian   x86_64 "${DEB}/linux"  "${DEB}/initrd.gz" linux initrd.gz
@@ -51,7 +55,8 @@ if want ubuntu x86_64; then
   flog "fetching ubuntu/x86_64 netboot tarball"
   bssh "set -e; d='${HTTP_ROOT}/installers/ubuntu/x86_64'; install -d \"\$d\"; cd \"\$d\"
     [ -s vmlinuz ] || { curl -fL --retry 3 -o nb.tgz '${UBU}' && tar xzf nb.tgz && \
-      find . -name vmlinuz -exec cp {} vmlinuz \\; && find . -name initrd -exec cp {} initrd \\; ; }
+      { find . -name vmlinuz -exec cp {} vmlinuz \\; ; [ -s vmlinuz ] || find . -name linux -path '*/amd64/*' -exec cp {} vmlinuz \\; ; } && \
+      find . -name initrd -path '*/amd64/*' -exec cp {} initrd \\; ; }
     ls -lh \"\$d\" 2>/dev/null | head" || fwarn "ubuntu netboot fetch/unpack failed; update the URL in fetch-images.sh"
 fi
 

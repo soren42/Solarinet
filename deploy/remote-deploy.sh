@@ -28,6 +28,7 @@
 #                        not match IP SANs. The name is pinned in the target hosts file.
 #   --server-ip IP       IP to pin the server name to (default: this host's LAN IP).
 #   --fqdn NAME          target FQDN for its node id + cert CN (default: target hostname).
+#   --arch ARCH          override the probed target arch (x86_64/arm64/arm32/mips/mipsel).
 #   --ca-dir DIR         local internal-CA dir with ca.pem (default: run/pki).
 #   --bin PATH           client binary to deploy (default: by target arch, see below).
 #   --conf-dir DIR       remote config/material dir (default: auto-probed writable dir).
@@ -44,7 +45,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-HOST=""; SERVER_URL=""; SERVER_IP=""; FQDN=""; CA_DIR="${REPO_ROOT}/run/pki"; BIN=""
+HOST=""; SERVER_URL=""; SERVER_IP=""; FQDN=""; ARCH_OVERRIDE=""; CA_DIR="${REPO_ROOT}/run/pki"; BIN=""
 CONF_DIR=""; REMOTE_BIN=""; INTERVAL=15; DRY=0   # bin/conf dirs: empty -> auto-probe
 CTL_SOCK="${REPO_ROOT}/run/solariCtl.sock"; OP="${USER:-deploy}"
 SUDO="sudo"; T_INIT="systemd"; T_LIBC="glibc"; T_PKG="none"; STATE_DIR=""
@@ -59,6 +60,7 @@ while [ $# -gt 0 ]; do
     --server)     SERVER_URL="${2:?}"; shift ;;
     --server-ip)  SERVER_IP="${2:?}"; shift ;;
     --fqdn)       FQDN="${2:?}"; shift ;;
+    --arch)       ARCH_OVERRIDE="${2:?}"; shift ;;
     --ca-dir)     CA_DIR="${2:?}"; shift ;;
     --bin)        BIN="${2:?}"; shift ;;
     --conf-dir)   CONF_DIR="${2:?}"; shift ;;
@@ -75,7 +77,15 @@ done
 
 [ -n "${HOST}" ] || die "--host is required (try --help)"
 command -v openssl >/dev/null 2>&1 || die "openssl is required locally"
-command -v python3 >/dev/null 2>&1 || die "python3 is required locally (for the CA SIGN call)"
+# solariCtlClient (standard C) speaks the solariCtl SIGN protocol; no python.
+CTL_CLIENT=""
+for c in "${REPO_ROOT}/build-snmp/src/server/solariCtlClient" \
+         "${REPO_ROOT}/build-nosnmp/src/server/solariCtlClient" \
+         "${REPO_ROOT}/build/src/server/solariCtlClient" \
+         "$(command -v solariCtlClient 2>/dev/null || true)"; do
+  [ -n "${c}" ] && [ -x "${c}" ] && CTL_CLIENT="${c}" && break
+done
+[ -n "${CTL_CLIENT}" ] || die "solariCtlClient not found; build the server tree (target solariCtlClient)"
 # Only the CA ROOT cert is needed here (to ship to the client so it trusts the
 # server). The CA PRIVATE key never touches this script — the server's CA signs
 # the CSR over the solariCtl socket (SIGN verb).
@@ -136,6 +146,8 @@ T_PKG="$(prb pkg)";   [ -n "${T_PKG}" ]  || T_PKG=none
 [ -n "${FQDN}" ] || { [ "${DRY}" -eq 1 ] && FQDN="${HOST##*@}"; }
 [ -n "${FQDN}" ] || die "could not determine target FQDN; pass --fqdn"
 
+# --arch overrides the probed arch (the DEPLOY ctl verb passes it explicitly).
+[ -n "${ARCH_OVERRIDE}" ] && RAW_ARCH="${ARCH_OVERRIDE}"
 case "${RAW_ARCH}" in
   x86_64|amd64)        ARCH=x86_64 ;;
   aarch64|arm64)       ARCH=arm64 ;;
@@ -188,24 +200,9 @@ cp "${CA_DIR}/ca.pem" "${TMP}/ca.pem"
 
 [ -S "${CTL_SOCK}" ] || die "solariCtl socket not found: ${CTL_SOCK} (is the server running? pass --ctl-sock)"
 log "requesting cert from CA via ${CTL_SOCK} (op=${OP})"
-SIGN_RC=0
-python3 - "${CTL_SOCK}" "${TMP}/node.csr" "${TMP}/node.pem" "${OP}" <<'PY' || SIGN_RC=$?
-import sys, socket, urllib.parse
-sock, csrf, outf, op = sys.argv[1:5]
-csr = open(csrf).read()
-s = socket.socket(socket.AF_UNIX); s.connect(sock)
-s.sendall(("SIGN op=%s csr=%s\n" % (op, urllib.parse.quote(csr, safe=""))).encode())
-buf = b""
-while b"\n" not in buf:
-    d = s.recv(65536)
-    if not d: break
-    buf += d
-reply = buf.decode(errors="replace").rstrip("\n")
-if not reply.startswith("OK cert="):
-    sys.stderr.write("CA SIGN failed: %s\n" % reply); sys.exit(2)
-open(outf, "w").write(urllib.parse.unquote(reply[len("OK cert="):]))
-PY
-[ "${SIGN_RC}" -eq 0 ] && [ -s "${TMP}/node.pem" ] || die "CA did not return a signed certificate (RC=${SIGN_RC})"
+"${CTL_CLIENT}" --sock "${CTL_SOCK}" sign --op "${OP}" \
+  --csr "${TMP}/node.csr" --out "${TMP}/node.pem" || die "CA SIGN failed"
+[ -s "${TMP}/node.pem" ] || die "CA did not return a signed certificate"
 log "CA signed cert CN=client.${FQDN}"
 
 # ---- render client.conf -----------------------------------------------------

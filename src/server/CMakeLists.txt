@@ -102,4 +102,9 @@ target_link_libraries(solariServer PRIVATE servercore)
 add_executable(solariSnmpPoll snmpPollMain.c)
 target_link_libraries(solariSnmpPoll PRIVATE servercore)
 
+# solariCtlClient — standard-C client for the solariCtl operator bridge
+# (replaces the python3 helper the deploy scripts used to embed). Pure
+# libc + POSIX sockets; no servercore dependency.
+add_executable(solariCtlClient ctlClientMain.c)
+
 message(STATUS "solariServer: MariaDB libs=${MARIADB_LIBS}")
