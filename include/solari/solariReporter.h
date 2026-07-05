@@ -51,6 +51,14 @@ solariStatus solariReporterFrame(solariReporter *r, uint8_t msgType, uint8_t fla
                                  uint16_t tlvCount,
                                  uint8_t *out, size_t cap, size_t *outLen);
 
+/* Like solariReporterFrame but stamps correlationId, for replies that must echo
+ * a request's seqNo (sec 5.2) - e.g. CONTROL_RESULT answering a directive. */
+solariStatus solariReporterFrameCorr(solariReporter *r, uint8_t msgType, uint8_t flags,
+                                     uint32_t correlationId,
+                                     const uint8_t *payload, size_t payloadLen,
+                                     uint16_t tlvCount,
+                                     uint8_t *out, size_t cap, size_t *outLen);
+
 /* Send a prebuilt frame durably: push if connected; on transient/offline
  * failure, spool it (when a spool exists). On a successful live send,
  * opportunistically drains the spool. Returns SOLARI_OK when the frame was sent

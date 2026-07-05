@@ -1,32 +1,18 @@
 /*
- * monitorControl.c - SCP_MSG_CONTROL handling on the monitor (sec 8, sec 9.1,
- * Phase 3 Handoff sec 4.2/7.4).
+ * clientControl.c - client control-plane receive + apply (§7.3, §9.1).
  *
- * The server steers a live monitor without a redeploy by PUBLISHING
- * SCP_MSG_CONTROL directives on its fleet PUB channel:
+ * See clientControl.h for the layering contract. The pure half (apply +
+ * handle) mirrors serverControl.c's tolerant parser style: every byte comes
+ * off the broadcast PUB channel and is untrusted, so parsing is bounded,
+ * unknown TLVs/JSON keys are skipped, and a malformed directive is rejected
+ * whole (never partially applied, never fatal).
  *
- *   CTRL_ADOPT_TARGET       - "one-click monitor this": promotes a discovered
- *     entity to a live probe target. TLV_CTRL_PAYLOAD carries the same
- *     "proto:host[:port][ : label]" spec the .conf uses, so adoption converges
- *     through the one scheduler add path (monitorAddTarget) - idempotent.
- *
- *   CTRL_SET_CONFIG / CTRL_PROVISION - converge this node to a config epoch:
- *     TLV_CTRL_PAYLOAD carries the per-node JSON config blob
- *     (nodeConfig.configBlob) and TLV_CTRL_TARGET_EPOCH the epoch to reach.
- *     Applied hot (round interval, probe tuning, target set), persisted to the
- *     local applied-state file, and acknowledged with the applied epoch.
- *
- * The monitor answers each addressed directive with SCP_MSG_CONTROL_RESULT
- * (verb echo + error magnitude + applied epoch) whose correlationId echoes the
- * directive frame's seqNo; the server folds it into per-node convergence
- * (serverControlOnResult -> serverDbSetNodeApplied).
- *
- * Layering mirrors serverControl.c and clientControl.c: parse/apply/decide is
- * pure over caller memory (unit-testable, no I/O); the state file is small
- * separate file I/O; the SUB-transport glue compiles only with
- * MONITOR_WITH_REPORTING.
+ * Epoch safety (§7.3): a directive whose targetEpoch is <= the epoch this
+ * node has already applied is answered as converged (CONTROL_RESULT carrying
+ * the current applied epoch) but NOT re-applied, so an idempotent
+ * re-provision converges instead of thrashing the live config.
  */
-#include "monitor.h"
+#include "clientControl.h"
 
 #include "solari/solariJson.h"
 #include "solari/solariLog.h"
@@ -36,71 +22,112 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Bounds for hot-applied probe tuning (defensive; the dashboard validates
- * tighter ranges - the agent only refuses the absurd). */
+/* Bounds for hot-applied scheduling values (defensive: the dashboard
+ * validates tighter ranges; the agent only refuses the absurd). */
 enum {
-    MONITOR_CTRL_INTERVAL_MIN = 1,
-    MONITOR_CTRL_INTERVAL_MAX = 86400,
-    MONITOR_CTRL_TIMEOUT_MIN  = 50,
-    MONITOR_CTRL_TIMEOUT_MAX  = 60000,
-    MONITOR_CTRL_BLOB_MAX     = 60 * 1024
+    CLIENT_CTRL_INTERVAL_MIN = 1,
+    CLIENT_CTRL_INTERVAL_MAX = 86400,
+    CLIENT_CTRL_BLOB_MAX     = 60 * 1024   /* mirrors PROV_PAYLOAD_CAP order */
 };
 
 /* ===================================================================== */
 /* Pure: blob -> config                                                  */
 /* ===================================================================== */
 
-solariStatus monitorControlApplyBlob(monitorConfig *cfg, const char *json, size_t len)
+/* Replace cfg's watched-process list from a JSON string array under `key`.
+ * Returns true if the key existed as an array (list replaced). */
+static bool applyProcessList(clientConfig *cfg, const char *json, size_t len,
+                             const char *key)
+{
+    char name[SOLARI_PROCNAME_MAX];
+    size_t i;
+    uint8_t n = 0;
+    solariStatus rc;
+
+    if (!solariJsonHasArray(json, len, key)) return false;
+
+    for (i = 0; n < SOLARI_MAX_PROCS; i++) {
+        rc = solariJsonGetStrAt(json, len, key, i, name, sizeof name);
+        if (rc == ERR_TLV_END) break;
+        if (rc != SOLARI_OK) continue;       /* skip non-string entries */
+        if (name[0] == '\0') continue;
+        strncpy(cfg->procs[n], name, SOLARI_PROCNAME_MAX - 1);
+        cfg->procs[n][SOLARI_PROCNAME_MAX - 1] = '\0';
+        n++;
+    }
+    cfg->procCount = n;
+    return true;
+}
+
+/* Replace cfg's watched-log list from a JSON string array of
+ * "path[ : regex]" entries under `key` (the .conf `logfile =` syntax). */
+static bool applyLogList(clientConfig *cfg, const char *json, size_t len,
+                         const char *key)
+{
+    char entry[SOLARI_LOGPATH_MAX + 132];
+    size_t i;
+    uint8_t n = 0;
+    solariStatus rc;
+
+    if (!solariJsonHasArray(json, len, key)) return false;
+
+    for (i = 0; n < SOLARI_MAX_LOGS; i++) {
+        clientLogWatch *w;
+        const char *sep;
+        size_t plen;
+
+        rc = solariJsonGetStrAt(json, len, key, i, entry, sizeof entry);
+        if (rc == ERR_TLV_END) break;
+        if (rc != SOLARI_OK) continue;
+        if (entry[0] == '\0') continue;
+
+        w = &cfg->logs[n];
+        memset(w, 0, sizeof *w);
+        sep = strstr(entry, " : ");                 /* "path : regex" */
+        if (sep) {
+            plen = (size_t)(sep - entry);
+            if (plen >= sizeof w->path) plen = sizeof w->path - 1;
+            memcpy(w->path, entry, plen);
+            w->path[plen] = '\0';
+            strncpy(w->regex, sep + 3, sizeof w->regex - 1);
+        } else {
+            strncpy(w->path, entry, sizeof w->path - 1);
+        }
+        if (w->path[0] == '\0') continue;
+        n++;
+    }
+    cfg->logCount = n;
+    return true;
+}
+
+solariStatus clientControlApplyBlob(clientConfig *cfg, const char *json, size_t len)
 {
     uint64_t v;
 
     if (!cfg) return ERR_INVALID_ARG;
     if (!json || len == 0) return SOLARI_OK;       /* empty blob: epoch-only */
-    if (len > MONITOR_CTRL_BLOB_MAX) return ERR_BUFFER_FULL;
+    if (len > CLIENT_CTRL_BLOB_MAX) return ERR_BUFFER_FULL;
 
-    /* Whole-document gate: malformed blobs are a no-op, never partial. */
+    /* Whole-document gate: a malformed blob must be a no-op, never a partial
+     * application of whichever keys happened to scan out of the wreckage. */
     if (solariJsonValidate(json, len) != SOLARI_OK) return ERR_INVALID_ARG;
 
-    if (solariJsonGetU64(json, len, "roundIntervalSec", &v) == SOLARI_OK) {
-        if (v < MONITOR_CTRL_INTERVAL_MIN) v = MONITOR_CTRL_INTERVAL_MIN;
-        if (v > MONITOR_CTRL_INTERVAL_MAX) v = MONITOR_CTRL_INTERVAL_MAX;
-        cfg->roundIntervalSec = (uint32_t)v;
+    if (solariJsonGetU64(json, len, "sampleIntervalSec", &v) == SOLARI_OK) {
+        if (v < CLIENT_CTRL_INTERVAL_MIN) v = CLIENT_CTRL_INTERVAL_MIN;
+        if (v > CLIENT_CTRL_INTERVAL_MAX) v = CLIENT_CTRL_INTERVAL_MAX;
+        cfg->sampleIntervalSec = (uint32_t)v;
     }
-    if (solariJsonGetU64(json, len, "probesPerRound", &v) == SOLARI_OK) {
-        if (v < 1)   v = 1;
-        if (v > 100) v = 100;
-        cfg->probesPerRound = (uint16_t)v;
-    }
-    if (solariJsonGetU64(json, len, "probeTimeoutMs", &v) == SOLARI_OK) {
-        if (v < MONITOR_CTRL_TIMEOUT_MIN) v = MONITOR_CTRL_TIMEOUT_MIN;
-        if (v > MONITOR_CTRL_TIMEOUT_MAX) v = MONITOR_CTRL_TIMEOUT_MAX;
-        cfg->probeTimeoutMs = (uint32_t)v;
-    }
-    if (solariJsonGetU64(json, len, "replFactor", &v) == SOLARI_OK) {
-        if (v < 1) v = 1;
-        if (v > MONITOR_MAX_FLEET) v = MONITOR_MAX_FLEET;
-        cfg->replFactor = (uint8_t)v;
+    if (solariJsonGetU64(json, len, "watchdogIntervalSec", &v) == SOLARI_OK) {
+        if (v > CLIENT_CTRL_INTERVAL_MAX) v = CLIENT_CTRL_INTERVAL_MAX;
+        cfg->watchdogIntervalSec = (uint32_t)v;
     }
 
-    /* Probe target SET: when present, the array is the desired state - the
-     * schedule is rebuilt through the one converging add path. Invalid specs
-     * are skipped with a log (tolerant), valid ones land. */
-    if (solariJsonHasArray(json, len, "targets")) {
-        char spec[MONITOR_TARGETID_MAX];
-        size_t i;
-        solariStatus rc;
+    /* Watch lists: replace-when-present (the blob is the desired state). */
+    if (!applyProcessList(cfg, json, len, "processes"))
+        (void)applyProcessList(cfg, json, len, "procs");
+    if (!applyLogList(cfg, json, len, "logfiles"))
+        (void)applyLogList(cfg, json, len, "logs");
 
-        cfg->targetCount = 0;
-        for (i = 0; cfg->targetCount < MONITOR_MAX_TARGETS; i++) {
-            rc = solariJsonGetStrAt(json, len, "targets", i, spec, sizeof spec);
-            if (rc == ERR_TLV_END) break;
-            if (rc != SOLARI_OK) continue;
-            if (spec[0] == '\0') continue;
-            if (monitorAddTarget(cfg, spec) != SOLARI_OK)
-                solariLogf(SOLARI_LOG_WARN,
-                           "control: skipped bad target spec '%s'", spec);
-        }
-    }
     return SOLARI_OK;
 }
 
@@ -108,9 +135,9 @@ solariStatus monitorControlApplyBlob(monitorConfig *cfg, const char *json, size_
 /* Pure: directive -> outcome + CONTROL_RESULT payload                   */
 /* ===================================================================== */
 
-/* Build the CONTROL_RESULT payload: echo the verb, report the magnitude
- * (0 = success), and the epoch this node now reports applied. The wire shape
- * matches serverControlOnResult's parser byte-for-byte. */
+/* Build the CONTROL_RESULT payload: echoed verb, error magnitude (0 = ok),
+ * and the epoch this node now reports applied (the convergence signal
+ * serverControlOnResult folds into serverDbSetNodeApplied). */
 static solariStatus buildResult(uint8_t verb, solariStatus outcome,
                                 uint64_t appliedEpoch,
                                 uint8_t *buf, size_t cap,
@@ -125,22 +152,20 @@ static solariStatus buildResult(uint8_t verb, solariStatus outcome,
     if (rc == SOLARI_OK) rc = solariTlvAppendU16(&w, TLV_ERROR_CODE, mag);
     if (rc == SOLARI_OK) rc = solariTlvAppendU64(&w, TLV_CTRL_TARGET_EPOCH, appliedEpoch);
     if (rc != SOLARI_OK) return rc;
-    if (outLen)    *outLen    = w.len;
-    if (tlvCount)  *tlvCount  = w.count;
+    if (outLen)   *outLen   = w.len;
+    if (tlvCount) *tlvCount = w.count;
     return SOLARI_OK;
 }
 
-solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
-                                  uint64_t selfNodeId,
-                                  const uint8_t *payload, size_t payloadLen,
-                                  uint8_t *resultBuf, size_t resultCap,
-                                  size_t *resultLen, uint16_t *resultTlvCount,
-                                  monitorControlOutcome *out)
+solariStatus clientControlHandle(clientControlState *st, clientConfig *cfg,
+                                 uint64_t selfNodeId,
+                                 const uint8_t *payload, size_t payloadLen,
+                                 uint8_t *resultBuf, size_t resultCap,
+                                 size_t *resultLen, uint16_t *resultTlvCount,
+                                 clientControlOutcome *out)
 {
     solariControl c;
     solariStatus  rc, outcome;
-    char spec[MONITOR_TARGETID_MAX];
-    uint16_t n;
 
     if (out) memset(out, 0, sizeof *out);
     if (resultLen)      *resultLen      = 0;
@@ -151,6 +176,8 @@ solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
     rc = solariMsgParseControl(payload ? payload : (const uint8_t *)"",
                                payload ? payloadLen : 0, &c);
     if (rc != SOLARI_OK) {
+        /* Malformed wire input off the broadcast channel: drop, no reply
+         * (there is no trustworthy verb/epoch to echo). */
         solariLogf(SOLARI_LOG_WARN, "control: malformed directive dropped: %s",
                    solariStrError(rc));
         return rc;
@@ -164,28 +191,9 @@ solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
     out->verb = c.verb;
 
     switch (c.verb) {
-    case CTRL_ADOPT_TARGET:
-        /* The adopt payload is the target spec; copy it NUL-terminated (TLV
-         * strings carry no terminator), bound to a targetId's worth of bytes.
-         * No epoch semantics: adoption is a live-schedule nudge. */
-        if (!c.payload || c.payloadLen == 0) outcome = ERR_INVALID_ARG;
-        else {
-            n = c.payloadLen < sizeof spec - 1 ? c.payloadLen : (uint16_t)(sizeof spec - 1);
-            memcpy(spec, c.payload, n);
-            spec[n] = '\0';
-            outcome = monitorAddTarget(cfg, spec);
-            if (outcome == SOLARI_OK)
-                solariLogf(SOLARI_LOG_INFO, "adopted target '%s' (%u live)",
-                           spec, (unsigned)cfg->targetCount);
-            else
-                solariLogf(SOLARI_LOG_ERROR, "adopt target '%s' failed: %s",
-                           spec, solariStrError(outcome));
-        }
-        break;
-
     case CTRL_SET_CONFIG:
     case CTRL_PROVISION:
-        /* Epoch monotonicity: never re-apply the past; ack as converged so a
+        /* Epoch monotonicity: never re-apply the past. Ack as converged so a
          * re-published directive settles the server's drift view. */
         if (c.targetEpoch <= st->appliedEpoch) {
             solariLogf(SOLARI_LOG_INFO,
@@ -195,19 +203,19 @@ solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
             outcome = SOLARI_OK;
             break;
         }
-        outcome = monitorControlApplyBlob(cfg, (const char *)c.payload,
-                                          c.payloadLen);
+        outcome = clientControlApplyBlob(cfg, (const char *)c.payload,
+                                         c.payloadLen);
         if (outcome == SOLARI_OK) {
             st->appliedEpoch = c.targetEpoch;
             out->applied = true;
             out->blob    = c.payload;
             out->blobLen = c.payloadLen;
             solariLogf(SOLARI_LOG_INFO,
-                       "control: verb %u applied, epoch %llu (round %us, "
-                       "%u targets)",
+                       "control: verb %u applied, epoch %llu (interval %us, "
+                       "%u procs, %u logs)",
                        (unsigned)c.verb, (unsigned long long)c.targetEpoch,
-                       (unsigned)cfg->roundIntervalSec,
-                       (unsigned)cfg->targetCount);
+                       (unsigned)cfg->sampleIntervalSec,
+                       (unsigned)cfg->procCount, (unsigned)cfg->logCount);
         } else {
             solariLogf(SOLARI_LOG_ERROR,
                        "control: verb %u epoch %llu apply failed: %s",
@@ -217,7 +225,8 @@ solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
         break;
 
     default:
-        solariLogf(SOLARI_LOG_WARN, "control verb %u not handled", (unsigned)c.verb);
+        solariLogf(SOLARI_LOG_WARN, "control: verb %u not handled",
+                   (unsigned)c.verb);
         outcome = ERR_UNKNOWN_MSG;
         break;
     }
@@ -233,7 +242,7 @@ solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
 /* Applied-state persistence ("<epoch>\n<blob>")                         */
 /* ===================================================================== */
 
-void monitorControlStatePath(const monitorConfig *cfg, char *out, size_t cap)
+void clientControlStatePath(const clientConfig *cfg, char *out, size_t cap)
 {
     if (!out || cap == 0) return;
     out[0] = '\0';
@@ -244,9 +253,9 @@ void monitorControlStatePath(const monitorConfig *cfg, char *out, size_t cap)
         snprintf(out, cap, "%s.ctrl", cfg->spoolDb);
 }
 
-solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg)
+solariStatus clientControlStateLoad(clientControlState *st, clientConfig *cfg)
 {
-    char   path[sizeof cfg->ctrlStateFile + 8];
+    char   path[CLIENT_PATH_MAX + 8];
     FILE  *f;
     char  *blob = NULL;
     char   line[32];
@@ -257,7 +266,7 @@ solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg
     if (!st || !cfg) return ERR_INVALID_ARG;
     st->appliedEpoch = cfg->configEpoch;        /* .conf floor */
 
-    monitorControlStatePath(cfg, path, sizeof path);
+    clientControlStatePath(cfg, path, sizeof path);
     if (path[0] == '\0') return SOLARI_OK;      /* persistence off */
 
     f = fopen(path, "rb");
@@ -266,9 +275,10 @@ solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg
     if (!fgets(line, sizeof line, f)) { fclose(f); return SOLARI_OK; }
     epoch = (uint64_t)strtoull(line, NULL, 10);
 
+    /* The rest of the file is the applied blob. */
     if (fseek(f, 0, SEEK_END) == 0 && (sz = ftell(f)) > 0) {
         size_t hdr = strlen(line);
-        if ((size_t)sz > hdr && (size_t)sz - hdr <= MONITOR_CTRL_BLOB_MAX) {
+        if ((size_t)sz > hdr && (size_t)sz - hdr <= CLIENT_CTRL_BLOB_MAX) {
             blobLen = (size_t)sz - hdr;
             blob = (char *)malloc(blobLen + 1);
             if (blob && fseek(f, (long)hdr, SEEK_SET) == 0 &&
@@ -280,7 +290,8 @@ solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg
     fclose(f);
 
     if (epoch > st->appliedEpoch) {
-        if (!blob || monitorControlApplyBlob(cfg, blob, blobLen) == SOLARI_OK) {
+        /* Re-apply the persisted push over the .conf so a restart keeps it. */
+        if (!blob || clientControlApplyBlob(cfg, blob, blobLen) == SOLARI_OK) {
             st->appliedEpoch = epoch;
             solariLogf(SOLARI_LOG_INFO,
                        "control: restored applied epoch %llu from %s",
@@ -294,16 +305,16 @@ solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg
     return SOLARI_OK;
 }
 
-solariStatus monitorControlStateSave(const monitorConfig *cfg,
-                                     const monitorControlState *st,
-                                     const uint8_t *blob, uint16_t blobLen)
+solariStatus clientControlStateSave(const clientConfig *cfg,
+                                    const clientControlState *st,
+                                    const uint8_t *blob, uint16_t blobLen)
 {
-    char  path[sizeof cfg->ctrlStateFile + 8];
-    char  tmp[sizeof cfg->ctrlStateFile + 16];
+    char  path[CLIENT_PATH_MAX + 8];
+    char  tmp[CLIENT_PATH_MAX + 16];
     FILE *f;
 
     if (!cfg || !st) return ERR_INVALID_ARG;
-    monitorControlStatePath(cfg, path, sizeof path);
+    clientControlStatePath(cfg, path, sizeof path);
     if (path[0] == '\0') return SOLARI_OK;      /* persistence off */
 
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
@@ -319,18 +330,22 @@ solariStatus monitorControlStateSave(const monitorConfig *cfg,
 /* ===================================================================== */
 /* Transport glue (SUB dial + poll + reply)                              */
 /* ===================================================================== */
-#ifdef MONITOR_WITH_REPORTING
+#ifdef CLIENT_WITH_REPORTING
 
 #include "solari/solariFrame.h"
 #include "solari/solariTime.h"
 
-#define MONITOR_CTRL_RECV_SLICE_MS 250   /* idle recv quantum in the poll loop */
-#define MONITOR_CTRL_BURST 16            /* directive bound per poll call      */
+/* How long one idle recv may block: the poll loop's pacing quantum. Short
+ * enough that a waitMs deadline is honored within one quantum. */
+#define CLIENT_CTRL_RECV_SLICE_MS 250
+/* Directive burst bound per poll call - a flood cannot starve sampling. */
+#define CLIENT_CTRL_BURST 16
 
 /* Derive the pub-channel URL: configured subUrl wins; otherwise re-point the
- * primary ingest URL at the standard pub port 7703, preserving scheme and the
- * dial-by-name host so the server cert's DNS SAN verifies under mbedTLS. */
-static void ctrlDeriveSubUrl(const monitorConfig *cfg, char *out, size_t cap)
+ * primary ingest URL at the standard pub port (§2: ingest 7701 / control 7702
+ * / pub 7703), preserving scheme and the DIAL-BY-NAME host so the server
+ * cert's DNS SAN still verifies under mbedTLS. */
+static void ctrlDeriveSubUrl(const clientConfig *cfg, char *out, size_t cap)
 {
     const char *p, *hostEnd;
     size_t n;
@@ -353,7 +368,7 @@ static void ctrlDeriveSubUrl(const monitorConfig *cfg, char *out, size_t cap)
     }
 }
 
-solariStatus monitorControlOpen(const monitorConfig *cfg, monitorControlIo *io)
+solariStatus clientControlOpen(const clientConfig *cfg, clientControlIo *io)
 {
     solariConnOpts o;
     solariStatus   rc;
@@ -372,7 +387,7 @@ solariStatus monitorControlOpen(const monitorConfig *cfg, monitorControlIo *io)
     o.keyFile       = cfg->keyFile[0]  ? cfg->keyFile  : NULL;
     o.dialTimeoutMs = 3000;
     o.sendTimeoutMs = 1000;
-    o.recvTimeoutMs = MONITOR_CTRL_RECV_SLICE_MS;
+    o.recvTimeoutMs = CLIENT_CTRL_RECV_SLICE_MS;
 
     rc = solariConnOpen(&o, &io->sub);
     if (rc != SOLARI_OK) {
@@ -386,17 +401,19 @@ solariStatus monitorControlOpen(const monitorConfig *cfg, monitorControlIo *io)
     return SOLARI_OK;
 }
 
-void monitorControlClose(monitorControlIo *io)
+void clientControlClose(clientControlIo *io)
 {
     if (io && io->sub) { solariConnClose(io->sub); io->sub = NULL; }
 }
 
-/* Push the CONTROL_RESULT over the reporter (ingest channel). Durable: an
- * offline result spools with the reports and replays on reconnect. */
-static void ctrlSendResult(monitorContext *ctx, uint32_t correlationId,
+/* Send the CONTROL_RESULT for one handled directive over the reporter (push
+ * channel -> server ingest -> serverControlOnResult). Durable: an offline
+ * result spools with the reports and replays on reconnect, so convergence
+ * survives a flapping link. */
+static void ctrlSendResult(clientContext *ctx, uint32_t correlationId,
                            const uint8_t *tlv, size_t tlvLen, uint16_t tlvCount)
 {
-    uint8_t frame[MONITOR_CTRL_RESULT_CAP + 128];
+    uint8_t frame[CLIENT_CTRL_RESULT_CAP + 128];
     size_t  flen = 0;
 
     if (solariReporterFrameCorr(ctx->rep, SCP_MSG_CONTROL_RESULT,
@@ -407,9 +424,9 @@ static void ctrlSendResult(monitorContext *ctx, uint32_t correlationId,
     (void)solariReporterSend(ctx->rep, frame, flen);
 }
 
-void monitorControlPoll(monitorControlIo *io, monitorContext *ctx,
-                        monitorConfig *cfg, monitorControlState *st,
-                        uint32_t waitMs)
+void clientControlPoll(clientControlIo *io, clientContext *ctx,
+                       clientConfig *cfg, clientControlState *st,
+                       uint32_t waitMs)
 {
     uint64_t deadline = solariNowUnixMs() + waitMs;
     int      handled  = 0;
@@ -423,10 +440,10 @@ void monitorControlPoll(monitorControlIo *io, monitorContext *ctx,
         const uint8_t    *buf = NULL, *payload = NULL;
         size_t            len = 0, plen = 0;
         solariFrameHeader hdr;
-        uint8_t           tlv[MONITOR_CTRL_RESULT_CAP];
+        uint8_t           tlv[CLIENT_CTRL_RESULT_CAP];
         size_t            tlvLen = 0;
         uint16_t          tlvCount = 0;
-        monitorControlOutcome oc;
+        clientControlOutcome oc;
         solariStatus      rc;
         uint64_t          now;
 
@@ -434,16 +451,16 @@ void monitorControlPoll(monitorControlIo *io, monitorContext *ctx,
         if (rc == SOLARI_OK) {
             if (solariFrameParse(buf, len, &hdr, &payload, &plen, NULL) == SOLARI_OK &&
                 hdr.msgType == SCP_MSG_CONTROL &&
-                handled < MONITOR_CTRL_BURST) {
+                handled < CLIENT_CTRL_BURST) {
                 handled++;
-                (void)monitorHandleControl(st, cfg, ctx->nodeId, payload, plen,
-                                           tlv, sizeof tlv, &tlvLen, &tlvCount,
-                                           &oc);
+                (void)clientControlHandle(st, cfg, ctx->nodeId, payload, plen,
+                                          tlv, sizeof tlv, &tlvLen, &tlvCount,
+                                          &oc);
                 if (oc.applied &&
-                    monitorControlStateSave(cfg, st, oc.blob, oc.blobLen) != SOLARI_OK)
-                    /* Hot-apply succeeded; only restart-durability failed. Loud,
-                     * not silent (the convergence ack is truthful for the
-                     * running monitor). */
+                    clientControlStateSave(cfg, st, oc.blob, oc.blobLen) != SOLARI_OK)
+                    /* Hot-apply succeeded (running config is current, so the
+                     * convergence ack below is truthful for this process); only
+                     * restart-durability failed. Make it loud rather than silent. */
                     solariLogf(SOLARI_LOG_ERROR,
                                "control: applied epoch %llu but state persist "
                                "failed; config will not survive a restart",
@@ -454,24 +471,28 @@ void monitorControlPoll(monitorControlIo *io, monitorContext *ctx,
                     ctrlSendResult(ctx, hdr.seqNo, tlv, tlvLen, tlvCount);
                 }
             }
+            /* non-CONTROL publishes (surveys etc.) are other increments */
         } else if (rc == ERR_CONN_FATAL) {
             solariLogf(SOLARI_LOG_WARN, "control: subscribe link lost");
             solariConnClose(io->sub);
             io->sub = NULL;
             break;
         }
+        /* ERR_CONN_RETRY = idle slice elapsed; loop until the deadline */
         now = solariNowUnixMs();
         if (now >= deadline) break;
-        if (deadline - now < MONITOR_CTRL_RECV_SLICE_MS && rc != SOLARI_OK) {
+        if (deadline - now < CLIENT_CTRL_RECV_SLICE_MS && rc != SOLARI_OK) {
             solariSleepMs((uint32_t)(deadline - now));
             break;
         }
     } while (waitMs > 0);
 
-    if (!io->sub) {                             /* dropped mid-wait: keep cadence */
+    /* Channel dropped mid-wait: honor the remaining sleep so the sample
+     * cadence is preserved. */
+    if (!io->sub) {
         uint64_t now = solariNowUnixMs();
         if (now < deadline) solariSleepMs((uint32_t)(deadline - now));
     }
 }
 
-#endif /* MONITOR_WITH_REPORTING */
+#endif /* CLIENT_WITH_REPORTING */

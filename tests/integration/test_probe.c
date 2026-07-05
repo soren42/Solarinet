@@ -119,6 +119,8 @@ static int hasTarget(const monitorConfig *cfg, const char *targetId)
 static void test_adopt_target(void)
 {
     monitorConfig cfg;
+    monitorControlState cst;
+    monitorControlOutcome oc;
     uint8_t payload[256], result[64];
     size_t plen, rlen = 0;
     uint16_t rtc = 0, code = 0xffff;
@@ -127,11 +129,13 @@ static void test_adopt_target(void)
     uint16_t type; const uint8_t *val; uint16_t len;
 
     monitorConfigDefaults(&cfg);
+    memset(&cst, 0, sizeof cst);
     TEST_ASSERT_EQUAL_UINT8(0, cfg.targetCount);
 
     plen = buildAdopt("tcp:198.51.100.7:443 : edge", payload, sizeof payload);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        monitorHandleControl(&cfg, payload, plen, result, sizeof result, &rlen, &rtc));
+        monitorHandleControl(&cst, &cfg, 0x1, payload, plen,
+                             result, sizeof result, &rlen, &rtc, &oc));
     TEST_ASSERT_EQUAL_UINT8(1, cfg.targetCount);
     TEST_ASSERT_TRUE(hasTarget(&cfg, "tcp:198.51.100.7:443"));
 
@@ -147,7 +151,8 @@ static void test_adopt_target(void)
     /* idempotent: adopting the same spec again leaves the count unchanged */
     plen = buildAdopt("tcp:198.51.100.7:443 : edge", payload, sizeof payload);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        monitorHandleControl(&cfg, payload, plen, result, sizeof result, &rlen, &rtc));
+        monitorHandleControl(&cst, &cfg, 0x1, payload, plen,
+                             result, sizeof result, &rlen, &rtc, &oc));
     TEST_ASSERT_EQUAL_UINT8(1, cfg.targetCount);
 }
 

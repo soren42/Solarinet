@@ -178,6 +178,21 @@ static solariStatus openCommon(const solariConnOpts *opts, solariConn **out, boo
     c->sockOpen = true;
     applyTimeouts(c->sock, opts);
 
+    /* An nng SUB socket delivers nothing until it subscribes to at least one
+     * topic prefix. SCP frames are not topic-prefixed (they begin with the
+     * length word + 'S''N' magic), so subscribe to everything; addressing is
+     * carried inside the frame (TLV_CTRL_TARGET_NODE) and filtered by the
+     * receiver. */
+    if (opts->pattern == SOLARI_PATTERN_SUB) {
+        rv = nng_socket_set(c->sock, NNG_OPT_SUB_SUBSCRIBE, "", 0);
+        if (rv != 0) {
+            solariLogf(SOLARI_LOG_ERROR, "net: sub subscribe-all failed: %s",
+                       nng_strerror(rv));
+            solariConnClose(c);
+            return ERR_CONN_FATAL;
+        }
+    }
+
     if (opts->useTls) {
         nng_tls_config *tls = NULL;
         solariStatus st = buildTlsConfig(opts, &tls, dial);

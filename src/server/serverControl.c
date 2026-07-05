@@ -107,10 +107,14 @@ solariStatus serverControlBuild(serverContext *ctx, uint64_t targetNode,
      * caller bug (solariMsgBuildControl would read past nothing). */
     if (payloadLen > 0 && payload == NULL) return ERR_INVALID_ARG;
 
-    /* 1. Build the control TLV payload (verb + targetEpoch + optional blob). */
+    /* 1. Build the control TLV payload (verb + targetEpoch + addressee +
+     * optional blob). The directive is PUBLISHED on the fleet PUB channel, so
+     * the addressee rides inside the payload (TLV_CTRL_TARGET_NODE) and every
+     * other subscriber drops the frame. */
     memset(&ctrl, 0, sizeof ctrl);
     ctrl.verb        = (uint8_t)verb;
     ctrl.targetEpoch = targetEpoch;
+    ctrl.targetNode  = targetNode;
     ctrl.payload     = payload;
     ctrl.payloadLen  = payloadLen;
 

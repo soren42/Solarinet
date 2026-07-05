@@ -37,11 +37,16 @@ typedef struct {
     /* server + transport */
     char     primaryUrl[CLIENT_URL_MAX];  /* empty = local-only (no reporting) */
     char     failoverUrl[CLIENT_URL_MAX];
+    char     subUrl[CLIENT_URL_MAX];      /* server PUB channel (directives);
+                                           * empty = derive from primaryUrl
+                                           * with the standard pub port 7703 */
     bool     useTls;
     char     caFile[CLIENT_PATH_MAX];
     char     certFile[CLIENT_PATH_MAX];
     char     keyFile[CLIENT_PATH_MAX];
     char     spoolDb[CLIENT_PATH_MAX];    /* empty = no store-and-forward */
+    char     ctrlStateFile[CLIENT_PATH_MAX]; /* applied-config state; empty =
+                                           * derive "<spoolDb>.ctrl" (or none) */
 
     /* watch lists */
     char     procs[SOLARI_MAX_PROCS][SOLARI_PROCNAME_MAX];

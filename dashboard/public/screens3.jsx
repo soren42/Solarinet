@@ -313,14 +313,14 @@
       if (!/^[A-Za-z0-9._-]{1,160}$/.test(host)) { toast("Enter a valid hostname", "close"); return; }
       const a = api();
       const isImage = fMode === "image";
-      if (!a || (isImage ? !a.buildImage : !a.provision)) { toast("Provisioning unavailable (offline)", "close"); return; }
+      if (!a || (isImage ? !a.buildImage : !a.fleetProvision)) { toast("Provisioning unavailable (offline)", "close"); return; }
       const body = { hostname: host, arch: fArch, distro: fDistro, role: fRole, profile: fProfile };
       if (!isImage) {
         if (!/^[A-Za-z0-9._:@-]{1,120}$/.test(fTarget.trim())) { toast("Enter the target MAC or host", "close"); return; }
         body.target = fTarget.trim();
       }
       setFBusy(true); setFLog(isImage ? "building image…" : "staging install…");
-      (isImage ? a.buildImage(body) : a.provision(body)).then(function () {
+      (isImage ? a.buildImage(body) : a.fleetProvision(body)).then(function () {
         toast((isImage ? "Building image for " : "Staging install for ") + host, "provision");
         pollProvision(host, isImage, 0);
       }).catch(function (e) {
@@ -690,7 +690,24 @@
       return { renewSec: 5, ttlSec: 15, pool: 8 };
     }
     const [draft, setDraft] = useState(() => initDraft(node));
+    const [loaded, setLoaded] = useState(false);
     const TYPE_ICON = { server: "server", monitor: "monitor", client: "host" };
+    // Load the node's ACTUAL persisted config so the editor reflects reality,
+    // not synthetic defaults. Merge the stored configBlob over the default shape
+    // (keeps slider keys present even if the blob omits them). Best-effort: if the
+    // read fails or we're offline, the initDraft defaults stand.
+    React.useEffect(() => {
+      const a = api();
+      if (!a || !a.getNodeConfig || node.nodeId == null) { setLoaded(true); return; }
+      let live = true;
+      a.getNodeConfig(node.nodeId).then(function (r) {
+        if (!live) return;
+        const blob = r && (r.configBlob || r.config || r.blob);
+        if (blob && typeof blob === "object") setDraft((d) => ({ ...d, ...blob }));
+        setLoaded(true);
+      }).catch(function () { if (live) setLoaded(true); });
+      return function () { live = false; };
+    }, [node.nodeId]);
     React.useEffect(() => {
       function onKey(e) { if (e.key === "Escape") onClose(); }
       window.addEventListener("keydown", onKey);
@@ -711,9 +728,11 @@
     }
     function push() {
       const a = api();
-      if (a && a.provision && node.nodeId != null) {
-        a.provision({ nodeId: node.nodeId, configEpoch: node.configEpoch + 1, configBlob: draft }).then(function () {
-          toast("Config pushed → " + node.name + " (solariCtl · epoch " + (node.configEpoch + 1) + ")", "settings"); refresh(); onClose();
+      // setNodeConfig posts to /api/nodes/{id}/config; the server computes the new
+      // epoch (max(nodeTarget, globalEpoch)+1) and PROVISIONs — no client-side epoch math.
+      if (a && a.setNodeConfig && node.nodeId != null) {
+        a.setNodeConfig(node.nodeId, draft).then(function () {
+          toast("Config pushed → " + node.name + " (solariCtl · PROVISION)", "settings"); refresh(); onClose();
         }).catch(function (e) { toast(`Push failed: ${e && e.message || "error"}`, "close"); });
       } else {
         toast("Config pushed → " + node.name + " (SCP_MSG_CONTROL · epoch " + (node.configEpoch + 1) + ")", "settings"); onClose();

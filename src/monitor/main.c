@@ -4,9 +4,12 @@
  * This increment wires probe + HRW ownership into a runnable monitor: load the
  * .conf, take the targets this node owns (HRW; a standalone monitor owns all),
  * probe each per round, and print the reachability/RTT/loss results. The peer
- * mesh + gossip, push-or-spool MONITOR_REPORT, and CTRL_ADOPT_TARGET adoption
- * (monitorHandleControl) are wired; the control receive path that dispatches an
- * inbound SCP_MSG_CONTROL frame to it lands with the survey responder.
+ * mesh + gossip, push-or-spool MONITOR_REPORT, and the control receive path
+ * are wired: in reporting mode the inter-round sleep doubles as the
+ * control-plane poll (monitorControlPoll) - a SUB connection to the server's
+ * fleet PUB endpoint receives CTRL_ADOPT_TARGET / CTRL_SET_CONFIG /
+ * CTRL_PROVISION directives, applies + persists them, and answers
+ * CONTROL_RESULT over the push channel so convergence clears.
  */
 #include "monitor.h"
 
@@ -125,10 +128,14 @@ int main(int argc, char **argv)
 
 #ifdef MONITOR_WITH_REPORTING
     {
-        monitorContext  ctx;
-        monitorGossip  *gossip = NULL;
+        monitorContext      ctx;
+        monitorGossip      *gossip = NULL;
+        monitorControlState cst;
+        monitorControlIo    cio;
         int reporting = (cfg.primaryUrl[0] != '\0');
 
+        memset(&cio, 0, sizeof cio);
+        memset(&cst, 0, sizeof cst);
         monitorGossipOpen(&cfg, self, &gossip);      /* NULL if no gossipUrl */
         if (reporting) {
             if (monitorContextInit(&ctx, &cfg) != SOLARI_OK) {
@@ -139,6 +146,10 @@ int main(int argc, char **argv)
             }
             monitorConnect(&ctx);
             solariLogf(SOLARI_LOG_INFO, "reporting to %s", cfg.primaryUrl);
+            /* Restore previously pushed config, then subscribe to the
+             * directive channel. Best-effort: the monitor probes regardless. */
+            (void)monitorControlStateLoad(&cst, &cfg);
+            (void)monitorControlOpen(&cfg, &cio);
         }
         do {
             uint64_t now = solariNowUnixMs();
@@ -158,9 +169,16 @@ int main(int argc, char **argv)
                 monitorReportSend(&ctx, &mrep);
             }
             fflush(stdout);
-            if (loop) solariSleepMs(cfg.roundIntervalSec * 1000u);
+            if (loop) {
+                if (reporting)
+                    monitorControlPoll(&cio, &ctx, &cfg, &cst,
+                                       cfg.roundIntervalSec * 1000u);
+                else
+                    solariSleepMs(cfg.roundIntervalSec * 1000u);
+            }
         } while (loop);
 
+        monitorControlClose(&cio);
         if (reporting) monitorContextClose(&ctx);
         monitorGossipClose(gossip);
     }

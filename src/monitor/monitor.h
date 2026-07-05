@@ -29,6 +29,7 @@ typedef struct {
 typedef struct {
     char     hostFqdn[SOLARI_FQDN_MAX];   /* override; empty = autodetect */
     uint64_t nodeId;                      /* 0 = derive from fqdn+role     */
+    uint64_t configEpoch;                 /* [identity] configEpoch (sec 13) */
     uint32_t roundIntervalSec;            /* default 30 */
     uint16_t probesPerRound;              /* default 5  */
     uint32_t probeTimeoutMs;              /* default 1000 */
@@ -38,9 +39,13 @@ typedef struct {
 
     /* server + transport (used by the reporting increment) */
     char     primaryUrl[256], failoverUrl[256];
+    char     subUrl[256];                 /* server PUB channel; empty = derive
+                                           * from primaryUrl at pub port 7703 */
     bool     useTls;
     char     caFile[256], certFile[256], keyFile[256];
     char     spoolDb[256];
+    char     ctrlStateFile[256];          /* applied-config state; empty =
+                                           * derive "<spoolDb>.ctrl" (or none) */
 
     /* peer mesh (sec 8.2) */
     char     gossipUrl[256];              /* this monitor's gossip listener (empty = off) */
@@ -64,15 +69,59 @@ solariStatus monitorParseTarget(const char *spec, monitorTarget *out);
  * loader and CTRL_ADOPT_TARGET converge through here. */
 solariStatus monitorAddTarget(monitorConfig *cfg, const char *spec);
 
-/* Handle an SCP_MSG_CONTROL payload (sec 8). Reads TLV_CTRL_VERB; for
- * CTRL_ADOPT_TARGET it reads the target spec from TLV_CTRL_PAYLOAD and adopts it
- * into `cfg`'s live schedule via monitorAddTarget. Builds an SCP_MSG_CONTROL_RESULT
- * payload into resultBuf (TLV_CTRL_VERB echo + TLV_ERROR_CODE magnitude, 0 = ok),
- * writing *resultLen / *resultTlvCount. Returns the directive's own outcome. */
-solariStatus monitorHandleControl(monitorConfig *cfg,
+/* ---- control plane (sec 8, sec 9.1) ---- */
+
+/* Result-payload scratch: verb + errCode + appliedEpoch TLVs. */
+#define MONITOR_CTRL_RESULT_CAP 64
+
+/* Control-plane runtime state: the config epoch this monitor has applied.
+ * Directives at or below it are acknowledged as converged, never re-applied. */
+typedef struct {
+    uint64_t appliedEpoch;
+} monitorControlState;
+
+/* Outcome of one handled directive, for the I/O glue. */
+typedef struct {
+    bool           wantReply;   /* a CONTROL_RESULT payload was built      */
+    bool           applied;     /* cfg changed: persist blob + epoch       */
+    uint8_t        verb;        /* directive verb (0 if unparseable)       */
+    const uint8_t *blob;        /* applied blob (aliases inbound payload)  */
+    uint16_t       blobLen;
+} monitorControlOutcome;
+
+/* Apply a JSON config blob onto cfg (whole-document validated first, so a
+ * malformed blob is a no-op error). Keys applied (all optional):
+ *   roundIntervalSec, probesPerRound, probeTimeoutMs, replFactor - numbers
+ *   targets - array of "proto:host[:port][ : label]" specs (replaces the
+ *             probe target set; each entry converges through monitorAddTarget)
+ * Pure; no I/O. */
+solariStatus monitorControlApplyBlob(monitorConfig *cfg, const char *json, size_t len);
+
+/* Handle an inbound SCP_MSG_CONTROL payload off the broadcast PUB channel:
+ * parse tolerantly, drop directives addressed to another node
+ * (TLV_CTRL_TARGET_NODE), enforce epoch monotonicity for CTRL_SET_CONFIG /
+ * CTRL_PROVISION (apply the JSON blob; targetEpoch <= appliedEpoch is
+ * acknowledged as converged without re-applying), and adopt CTRL_ADOPT_TARGET
+ * specs via monitorAddTarget. Builds the SCP_MSG_CONTROL_RESULT payload
+ * (TLV_CTRL_VERB echo + TLV_ERROR_CODE magnitude + TLV_CTRL_TARGET_EPOCH =
+ * applied epoch) into resultBuf. Pure; the caller sends the reply / persists.
+ * Returns the directive's own outcome (SOLARI_OK also for a clean drop). */
+solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
+                                  uint64_t selfNodeId,
                                   const uint8_t *payload, size_t payloadLen,
                                   uint8_t *resultBuf, size_t resultCap,
-                                  size_t *resultLen, uint16_t *resultTlvCount);
+                                  size_t *resultLen, uint16_t *resultTlvCount,
+                                  monitorControlOutcome *out);
+
+/* Applied-state persistence ("<epoch>\n<blob>"; file I/O only, no sockets).
+ * Load floors appliedEpoch at cfg->configEpoch and re-applies a newer stored
+ * blob so a restart keeps pushed config; save is write+rename. Both are
+ * no-ops (OK) when no state path resolves (no ctrlStateFile and no spoolDb). */
+void         monitorControlStatePath(const monitorConfig *cfg, char *out, size_t cap);
+solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg);
+solariStatus monitorControlStateSave(const monitorConfig *cfg,
+                                     const monitorControlState *st,
+                                     const uint8_t *blob, uint16_t blobLen);
 
 /* HRW ownership (sec 8.2): true if `self` is among the top-k monitors for
  * `targetId` over `fleet`. Deterministic; removing a non-owner never changes a
@@ -141,6 +190,30 @@ typedef struct {
     solariReporter      *rep;
     uint64_t             nodeId;
 } monitorContext;
+
+/* ---- control transport glue (SUB dial + poll + reply) ---- */
+
+#include "solari/solariNet.h"
+
+typedef struct {
+    solariConn *sub;                  /* SUB dialer to the server PUB channel */
+    char        subUrl[256];
+} monitorControlIo;
+
+/* Dial the server PUB channel (cfg->subUrl, or primaryUrl re-pointed at the
+ * standard pub port 7703) as a subscriber. Best-effort: on failure io->sub is
+ * NULL and polling degrades to plain sleeping. */
+solariStatus monitorControlOpen(const monitorConfig *cfg, monitorControlIo *io);
+void         monitorControlClose(monitorControlIo *io);
+
+/* Service the control channel for ~waitMs (doubles as the round-loop sleep):
+ * receive published frames, dispatch SCP_MSG_CONTROL to monitorHandleControl,
+ * persist applied state, and push the CONTROL_RESULT (correlationId = the
+ * directive frame's seqNo) via ctx's reporter to the server ingest channel.
+ * Never blocks materially past waitMs (worst case one ~250ms recv slice). */
+void monitorControlPoll(monitorControlIo *io, monitorContext *ctx,
+                        monitorConfig *cfg, monitorControlState *st,
+                        uint32_t waitMs);
 
 /* Derive nodeId, open the reporter (and spool, if configured). Does not connect. */
 solariStatus monitorContextInit(monitorContext *ctx, const monitorConfig *cfg);

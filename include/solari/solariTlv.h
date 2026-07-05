@@ -55,6 +55,7 @@ enum solariTlvType {
     TLV_CTRL_VERB         = 0x3001,  /* uint8: setConfig|deploy|restart|.. */
     TLV_CTRL_PAYLOAD      = 0x3002,  /* opaque blob                        */
     TLV_CTRL_TARGET_EPOCH = 0x3003,  /* uint64 config epoch to converge to */
+    TLV_CTRL_TARGET_NODE  = 0x3004,  /* uint64 addressee nodeId; absent/0 = broadcast */
     /* --- lifecycle (0x32xx) --- */
     TLV_LIFE_CONFIRM      = 0x3201,  /* uint64: echo token the server must match to */
                                      /* authorize a destructive decommission        */

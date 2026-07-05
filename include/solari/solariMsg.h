@@ -164,6 +164,9 @@ typedef enum {
 typedef struct {
     uint8_t        verb;          /* solariCtrlVerb                      */
     uint64_t       targetEpoch;   /* config epoch to converge to         */
+    uint64_t       targetNode;    /* addressee nodeId; 0 = broadcast (the
+                                   * PUB channel reaches every subscriber,
+                                   * so directives carry their addressee) */
     const uint8_t *payload;       /* opaque blob (aliases caller / source)*/
     uint16_t       payloadLen;
 } solariControl;

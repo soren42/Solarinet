@@ -122,10 +122,11 @@ bool solariReporterConnected(const solariReporter *r)
     return r && r->conn != NULL;
 }
 
-solariStatus solariReporterFrame(solariReporter *r, uint8_t msgType, uint8_t flags,
-                                 const uint8_t *payload, size_t payloadLen,
-                                 uint16_t tlvCount,
-                                 uint8_t *out, size_t cap, size_t *outLen)
+solariStatus solariReporterFrameCorr(solariReporter *r, uint8_t msgType, uint8_t flags,
+                                     uint32_t correlationId,
+                                     const uint8_t *payload, size_t payloadLen,
+                                     uint16_t tlvCount,
+                                     uint8_t *out, size_t cap, size_t *outLen)
 {
     solariFrameHeader h;
     if (!r || !out || !outLen) return ERR_INVALID_ARG;
@@ -139,7 +140,17 @@ solariStatus solariReporterFrame(solariReporter *r, uint8_t msgType, uint8_t fla
     h.sourceNodeId   = r->nodeId;
     h.sendTimeUnixMs = solariNowUnixMs();
     h.seqNo          = ++r->seqNo;
+    h.correlationId  = correlationId;
     return solariFrameBuild(&h, payload, payloadLen, out, cap, outLen);
+}
+
+solariStatus solariReporterFrame(solariReporter *r, uint8_t msgType, uint8_t flags,
+                                 const uint8_t *payload, size_t payloadLen,
+                                 uint16_t tlvCount,
+                                 uint8_t *out, size_t cap, size_t *outLen)
+{
+    return solariReporterFrameCorr(r, msgType, flags, 0,
+                                   payload, payloadLen, tlvCount, out, cap, outLen);
 }
 
 solariStatus solariReporterSend(solariReporter *r, const uint8_t *frame, size_t len)
