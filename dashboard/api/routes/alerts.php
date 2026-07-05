@@ -82,4 +82,21 @@ return static function (Router $router): void {
         }, $rows);
         Response::ok($out);
     });
+
+    $router->post('/api/alerts/{eventId}/ack', static function (array $p): void {
+        if (preg_match('/^\d+$/', $p['eventId']) !== 1 || $p['eventId'] === '0') {
+            Response::error('bad_request', 'eventId must be a positive integer.', 400);
+        }
+        $eventId = (int) $p['eventId'];
+        if (Db::row('SELECT eventId FROM alertEvent WHERE eventId = :id', [':id' => $eventId]) === null) {
+            Response::error('not_found', "No alert event $eventId", 404);
+        }
+        solari_json_body();
+        $op = Operator::requireOperator();
+        SolariCtl::call('ALERT_ACK', [
+            'event' => (string) $eventId,
+            'op'    => $op,
+        ]);
+        Response::ok(['eventId' => $eventId, 'status' => 'acknowledged', 'ackBy' => $op]);
+    });
 };

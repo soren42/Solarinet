@@ -108,6 +108,51 @@ return static function (Router $router): void {
         SolariCtl::call('ASSET_SET', $args);
         Response::ok(['assetId' => $aid, 'status' => 'updated']);
     });
+
+    $router->post('/api/assets/{assetId}/remove', static function (array $p): void {
+        $aid = asset_id($p['assetId']);
+        if (Db::row('SELECT assetId FROM asset WHERE assetId = :i', [':i' => $aid]) === null) {
+            Response::error('not_found', "No asset $aid", 404);
+        }
+        $b  = solari_json_body();
+        $op = Operator::requireOperator();
+        if (($b['confirm'] ?? null) !== true) {
+            Response::error('confirm_required',
+                'Asset removal deletes its probe targets and history; resend with {"confirm":true}.', 409);
+        }
+        $reply = SolariCtl::call('ASSET_REMOVE', [
+            'asset' => (string) $aid,
+            'op'    => $op,
+        ]);
+        Response::ok([
+            'assetId' => $aid,
+            'status'  => 'removed',
+            'removed' => isset($reply['removed']) ? (int) $reply['removed'] : null,
+        ]);
+    });
+
+    $router->post('/api/assets/{assetId}/targets/{targetId}/remove', static function (array $p): void {
+        $aid = asset_id($p['assetId']);
+        $targetId = (string) $p['targetId'];
+        if ($targetId === '' || strlen($targetId) > 128) {
+            Response::error('bad_request', 'targetId invalid.', 400);
+        }
+        if (Db::row('SELECT targetId FROM probeTarget WHERE assetId = :a AND targetId = :t',
+                    [':a' => $aid, ':t' => $targetId]) === null) {
+            Response::error('not_found', "No target $targetId for asset $aid", 404);
+        }
+        $b  = solari_json_body();
+        $op = Operator::requireOperator();
+        if (($b['confirm'] ?? null) !== true) {
+            Response::error('confirm_required',
+                'Target removal deletes current and historical probe state; resend with {"confirm":true}.', 409);
+        }
+        SolariCtl::call('TARGET_REMOVE', [
+            'target' => $targetId,
+            'op'     => $op,
+        ]);
+        Response::ok(['assetId' => $aid, 'targetId' => $targetId, 'status' => 'removed']);
+    });
 };
 
 /** Shape one asset list/detail row. */

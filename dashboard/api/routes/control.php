@@ -92,6 +92,26 @@ return static function (Router $router): void {
         ]);
     });
 
+    // --- POST /api/nodes/{nodeId}/retire --------------------------------
+    // body: { confirm:true }
+    $router->post('/api/nodes/{nodeId}/retire', static function (array $p): void {
+        $op     = Operator::requireOperator();
+        $nodeId = ctrl_pos_int($p['nodeId'] ?? null, 'nodeId');
+        if (Db::row('SELECT nodeId FROM node WHERE nodeId = :id', [':id' => $nodeId]) === null) {
+            Response::error('not_found', "No node $nodeId", 404);
+        }
+        $body = solari_json_body();
+        if (($body['confirm'] ?? null) !== true) {
+            Response::error('confirm_required',
+                'Retire marks the node terminal; resend with {"confirm":true}.', 409);
+        }
+        SolariCtl::call('RETIRE', [
+            'node' => $nodeId,
+            'op'   => $op,
+        ]);
+        Response::ok(['nodeId' => $nodeId, 'status' => 'retired', 'decidedBy' => $op]);
+    });
+
     // --- POST /api/control/survey ----------------------------------------
     // body: { scope?: "all" }   (the bridge broadcasts SCP_MSG_SURVEY)
     $router->post('/api/control/survey', static function (): void {

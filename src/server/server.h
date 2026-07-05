@@ -165,6 +165,8 @@ solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
                                        uint64_t assetId);
 /* Delete a probe target by id (e.g. when a host heartbeat is turned off). */
 solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *targetId);
+/* Delete probeCurrent + probeHistory rows for a target before removing catalog. */
+solariStatus serverDbPurgeProbeState(serverDb *db, const char *targetId);
 
 /* ---- assets / pools (monitored systems + functional groups; §10 ext) ---- */
 /* Upsert a monitored system keyed by ip; *assetId returns the row id. poolId 0
@@ -177,12 +179,21 @@ solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
                                  uint64_t *assetId);
 /* Look up an asset id by ip (*assetId = 0 if none). */
 solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *assetId);
+/* List targetIds owned by an asset; out is [cap][SERVER_TARGETID_MAX]. */
+solariStatus serverDbListAssetTargets(serverDb *db, uint64_t assetId,
+                                      char out[][SERVER_TARGETID_MAX],
+                                      size_t cap, size_t *count);
+/* Delete an asset row. */
+solariStatus serverDbDeleteAsset(serverDb *db, uint64_t assetId);
 /* Create a functional pool; *poolId returns the id. ERR_DB on a duplicate name. */
 solariStatus serverDbCreatePool(serverDb *db, const char *name, const char *desc,
                                 const char *color, uint64_t *poolId);
 /* Update a pool's fields (NULL leaves a field unchanged). */
 solariStatus serverDbUpdatePool(serverDb *db, uint64_t poolId, const char *name,
                                 const char *desc, const char *color);
+solariStatus serverDbReassignPoolAssets(serverDb *db, uint64_t fromPool,
+                                        uint64_t toPool, size_t *n);
+solariStatus serverDbDeletePool(serverDb *db, uint64_t poolId);
 
 /* ---- global config / rules (operator config writes; §10) ---- */
 /* Persist the fleet-wide config document and bump its epoch; *epoch returns the
@@ -201,6 +212,8 @@ typedef struct {
     bool   hasScope;      char   scope[8];
 } serverAlertRuleEdit;
 solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e);
+solariStatus serverDbDeleteAlertRule(serverDb *db, uint64_t ruleId);
+solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eventId);
 
 /* ---- report persistence (§9.1 representative writers, §10) ---- */
 /* Upsert hostCurrent + append hostHistory in one txn (§9.1). All time UTC. */

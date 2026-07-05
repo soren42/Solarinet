@@ -43,4 +43,11 @@ solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
                                  uint64_t poolId, const char *tagsJson,
                                  const char *notes, bool monitorHost);
 
+/* Remove an asset by asset id or ip. Purges every owned probe target's current
+ * and history state, deletes the target catalog rows, deletes the asset row, and
+ * writes an audit alertEvent. *removedTargets returns the target purge count. */
+solariStatus serverAssetsRemove(serverContext *ctx, const char *assetKey,
+                                bool byIp, const char *operator_,
+                                size_t *removedTargets);
+
 #endif /* SOLARI_SERVER_ASSETS_H */
