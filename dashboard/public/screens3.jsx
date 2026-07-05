@@ -4,7 +4,7 @@
 (function () {
   const { useState, useEffect } = React;
   const Icon = window.Icon;
-  const { StatusDot } = window;
+  const { StatusDot, DangerModal } = window;
   const S = window.SOLARI;
   const fmt = S.fmt;
   const STATE_DOT = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)", unknown: "var(--unknown)" };
@@ -18,7 +18,27 @@
   /* ===================== DISCOVERY ===================== */
   function Discovery({ onOpenNode }) {
     const [staged, setStaged] = useState({});      // host -> "staged" | "ignored"
-    const [auto, setAuto] = useState(S.config.autoDiscover);
+    const [auto, setAuto] = useState(!!S.config.autoDiscover);
+
+    // Persist the toggle: POST /api/config with the full effective global config
+    // (same body shape ConfigScreen saves) so it survives reloads. On load the
+    // useState above reads the persisted value back from S.config.
+    function toggleAuto() {
+      const next = !auto;
+      setAuto(next);   // optimistic
+      const a = api();
+      if (a && a.saveConfig) {
+        a.saveConfig(Object.assign({}, S.config, { autoDiscover: next })).then(function () {
+          toast(`Auto-discovery ${next ? "resumed" : "paused"}`, next ? "check" : "close");
+          refresh();
+        }).catch(function (e) {
+          setAuto(!next);   // revert — it didn't stick
+          toast(`Auto-discovery save failed: ${e && e.message || "error"}`, "close");
+        });
+      } else {
+        toast(`Auto-discovery ${next ? "resumed" : "paused"} (offline — not persisted)`, next ? "check" : "close");
+      }
+    }
     const [cidr, setCidr] = useState("");
     const [scanning, setScanning] = useState(false);
     const [adoptDisc, setAdoptDisc] = useState(null);   // discovered entity in the adopt dialog
@@ -80,7 +100,7 @@
             <button className="btn-primary" disabled={scanning} onClick={scanNow}>
               <Icon name="discovery" size={14} />{scanning ? "Scanning…" : "Scan"}
             </button>
-            <div className="chip" onClick={() => { setAuto((a) => !a); toast(`Auto-discovery ${auto ? "paused" : "resumed"}`, auto ? "close" : "check"); }}>
+            <div className="chip" onClick={toggleAuto}>
               <button className={"switch" + (auto ? " on" : "")} style={{ pointerEvents: "none" }}><i /></button>Auto-discover
             </div>
           </div>
@@ -577,7 +597,7 @@
     return (
       <div className="page">
         <div className="page-head">
-          <div><h1 className="page-title">Config & Rules</h1><div className="page-sub">global tolerances, schedules & retention · pushed as SCP control frames</div></div>
+          <div><h1 className="page-title">Config & Rules</h1><div className="page-sub">effective global config · save & push as SCP control frames · CA / transport are server.conf (read-only)</div></div>
           <div className="page-head__right">
             <div className="seg">
               <button className={tab === "global" ? "on" : ""} onClick={() => setTab("global")}><Icon name="settings" size={14} />Global</button>
@@ -640,17 +660,24 @@
                 <div className="cfg-toggle"><span>Auto-discovery</span><button className={"switch" + (cfg.autoDiscover ? " on" : "")} onClick={() => set("autoDiscover", !cfg.autoDiscover)}><i /></button></div>
                 <div className="cfg-toggle"><span>Auto-enroll discovered <span className="muted" style={{ fontSize: 11 }}>(requires approval off)</span></span><button className={"switch" + (cfg.autoEnroll ? " on" : "")} onClick={() => set("autoEnroll", !cfg.autoEnroll)}><i /></button></div>
                 <div className="divider" />
-                <div className="cfg-info"><span className="kpi__k">Internal CA</span><span className="td-mono">{cfg.ca.issuer}</span></div>
+                <div className="kpi__k" style={{ margin: "2px 0 4px" }}>Internal CA <span className="tag" style={{ marginLeft: 6 }}>read-only</span></div>
+                <div className="cfg-info"><span className="kpi__k">Issuer</span><span className="td-mono">{cfg.ca.issuer}</span></div>
                 <div className="cfg-info"><span className="kpi__k">Cert TTL</span><span className="td-mono">{cfg.ca.certTtlDays} days</span></div>
                 <div className="cfg-info"><span className="kpi__k">Enroll method</span><span className="td-mono">{cfg.ca.enroll}</span></div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+                  Set in <code>server.conf</code> — edit on the host + restart the server. Not editable here.
+                </div>
               </div>
             </div>
             <div className="panel">
-              <div className="panel__head"><Icon name="network" size={16} /><h3>Transport</h3><div className="right">{cfg.ingest.tls}</div></div>
+              <div className="panel__head"><Icon name="network" size={16} /><h3>Transport</h3><span className="tag">read-only</span><div className="right">{cfg.ingest.tls}</div></div>
               <div className="panel__body">
                 <div className="cfg-info"><span className="kpi__k">Ingest</span><span className="td-mono">:{cfg.ingest.ports.ingest} · PULL</span></div>
                 <div className="cfg-info"><span className="kpi__k">Survey</span><span className="td-mono">:{cfg.ingest.ports.survey} · SURVEYOR</span></div>
                 <div className="cfg-info"><span className="kpi__k">Publish</span><span className="td-mono">:{cfg.ingest.ports.pub} · PUB</span></div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+                  Bind ports + TLS come from <code>server.conf</code> — edit on the host + restart the server. Not editable here.
+                </div>
               </div>
             </div>
           </div>
@@ -666,8 +693,11 @@
     const [type, setType] = useState("client");
     const [q, setQ] = useState("");
     const [driftOnly, setDriftOnly] = useState(false);
+    const [showRetired, setShowRetired] = useState(false);   // retired agents hidden by default
     const [modalId, setModalId] = useState(null);
-    const pool = S.nodes.filter((n) => n.role === type);
+    const retiredCount = S.nodes.filter((n) => n.state === "retired").length;
+    const base = S.nodes.filter((n) => showRetired || n.state !== "retired");
+    const pool = base.filter((n) => n.role === type);
     const list = pool.filter((n) => (!q || n.name.includes(q.toLowerCase()) || (n.ip || "").includes(q)) && (!driftOnly || !n.converged));
     const drift = pool.filter((n) => !n.converged).length;
     const modalNode = modalId ? S.nodes.find((n) => n.nodeId === modalId) : null;
@@ -678,10 +708,16 @@
       <div>
         <div className="filters">
           {["server", "monitor", "client"].map((t) => (
-            <button key={t} className={"chip" + (type === t ? " on" : "")} onClick={() => setType(t)}><Icon name={TYPE_ICON[t]} size={14} />{TYPE_LABEL[t]}<span className="chip__n">{S.nodes.filter((n) => n.role === t).length}</span></button>
+            <button key={t} className={"chip" + (type === t ? " on" : "")} onClick={() => setType(t)}><Icon name={TYPE_ICON[t]} size={14} />{TYPE_LABEL[t]}<span className="chip__n">{base.filter((n) => n.role === t).length}</span></button>
           ))}
           <div style={{ width: 1, height: 24, background: "var(--line)", margin: "0 4px" }} />
           <button className={"chip" + (driftOnly ? " on" : "")} onClick={() => setDriftOnly((d) => !d)}><span className="dot degraded" />Drift only<span className="chip__n">{drift}</span></button>
+          {retiredCount > 0 && (
+            <button className={"chip" + (showRetired ? " on" : "")} onClick={() => setShowRetired((v) => !v)}
+              title={showRetired ? "Hide retired agents" : "Show retired agents"}>
+              <span className="dot unknown" />Retired<span className="chip__n">{retiredCount}</span>
+            </button>
+          )}
           <div className="search" style={{ marginLeft: "auto", maxWidth: 250, height: 36 }}><Icon name="search" size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find agent…" /></div>
         </div>
 
@@ -735,18 +771,40 @@
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
     }, []);
-    // decommission (irreversible) — double-confirmed: a UI confirm here, plus the
-    // adapter sends confirm:true and the PHP/bridge run the two-step token handshake.
-    function decommission() {
-      if (!window.confirm(`Decommission ${node.name}? This securely wipes config, certs, spool, logs, and the service unit, then retires the node. This cannot be undone.`)) return;
+    // destructive lifecycle — both flows confirm in a DangerModal AND carry
+    // confirm:true on the wire (the PHP/bridge run the two-step token handshake).
+    const [confirmKind, setConfirmKind] = useState(null);          // "retire" | "decom" | null
+    const WIPE_SCOPES = [
+      { id: "config", label: "Configuration", hint: "/etc/solarinet client config" },
+      { id: "certs", label: "Certificates", hint: "client cert + key (CA-signed)" },
+      { id: "spool", label: "Spool", hint: "queued, unsent samples" },
+      { id: "logs", label: "Logs", hint: "agent log files" },
+      { id: "unit", label: "Service unit", hint: "systemd unit — agent stops permanently" },
+    ];
+    const [wipe, setWipe] = useState(() => Object.fromEntries(WIPE_SCOPES.map((s) => [s.id, true])));
+    // Decommission: securely wipe the selected scopes on the host, then retire.
+    function doDecommission() {
       const a = api();
-      if (a && a.decommission && node.nodeId != null) {
-        a.decommission(node.nodeId, ["config", "certs", "spool", "logs", "unit"]).then(function () {
-          toast(`Decommissioned → ${node.name} (retired)`, "close"); refresh(); onClose();
-        }).catch(function (e) { toast(`Decommission failed: ${e && e.message || "error"}`, "close"); });
-      } else {
-        toast(`Decommission requires the live control plane`, "close");
+      if (!a || !a.decommission || node.nodeId == null) {
+        toast("Decommission unavailable (offline)", "close"); setConfirmKind(null); return;
       }
+      const scope = WIPE_SCOPES.map((s) => s.id).filter((id) => wipe[id]);
+      return a.decommission(node.nodeId, scope).then(function () {
+        toast(`Decommissioned → ${node.name} (wiped: ${scope.join(", ") || "nothing"} · retired)`, "close");
+        setConfirmKind(null); refresh(); onClose();
+      }).catch(function (e) { toast(`Decommission failed: ${e && e.message || "error"}`, "close"); });
+    }
+    // Retire: drop the node from the active roster WITHOUT touching the host —
+    // the right call when the machine is already gone/offline.
+    function doRetire() {
+      const a = api();
+      if (!a || !a.retireNode || node.nodeId == null) {
+        toast("Retire unavailable (offline)", "close"); setConfirmKind(null); return;
+      }
+      return a.retireNode(node.nodeId).then(function () {
+        toast(`Retired → ${node.name} (removed from active roster)`, "close");
+        setConfirmKind(null); refresh(); onClose();
+      }).catch(function (e) { toast(`Retire failed: ${e && e.message || "error"}`, "close"); });
     }
     function push() {
       const a = api();
@@ -830,11 +888,46 @@
             )}
           </div>
           <div className="modal__foot">
-            <button className="btn-ghost" onClick={decommission} style={{ marginRight: "auto", color: "var(--crit)", borderColor: "var(--crit)" }}><Icon name="close" size={14} />Decommission</button>
+            <button className="btn-ghost" onClick={() => setConfirmKind("retire")} style={{ marginRight: "auto", color: "var(--crit)", borderColor: "var(--crit)" }}><Icon name="close" size={14} />Retire</button>
+            <button className="btn-ghost" onClick={() => setConfirmKind("decom")} style={{ color: "var(--crit)", borderColor: "var(--crit)" }}><Icon name="close" size={14} />Decommission</button>
             <button className="btn-ghost" onClick={onClose}>Cancel</button>
             <button className="btn-primary" onClick={push}><Icon name="check" size={14} />Push to node</button>
           </div>
         </div>
+
+        {confirmKind && <div onClick={(e) => e.stopPropagation()}>
+        {confirmKind === "retire" && (
+          <DangerModal title={`Retire ${node.name}?`} sub={`${node.hostFqdn || node.name} · ${node.ip || ""}`}
+            verb="Retire node" busyVerb="Retiring…" onConfirm={doRetire} onClose={() => setConfirmKind(null)}>
+            <p style={{ margin: 0 }}>
+              The node is removed from the active roster: no more samples are expected, alerts stop
+              firing for it, and it is hidden from the fleet views (behind the “Retired” filter).
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              Nothing on the host is touched — use <b>Decommission</b> instead to also wipe the agent
+              from the machine. Use Retire when the machine is already offline or gone.
+            </p>
+          </DangerModal>
+        )}
+        {confirmKind === "decom" && (
+          <DangerModal title={`Decommission ${node.name}?`} sub={`${node.hostFqdn || node.name} · ${node.ip || ""}`}
+            verb="Decommission" busyVerb="Decommissioning…" confirmName={node.name}
+            onConfirm={doDecommission} onClose={() => setConfirmKind(null)}>
+            <p style={{ margin: 0 }}>
+              Securely wipes the selected data from the host over the control plane, then retires the
+              node. <b style={{ color: "var(--crit)" }}>This cannot be undone.</b>
+            </p>
+            <div className="agent-sect" style={{ marginTop: 12 }}>Wipe scope</div>
+            {WIPE_SCOPES.map((s) => (
+              <label key={s.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 0", cursor: "pointer", fontSize: 13 }}>
+                <input type="checkbox" checked={!!wipe[s.id]} onChange={(e) => setWipe((w) => ({ ...w, [s.id]: e.target.checked }))} />
+                <span style={{ fontWeight: 600 }}>{s.label}</span>
+                <span className="td-mono muted" style={{ fontSize: 11 }}>{s.hint}</span>
+              </label>
+            ))}
+          </DangerModal>
+        )}
+        </div>}
       </div>
     );
   }
@@ -843,7 +936,19 @@
   // Operator-defined functional pools with per-pool health rollups.
   function PoolCards({ onOpen }) {
     const pools = S.pools || [];
+    const [del, setDel] = useState(null);   // pool pending delete confirmation
     if (!pools.length) return null;
+    // Pool 1 ("Unassigned") is the server-side catch-all — never deletable.
+    const deletable = (p) => Number(p.poolId) !== 1;
+    function doDelete() {
+      const a = api();
+      if (!a || !a.deletePool) { toast("Pool deletion unavailable (offline)", "close"); setDel(null); return; }
+      const p = del;
+      return a.deletePool(p.poolId).then(function () {
+        toast(`Pool deleted: ${p.name} — systems moved to Unassigned`, "close");
+        setDel(null); refresh();
+      }).catch(function (e) { toast(`Delete failed: ${e && e.message || "error"}`, "close"); });
+    }
     return (
       <div className="kpis" style={{ marginBottom: 18 }}>
         {pools.map(function (p) {
@@ -856,6 +961,12 @@
                  style={{ cursor: onOpen ? "pointer" : "default", borderLeft: "3px solid " + accent }}
                  onClick={() => onOpen && onOpen(p)}>
               <div className="kpi__k">{p.name}</div>
+              {deletable(p) && (
+                <button className="rowx kpi__x" title={`Delete pool ${p.name}`} aria-label={`Delete pool ${p.name}`}
+                  onClick={(e) => { e.stopPropagation(); setDel(p); }}>
+                  <Icon name="close" size={13} />
+                </button>
+              )}
               <div className="kpi__v">{total}</div>
               <div className="kpi__sub">
                 {h.up > 0 && <span style={{ color: "var(--ok)" }}>{h.up} up </span>}
@@ -868,6 +979,15 @@
             </div>
           );
         })}
+        {del && (
+          <DangerModal title={`Delete pool ${del.name}?`} sub={`${del.assetCount || 0} system(s) currently assigned`}
+            verb="Delete pool" busyVerb="Deleting…" onConfirm={doDelete} onClose={() => setDel(null)}>
+            <p style={{ margin: 0 }}>
+              The pool is removed. Systems assigned to it are <b>not</b> deleted — they move to
+              the <b>Unassigned</b> pool and keep their monitoring targets and history.
+            </p>
+          </DangerModal>
+        )}
       </div>
     );
   }
@@ -979,6 +1099,30 @@
     }
     function rename() { const v = window.prompt("Rename system", data.displayName); if (v != null && v.trim() !== "") patch({ displayName: v.trim() }, "Renamed"); }
 
+    // ---- removal (danger, typed-name confirm; confirm:true on the wire) ----
+    const [confirmRemove, setConfirmRemove] = useState(false);
+    const [rmTarget, setRmTarget] = useState(null);   // target row pending removal
+    function removeSystem() {
+      const a = api();
+      if (!a || !a.removeAsset) { toast && toast("Removal unavailable (offline)", "close"); setConfirmRemove(false); return; }
+      return a.removeAsset(assetId).then(() => {
+        toast && toast(`Removed ${data.displayName} — monitoring stopped, history purged`, "close");
+        setConfirmRemove(false);
+        if (a.refresh) a.refresh().catch(() => {});
+        onBack();
+      }).catch((e) => { toast && toast("Remove failed: " + (e && e.message || "error"), "close"); });
+    }
+    function removeTargetGo() {
+      const a = api();
+      if (!a || !a.removeTarget) { toast && toast("Removal unavailable (offline)", "close"); setRmTarget(null); return; }
+      const t = rmTarget;
+      return a.removeTarget(assetId, t.targetId).then(() => {
+        toast && toast(`Target removed: ${t.label || t.targetId}`, "close");
+        setRmTarget(null); load();
+        if (a.refresh) a.refresh().catch(() => {});
+      }).catch((e) => { toast && toast("Remove failed: " + (e && e.message || "error"), "close"); });
+    }
+
     if (err) return (<div className="page"><button className="btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14} />Back</button><div className="muted" style={{ marginTop: 16 }}>Couldn't load system: {err}</div></div>);
     if (!data) return (<div className="page"><div className="muted">Loading…</div></div>);
     const targets = data.targets || [];
@@ -991,6 +1135,9 @@
           <div>
             <h1 className="page-title"><span style={dotStyle(data.state, 11)} />&nbsp;{data.displayName} <Icon name="settings" size={13} style={{ opacity: 0.4, cursor: "pointer" }} onClick={rename} /></h1>
             <div className="page-sub">{data.ip}{data.host ? " · " + data.host : ""} · {data.class} · {data.poolName || "Unassigned"}</div>
+          </div>
+          <div className="page-head__right">
+            <button className="btn-danger" onClick={() => setConfirmRemove(true)}><Icon name="close" size={14} />Remove system</button>
           </div>
         </div>
 
@@ -1013,7 +1160,7 @@
         {targets.length === 0 && <div className="muted">No targets yet. Enable the heartbeat or adopt services for this system.</div>}
         {targets.length > 0 && (
           <div className="tablewrap"><table className="grid">
-            <thead><tr><th>Target</th><th>Proto</th><th>Port</th><th>State</th><th>Vantages</th></tr></thead>
+            <thead><tr><th>Target</th><th>Proto</th><th>Port</th><th>State</th><th>Vantages</th><th aria-label="remove" /></tr></thead>
             <tbody>
               {targets.map((t) => (
                 <tr key={t.targetId} style={{ cursor: "pointer" }} onClick={() => onOpenService(t.targetId)}>
@@ -1022,6 +1169,12 @@
                   <td className="td-mono">{t.port || "—"}</td>
                   <td><span style={dotStyle(t.state)} /> {t.state}</td>
                   <td className="td-mono">{t.vantages}</td>
+                  <td style={{ width: 34, textAlign: "right" }}>
+                    <button className="rowx" title={`Stop monitoring ${t.label || t.targetId}`} aria-label={`Remove target ${t.label || t.targetId}`}
+                      onClick={(e) => { e.stopPropagation(); setRmTarget(t); }}>
+                      <Icon name="close" size={13} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1030,6 +1183,31 @@
         <div className="muted" style={{ marginTop: 18, fontSize: 12 }}>
           {data.nodeId ? "Agent linked — host metrics available." : "No agent deployed on this system — reachability only. Deploy a SolariNet client to collect CPU / RAM / disk metrics."}
         </div>
+
+        {confirmRemove && (
+          <DangerModal title={`Remove ${data.displayName}?`} sub={`${data.ip}${data.host ? " · " + data.host : ""} · ${targets.length} target(s)`}
+            verb="Remove system" busyVerb="Removing…" confirmName={data.displayName}
+            onConfirm={removeSystem} onClose={() => setConfirmRemove(false)}>
+            <p style={{ margin: 0 }}>
+              Monitoring stops for this system: all {targets.length} probe target(s) are deleted and
+              its reachability history is purged. <b style={{ color: "var(--crit)" }}>This cannot be undone.</b>
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              The host itself is untouched — it may reappear under Discovery on a future scan.
+            </p>
+          </DangerModal>
+        )}
+        {rmTarget && (
+          <DangerModal title={`Remove target ${rmTarget.label || rmTarget.targetId}?`}
+            sub={`${rmTarget.proto}${rmTarget.port ? ":" + rmTarget.port : ""} on ${data.displayName}`}
+            verb="Remove target" busyVerb="Removing…"
+            onConfirm={removeTargetGo} onClose={() => setRmTarget(null)}>
+            <p style={{ margin: 0 }}>
+              Probing stops for this target and its history is purged. The system itself stays
+              monitored via its remaining target(s).
+            </p>
+          </DangerModal>
+        )}
       </div>
     );
   }

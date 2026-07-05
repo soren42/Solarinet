@@ -6,7 +6,7 @@
   const Icon = window.Icon;
 
   // ---------- status helpers ----------
-  const STATE_LABEL = { up: "Up", degraded: "Degraded", down: "Down", unknown: "Unknown" };
+  const STATE_LABEL = { up: "Up", degraded: "Degraded", down: "Down", unknown: "Unknown", retired: "Retired" };
   function StatusDot({ state, glow = true, size = 9, style }) {
     return <span className={"dot " + (glow ? "glow " : "") + state} style={{ width: size, height: size, ...style }} />;
   }
@@ -365,6 +365,63 @@
     );
   }
 
+  // ---------- danger confirm modal ----------
+  // Shared confirm for destructive actions (remove / retire / decommission /
+  // delete). Matches the AgentModal .modal-overlay/.modal design. Two grades:
+  //   confirmName set  → the operator must TYPE the exact name to arm the button
+  //   confirmName null → a plain OK-style confirm (for lesser deletions)
+  // onConfirm may return a Promise; the button shows busyVerb until it settles.
+  // The CALLER closes the modal on success (and toasts either way).
+  function DangerModal({ icon = "close", title, sub, children, verb = "Remove", busyVerb = "Removing…", confirmName, confirmHint, disabled, onConfirm, onClose }) {
+    const [typed, setTyped] = useState("");
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+      function onKey(e) { if (e.key === "Escape") onClose(); }
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [onClose]);
+    const armed = !disabled && !busy && (!confirmName || typed === confirmName);
+    function go() {
+      if (!armed) return;
+      setBusy(true);
+      Promise.resolve(onConfirm()).catch(() => {}).then(() => setBusy(false));
+    }
+    return (
+      <div className="modal-overlay" style={{ zIndex: 1200 }} onClick={onClose}>
+        <div className="modal" style={{ width: "min(460px, 94vw)", borderColor: "var(--crit)" }} onClick={(e) => e.stopPropagation()}>
+          <div className="modal__head">
+            <Icon name={icon} size={20} style={{ color: "var(--crit)" }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{title}</div>
+              {sub && <div className="td-mono muted" style={{ fontSize: 11 }}>{sub}</div>}
+            </div>
+            <button className="iconbtn" style={{ width: 36, height: 36, flex: "0 0 36px" }} onClick={onClose} aria-label="Close"><Icon name="close" size={16} /></button>
+          </div>
+          <div className="modal__body" style={{ fontSize: 13, lineHeight: 1.55 }}>
+            {children}
+            {confirmName && (
+              <div style={{ marginTop: 14 }}>
+                <label style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", opacity: 0.6, display: "block" }}>
+                  {confirmHint || <span>Type <b className="td-mono" style={{ color: "var(--crit)" }}>{confirmName}</b> to confirm</span>}
+                </label>
+                <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") go(); }}
+                  placeholder={confirmName} spellCheck={false} autoComplete="off"
+                  style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", marginTop: 6, borderRadius: 8, border: "1px solid " + (typed === confirmName ? "var(--crit)" : "var(--line-glow, rgba(255,255,255,0.14))"), background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "var(--mono)", fontSize: 13 }} />
+              </div>
+            )}
+          </div>
+          <div className="modal__foot">
+            <button className="btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+            <button className="btn-danger" disabled={!armed} onClick={go}>
+              <Icon name="close" size={14} />{busy ? busyVerb : verb}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ---------- toasts ----------
   function Toasts({ items }) {
     return (
@@ -379,6 +436,6 @@
   Object.assign(window, {
     StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars,
     Sidebar, TopBar, CommandPalette, Toasts, NAV, STATE_LABEL, metricColor,
-    ProfileChip, solariLogout,
+    ProfileChip, solariLogout, DangerModal,
   });
 })();

@@ -382,7 +382,7 @@ body {
 .dot.up, .sv-up { background: var(--ok); }
 .dot.degraded, .sv-degraded { background: var(--warn); }
 .dot.down, .sv-down { background: var(--crit); }
-.dot.unknown, .sv-unknown { background: var(--unknown); }
+.dot.unknown, .sv-unknown, .dot.retired { background: var(--unknown); }
 .dot.glow.up { box-shadow: 0 0 calc(8px*var(--glow)) var(--ok); }
 .dot.glow.degraded { box-shadow: 0 0 calc(8px*var(--glow)) var(--warn); }
 .dot.glow.down { box-shadow: 0 0 calc(9px*var(--glow)) var(--crit); }
@@ -623,6 +623,15 @@ table.grid tbody tr:active { background: var(--panel-2); }
 .btn-primary.disabled { opacity: .4; pointer-events: none; }
 .btn-ghost { min-height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: transparent; color: var(--ink-dim); font-family: var(--mono); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .btn-ghost:active { background: var(--panel-2); color: var(--ink); }
+
+/* danger — destructive actions (remove / retire / decommission / delete) */
+.btn-danger { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 14px; border: 1px solid var(--crit); border-radius: var(--r-md); background: var(--crit-bg); color: var(--crit); font-family: var(--mono); font-size: 12px; letter-spacing: .04em; cursor: pointer; white-space: nowrap; }
+.btn-danger:active { background: var(--crit); color: #fff; }
+.btn-danger:disabled, .btn-danger.disabled { opacity: .4; pointer-events: none; }
+.rowx { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: var(--r-sm, 7px); background: transparent; color: var(--ink-faint); cursor: pointer; padding: 0; }
+.rowx:hover { color: var(--crit); border-color: var(--crit); background: var(--crit-bg); }
+.kpi__x { position: absolute; top: 8px; right: 8px; opacity: 0; transition: opacity .12s; }
+.kpi:hover .kpi__x { opacity: 1; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 
