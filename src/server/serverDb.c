@@ -557,6 +557,32 @@ solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *targetId)
     return rc;
 }
 
+solariStatus serverDbPurgeProbeState(serverDb *db, const char *targetId)
+{
+    static const char *SQL_CUR = "DELETE FROM probeCurrent WHERE targetId = ?";
+    static const char *SQL_HIS = "DELETE FROM probeHistory WHERE targetId = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long l0;
+    solariStatus rc;
+
+    if (!conn || !targetId) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL_CUR, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], targetId, &l0);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    if (rc != SOLARI_OK) return rc;
+
+    rc = dbStmtPrepare(conn, SQL_HIS, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], targetId, &l0);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    return rc;
+}
+
 solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *assetId)
 {
     static const char *SQL = "SELECT assetId FROM asset WHERE ip = ?";
@@ -580,6 +606,60 @@ solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *asse
     if (mysql_stmt_fetch(st) == 0 && !isNull) *assetId = vId;
     mysql_stmt_close(st);
     return SOLARI_OK;
+}
+
+solariStatus serverDbListAssetTargets(serverDb *db, uint64_t assetId,
+                                      char out[][SERVER_TARGETID_MAX],
+                                      size_t cap, size_t *count)
+{
+    static const char *SQL =
+        "SELECT targetId FROM probeTarget WHERE assetId = ? ORDER BY targetId";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  in[1], res[1];
+    unsigned long long vId = assetId;
+    char targetId[SERVER_TARGETID_MAX];
+    unsigned long lTid = 0;
+    my_bool nTid = 0;
+    size_t n = 0;
+    solariStatus rc;
+
+    if (count) *count = 0;
+    if (!conn || assetId == 0 || !out || !count) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &vId);
+    if (mysql_stmt_bind_param(st, in) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    if (mysql_stmt_execute(st) != 0)        { mysql_stmt_close(st); return ERR_DB; }
+    dbBindOutStr(&res[0], targetId, sizeof targetId, &lTid, &nTid);
+    if (mysql_stmt_bind_result(st, res) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    while (mysql_stmt_fetch(st) == 0) {
+        if (n >= cap) { mysql_stmt_close(st); return ERR_BUFFER_FULL; }
+        targetId[sizeof targetId - 1] = '\0';
+        snprintf(out[n], SERVER_TARGETID_MAX, "%s", nTid ? "" : targetId);
+        n++;
+    }
+    mysql_stmt_close(st);
+    *count = n;
+    return SOLARI_OK;
+}
+
+solariStatus serverDbDeleteAsset(serverDb *db, uint64_t assetId)
+{
+    static const char *SQL = "DELETE FROM asset WHERE assetId = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long long vId = assetId;
+    solariStatus rc;
+
+    if (!conn || assetId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vId);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    return rc;
 }
 
 solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
@@ -673,6 +753,50 @@ solariStatus serverDbUpdatePool(serverDb *db, uint64_t poolId, const char *name,
     return rc;
 }
 
+solariStatus serverDbReassignPoolAssets(serverDb *db, uint64_t fromPool,
+                                        uint64_t toPool, size_t *n)
+{
+    static const char *SQL = "UPDATE asset SET poolId = ? WHERE poolId = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[2];
+    unsigned long long vTo = toPool, vFrom = fromPool;
+    solariStatus rc;
+
+    if (n) *n = 0;
+    if (!conn || fromPool == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    if (toPool) dbBindU64(&b[0], &vTo);
+    else {
+        memset(&b[0], 0, sizeof b[0]);
+        b[0].buffer_type = MYSQL_TYPE_NULL;
+    }
+    dbBindU64(&b[1], &vFrom);
+    rc = dbStmtRunWrite(st, b, 2);
+    if (rc == SOLARI_OK && n) *n = (size_t)mysql_stmt_affected_rows(st);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbDeletePool(serverDb *db, uint64_t poolId)
+{
+    static const char *SQL = "DELETE FROM pool WHERE poolId = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long long vId = poolId;
+    solariStatus rc;
+
+    if (!conn || poolId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vId);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    return rc;
+}
+
 solariStatus serverDbSetGlobalConfig(serverDb *db, const char *configJson,
                                      const char *updatedBy, uint64_t *epoch)
 {
@@ -759,6 +883,24 @@ solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e)
     dbBindU64(&b[nb++], &vId);
 
     rc = dbStmtRunWrite(st, b, nb);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbDeleteAlertRule(serverDb *db, uint64_t ruleId)
+{
+    static const char *SQL = "DELETE FROM alertRule WHERE ruleId = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long long vId = ruleId;
+    solariStatus rc;
+
+    if (!conn || ruleId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vId);
+    rc = dbStmtRunWrite(st, b, 1);
     mysql_stmt_close(st);
     return rc;
 }
@@ -1119,6 +1261,26 @@ solariStatus serverDbWriteAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
     dbBindStr(&b[5], (detail && detail[0]) ? detail : NULL, &dLen);
 
     rc = dbStmtRunWrite(st, b, 6);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eventId)
+{
+    static const char *SQL =
+        "UPDATE alertEvent SET clearedAt = COALESCE(clearedAt, UTC_TIMESTAMP()) "
+        "WHERE eventId = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long long vId = eventId;
+    solariStatus rc;
+
+    if (!conn || eventId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vId);
+    rc = dbStmtRunWrite(st, b, 1);
     mysql_stmt_close(st);
     return rc;
 }

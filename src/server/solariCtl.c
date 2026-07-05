@@ -19,18 +19,39 @@
  *   reply   : OK [k=v ...]\n  |  ERR <code> <message>\n
  *
  * Recognised verbs and their required keys:
- *   PING                                         -> liveness
- *   SURVEY                                       -> broadcast SCP_MSG_SURVEY
- *   APPROVE   enr=<id> op=<operator>             -> serverProvisionApprove
- *   REJECT    enr=<id> op=<operator>             -> serverProvisionReject
- *   PROVISION node=<id> build=<id> epoch=<n> [cfg=<json>]
- *   ADOPT     disc=<id> [spec=<probeSpec>]       -> serverProvisionAdoptTarget
- *   IGNORE    disc=<id>                          -> serverDiscoveryIgnore
+ *   PING                                           -> liveness
+ *   DISCOVER cidr=<cidr> [ports=<csv>]              -> active scan
+ *   SURVEY                                         -> broadcast SCP_MSG_SURVEY
+ *   APPROVE   enr=<id> [op=<operator>]              -> approve enrollment
+ *   REJECT    enr=<id> [op=<operator>]              -> reject enrollment
+ *   PROVISION node=<id> [build=<id>] [epoch=<n>] [cfg=<json>]
+ *   SIGN* csr=<pem> op=<operator>                   -> sign CSR
+ *   DEPLOY* host=<host> op=<operator> [server=] [arch=] [fqdn=]
+ *   FLEET_PROVISION* target=<mac|host> distro=<id> arch=<id> hostname=<name> op=<operator> [...]
+ *   FLEET_IMAGE* hostname=<name> arch=<id> op=<operator> [distro=] [...]
+ *   ADOPT     disc=<id> [pool=<id>] [heartbeat=0|1] [name=] [class=] [tags=] [notes=] [services=]
+ *   IGNORE    disc=<id>                             -> suppress discovered row
  *   CONTROL   node=<id> verb=<n> [epoch=<n>] [payload=<blob>]
- *   DECOMMISSION node=<id> scope=<hex> op=<operator> [confirm=<token>]
- *   RETIRE    node=<id> op=<operator>
+ *   ASSET_SET ip=<ip> [name=] [class=] [pool=<id>] [tags=] [notes=] [heartbeat=0|1]
+ *   ASSET_REMOVE* (asset=<id>|ip=<ip>) op=<operator>
+ *   TARGET_REMOVE* target=<targetId> op=<operator>
+ *   POOL_NEW name=<name> [desc=] [color=]
+ *   POOL_SET pool=<id> [name=] [desc=] [color=]
+ *   POOL_DEL* pool=<id> op=<operator>
+ *   CONFIG_SET cfg=<json> [op=<operator>]
+ *   RULE_SET rule=<id> [enabled=] [threshold=] [forSeconds=] [op=] [severity=] [metric=] [scope=]
+ *   RULE_DEL* rule=<id> op=<operator>
+ *   ALERT_ACK event=<id> op=<operator>
+ *   DECOMMISSION* node=<id> scope=<hex> op=<operator> [confirm=<token>]
+ *   RETIRE* node=<id> op=<operator>
  *
- * Destructive verbs (DECOMMISSION, RETIRE) require two things: an operator
+ * A trailing '*' marks destructive/privileged verbs that require op=. The
+ * destructive catalog is enforced by ctlVerbIsDestructive(); ALERT_ACK also
+ * requires op= for attribution but is not classed as destructive.
+ *
+ * Destructive verbs (DECOMMISSION, RETIRE, SIGN, DEPLOY, FLEET_PROVISION,
+ * FLEET_IMAGE, ASSET_REMOVE, TARGET_REMOVE, POOL_DEL, RULE_DEL) require two
+ * things: an operator
  * identity (RBAC: the caller must name who is authorizing) and, for the
  * irreversible second step, an explicit `confirm=<token>` echoing the one-time
  * token the first DECOMMISSION call issued (§7.3, §11). A first DECOMMISSION
@@ -309,7 +330,19 @@ static bool ctlVerbIsDestructive(const char *verb)
      * bootable image; both mint enrollment certs, so they are gated the same. */
     return strcmp(verb, "DECOMMISSION") == 0 || strcmp(verb, "RETIRE") == 0 ||
            strcmp(verb, "SIGN") == 0 || strcmp(verb, "DEPLOY") == 0 ||
-           strcmp(verb, "FLEET_PROVISION") == 0 || strcmp(verb, "FLEET_IMAGE") == 0;
+           strcmp(verb, "FLEET_PROVISION") == 0 || strcmp(verb, "FLEET_IMAGE") == 0 ||
+           strcmp(verb, "ASSET_REMOVE") == 0 || strcmp(verb, "TARGET_REMOVE") == 0 ||
+           strcmp(verb, "POOL_DEL") == 0 || strcmp(verb, "RULE_DEL") == 0;
+}
+
+static bool ctlVerbRequiresOperator(const char *verb)
+{
+    return ctlVerbIsDestructive(verb) || strcmp(verb, "ALERT_ACK") == 0;
+}
+
+static bool ctlPoolCanDelete(uint64_t poolId)
+{
+    return poolId != 0 && poolId != 1;
 }
 
 /* Sanitize an arbitrary string into a safe filename fragment ([A-Za-z0-9._-]). */
@@ -359,7 +392,7 @@ static solariStatus ctlCheckRbac(const char *verb, const char *args,
 {
     solariStatus st;
     if (operatorOut && cap) operatorOut[0] = '\0';
-    if (!ctlVerbIsDestructive(verb)) return SOLARI_OK;
+    if (!ctlVerbRequiresOperator(verb)) return SOLARI_OK;
     st = ctlArgStr(args, "op", operatorOut, cap);
     if (st != SOLARI_OK || operatorOut[0] == '\0') {
         return ERR_AUTH_ROLE;   /* nearest "not authorized" code */
@@ -646,6 +679,41 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         return ctlReplyErr(replyOut, replyCap, st, "asset update failed");
     }
 
+    /* ---- remove a monitored asset and all owned probe target state ---- */
+    if (strcmp(verb, "ASSET_REMOVE") == 0) {
+        char key[80], extra[64];
+        size_t removed = 0;
+        bool byIp = false;
+        if (ctlArgStr(args, "asset", key, sizeof key) != SOLARI_OK || !key[0]) {
+            if (ctlArgStr(args, "ip", key, sizeof key) != SOLARI_OK || !key[0])
+                return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "asset or ip required");
+            byIp = true;
+        }
+        st = serverAssetsRemove(ctl->ctx, key, byIp, operator_, &removed);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "asset remove failed");
+        (void)snprintf(extra, sizeof extra, "removed=%zu", removed);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- remove one probe target and its current/history rows ---- */
+    if (strcmp(verb, "TARGET_REMOVE") == 0) {
+        char target[SERVER_TARGETID_MAX], detail[256];
+        if (ctlArgStr(args, "target", target, sizeof target) != SOLARI_OK || !target[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "target required");
+        (void)snprintf(detail, sizeof detail, "target removed by %s target=%s",
+                       operator_, target);
+        st = serverDbWriteAlertEvent(ctl->ctx->db, 0, 0, target, "warn",
+                                     detail, solariNowUnixMs());
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "target audit failed");
+        if ((st = serverDbPurgeProbeState(ctl->ctx->db, target)) != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "target purge failed");
+        st = serverDbDeleteProbeTarget(ctl->ctx->db, target);
+        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
+        return ctlReplyErr(replyOut, replyCap, st, "target remove failed");
+    }
+
     /* ---- create a functional pool ---- */
     if (strcmp(verb, "POOL_NEW") == 0) {
         char name[64], desc[256], color[16], extra[48];
@@ -675,6 +743,28 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
                                 desc[0] ? desc : NULL, color[0] ? color : NULL);
         if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
         return ctlReplyErr(replyOut, replyCap, st, "pool update failed");
+    }
+
+    /* ---- delete a functional pool, moving members back to Unassigned ---- */
+    if (strcmp(verb, "POOL_DEL") == 0) {
+        uint64_t poolId = 0;
+        size_t reassigned = 0;
+        char detail[160], extra[64];
+        if (ctlArgU64(args, "pool", &poolId) != SOLARI_OK || !ctlPoolCanDelete(poolId))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad pool id");
+        (void)snprintf(detail, sizeof detail, "pool deleted by %s pool=%llu",
+                       operator_, (unsigned long long)poolId);
+        st = serverDbWriteAlertEvent(ctl->ctx->db, 0, 0, NULL, "warn",
+                                     detail, solariNowUnixMs());
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "pool audit failed");
+        if ((st = serverDbReassignPoolAssets(ctl->ctx->db, poolId, 1, &reassigned)) != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "pool reassign failed");
+        st = serverDbDeletePool(ctl->ctx->db, poolId);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "pool delete failed");
+        (void)snprintf(extra, sizeof extra, "reassigned=%zu", reassigned);
+        return ctlReplyOk(replyOut, replyCap, extra);
     }
 
     /* ---- persist the fleet-wide config document ---- */
@@ -715,6 +805,37 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         st = serverDbUpdateAlertRule(ctl->ctx->db, &e);
         if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
         return ctlReplyErr(replyOut, replyCap, st, "rule update failed");
+    }
+
+    /* ---- delete an alert rule ---- */
+    if (strcmp(verb, "RULE_DEL") == 0) {
+        uint64_t ruleId = 0;
+        char detail[160];
+        if (ctlArgU64(args, "rule", &ruleId) != SOLARI_OK || ruleId == 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad rule id");
+        (void)snprintf(detail, sizeof detail, "rule deleted by %s rule=%llu",
+                       operator_, (unsigned long long)ruleId);
+        st = serverDbWriteAlertEvent(ctl->ctx->db, 0, 0, NULL, "warn",
+                                     detail, solariNowUnixMs());
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "rule audit failed");
+        st = serverDbDeleteAlertRule(ctl->ctx->db, ruleId);
+        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
+        return ctlReplyErr(replyOut, replyCap, st, "rule delete failed");
+    }
+
+    /* ---- acknowledge/clear an alert event (operator attributed) ---- */
+    if (strcmp(verb, "ALERT_ACK") == 0) {
+        uint64_t eventId = 0;
+        if (ctlArgU64(args, "event", &eventId) != SOLARI_OK || eventId == 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad event id");
+        st = serverDbAckAlertEvent(ctl->ctx->db, eventId);
+        if (st == SOLARI_OK) {
+            solariLogf(SOLARI_LOG_INFO, "ctl: alert ack event=%llu by=%s",
+                       (unsigned long long)eventId, operator_);
+            return ctlReplyOk(replyOut, replyCap, NULL);
+        }
+        return ctlReplyErr(replyOut, replyCap, st, "alert ack failed");
     }
 
     /* ---- suppress a discovered candidate ---- */

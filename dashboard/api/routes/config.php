@@ -177,6 +177,27 @@ return static function (Router $router): void {
             'enabled'    => Coerce::bool($row['enabled']),
         ]);
     });
+
+    $router->post('/api/rules/{ruleId}/delete', static function (array $p): void {
+        if (preg_match('/^\d+$/', $p['ruleId']) !== 1 || $p['ruleId'] === '0') {
+            Response::error('bad_request', 'ruleId must be a positive integer.', 400);
+        }
+        $ruleId = (int) $p['ruleId'];
+        if (Db::row('SELECT ruleId FROM alertRule WHERE ruleId = :id', [':id' => $ruleId]) === null) {
+            Response::error('not_found', "No alert rule $ruleId", 404);
+        }
+        $body = solari_json_body();
+        $op = Operator::requireOperator();
+        if (($body['confirm'] ?? null) !== true) {
+            Response::error('confirm_required',
+                'Rule deletion is permanent; resend with {"confirm":true}.', 409);
+        }
+        SolariCtl::call('RULE_DEL', [
+            'rule' => (string) $ruleId,
+            'op'   => $op,
+        ]);
+        Response::ok(['ruleId' => $ruleId, 'status' => 'deleted']);
+    });
 };
 
 /* ---- global config view + validation -------------------------------- */

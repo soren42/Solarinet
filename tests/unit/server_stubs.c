@@ -138,27 +138,46 @@ WEAK solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *tid,
 { (void)db;(void)tid;(void)host;(void)port;(void)proto;(void)repl;(void)label;(void)seg;(void)asset; return SOLARI_OK; }
 WEAK solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *tid)
 { (void)db;(void)tid; return SOLARI_OK; }
+WEAK solariStatus serverDbPurgeProbeState(serverDb *db, const char *tid)
+{ (void)db;(void)tid; return SOLARI_OK; }
 WEAK solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
     const char *dn, const char *cls, uint64_t pool, const char *tags,
     const char *notes, bool mon, uint64_t *aid)
 { (void)db;(void)ip;(void)host;(void)dn;(void)cls;(void)pool;(void)tags;(void)notes;(void)mon; if(aid)*aid=0; return SOLARI_OK; }
 WEAK solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *aid)
 { (void)db;(void)ip; if(aid)*aid=0; return SOLARI_OK; }
+WEAK solariStatus serverDbListAssetTargets(serverDb *db, uint64_t aid,
+    char out[][SERVER_TARGETID_MAX], size_t cap, size_t *count)
+{ (void)db;(void)aid;(void)out;(void)cap; if(count)*count=0; return SOLARI_OK; }
+WEAK solariStatus serverDbDeleteAsset(serverDb *db, uint64_t aid)
+{ (void)db;(void)aid; return SOLARI_OK; }
 WEAK solariStatus serverDbCreatePool(serverDb *db, const char *n, const char *d,
     const char *c, uint64_t *pid)
 { (void)db;(void)n;(void)d;(void)c; if(pid)*pid=0; return SOLARI_OK; }
 WEAK solariStatus serverDbUpdatePool(serverDb *db, uint64_t pid, const char *n,
     const char *d, const char *c)
 { (void)db;(void)pid;(void)n;(void)d;(void)c; return SOLARI_OK; }
+WEAK solariStatus serverDbReassignPoolAssets(serverDb *db, uint64_t f,
+    uint64_t t, size_t *n)
+{ (void)db;(void)f;(void)t; if(n)*n=0; return SOLARI_OK; }
+WEAK solariStatus serverDbDeletePool(serverDb *db, uint64_t pid)
+{ (void)db;(void)pid; return SOLARI_OK; }
 WEAK solariStatus serverDbSetGlobalConfig(serverDb *db, const char *cfg,
     const char *by, uint64_t *epoch)
 { (void)db;(void)cfg;(void)by; if(epoch)*epoch=0; return SOLARI_OK; }
 WEAK solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e)
 { (void)db;(void)e; return SOLARI_OK; }
+WEAK solariStatus serverDbDeleteAlertRule(serverDb *db, uint64_t rid)
+{ (void)db;(void)rid; return SOLARI_OK; }
+WEAK solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eid)
+{ (void)db;(void)eid; return SOLARI_OK; }
 WEAK solariStatus serverAssetsAdopt(serverContext *c, const serverAdoptOpts *o, uint64_t *aid)
 { (void)c;(void)o; if(aid)*aid=0; return SOLARI_OK; }
 WEAK solariStatus serverAssetsSetMeta(serverContext *c, const char *ip, const char *dn,
     const char *cls, uint64_t pool, const char *tags, const char *notes, bool mon)
 { (void)c;(void)ip;(void)dn;(void)cls;(void)pool;(void)tags;(void)notes;(void)mon; return SOLARI_OK; }
+WEAK solariStatus serverAssetsRemove(serverContext *c, const char *key, bool byIp,
+    const char *op, size_t *removed)
+{ (void)c;(void)key;(void)byIp;(void)op; if(removed)*removed=0; return SOLARI_OK; }
 WEAK solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csr, char *b, size_t c)
 { (void)ctl;(void)csr; if(b&&c)b[0]='\0'; return ERR_TLS; }

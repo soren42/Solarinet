@@ -88,13 +88,32 @@ static void test_rbac(void)
 
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("DECOMMISSION"));
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("RETIRE"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("ASSET_REMOVE"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("TARGET_REMOVE"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("POOL_DEL"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("RULE_DEL"));
     TEST_ASSERT_FALSE(ctlVerbIsDestructive("PROVISION"));
+    TEST_ASSERT_FALSE(ctlVerbIsDestructive("ALERT_ACK"));
 
     /* destructive without op= is refused */
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("DECOMMISSION", "node=1", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("ASSET_REMOVE", "asset=1", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("TARGET_REMOVE", "target=icmp:1.2.3.4", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("POOL_DEL", "pool=2", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("RULE_DEL", "rule=1", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("ALERT_ACK", "event=1", op, sizeof op));
     /* destructive WITH op= passes and reports the operator */
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlCheckRbac("RETIRE", "node=1 op=carol", op, sizeof op));
     TEST_ASSERT_EQUAL_STRING("carol", op);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlCheckRbac("ALERT_ACK", "event=1 op=dana", op, sizeof op));
+    TEST_ASSERT_EQUAL_STRING("dana", op);
+}
+
+static void test_pool_delete_guard(void)
+{
+    TEST_ASSERT_FALSE(ctlPoolCanDelete(0));
+    TEST_ASSERT_FALSE(ctlPoolCanDelete(1));
+    TEST_ASSERT_TRUE(ctlPoolCanDelete(2));
 }
 
 static void test_reply_format(void)
@@ -132,6 +151,7 @@ int main(void)
     RUN_TEST(test_arg_numeric);
     RUN_TEST(test_split_verb);
     RUN_TEST(test_rbac);
+    RUN_TEST(test_pool_delete_guard);
     RUN_TEST(test_reply_format);
     RUN_TEST(test_looks_like_csr);
     return UNITY_END();

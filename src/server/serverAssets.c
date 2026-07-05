@@ -8,10 +8,14 @@
 #include "serverAssets.h"
 
 #include "solari/solariLog.h"
+#include "solari/solariTime.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define ASSET_REMOVE_TARGET_CAP 512
 
 /* Upsert a TCP service target for an asset. */
 static void assetAddService(serverContext *ctx, const char *ip, int port,
@@ -150,5 +154,70 @@ solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
     assetSyncHeartbeat(ctx, ip, monitorHost, NULL, aid);
     solariLogf(SOLARI_LOG_INFO, "assets/setmeta: ip=%s asset=%llu pool=%llu hb=%d",
                ip, (unsigned long long)aid, (unsigned long long)poolId, (int)monitorHost);
+    return SOLARI_OK;
+}
+
+static solariStatus assetParseId(const char *s, uint64_t *out)
+{
+    char *endp = NULL;
+    unsigned long long v;
+    if (out) *out = 0;
+    if (!s || !s[0] || !out) return ERR_INVALID_ARG;
+    errno = 0;
+    v = strtoull(s, &endp, 10);
+    if (errno != 0 || !endp || *endp != '\0' || v == 0) return ERR_INVALID_ARG;
+    *out = (uint64_t)v;
+    return SOLARI_OK;
+}
+
+solariStatus serverAssetsRemove(serverContext *ctx, const char *assetKey,
+                                bool byIp, const char *operator_,
+                                size_t *removedTargets)
+{
+    char targets[ASSET_REMOVE_TARGET_CAP][SERVER_TARGETID_MAX];
+    uint64_t assetId = 0;
+    size_t count = 0, i;
+    char detail[256];
+    solariStatus st;
+
+    if (removedTargets) *removedTargets = 0;
+    if (!ctx || !ctx->db || !assetKey || !assetKey[0] ||
+        !operator_ || !operator_[0]) {
+        return ERR_INVALID_ARG;
+    }
+
+    st = byIp ? serverDbGetAssetIdByIp(ctx->db, assetKey, &assetId)
+              : assetParseId(assetKey, &assetId);
+    if (st != SOLARI_OK) return st;
+    if (assetId == 0) return ERR_INVALID_ARG;
+
+    st = serverDbListAssetTargets(ctx->db, assetId, targets,
+                                  ASSET_REMOVE_TARGET_CAP, &count);
+    if (st != SOLARI_OK) return st;
+
+    snprintf(detail, sizeof detail, "asset removed by %s asset=%llu targets=%zu",
+             operator_, (unsigned long long)assetId, count);
+    st = serverDbWriteAlertEvent(ctx->db, 0, 0, NULL, "warn",
+                                 detail, solariNowUnixMs());
+    if (st != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "assets/remove: audit row write failed asset=%llu: %s",
+                   (unsigned long long)assetId, solariStrError(st));
+        return st;
+    }
+
+    for (i = 0; i < count; i++) {
+        st = serverDbPurgeProbeState(ctx->db, targets[i]);
+        if (st != SOLARI_OK) return st;
+        st = serverDbDeleteProbeTarget(ctx->db, targets[i]);
+        if (st != SOLARI_OK) return st;
+    }
+
+    st = serverDbDeleteAsset(ctx->db, assetId);
+    if (st != SOLARI_OK) return st;
+    if (removedTargets) *removedTargets = count;
+
+    solariLogf(SOLARI_LOG_WARN, "assets/remove: asset=%llu targets=%zu by=%s",
+               (unsigned long long)assetId, count, operator_);
     return SOLARI_OK;
 }

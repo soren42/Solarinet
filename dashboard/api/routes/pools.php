@@ -73,4 +73,32 @@ return static function (Router $router): void {
         SolariCtl::call('POOL_SET', $args);
         Response::ok(['poolId' => (int) $p['poolId']]);
     });
+
+    $router->post('/api/pools/{poolId}/delete', static function (array $p): void {
+        if (preg_match('/^\d+$/', $p['poolId']) !== 1 || $p['poolId'] === '0') {
+            Response::error('bad_request', 'poolId must be a positive integer.', 400);
+        }
+        $poolId = (int) $p['poolId'];
+        if ($poolId === 1) {
+            Response::error('bad_request', 'The Unassigned pool cannot be deleted.', 400);
+        }
+        if (Db::row('SELECT poolId FROM pool WHERE poolId = :i', [':i' => $poolId]) === null) {
+            Response::error('not_found', "No pool $poolId", 404);
+        }
+        $b  = solari_json_body();
+        $op = Operator::requireOperator();
+        if (($b['confirm'] ?? null) !== true) {
+            Response::error('confirm_required',
+                'Pool deletion reassigns its assets to Unassigned; resend with {"confirm":true}.', 409);
+        }
+        $reply = SolariCtl::call('POOL_DEL', [
+            'pool' => (string) $poolId,
+            'op'   => $op,
+        ]);
+        Response::ok([
+            'poolId'     => $poolId,
+            'status'     => 'deleted',
+            'reassigned' => isset($reply['reassigned']) ? (int) $reply['reassigned'] : null,
+        ]);
+    });
 };
