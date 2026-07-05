@@ -173,6 +173,31 @@ final class Auth
         return $principal;
     }
 
+    /**
+     * Pin an already-verified principal into a fresh session. This is the
+     * externally-authenticated counterpart to login(): the caller (e.g. the
+     * OIDC callback in Oidc.php) has proven the identity by other means, so we
+     * only normalise the principal shape and establish the session. It shares
+     * the exact session model (fixation-safe id regeneration, SESS_KEY) with
+     * local login, so downstream code — Operator.php, the auth gate, whoami —
+     * cannot tell the two paths apart. Returns the stored principal.
+     *
+     * @param array{username:string,role:string,displayName?:string,source?:string} $principal
+     */
+    public static function establishSession(array $principal): array
+    {
+        self::bootSession();
+        $principal = [
+            'username'    => (string) ($principal['username'] ?? ''),
+            'role'        => strtolower((string) ($principal['role'] ?? 'viewer')),
+            'displayName' => (string) ($principal['displayName'] ?? ($principal['username'] ?? '')),
+            'source'      => (string) ($principal['source'] ?? 'directory'),
+        ];
+        session_regenerate_id(true);          // prevent fixation
+        $_SESSION[self::SESS_KEY] = $principal;
+        return $principal;
+    }
+
     /** Tear down the current session. */
     public static function logout(): void
     {

@@ -226,7 +226,26 @@
     const [u, setU] = useState("");
     const [p, setP] = useState("");
     const [busy, setBusy] = useState(false);
-    const [err, setErr] = useState("");
+    // Surface an SSO failure the callback bounced back via ?sso_error=.
+    const initialSsoErr = (() => {
+      try { return new URLSearchParams(window.location.search).get("sso_error") || ""; }
+      catch (_) { return ""; }
+    })();
+    const [err, setErr] = useState(initialSsoErr);
+    // Which sign-in options the server offers. SSO is additive: the local form
+    // is always shown; the button only appears when OIDC is enabled + configured.
+    const [oidc, setOidc] = useState({ enabled: false, label: "Sign in with SSO", url: "/api/auth/oidc/login" });
+    useEffect(() => {
+      const api = window.SolariAPI;
+      if (!api || !api.authConfig) return;
+      api.authConfig()
+        .then((cfg) => cfg && cfg.oidcEnabled && setOidc({
+          enabled: true,
+          label: cfg.oidcLabel || "Sign in with SSO",
+          url: cfg.oidcLoginUrl || "/api/auth/oidc/login",
+        }))
+        .catch(() => {});
+    }, []);
     const submit = (e) => {
       e.preventDefault();
       if (!u || !p) return;
@@ -252,6 +271,20 @@
             style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: busy ? "default" : "pointer", fontWeight: 600, fontSize: 14, background: "var(--teal, #35e0d0)", color: "#05080e", opacity: (busy || !u || !p) ? 0.6 : 1 }}>
             {busy ? "Signing in…" : "Sign in"}
           </button>
+          {oidc.enabled ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 12px", opacity: 0.5, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
+                or
+                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
+              </div>
+              <button type="button" onClick={() => { window.location.href = oidc.url; }}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 14, background: "transparent", color: "inherit", border: "1px solid rgba(255,255,255,0.18)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <Icon name="shield" size={16} style={{ color: "var(--teal, #35e0d0)" }} />
+                {oidc.label}
+              </button>
+            </>
+          ) : null}
         </form>
       </div>
     );
