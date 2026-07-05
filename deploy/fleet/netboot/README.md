@@ -12,6 +12,31 @@ The whole tree is rendered per-target and rsync'd to the provisioning host
 > integrator) substitutes them per-target and writes the concrete artifacts into
 > the serving tree. See the **token manifest** below for every token.
 
+## Go-live: iPXE loaders + which DHCP advertises them
+
+`build-ipxe-loaders.sh` builds the iPXE loaders **with an embedded chain script**
+and installs them into benzene's TFTP root, then stages `solari-tftp.service`
+(TFTP-only, no DHCP). Embedding `chain …/boot.ipxe` into the loader is what makes
+the **UniFi DHCP** path (Option B) work: UniFi advertises a single boot filename
+and does not vary its reply by user-class, so a *stock* iPXE loader would re-request
+the same filename forever (a boot loop). The embedded script fetches our HTTP menu
+the instant iPXE starts; `|| exit` falls back to local disk for un-staged machines.
+
+```sh
+# build + install loaders, stage the TFTP-only service:
+deploy/fleet/netboot/build-ipxe-loaders.sh
+# ...and go live (enable service + open firewall):
+deploy/fleet/netboot/build-ipxe-loaders.sh --enable
+```
+
+Then pick ONE DHCP source (they must not both answer PXE):
+- **Option A — proxyDHCP on benzene**: `staging/go-live.sh` (does DHCP *and* TFTP,
+  with per-arch boot-file selection). Leave `solari-tftp.service` disabled.
+- **Option B — UniFi DHCP**: set Network → LAN → DHCP → Network Boot →
+  next-server `10.5.2.50`, filename `ipxe-x86_64.efi`; run `solari-tftp.service`
+  for the file transfer. UniFi has only one filename field, so the embedded-script
+  loaders above are required for BIOS/arm64 clients to reach the menu.
+
 ---
 
 ## Boot flow (x86 + arm64 via iPXE)
