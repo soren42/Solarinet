@@ -10,13 +10,218 @@
 
   const ROLE_ICON = { server: "server", monitor: "monitor", client: "host" };
   const STATE_COLOR = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)", unknown: "var(--unknown)" };
+  const STATE_ORD = { down: 0, degraded: 1, unknown: 2, up: 3 };
+
+  // Staleness: a node is stale when it has been silent for more than 2× the
+  // configured sample interval (floor 2 min so the UI never flaps on jitter).
+  function staleThresholdMin() {
+    const sec = (S.config && S.config.schedule && S.config.schedule.sampleIntervalSec) || 15;
+    return Math.max(2, Math.ceil((2 * sec) / 60));
+  }
+  function isStale(n) {
+    return !n.isAsset && n.state !== "down" && n.lastSeenMin != null && n.lastSeenMin > staleThresholdMin();
+  }
+
+  /* ===================== ATTENTION PANEL =====================
+     The operator's first read: everything that currently needs a human,
+     ranked crit → warn → info, each row a click-through to the owning
+     screen/item. Aggregates nodes, alerts, probes, drift, staleness and
+     pending enrollments without duplicating the same incident twice
+     (a down node's row absorbs its own alerts). */
+  function buildAttention(fleet, { onOpenNode, onNav }) {
+    const items = [];
+    const active = S.alerts.filter((a) => !a.cleared);
+    const alertsByNode = {};
+    active.forEach((a) => { if (a.nodeId != null) (alertsByNode[a.nodeId] = alertsByNode[a.nodeId] || []).push(a); });
+    const listed = {};  // nodeId -> true once a node already owns a row
+
+    const nodeOf = (nid) => fleet.find((n) => String(n.nodeId) === String(nid)) || null;
+    const openNodeOrAlerts = (nid) => { const n = nodeOf(nid); if (n) onOpenNode(n); else onNav("alerts"); };
+    const alertNote = (nodeId) => {
+      const as = alertsByNode[nodeId] || [];
+      if (!as.length) return null;
+      const c = as.filter((a) => a.severity === "crit").length;
+      const w = as.filter((a) => a.severity === "warn").length;
+      const bits = [];
+      if (c) bits.push(c + " crit");
+      if (w) bits.push(w + " warn");
+      return bits.length ? bits.join(" · ") + (as.length === 1 ? " alert" : " alerts") : null;
+    };
+
+    // 1 — down systems (crit)
+    fleet.filter((n) => n.state === "down").forEach((n) => {
+      listed[n.nodeId] = true;
+      const seen = n.lastSeenMin != null ? "last seen " + fmt.ago(n.lastSeenMin) : "reachability lost";
+      items.push({
+        key: "down-" + n.nodeId, sev: "crit", icon: n.isAsset ? "host" : (ROLE_ICON[n.role] || "host"),
+        text: `${n.name} is down`,
+        sub: [n.segName, seen, alertNote(n.nodeId)].filter(Boolean).join(" · "),
+        onClick: () => onOpenNode(n),
+      });
+    });
+
+    // 2 — probes unreachable from every vantage (crit)
+    S.probes.filter((p) => p.state === "down").forEach((p) => {
+      items.push({
+        key: "probe-down-" + p.targetId, sev: "crit", icon: "reachability",
+        text: p.vantages.length > 1
+          ? `${p.targetId} unreachable from all ${p.vantages.length} vantages`
+          : `${p.targetId} is unreachable`,
+        sub: [p.label, p.host].filter(Boolean).join(" · "),
+        onClick: () => onNav("reachability"),
+      });
+    });
+
+    // 3 — critical alerts on systems that are not already listed as down (crit)
+    Object.keys(alertsByNode).forEach((nid) => {
+      if (listed[nid]) return;
+      const crits = alertsByNode[nid].filter((a) => a.severity === "crit");
+      if (!crits.length) return;
+      const first = crits[0];
+      items.push({
+        key: "crit-" + nid, sev: "crit", icon: "alerts",
+        text: crits.length === 1 ? `${first.ruleName} — ${first.node}` : `${crits.length} critical alerts — ${first.node}`,
+        sub: first.detail,
+        onClick: () => openNodeOrAlerts(nid),
+      });
+    });
+    // nodeless critical alerts (fleet / probe scope) → Alerts screen
+    active.filter((a) => a.severity === "crit" && a.nodeId == null).forEach((a) => {
+      items.push({ key: "crit-ev-" + a.eventId, sev: "crit", icon: "alerts", text: a.ruleName, sub: a.detail, onClick: () => onNav("alerts") });
+    });
+
+    // 4 — degraded systems (warn); their own warn alerts fold into the sub-line
+    fleet.filter((n) => n.state === "degraded").forEach((n) => {
+      listed[n.nodeId] = true;
+      items.push({
+        key: "deg-" + n.nodeId, sev: "warn", icon: n.isAsset ? "host" : (ROLE_ICON[n.role] || "host"),
+        text: `${n.name} is degraded`,
+        sub: [n.segName, alertNote(n.nodeId) || "over tolerance"].filter(Boolean).join(" · "),
+        onClick: () => onOpenNode(n),
+      });
+    });
+
+    // 5 — split-vantage probes (warn)
+    S.probes.filter((p) => p.state === "degraded").forEach((p) => {
+      const bad = p.vantages.filter((v) => v.outcome !== "ok").length;
+      items.push({
+        key: "probe-split-" + p.targetId, sev: "warn", icon: "reachability",
+        text: `${p.targetId} split vantage — failing from ${bad}/${p.vantages.length}`,
+        sub: [p.label, p.host].filter(Boolean).join(" · "),
+        onClick: () => onNav("reachability"),
+      });
+    });
+
+    // 6 — warn-level alerts on otherwise-healthy systems (warn)
+    Object.keys(alertsByNode).forEach((nid) => {
+      if (listed[nid]) return;
+      const warns = alertsByNode[nid].filter((a) => a.severity === "warn");
+      if (!warns.length) return;
+      const first = warns[0];
+      listed[nid] = true;
+      items.push({
+        key: "warn-" + nid, sev: "warn", icon: "alerts",
+        text: warns.length === 1 ? `${first.ruleName} — ${first.node}` : `${warns.length} warnings — ${first.node}`,
+        sub: first.detail,
+        onClick: () => openNodeOrAlerts(nid),
+      });
+    });
+
+    // 7 — stale (silent) nodes (warn)
+    fleet.filter((n) => n.state !== "down" && n.state !== "degraded" && isStale(n)).forEach((n) => {
+      items.push({
+        key: "stale-" + n.nodeId, sev: "warn", icon: "clock",
+        text: `${n.name} silent for ${fmt.ago(n.lastSeenMin).replace(" ago", "")}`,
+        sub: `${n.segName} · expected every ${staleThresholdMin() / 2}m`,
+        onClick: () => onOpenNode(n),
+      });
+    });
+
+    // 8 — config drift (warn, aggregated)
+    const drifted = S.nodes.filter((n) => !n.converged);
+    if (drifted.length) {
+      items.push({
+        key: "drift", sev: "warn", icon: "refresh",
+        text: drifted.length === 1 ? `${drifted[0].name} has config drift` : `${drifted.length} nodes have config drift`,
+        sub: drifted.slice(0, 3).map((n) => n.name).join(", ") + (drifted.length > 3 ? ` +${drifted.length - 3}` : "") + " · re-push from Provisioning",
+        onClick: () => onNav("provision"),
+      });
+    }
+
+    // 9 — pending enrollments (info)
+    const pend = (S.enrollments || []).length;
+    if (pend) {
+      items.push({
+        key: "enroll", sev: "info", icon: "shield",
+        text: pend === 1 ? "1 CSR awaiting approval" : `${pend} CSRs awaiting approval`,
+        sub: (S.enrollments || []).slice(0, 3).map((e) => e.host).join(", "),
+        onClick: () => onNav("provision"),
+      });
+    }
+
+    return items;
+  }
+
+  function AttentionPanel({ fleet, onOpenNode, onNav }) {
+    const [expanded, setExpanded] = useState(false);
+    const items = useMemo(() => buildAttention(fleet, { onOpenNode, onNav }),
+      [fleet, S.alerts, S.probes, S.enrollments]);
+
+    if (!items.length) {
+      return (
+        <div className="attn nominal">
+          <span className="dot up glow" style={{ width: 9, height: 9 }} />
+          <span className="attn__ok">All systems nominal</span>
+          <span className="attn__oksub">{fleet.length} systems · {S.probes.length} probes · {S.rules.filter((r) => r.enabled).length} rules armed — nothing needs attention</span>
+        </div>
+      );
+    }
+
+    const crit = items.filter((i) => i.sev === "crit").length;
+    const warn = items.filter((i) => i.sev === "warn").length;
+    const CAP = 7;
+    const shown = expanded ? items : items.slice(0, CAP);
+    const hidden = items.length - shown.length;
+
+    return (
+      <div className="attn panel">
+        <div className="attn__head">
+          <Icon name="pulse" size={16} style={{ color: crit ? "var(--crit)" : "var(--warn)" }} />
+          <h3>Needs attention</h3>
+          <div className="attn__counts">
+            {crit > 0 && <span className="attn__pill crit">{crit} crit</span>}
+            {warn > 0 && <span className="attn__pill warn">{warn} warn</span>}
+            {items.length - crit - warn > 0 && <span className="attn__pill info">{items.length - crit - warn} info</span>}
+          </div>
+        </div>
+        <div className="attn__list">
+          {shown.map((it) => (
+            <div key={it.key} className={"attn__row " + it.sev} onClick={it.onClick} role="button" tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter") it.onClick(); }}>
+              <span className={"dot glow " + (it.sev === "crit" ? "down" : it.sev === "warn" ? "degraded" : "up")} style={{ width: 8, height: 8 }} />
+              <Icon name={it.icon} size={16} className="attn__ico" />
+              <span className="attn__text">{it.text}</span>
+              <span className="attn__sub">{it.sub}</span>
+              <Icon name="chevronRight" size={14} className="attn__go" />
+            </div>
+          ))}
+        </div>
+        {(hidden > 0 || expanded) && (
+          <button className="attn__more" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Show fewer" : `+${hidden} more issue${hidden === 1 ? "" : "s"}`}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   /* ===================== FLEET OVERVIEW ===================== */
-  function FleetOverview({ onOpenNode, view, setView, fleet }) {
+  function FleetOverview({ onOpenNode, onNav, view, setView, fleet }) {
     const [stateFilter, setStateFilter] = useState("all");
     const [roleFilter, setRoleFilter] = useState("all");
     const [dense, setDense] = useState(true);
-    const [sort, setSort] = useState({ key: "name", dir: 1 });
+    // problem-first default: worst state floats to the top until re-sorted
+    const [sort, setSort] = useState({ key: "state", dir: 1 });
 
     const filtered = useMemo(() => fleet.filter((n) =>
       (stateFilter === "all" || n.state === stateFilter) &&
@@ -45,12 +250,15 @@
           </div>
         </div>
 
-        {/* KPIs */}
+        {/* what needs attention — ranked, click-through */}
+        <AttentionPanel fleet={fleet} onOpenNode={onOpenNode} onNav={onNav || (() => {})} />
+
+        {/* KPIs — the state tiles double as filters */}
         <div className="kpis">
-          <div className="kpi teal"><div className="kpi__k">Systems</div><div className="kpi__v">{roll.total}</div><div className="kpi__sub">monitored hosts</div><div className="kpi__bar" /></div>
-          <div className="kpi ok"><div className="kpi__k">Operational</div><div className="kpi__v">{roll.up}</div><div className="kpi__sub">{Math.round(roll.up / roll.total * 100)}% healthy</div><div className="kpi__bar" /></div>
-          <div className="kpi warn"><div className="kpi__k">Degraded</div><div className="kpi__v">{roll.degraded}</div><div className="kpi__sub">over tolerance</div><div className="kpi__bar" /></div>
-          <div className="kpi crit"><div className="kpi__k">Down</div><div className="kpi__v">{roll.down}</div><div className="kpi__sub">{S.activeCrit} critical alerts</div><div className="kpi__bar" /></div>
+          <div className={"kpi teal clickable" + (stateFilter === "all" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("all")}><div className="kpi__k">Systems</div><div className="kpi__v">{roll.total}</div><div className="kpi__sub">monitored hosts</div><div className="kpi__bar" /></div>
+          <div className={"kpi ok clickable" + (stateFilter === "up" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("up")}><div className="kpi__k">Operational</div><div className="kpi__v">{roll.up}</div><div className="kpi__sub">{Math.round(roll.up / roll.total * 100)}% healthy</div><div className="kpi__bar" /></div>
+          <div className={"kpi warn clickable" + (stateFilter === "degraded" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("degraded")}><div className="kpi__k">Degraded</div><div className="kpi__v">{roll.degraded}</div><div className="kpi__sub">over tolerance</div><div className="kpi__bar" /></div>
+          <div className={"kpi crit clickable" + (stateFilter === "down" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("down")}><div className="kpi__k">Down</div><div className="kpi__v">{roll.down}</div><div className="kpi__sub">{S.activeCrit} critical alerts</div><div className="kpi__bar" /></div>
           <div className="kpi"><div className="kpi__k">Avg CPU</div><div className="kpi__v" style={{ color: metricColor(avgCpu) }}>{avgCpu}%</div><div className="kpi__sub">across live hosts</div><div className="kpi__bar" style={{ background: metricColor(avgCpu) }} /></div>
           <div className="kpi violet"><div className="kpi__k">Monitors</div><div className="kpi__v">{monsUp}<span style={{ fontSize: 16, color: "var(--ink-faint)" }}>/{monsTotal}</span></div><div className="kpi__sub">vantages online</div><div className="kpi__bar" /></div>
         </div>
@@ -84,13 +292,15 @@
 
   function Cell({ n, dense, onOpenNode }) {
     const load = n.state === "down" ? 0 : n.cpuPct;
+    const stale = isStale(n);
     return (
-      <div className={"cell " + n.state + (dense ? "" : " cozy-cell")} onClick={() => onOpenNode(n)} title={`${n.hostFqdn} — ${n.state}`}>
+      <div className={"cell " + n.state + (dense ? "" : " cozy-cell")} onClick={() => onOpenNode(n)}
+        title={`${n.hostFqdn} — ${n.state}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`}>
         <div className="cell__top">
           <span className="cell__name">{n.name}</span>
           <span className="cell__dot" style={{ background: STATE_COLOR[n.state], boxShadow: n.state !== "unknown" ? `0 0 6px ${STATE_COLOR[n.state]}` : "none" }} />
         </div>
-        <div className="cell__meta">{n.role === "client" ? n.ip : n.role.toUpperCase()}</div>
+        <div className="cell__meta">{n.role === "client" ? n.ip : n.role.toUpperCase()}{stale && <span className="stale-tag">stale</span>}</div>
         {n.alertsCount > 0 && <span className="cell__badge">{n.alertsCount}</span>}
         <div className="cell__spark"><Sparkline data={n.hist.cpu} color={STATE_COLOR[n.state]} h={dense ? 20 : 26} fill={true} strokeW={1.5} /></div>
         <div className="cell__load"><i style={{ width: load + "%", background: metricColor(load), boxShadow: `0 0 5px ${metricColor(load)}` }} /></div>
@@ -100,8 +310,11 @@
 
   function HeatView({ nodes, dense, onOpenNode }) {
     // One block (network segment, or a functional pool for agent-less systems).
-    const block = (key, title, sub, segNodes) => {
-      if (!segNodes.length) return null;
+    const block = (key, title, sub, segNodesIn) => {
+      if (!segNodesIn.length) return null;
+      // problem-first: worst state leads each segment block
+      const segNodes = [...segNodesIn].sort((a, b) =>
+        (STATE_ORD[a.state] ?? 4) - (STATE_ORD[b.state] ?? 4) || String(a.name).localeCompare(String(b.name)));
       const roll = { up: 0, degraded: 0, down: 0, unknown: 0 };
       segNodes.forEach((n) => roll[n.state]++);
       return (
@@ -141,7 +354,7 @@
       const k = sort.key;
       arr.sort((a, b) => {
         let va, vb;
-        if (k === "state") { const ord = { down: 0, degraded: 1, unknown: 2, up: 3 }; va = ord[a.state]; vb = ord[b.state]; }
+        if (k === "state") { va = STATE_ORD[a.state] ?? 4; vb = STATE_ORD[b.state] ?? 4; }
         else if (k === "name") { va = a.name; vb = b.name; }
         else if (k === "seg") { va = a.segName; vb = b.segName; }
         else if (k === "role") { va = a.role; vb = b.role; }
@@ -175,7 +388,7 @@
                 <td style={{ textAlign: "right" }}><Bar pct={n.ramPct} /></td>
                 <td style={{ textAlign: "right" }}><Bar pct={n.diskMaxPct} /></td>
                 <td className="td-mono" style={{ textAlign: "right" }}>{n.state === "down" ? "—" : fmt.mbps(n.netTotalMbps)}</td>
-                <td className="td-mono" style={{ textAlign: "right", color: n.lastSeenMin > 2 ? "var(--crit)" : "var(--ink-dim)" }}>{fmt.ago(n.lastSeenMin)}</td>
+                <td className="td-mono" style={{ textAlign: "right", color: n.lastSeenMin != null && n.lastSeenMin > staleThresholdMin() ? "var(--crit)" : "var(--ink-dim)" }}>{n.lastSeenMin == null ? "—" : fmt.ago(n.lastSeenMin)}</td>
                 <td style={{ textAlign: "right" }}>{n.alertsCount > 0 ? <span className="cell__badge" style={{ position: "static", display: "inline-flex" }}>{n.alertsCount}</span> : <span className="td-mono" style={{ color: "var(--ink-faint)" }}>0</span>}</td>
               </tr>
             ))}
@@ -193,8 +406,10 @@
   }
 
   function CardsView({ nodes, onOpenNode }) {
-    const card = (key, title, sub, desc, segNodes) => {
-      if (!segNodes.length) return null;
+    const card = (key, title, sub, desc, segNodesIn) => {
+      if (!segNodesIn.length) return null;
+      const segNodes = [...segNodesIn].sort((a, b) =>
+        (STATE_ORD[a.state] ?? 4) - (STATE_ORD[b.state] ?? 4) || String(a.name).localeCompare(String(b.name)));
       const roll = { total: segNodes.length, up: 0, degraded: 0, down: 0, unknown: 0 };
       segNodes.forEach((n) => roll[n.state]++);
       const metricNodes = segNodes.filter((n) => !n.isAsset);  // agent-less systems have no CPU/RAM
@@ -220,10 +435,14 @@
               </div>
             </div>
             <div className="minigrid">
-              {segNodes.map((n) => (
-                <div key={n.nodeId} className="minicell" title={`${n.name} — ${n.state}`} onClick={() => onOpenNode(n)}
-                  style={{ background: STATE_COLOR[n.state], boxShadow: n.state === "down" ? "0 0 7px var(--crit)" : "none", opacity: n.state === "unknown" ? 0.5 : 1 }} />
-              ))}
+              {segNodes.map((n) => {
+                const stale = isStale(n);
+                return (
+                  <div key={n.nodeId} className={"minicell" + (stale ? " stale" : "")}
+                    title={`${n.name} — ${n.state}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`} onClick={() => onOpenNode(n)}
+                    style={{ background: STATE_COLOR[n.state], boxShadow: n.state === "down" ? "0 0 7px var(--crit)" : "none", opacity: n.state === "unknown" ? 0.5 : 1 }} />
+                );
+              })}
             </div>
             {desc && <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-faint)", marginTop: 10 }}>{desc}</div>}
           </div>
@@ -463,7 +682,33 @@
   /* ===================== ALERTS + RULES ===================== */
   function AlertsScreen({ onOpenNode, rules, setRules, toast }) {
     const [tab, setTab] = useState("active");
+    const [acked, setAcked] = useState({});   // eventId -> true (optimistic, until refresh)
     const list = S.alerts.filter((a) => tab === "all" ? true : !a.cleared);
+    // group events by owning node (nodeless events group under "Fleet / probes");
+    // S.alerts is pre-sorted uncleared+crit first, so group order inherits severity.
+    const groups = [];
+    {
+      const byKey = new Map();
+      list.forEach((a) => {
+        const k = a.node || "Fleet / probes";
+        if (!byKey.has(k)) { const g = { key: k, node: a.node, nodeId: a.nodeId, segName: a.segName, events: [] }; byKey.set(k, g); groups.push(g); }
+        byKey.get(k).events.push(a);
+      });
+    }
+    // POST /api/alerts/{eventId}/ack, then refresh the model
+    function ackAlert(a) {
+      const x = api();
+      if (x && x.ackAlert) {
+        x.ackAlert(a.eventId).then(() => {
+          setAcked((m) => ({ ...m, [a.eventId]: true }));
+          toast(`Acknowledged — ${a.ruleName}`, "check");
+          if (x.refresh) x.refresh().catch(() => {});
+        }).catch((e) => toast(`Ack failed: ${e && e.message || "error"}`, "close"));
+      } else {
+        setAcked((m) => ({ ...m, [a.eventId]: true }));
+        toast("Acknowledged (offline — not persisted)", "check");
+      }
+    }
     const crit = S.alerts.filter((a) => !a.cleared && a.severity === "crit").length;
     const warn = S.alerts.filter((a) => !a.cleared && a.severity === "warn").length;
     const info = S.alerts.filter((a) => !a.cleared && a.severity === "info").length;
@@ -510,19 +755,42 @@
 
         <div className="two-col" style={{ alignItems: "start" }}>
           <div>
-            <div className="page-sub" style={{ marginBottom: 12 }}>{tab === "active" ? "Active events" : "All events (incl. cleared)"}</div>
+            <div className="page-sub" style={{ marginBottom: 12 }}>{tab === "active" ? "Active events · by node" : "All events (incl. cleared) · by node"}</div>
             {list.length === 0 && <div className="empty">No alerts — all systems nominal.</div>}
-            {list.map((a) => (
-              <div key={a.eventId} className={"alert-row " + a.severity + (a.cleared ? " cleared" : "")} onClick={() => a.nodeId && onOpenNode(a.nodeId)}>
-                <span className={"alert-sev " + a.severity}>{a.severity}</span>
-                <div className="alert-main">
-                  <div className="t">{a.ruleName}</div>
-                  <div className="d">{a.detail}</div>
+            {groups.map((g) => {
+              const open = g.events.filter((a) => !a.cleared);
+              const gc = open.filter((a) => a.severity === "crit").length;
+              const gw = open.filter((a) => a.severity === "warn").length;
+              return (
+                <div key={g.key} className="alert-group">
+                  <div className={"alert-group__head" + (g.nodeId != null ? " link" : "")}
+                    onClick={() => g.nodeId != null && onOpenNode(g.nodeId)}>
+                    <Icon name={g.node ? "host" : "reachability"} size={14} className="ico" />
+                    <span className="alert-group__name">{g.key}</span>
+                    {g.segName && <span className="alert-group__seg">{g.segName}</span>}
+                    <span className="alert-group__counts">
+                      {gc > 0 && <span className="attn__pill crit">{gc} crit</span>}
+                      {gw > 0 && <span className="attn__pill warn">{gw} warn</span>}
+                      <span className="alert-group__n">{g.events.length} event{g.events.length === 1 ? "" : "s"}</span>
+                    </span>
+                  </div>
+                  {g.events.map((a) => (
+                    <div key={a.eventId} className={"alert-row " + a.severity + (a.cleared ? " cleared" : "")} onClick={() => a.nodeId && onOpenNode(a.nodeId)}>
+                      <span className={"alert-sev " + a.severity}>{a.severity}</span>
+                      <div className="alert-main">
+                        <div className="t">{a.ruleName}</div>
+                        <div className="d">{a.detail}</div>
+                      </div>
+                      {!a.cleared && (acked[a.eventId]
+                        ? <span className="tag" style={{ color: "var(--ok)", borderColor: "var(--ok)" }}>ack’d</span>
+                        : <button className="btn-ghost btn-ack" onClick={(ev) => { ev.stopPropagation(); ackAlert(a); }}
+                            title="Acknowledge this event"><Icon name="check" size={13} />Ack</button>)}
+                      <div className="alert-meta">{a.cleared ? "cleared" : ""}<div>{fmt.ago(a.firedMinAgo)}</div></div>
+                    </div>
+                  ))}
                 </div>
-                {a.node && <div className="alert-node">{a.node}<div style={{ color: "var(--ink-faint)", fontSize: 10 }}>{a.segName}</div></div>}
-                <div className="alert-meta">{a.cleared ? "cleared" : ""}<div>{fmt.ago(a.firedMinAgo)}</div></div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="panel">
@@ -555,5 +823,5 @@
     );
   }
 
-  Object.assign(window, { FleetOverview, NodeDetail, AlertsScreen });
+  Object.assign(window, { FleetOverview, NodeDetail, AlertsScreen, AttentionPanel });
 })();

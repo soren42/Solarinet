@@ -18,7 +18,11 @@
     const [proto, setProto] = useState("all");
     const [stateF, setStateF] = useState("all");
     const [selId, setSelId] = useState(null);
-    const probes = S.probes.filter((p) => (proto === "all" || p.proto === proto) && (stateF === "all" || p.state === stateF));
+    // problem-first: unreachable, then split-vantage, then healthy
+    const PROBE_ORD = { down: 0, degraded: 1, up: 2, unknown: 3 };
+    const probes = S.probes
+      .filter((p) => (proto === "all" || p.proto === proto) && (stateF === "all" || p.state === stateF))
+      .sort((a, b) => (PROBE_ORD[a.state] ?? 4) - (PROBE_ORD[b.state] ?? 4) || String(a.targetId).localeCompare(String(b.targetId)));
     const sel = selId ? S.probes.find((p) => p.targetId === selId) : null;
 
     const monCols = useMemo(() => {
@@ -63,10 +67,10 @@
         </div>
 
         <div className="kpis">
-          <div className="kpi teal"><div className="kpi__k">Targets</div><div className="kpi__v">{roll.total}</div><div className="kpi__sub">under probe</div><div className="kpi__bar" /></div>
-          <div className="kpi ok"><div className="kpi__k">Reachable</div><div className="kpi__v">{roll.up}</div><div className="kpi__sub">all vantages OK</div><div className="kpi__bar" /></div>
-          <div className="kpi warn"><div className="kpi__k">Split vantage</div><div className="kpi__v">{roll.degraded}</div><div className="kpi__sub">partial reachability</div><div className="kpi__bar" /></div>
-          <div className="kpi crit"><div className="kpi__k">Unreachable</div><div className="kpi__v">{roll.down}</div><div className="kpi__sub">from every vantage</div><div className="kpi__bar" /></div>
+          <div className={"kpi teal clickable" + (stateF === "all" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateF("all")}><div className="kpi__k">Targets</div><div className="kpi__v">{roll.total}</div><div className="kpi__sub">under probe</div><div className="kpi__bar" /></div>
+          <div className={"kpi ok clickable" + (stateF === "up" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateF("up")}><div className="kpi__k">Reachable</div><div className="kpi__v">{roll.up}</div><div className="kpi__sub">all vantages OK</div><div className="kpi__bar" /></div>
+          <div className={"kpi warn clickable" + (stateF === "degraded" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateF("degraded")}><div className="kpi__k">Split vantage</div><div className="kpi__v">{roll.degraded}</div><div className="kpi__sub">partial reachability</div><div className="kpi__bar" /></div>
+          <div className={"kpi crit clickable" + (stateF === "down" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateF("down")}><div className="kpi__k">Unreachable</div><div className="kpi__v">{roll.down}</div><div className="kpi__sub">from every vantage</div><div className="kpi__bar" /></div>
           <div className="kpi"><div className="kpi__k">Avg RTT</div><div className="kpi__v" style={{ color: "var(--teal)" }}>{fmt.rtt(avgRtt)}</div><div className="kpi__sub">across OK probes</div><div className="kpi__bar" style={{ background: "var(--teal)" }} /></div>
         </div>
 

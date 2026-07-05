@@ -246,6 +246,7 @@
     const [token, setToken] = useState(null);
     const drifted = S.nodes.filter((n) => !n.converged);
     const converged = S.nodes.length - drifted.length;
+    const [driftAll, setDriftAll] = useState(false);   // "+N more" expander for the drift list
 
     // ---- remote client deployment ----
     const [dHost, setDHost] = useState("");
@@ -499,7 +500,7 @@
             <div className="panel">
               <div className="panel__head"><Icon name="refresh" size={16} /><h3>Config convergence</h3><div className="right">{converged}/{S.nodes.length} ok</div></div>
               <div className="panel__body" style={{ padding: 0 }}>
-                {drifted.slice(0, 8).map((n) => (
+                {(driftAll ? drifted : drifted.slice(0, 8)).map((n) => (
                   <div key={n.nodeId} className="enr-row" onClick={() => onOpenNode(n.nodeId)} style={{ cursor: "pointer" }}>
                     <span className="dot degraded" style={{ flex: "0 0 auto" }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -517,6 +518,11 @@
                     }}><Icon name="refresh" size={13} />Re-push</button>
                   </div>
                 ))}
+                {drifted.length > 8 && (
+                  <button className="btn-ghost" style={{ margin: 12 }} onClick={() => setDriftAll((v) => !v)}>
+                    {driftAll ? "Show fewer" : `+${drifted.length - 8} more drifted node${drifted.length - 8 === 1 ? "" : "s"}`}
+                  </button>
+                )}
                 {drifted.length === 0 && <div className="td-mono muted" style={{ fontSize: 13, padding: 16 }}>All nodes converged.</div>}
               </div>
             </div>
