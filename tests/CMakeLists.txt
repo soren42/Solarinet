@@ -14,6 +14,7 @@ set(SOLARI_UNIT_TESTS
   test_frame
   test_msg
   test_config
+  test_json
 )
 
 foreach(t ${SOLARI_UNIT_TESTS})
@@ -65,6 +66,23 @@ if(TARGET clientcore AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_test(NAME test_watchdog COMMAND test_watchdog)
 endif()
 
+# Client control-plane pure logic: blob apply, epoch monotonicity, addressing,
+# CONTROL_RESULT wire shape. No transport needed (the SUB glue is gated inside
+# clientControl.c), so it runs in the default build too.
+if(TARGET clientcore)
+  add_executable(test_client_control unit/test_client_control.c)
+  target_link_libraries(test_client_control PRIVATE clientcore unity)
+  add_test(NAME test_client_control COMMAND test_client_control)
+endif()
+
+# Config-push convergence end-to-end over loopback sockets: PUB->SUB directive,
+# apply + persist, CONTROL_RESULT back over PUSH->PULL with correlation echo.
+if(TARGET clientcore AND SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
+  add_executable(test_control_e2e integration/test_control_e2e.c)
+  target_link_libraries(test_control_e2e PRIVATE clientcore unity)
+  add_test(NAME test_control_e2e COMMAND test_control_e2e)
+endif()
+
 # Monitor: HRW ownership (unit) + the TCP probe engine (integration). Both link
 # monitorcore, which is Linux-only.
 if(TARGET monitorcore)
@@ -79,6 +97,12 @@ if(TARGET monitorcore)
   add_executable(test_peers unit/test_peers.c)
   target_link_libraries(test_peers PRIVATE monitorcore unity)
   add_test(NAME test_peers COMMAND test_peers)
+
+  # Monitor control-plane pure logic: adopt + set-config/provision apply under
+  # epoch monotonicity, addressing, CONTROL_RESULT wire shape.
+  add_executable(test_monitor_control unit/test_monitor_control.c)
+  target_link_libraries(test_monitor_control PRIVATE monitorcore unity)
+  add_test(NAME test_monitor_control COMMAND test_monitor_control)
 endif()
 
 # Monitor reporting + gossip - need the transport (and spool).

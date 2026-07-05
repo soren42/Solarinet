@@ -99,19 +99,22 @@ static void test_build_provision_payload(void)
 {
     uint8_t buf[256]; size_t len = 0; uint16_t count = 0;
     const uint8_t blob[] = { 'c','f','g' };
-    solariStatus st = provBuildProvisionPayload(0xDEAD, blob, sizeof blob,
+    solariStatus st = provBuildProvisionPayload(0xA0DE0B0BULL, 0xDEAD,
+                                                blob, sizeof blob,
                                                 buf, sizeof buf, &len, &count);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, st);
-    TEST_ASSERT_EQUAL_UINT16(3, count);   /* verb + epoch + payload */
+    TEST_ASSERT_EQUAL_UINT16(4, count);   /* verb + epoch + addressee + payload */
 
-    uint8_t verb = 0; uint64_t epoch = 0;
+    uint8_t verb = 0; uint64_t epoch = 0, node = 0;
     TEST_ASSERT_TRUE(findTlvU8 (buf, len, TLV_CTRL_VERB, &verb));
     TEST_ASSERT_TRUE(findTlvU64(buf, len, TLV_CTRL_TARGET_EPOCH, &epoch));
+    TEST_ASSERT_TRUE(findTlvU64(buf, len, TLV_CTRL_TARGET_NODE, &node));
     TEST_ASSERT_EQUAL_UINT8(CTRL_PROVISION, verb);
     TEST_ASSERT_EQUAL_HEX64(0xDEAD, epoch);
+    TEST_ASSERT_EQUAL_HEX64(0xA0DE0B0BULL, node);
 
-    /* no blob -> just verb + epoch */
-    st = provBuildProvisionPayload(1, NULL, 0, buf, sizeof buf, &len, &count);
+    /* no blob, broadcast (node 0) -> just verb + epoch */
+    st = provBuildProvisionPayload(0, 1, NULL, 0, buf, sizeof buf, &len, &count);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, st);
     TEST_ASSERT_EQUAL_UINT16(2, count);
 }

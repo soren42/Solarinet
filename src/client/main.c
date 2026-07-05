@@ -5,9 +5,13 @@
  *   - local (default / no server): collect a report and print a human summary.
  *   - reporting (a [server] primaryUrl is configured and the build has the
  *     transport+spool): HELLO, then sample -> push-or-spool every interval.
- * The watchdog sibling and the CONTROL back-channel land in the next increment.
+ * Reporting mode also services the CONTROL back-channel: a SUB connection to
+ * the server's fleet PUB endpoint receives CTRL_SET_CONFIG / CTRL_PROVISION
+ * directives between samples (clientControl), applies + persists them, and
+ * answers CONTROL_RESULT over the push channel so convergence clears.
  */
 #include "client.h"
+#include "clientControl.h"
 #include "platOS.h"
 
 #include "solari/solariLog.h"
@@ -110,19 +114,30 @@ static int runLocal(const clientConfig *cfg, int loop)
 #define CLIENT_DISCOVERY_EVERY 20   /* emit discovery/topology every N cycles */
 
 /* reporting mode: announce, then sample -> push-or-spool every interval, with
- * periodic discovery/topology adverts. */
-static int runReporting(const clientConfig *cfg, int loop)
+ * periodic discovery/topology adverts. Between samples the inter-cycle sleep
+ * doubles as the control-plane poll (clientControlPoll), so directives are
+ * received and applied promptly without disturbing the sample cadence. cfg is
+ * mutable here: directives hot-apply onto it (interval, watch lists). */
+static int runReporting(clientConfig *cfg, int loop)
 {
-    clientContext ctx;
-    clientState   st;
-    solariStatus  rc;
-    unsigned long cycle = 0;
+    clientContext      ctx;
+    clientState        st;
+    clientControlState cst;
+    clientControlIo    cio;
+    solariStatus       rc;
+    unsigned long      cycle = 0;
 
     memset(&st, 0, sizeof st);
     if (clientContextInit(&ctx, cfg) != SOLARI_OK) {
         solariLogf(SOLARI_LOG_FATAL, "context init failed");
         return 1;
     }
+    /* Restore any previously pushed config (persisted applied state), then
+     * subscribe to the directive channel. Both are best-effort: without them
+     * the client still samples and reports. */
+    (void)clientControlStateLoad(&cst, cfg);
+    (void)clientControlOpen(cfg, &cio);
+
     clientConnect(&ctx);                       /* best-effort */
     clientSendHello(&ctx);                      /* best-effort announce */
 
@@ -141,9 +156,12 @@ static int runReporting(const clientConfig *cfg, int loop)
             clientSendTopology(&ctx);
         }
         cycle++;
-        if (loop) solariSleepMs(cfg->sampleIntervalSec * 1000u);
+        if (loop)
+            clientControlPoll(&cio, &ctx, cfg, &cst,
+                              cfg->sampleIntervalSec * 1000u);
     } while (loop);
 
+    clientControlClose(&cio);
     clientContextClose(&ctx);
     return 0;
 }

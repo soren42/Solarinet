@@ -353,6 +353,9 @@ solariStatus solariMsgBuildControl(const solariControl *c,
     solariTlvWriterInit(&w, payload, cap);
     if ((st = solariTlvAppendU8 (&w, TLV_CTRL_VERB,         c->verb))        != SOLARI_OK) return st;
     if ((st = solariTlvAppendU64(&w, TLV_CTRL_TARGET_EPOCH, c->targetEpoch)) != SOLARI_OK) return st;
+    if (c->targetNode != 0) {   /* absent = broadcast; old parsers skip it */
+        if ((st = solariTlvAppendU64(&w, TLV_CTRL_TARGET_NODE, c->targetNode)) != SOLARI_OK) return st;
+    }
     if (c->payloadLen > 0) {
         if ((st = solariTlvAppend(&w, TLV_CTRL_PAYLOAD, c->payload, c->payloadLen)) != SOLARI_OK) return st;
     }
@@ -371,11 +374,24 @@ solariStatus solariMsgParseControl(const uint8_t *payload, size_t len, solariCon
     memset(c, 0, sizeof *c);
     solariTlvReaderInit(&r, payload, len);
     while ((st = solariTlvNext(&r, &type, &val, &vlen)) == SOLARI_OK) {
+        solariStatus fst;
         switch (type) {
-        case TLV_CTRL_VERB:         solariTlvReadU8(val, vlen, &c->verb); break;
-        case TLV_CTRL_TARGET_EPOCH: solariTlvReadU64(val, vlen, &c->targetEpoch); break;
+        /* The scalar control fields are fail-CLOSED: a present-but-malformed
+         * verb/epoch/addressee (wrong length) makes the whole directive
+         * untrustworthy. Rejecting it is critical for TLV_CTRL_TARGET_NODE in
+         * particular — silently defaulting a bad addressee to 0 would turn a
+         * corrupt single-node directive into a fleet-wide broadcast. */
+        case TLV_CTRL_VERB:
+            if ((fst = solariTlvReadU8(val, vlen, &c->verb)) != SOLARI_OK) return fst;
+            break;
+        case TLV_CTRL_TARGET_EPOCH:
+            if ((fst = solariTlvReadU64(val, vlen, &c->targetEpoch)) != SOLARI_OK) return fst;
+            break;
+        case TLV_CTRL_TARGET_NODE:
+            if ((fst = solariTlvReadU64(val, vlen, &c->targetNode)) != SOLARI_OK) return fst;
+            break;
         case TLV_CTRL_PAYLOAD:      c->payload = val; c->payloadLen = vlen; break;
-        default: break;
+        default: break;   /* unknown TLVs remain tolerated (forward-compat) */
         }
     }
     return (st == ERR_TLV_END) ? SOLARI_OK : st;

@@ -86,8 +86,11 @@ static uint64_t provDeriveConfirmToken(uint64_t nodeId, uint32_t wipeScope,
 }
 
 /* Build a CTRL_PROVISION (verb 7) control payload: verb + target epoch + the
- * opaque config blob. Pure TLV assembly over a caller buffer. */
-static solariStatus provBuildProvisionPayload(uint64_t targetEpoch,
+ * addressee node (the directive rides the broadcast PUB channel, so the target
+ * is in-payload) + the opaque config blob. Pure TLV assembly over a caller
+ * buffer. */
+static solariStatus provBuildProvisionPayload(uint64_t targetNode,
+                                              uint64_t targetEpoch,
                                               const uint8_t *cfgBlob,
                                               uint16_t cfgLen,
                                               uint8_t *out, size_t cap,
@@ -101,6 +104,10 @@ static solariStatus provBuildProvisionPayload(uint64_t targetEpoch,
         return st;
     if ((st = solariTlvAppendU64(&w, TLV_CTRL_TARGET_EPOCH, targetEpoch)) != SOLARI_OK)
         return st;
+    if (targetNode != 0) {
+        if ((st = solariTlvAppendU64(&w, TLV_CTRL_TARGET_NODE, targetNode)) != SOLARI_OK)
+            return st;
+    }
     if (cfgLen > 0) {
         if ((st = solariTlvAppend(&w, TLV_CTRL_PAYLOAD, cfgBlob, cfgLen)) != SOLARI_OK)
             return st;
@@ -425,7 +432,7 @@ solariStatus serverProvisionNode(serverContext *ctx, uint64_t nodeId,
     }
 
     /* Build the CTRL_PROVISION directive carrying the config blob. */
-    if ((st = provBuildProvisionPayload(targetEpoch,
+    if ((st = provBuildProvisionPayload(nodeId, targetEpoch,
                                         (const uint8_t *)configJson, cfgLen,
                                         payload, sizeof payload,
                                         &payloadLen, &tlvCount)) != SOLARI_OK) {

@@ -4,7 +4,9 @@
 # layer (clientReport.c) compiles only when libsolari carries the nng transport
 # and the SQLite spool.
 
-set(CLIENT_CORE_SOURCES clientCollect.c clientWatchdog.c)
+# clientControl.c: the pure directive parse/apply half compiles everywhere;
+# its SUB-transport glue is inside #ifdef CLIENT_WITH_REPORTING.
+set(CLIENT_CORE_SOURCES clientCollect.c clientWatchdog.c clientControl.c)
 
 # Select the PAL for the target OS. Only platLinux.c exists today; platMacos.c
 # and platWindows.c are future PAL steps (base plan sec 7 / Phase 3). If the

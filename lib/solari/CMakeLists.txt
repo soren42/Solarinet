@@ -13,6 +13,7 @@ set(SOLARI_CORE_SOURCES
   solariTlv.c
   solariMsg.c
   solariConfig.c        # zero deps (JSON overlay gated behind SOLARI_WITH_JSON)
+  solariJson.c          # zero deps: bounded JSON field extraction (control blobs)
 )
 
 set(SOLARI_EXTRA_SOURCES "")

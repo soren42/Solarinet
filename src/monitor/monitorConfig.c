@@ -128,6 +128,7 @@ solariStatus monitorConfigFromFile(const char *path, monitorConfig *out)
             sizeof out->hostFqdn - 1);
     { const char *nid = solariConfigGetStr(c, "identity", "nodeId", "");
       if (nid[0]) out->nodeId = (uint64_t)strtoull(nid, NULL, 0); }
+    out->configEpoch = solariConfigEpoch(c);
 
     out->roundIntervalSec = (uint32_t)solariConfigGetInt(c, "probe", "roundIntervalSec", 30);
     out->probesPerRound   = (uint16_t)solariConfigGetInt(c, "probe", "probesPerRound", 5);
@@ -136,6 +137,9 @@ solariStatus monitorConfigFromFile(const char *path, monitorConfig *out)
 
     strncpy(out->primaryUrl,  solariConfigGetStr(c, "server", "primaryUrl", ""),  sizeof out->primaryUrl - 1);
     strncpy(out->failoverUrl, solariConfigGetStr(c, "server", "failoverUrl", ""), sizeof out->failoverUrl - 1);
+    strncpy(out->subUrl,      solariConfigGetStr(c, "server", "subUrl", ""),      sizeof out->subUrl - 1);
+    strncpy(out->ctrlStateFile, solariConfigGetStr(c, "control", "stateFile", ""),
+            sizeof out->ctrlStateFile - 1);
     out->useTls = strncmp(out->primaryUrl, "tls+", 4) == 0;
     strncpy(out->caFile,   solariConfigGetStr(c, "tls", "caFile", ""),   sizeof out->caFile - 1);
     strncpy(out->certFile, solariConfigGetStr(c, "tls", "certFile", ""), sizeof out->certFile - 1);
