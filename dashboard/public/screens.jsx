@@ -4,13 +4,13 @@
 (function () {
   const { useState, useMemo, useEffect } = React;
   const Icon = window.Icon;
-  const { StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars, metricColor } = window;
+  const { StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars, metricColor, DangerModal } = window;
   const S = window.SOLARI;
   const fmt = S.fmt;
 
   const ROLE_ICON = { server: "server", monitor: "monitor", client: "host" };
-  const STATE_COLOR = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)", unknown: "var(--unknown)" };
-  const STATE_ORD = { down: 0, degraded: 1, unknown: 2, up: 3 };
+  const STATE_COLOR = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)", unknown: "var(--unknown)", retired: "var(--unknown)" };
+  const STATE_ORD = { down: 0, degraded: 1, unknown: 2, up: 3, retired: 5 };
 
   // Staleness: a node is stale when it has been silent for more than 2× the
   // configured sample interval (floor 2 min so the UI never flaps on jitter).
@@ -19,7 +19,7 @@
     return Math.max(2, Math.ceil((2 * sec) / 60));
   }
   function isStale(n) {
-    return !n.isAsset && n.state !== "down" && n.lastSeenMin != null && n.lastSeenMin > staleThresholdMin();
+    return !n.isAsset && n.state !== "down" && n.state !== "retired" && n.lastSeenMin != null && n.lastSeenMin > staleThresholdMin();
   }
 
   /* ===================== ATTENTION PANEL =====================
@@ -219,17 +219,21 @@
   function FleetOverview({ onOpenNode, onNav, view, setView, fleet }) {
     const [stateFilter, setStateFilter] = useState("all");
     const [roleFilter, setRoleFilter] = useState("all");
+    const [showRetired, setShowRetired] = useState(false);   // retired nodes hidden by default
     const [dense, setDense] = useState(true);
     // problem-first default: worst state floats to the top until re-sorted
     const [sort, setSort] = useState({ key: "state", dir: 1 });
 
+    const retiredCount = useMemo(() => fleet.filter((n) => n.state === "retired").length, [fleet]);
     const filtered = useMemo(() => fleet.filter((n) =>
+      (showRetired || n.state !== "retired") &&
       (stateFilter === "all" || n.state === stateFilter) &&
       (roleFilter === "all" || n.role === roleFilter)
-    ), [fleet, stateFilter, roleFilter]);
+    ), [fleet, stateFilter, roleFilter, showRetired]);
 
     const roll = S.fleetRoll;
-    const cpuNodes = fleet.filter((n) => !n.isAsset && n.state !== "down");
+    const active = Math.max(1, roll.total - (roll.retired || 0));   // KPI denominators exclude retired
+    const cpuNodes = fleet.filter((n) => !n.isAsset && n.state !== "down" && n.state !== "retired");
     const avgCpu = Math.round(cpuNodes.reduce((a, n) => a + n.cpuPct, 0) / Math.max(1, cpuNodes.length));
     const monsUp = fleet.filter((n) => n.role === "monitor" && n.state === "up").length;
     const monsTotal = fleet.filter((n) => n.role === "monitor").length;
@@ -255,8 +259,8 @@
 
         {/* KPIs — the state tiles double as filters */}
         <div className="kpis">
-          <div className={"kpi teal clickable" + (stateFilter === "all" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("all")}><div className="kpi__k">Systems</div><div className="kpi__v">{roll.total}</div><div className="kpi__sub">monitored hosts</div><div className="kpi__bar" /></div>
-          <div className={"kpi ok clickable" + (stateFilter === "up" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("up")}><div className="kpi__k">Operational</div><div className="kpi__v">{roll.up}</div><div className="kpi__sub">{Math.round(roll.up / roll.total * 100)}% healthy</div><div className="kpi__bar" /></div>
+          <div className={"kpi teal clickable" + (stateFilter === "all" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("all")}><div className="kpi__k">Systems</div><div className="kpi__v">{roll.total - (roll.retired || 0)}</div><div className="kpi__sub">monitored hosts</div><div className="kpi__bar" /></div>
+          <div className={"kpi ok clickable" + (stateFilter === "up" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("up")}><div className="kpi__k">Operational</div><div className="kpi__v">{roll.up}</div><div className="kpi__sub">{Math.round(roll.up / active * 100)}% healthy</div><div className="kpi__bar" /></div>
           <div className={"kpi warn clickable" + (stateFilter === "degraded" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("degraded")}><div className="kpi__k">Degraded</div><div className="kpi__v">{roll.degraded}</div><div className="kpi__sub">over tolerance</div><div className="kpi__bar" /></div>
           <div className={"kpi crit clickable" + (stateFilter === "down" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("down")}><div className="kpi__k">Down</div><div className="kpi__v">{roll.down}</div><div className="kpi__sub">{S.activeCrit} critical alerts</div><div className="kpi__bar" /></div>
           <div className="kpi"><div className="kpi__k">Avg CPU</div><div className="kpi__v" style={{ color: metricColor(avgCpu) }}>{avgCpu}%</div><div className="kpi__sub">across live hosts</div><div className="kpi__bar" style={{ background: metricColor(avgCpu) }} /></div>
@@ -276,6 +280,15 @@
               {k !== "all" && <Icon name={ROLE_ICON[k]} size={14} />}{lbl}
             </button>
           ))}
+          {retiredCount > 0 && (
+            <React.Fragment>
+              <div style={{ width: 1, height: 24, background: "var(--line)", margin: "0 4px" }} />
+              <button className={"chip" + (showRetired ? " on" : "")} onClick={() => setShowRetired((v) => !v)}
+                title={showRetired ? "Hide retired nodes" : "Show retired nodes"}>
+                <span className="dot unknown" />Retired<span className="chip__n">{retiredCount}</span>
+              </button>
+            </React.Fragment>
+          )}
           {view === "heat" && (
             <button className="chip" style={{ marginLeft: "auto" }} onClick={() => setDense((d) => !d)}>
               <Icon name={dense ? "cards" : "grid"} size={14} />{dense ? "Compact" : "Detailed"}
@@ -680,6 +693,129 @@
   }
 
   /* ===================== ALERTS + RULES ===================== */
+  // metric taxonomy for the rule editor — the wire metric names the C server
+  // evaluates (§ rules), grouped by scope, with their display units.
+  const RULE_METRICS = {
+    host: [
+      { id: "cpuAvgMilli", label: "CPU average", unit: "%" },
+      { id: "ramUsedPct", label: "RAM used", unit: "%" },
+      { id: "swapUsedPct", label: "Swap used", unit: "%" },
+      { id: "diskUsedPct", label: "Disk used", unit: "%" },
+      { id: "lastSeenSec", label: "Silence (last seen)", unit: "s" },
+      { id: "ifErrs", label: "NIC errors", unit: "/s" },
+      { id: "procRunState", label: "Watched process state", unit: "" },
+    ],
+    probe: [
+      { id: "lossPermille", label: "Packet loss", unit: "‰" },
+      { id: "rttMicros", label: "Round-trip time", unit: "µs" },
+      { id: "outcome", label: "Probe outcome", unit: "" },
+    ],
+  };
+
+  // Create-rule modal — same .modal design system as AgentModal/DangerModal.
+  // onSave receives the full rule body; the caller assigns the fresh ruleId
+  // and POSTs it via the existing saveRule (RULE_SET) endpoint.
+  function RuleModal({ onSave, onClose }) {
+    const [name, setName] = useState("");
+    const [scope, setScope] = useState("host");
+    const [metric, setMetric] = useState(RULE_METRICS.host[0].id);
+    const [op, setOp] = useState("gt");
+    const [threshold, setThreshold] = useState(90);
+    const [forSeconds, setForSeconds] = useState(60);
+    const [severity, setSeverity] = useState("warn");
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+      function onKey(e) { if (e.key === "Escape") onClose(); }
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [onClose]);
+    const metrics = RULE_METRICS[scope];
+    const mdef = metrics.find((m) => m.id === metric) || metrics[0];
+    const fld = { width: "100%", boxSizing: "border-box", padding: "8px 10px", marginTop: 4, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13 };
+    const lbl = { fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", opacity: 0.6, marginTop: 14, display: "block" };
+    const valid = name.trim().length > 0;
+    function submit() {
+      if (!valid || busy) return;
+      setBusy(true);
+      Promise.resolve(onSave({
+        name: name.trim(), scope, metric: mdef.id, op,
+        threshold: op === "transition" ? 0 : (Number(threshold) || 0),
+        unit: mdef.unit,
+        forSeconds: op === "transition" ? 0 : (Number(forSeconds) || 0),
+        severity, enabled: true,
+      })).then(() => setBusy(false));
+    }
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal" style={{ width: "min(460px, 94vw)" }} onClick={(e) => e.stopPropagation()}>
+          <div className="modal__head">
+            <Icon name="alerts" size={20} style={{ color: "var(--teal)" }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>New alert rule</div>
+              <div className="td-mono muted" style={{ fontSize: 11 }}>armed on save · pushed to the fleet</div>
+            </div>
+            <button className="iconbtn" style={{ width: 36, height: 36, flex: "0 0 36px" }} onClick={onClose} aria-label="Close"><Icon name="close" size={16} /></button>
+          </div>
+          <div className="modal__body">
+            <label style={{ ...lbl, marginTop: 2 }}>Rule name</label>
+            <input autoFocus style={fld} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Disk almost full" />
+            <div style={{ display: "flex", gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label style={lbl}>Scope</label>
+                <select style={fld} value={scope} onChange={(e) => { const s = e.target.value; setScope(s); setMetric(RULE_METRICS[s][0].id); }}>
+                  <option value="host">host</option><option value="probe">probe</option>
+                </select>
+              </div>
+              <div style={{ flex: 2 }}>
+                <label style={lbl}>Metric</label>
+                <select style={fld} value={mdef.id} onChange={(e) => setMetric(e.target.value)}>
+                  {metrics.map((m) => <option key={m.id} value={m.id}>{m.label} ({m.id})</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label style={lbl}>Condition</label>
+                <select style={fld} value={op} onChange={(e) => setOp(e.target.value)}>
+                  <option value="gt">&gt; greater than</option>
+                  <option value="lt">&lt; less than</option>
+                  <option value="eq">= equals</option>
+                  <option value="transition">Δ on change</option>
+                </select>
+              </div>
+              {op !== "transition" && (
+                <React.Fragment>
+                  <div style={{ flex: 1 }}>
+                    <label style={lbl}>Threshold{mdef.unit ? ` (${mdef.unit})` : ""}</label>
+                    <input type="number" style={fld} value={threshold} onChange={(e) => setThreshold(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={lbl}>Sustained for (s)</label>
+                    <input type="number" style={fld} value={forSeconds} onChange={(e) => setForSeconds(e.target.value)} />
+                  </div>
+                </React.Fragment>
+              )}
+            </div>
+            <label style={lbl}>Severity</label>
+            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              {["info", "warn", "crit"].map((sv) => (
+                <button key={sv} className={"chip" + (severity === sv ? " on" : "")} onClick={() => setSeverity(sv)}>
+                  <span className={"alert-sev " + sv}>{sv}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="modal__foot">
+            <button className="btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+            <button className={"btn-primary" + (valid ? "" : " disabled")} onClick={submit} disabled={busy}>
+              <Icon name="plus" size={14} />{busy ? "Creating…" : "Create rule"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function AlertsScreen({ onOpenNode, rules, setRules, toast }) {
     const [tab, setTab] = useState("active");
     const [acked, setAcked] = useState({});   // eventId -> true (optimistic, until refresh)
@@ -733,6 +869,32 @@
       } else {
         toast(`Rule "${label}" ${next ? "enabled" : "disabled"}`, next ? "check" : "close");
       }
+    }
+
+    // ---- rule CRUD (create via existing RULE_SET; delete via RULE_DEL) ----
+    const [ruleModal, setRuleModal] = useState(false);
+    const [delRule, setDelRule] = useState(null);   // rule pending delete confirmation
+    function createRule(fields) {
+      const a = api();
+      if (!a || !a.saveRule) { toast("Rule editing unavailable (offline)", "close"); setRuleModal(false); return; }
+      const ruleId = rules.reduce((m, r) => Math.max(m, Number(r.ruleId) || 0), 0) + 1;
+      return a.saveRule(ruleId, fields).then(() => {
+        setRules((rs) => [...rs, Object.assign({ ruleId }, fields)]);
+        toast(`Rule created: ${fields.name}`, "check");
+        setRuleModal(false);
+        if (a.refresh) a.refresh().catch(() => {});
+      }).catch((e) => toast(`Rule create failed: ${e && e.message || "error"}`, "close"));
+    }
+    function deleteRuleGo() {
+      const a = api();
+      if (!a || !a.deleteRule) { toast("Rule deletion unavailable (offline)", "close"); setDelRule(null); return; }
+      const r = delRule;
+      return a.deleteRule(r.ruleId).then(() => {
+        setRules((rs) => rs.filter((x) => x.ruleId !== r.ruleId));
+        toast(`Rule deleted: ${r.name}`, "close");
+        setDelRule(null);
+        if (a.refresh) a.refresh().catch(() => {});
+      }).catch((e) => toast(`Delete failed: ${e && e.message || "error"}`, "close"));
     }
 
     return (
@@ -794,8 +956,12 @@
           </div>
 
           <div className="panel">
-            <div className="panel__head"><Icon name="settings" size={16} /><h3>Alert rules & tolerances</h3></div>
+            <div className="panel__head">
+              <Icon name="settings" size={16} /><h3>Alert rules & tolerances</h3>
+              <div className="right"><button className="btn-primary" onClick={() => setRuleModal(true)}><Icon name="plus" size={14} />New rule</button></div>
+            </div>
             <div className="panel__body" style={{ padding: 0 }}>
+              {rules.length === 0 && <div className="td-mono muted" style={{ fontSize: 13, padding: 16 }}>No rules defined — create one to start alerting.</div>}
               {rules.map((r) => (
                 <div key={r.ruleId} style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)", opacity: r.enabled ? 1 : 0.55 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -806,6 +972,9 @@
                     </div>
                     <span className="tag">{r.scope}</span>
                     <button className={"switch" + (r.enabled ? " on" : "")} onClick={() => toggleRule(r.ruleId)} aria-label="toggle rule"><i /></button>
+                    <button className="rowx" title={`Delete rule "${r.name}"`} aria-label={`Delete rule ${r.name}`} onClick={() => setDelRule(r)}>
+                      <Icon name="close" size={13} />
+                    </button>
                   </div>
                   {r.op !== "transition" && r.enabled && (
                     <div className="thr" style={{ marginTop: 12 }}>
@@ -819,6 +988,18 @@
             </div>
           </div>
         </div>
+
+        {ruleModal && <RuleModal onSave={createRule} onClose={() => setRuleModal(false)} />}
+        {delRule && (
+          <DangerModal title={`Delete rule "${delRule.name}"?`}
+            sub={`${delRule.metric} ${({ gt: ">", lt: "<", eq: "=", transition: "Δ" })[delRule.op] || delRule.op} ${delRule.op !== "transition" ? delRule.threshold + (delRule.unit || "") : "change"} · ${delRule.scope}`}
+            verb="Delete rule" busyVerb="Deleting…" onConfirm={deleteRuleGo} onClose={() => setDelRule(null)}>
+            <p style={{ margin: 0 }}>
+              The rule stops firing immediately and is removed from every node's evaluation set.
+              Alert history already recorded by this rule is kept.
+            </p>
+          </DangerModal>
+        )}
       </div>
     );
   }

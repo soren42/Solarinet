@@ -627,6 +627,15 @@
     assets: function () { return getJSON(EP.assets); },
     asset: function (id) { return getJSON(EP.asset(id)); },
     updateAsset: function (id, body) { return post(EP.asset(id), body || {}); },
+    // removal / lifecycle (PR-C endpoints) — all destructive, all double-confirmed:
+    // the UI gates on a real confirm dialog AND the body carries confirm:true.
+    removeAsset: function (id) { return post(EP.asset(id) + "/remove", { confirm: true }); },
+    removeTarget: function (assetId, targetId) {
+      return post(EP.asset(assetId) + "/targets/" + encodeURIComponent(targetId) + "/remove", { confirm: true });
+    },
+    retireNode: function (id) { return post(EP.node(id) + "/retire", { confirm: true }); },
+    deletePool: function (id) { return post(EP.pool(id) + "/delete", { confirm: true }); },
+    deleteRule: function (id) { return post(EP.rule(id) + "/delete", { confirm: true }); },
 
     // enrollment — approve is destructive (signs a cert) so it carries the
     // explicit double-confirm the PHP layer + solariCtl demand.
