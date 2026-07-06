@@ -27,7 +27,7 @@ A coherent first RC: a normalized **System of Record** (mirrored, DNS renders fr
 - `4e46c7b` docs.
 
 ## Known gaps / follow-ups (honest, prioritized)
-1. **Bidirectional SoR sync — LIVE** (`deploy/sorsync/`): SoR change → CDC outbox → `sor.events` → DNS auto-rendered/reloaded; detected+adopted host → SoR → onward to DNS. Verified end-to-end (insert/update/delete). Remaining extensions: wire the **dashboard's** create/alter/remove mutations to write the SoR (today it reads the monitoring DB); add more render-target appliers (AD, Pi-hole, config — all SoR views); monotonic zone serial for secondary AXFR; outbox pruning.
+1. **Bidirectional SoR sync — LIVE + closed** (`deploy/sorsync/` + `dashboard/api/lib/Sor.php`): operator create/alter/remove in the dashboard → **writes the SoR** → CDC outbox → `sor.events` → DNS auto-rendered/reloaded; and detected+adopted host → SoR → onward to DNS. Verified end-to-end both directions (insert/update/delete). Remaining extensions: more render-target appliers (AD, Pi-hole, config — all SoR views); monotonic zone serial for secondary AXFR; outbox pruning.
 2. **Monitor fleet registry** — no `monitor`-role rows in the `node` table (all `client`); HRW owner-select is a documented **CONTRACT GAP** (fleet-of-one = server nodeId). Works today via broadcast; close it (fleet enumerator → true k-of-n) before the fleet grows. Note: adopted targets are runtime state — a from-scratch rebuild needs re-adopt.
 3. **Keycloak app-layer check** — `:9000/health/ready` would need HTTP-check-with-path plumbed through the adopt spec; currently TCP-reachability only.
 4. **Hardware-gated** — Tachyon SMS (`10.6.6.10` unreachable), Tab5 flashing + C6 BLE firmware, NFC (ST25DV04K tag confirmed on xenon `i2c-4`, deprioritized).

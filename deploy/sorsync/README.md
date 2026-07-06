@@ -58,6 +58,10 @@ Live on xenon (reaches cesium SoR + benzene MQ). `sor_reconcile_discovery.py
   serial. Bump it in the applier (or gen-zones) for correct secondary propagation.
 - **More render targets** — AD, Pi-hole, and config are also SoR *views*; add
   appliers binding the same `sor.events` (e.g. `sor_apply_ad`) as needed.
-- **Dashboard write path** — the dashboard currently reads the monitoring DB; wire
-  its create/alter/remove mutations to write the SoR so operator edits enter here.
+- **Dashboard write path — DONE.** `dashboard/api/lib/Sor.php` mirrors operator
+  mutations into the SoR (fail-soft): ADOPT + ASSET_SET → `upsertHost`, ASSET_REMOVE
+  → `removeHost` (soft-delete). Needs `SOR_DB_*` in the php-fpm pool
+  (`/etc/php/8.4/fpm/pool.d/solarinet.conf`, alongside `SOLARI_DB_*`; **quote a
+  password containing `!`** or php-fpm won't start). Operator edits now enter this
+  loop directly (→ DNS), with `sor_reconcile_discovery` as the catch-all net.
 - **Outbox pruning** — add a periodic `DELETE FROM sor_outbox WHERE id <= emit_checkpoint`.
