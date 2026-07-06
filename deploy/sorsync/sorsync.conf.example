@@ -1,0 +1,39 @@
+# SolariNet SoR bidirectional-sync config. Copy to sorsync.conf (gitignored) and
+# fill real credentials. Read by sor_emitd / sor_apply_dnsd / sor_reconcile_discovery.
+
+[sor]
+host = 10.1.0.200
+port = 3306
+user = solari
+password = CHANGME-sor-app-pw
+name = sor
+
+[amqp]
+# RabbitMQ on benzene. url includes vhost: amqp://user:pass@host:5672/vhost
+url = amqp://solari:CHANGEME-rabbitmq-pw@10.5.2.50:5672/solari
+exchange = sor.events
+poll_interval_sec = 2
+reconnect_delay_sec = 5
+
+[dns]
+# sor_apply_dnsd: re-render zones from the SoR and reload BIND on change.
+gen_zones = /home/jason/Code/Solarinet/netdb/gen-zones.py
+render_python = /home/jason/Code/Solarinet/netdb/sor/.venv/bin/python3
+zone_src_dir = /home/jason/Code/Solarinet/netdb/zones
+zone_dst_dir = /etc/bind/zones
+named_conf_akoria = /etc/bind/named.conf.akoria
+reload_cmd = sudo rndc reload
+debounce_sec = 4
+# SoR password for the render step (source_sor.py reads SOR_DB_PASSWORD)
+sor_db_password = CHANGME-sor-app-pw
+
+[discovery]
+# sor_reconcile_discovery: fold detected hosts/services into the SoR.
+mon_host = 127.0.0.1
+mon_port = 3306
+mon_user = solari
+mon_password = CHANGME-solarinet-db-pw
+mon_name = solarinet
+interval_sec = 60
+# provenance: the sources.id to attribute machine-detected rows to
+source_label = monitoring

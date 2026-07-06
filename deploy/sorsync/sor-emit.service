@@ -1,0 +1,21 @@
+; SolariNet SoR bidirectional-sync: change emitter (outbox -> sor.events)
+; Install: see deploy/sorsync/README.md. Assumes repo at /home/jason/Code/Solarinet.
+[Unit]
+Description=SolariNet SoR sync — change emitter (outbox -> sor.events)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/sorsync
+Environment=SORSYNC_CONF=/home/jason/Code/Solarinet/deploy/sorsync/sorsync.conf
+ExecStart=/home/jason/Code/Solarinet/deploy/sorsync/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/sorsync/sor_emitd.py
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
