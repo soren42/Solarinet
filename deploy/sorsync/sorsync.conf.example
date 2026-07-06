@@ -37,3 +37,18 @@ mon_name = solarinet
 interval_sec = 60
 # provenance: the sources.id to attribute machine-detected rows to
 source_label = monitoring
+
+[pihole]
+targets = helium, mercury
+domain = akoria.net
+debounce_sec = 4
+
+[pihole.helium]
+ssh = jason@10.0.0.254
+custom_list = /etc/pihole/custom.list
+reload = sudo pihole reloaddns
+
+[pihole.mercury]
+ssh = jason@10.0.0.253
+custom_list = /DATA/AppData/pihole/etc/pihole/custom.list
+reload = sudo docker exec pihole pihole reloaddns
