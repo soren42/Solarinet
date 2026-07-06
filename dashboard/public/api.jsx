@@ -173,6 +173,7 @@
     login:        "/api/auth/login",
     logout:       "/api/auth/logout",
     whoami:       "/api/auth/whoami",
+    authConfig:   "/api/auth/config",   // public: which sign-in options to show
   };
 
   // =====================================================================
@@ -684,6 +685,9 @@
 
     // ---- authentication (§11.1) ----
     whoami: function () { return getJSON(EP.whoami); },
+    // Public auth config — readable while logged out so the login screen knows
+    // whether to offer the SSO button. Never carries secrets.
+    authConfig: function () { return getJSON(EP.authConfig); },
     login:  function (username, password) { return post(EP.login, { username: username, password: password }); },
     logout: function () { return post(EP.logout, {}); },
 

@@ -37,6 +37,31 @@ return static function (Router $router): void {
         Response::ok(['loggedOut' => true]);
     });
 
+    // GET /api/auth/config — public (unauthenticated) surface the login screen
+    // reads to decide which sign-in options to show. Carries NO secrets: just
+    // whether SSO is on and its button label. Without this the logged-out SPA
+    // (which 401s on whoami) could never know an SSO option exists.
+    $router->get('/api/auth/config', static function (): void {
+        Response::ok([
+            'localEnabled' => true,                  // local login is always available
+            'oidcEnabled'  => Oidc::isEnabled(),
+            'oidcLabel'    => Oidc::buttonLabel(),
+            'oidcLoginUrl' => '/api/auth/oidc/login',
+        ]);
+    });
+
+    // GET /api/auth/oidc/login — begin the authorization-code flow (302 to IdP).
+    // A browser navigation, not an XHR: emits a redirect, not a JSON envelope.
+    $router->get('/api/auth/oidc/login', static function (): void {
+        Oidc::beginLogin();   // redirects + exits (or fails closed with a redirect)
+    });
+
+    // GET /api/auth/oidc/callback — IdP redirect target. Exchanges the code,
+    // validates the ID token, establishes the session, then 302s into the app.
+    $router->get('/api/auth/oidc/callback', static function (): void {
+        Oidc::handleCallback($_GET);   // redirects + exits
+    });
+
     // GET /api/auth/whoami — the SPA polls this on boot to decide login vs app.
     $router->get('/api/auth/whoami', static function (): void {
         $p = Auth::current();
@@ -49,6 +74,7 @@ return static function (Router $router): void {
             'displayName' => $p['displayName'],
             'source'      => $p['source'],
             'directoryEnabled' => (bool) (Auth::directoryConfig()['enabled'] ?? false),
+            'oidcEnabled'      => Oidc::isEnabled(),
         ]);
     });
 };

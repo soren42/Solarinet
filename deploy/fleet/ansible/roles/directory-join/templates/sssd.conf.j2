@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+# SolariNet directory-join: SSSD client config for realm {{ solari_ad_realm }}.
+# Managed declaratively by the directory-join role — edit the role, not this file.
+[sssd]
+domains = {{ solari_ad_domain }}
+config_file_version = 2
+services = nss, pam
+
+[domain/{{ solari_ad_domain }}]
+id_provider = ad
+ad_domain = {{ solari_ad_domain }}
+krb5_realm = {{ solari_ad_realm }}
+realmd_tags = manages-system joined-with-adcli
+cache_credentials = True
+krb5_store_password_if_offline = True
+# SID-algorithmic UID/GID mapping — identical on every joined host, so a user's
+# uid is stable fleet-wide (required for coherent NFS home ownership).
+ldap_id_mapping = True
+use_fully_qualified_names = {{ 'True' if solari_ad_fqn_login else 'False' }}
+fallback_homedir = {{ solari_ad_home_template }}
+default_shell = {{ solari_ad_login_shell }}
+{% if solari_ad_permit_all %}
+access_provider = permit
+{% else %}
+access_provider = simple
+simple_allow_groups = {{ solari_ad_permitted_groups | join(', ') }}
+{% endif %}

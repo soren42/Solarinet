@@ -1,12 +1,17 @@
 # SolariNet Fleet Provisioning - top-level play.
 #
-# Runs the three roles in strict order against a target:
+# Runs the roles in strict order against a target:
 #   base-os          -> identity, users, sshd, time, journald (host is "ours")
 #   common-stack     -> the identical logical package set (name-mapped per family)
+#   directory-join   -> enroll into Active Directory (AKORIA.ORG) for SSO  [opt-in]
 #   solarinet-client -> install + enroll + supervise the monitoring agent
+#
+# directory-join is opt-in per host: set `solari_ad_enabled: true` (and supply
+# solari_ad_join_password via vault/--extra-vars) in host_vars/group_vars.
 #
 # Typical invocation (from /srv/solari-provision/ansible on benzene):
 #   ansible-playbook -i inventory/hosts.yml playbooks/site.yml --limit pi-porch
+#   ansible-playbook ... --limit tungsten --tags ad -e @secrets/ad-join.vault.yml
 ---
 - name: Provision SolariNet fleet host
   hosts: all
@@ -17,5 +22,14 @@
       tags: [base]
     - role: common-stack
       tags: [stack]
+    - role: dev-tools
+      tags: [devtools, tools]
+      when: solari_devtools_enabled | default(false) | bool
+    - role: directory-join
+      tags: [ad, directory]
+      when: solari_ad_enabled | default(false) | bool
+    - role: shared-home
+      tags: [home, nfs]
+      when: solari_home_enabled | default(false) | bool
     - role: solarinet-client
       tags: [client]

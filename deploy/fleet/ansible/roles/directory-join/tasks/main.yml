@@ -1,0 +1,104 @@
+# =============================================================================
+# directory-join role - enroll a host into the SolariNet Active Directory
+# (Samba AD DC "radium" / realm AKORIA.ORG) for central identity + Kerberos SSO.
+# =============================================================================
+# Proven end-to-end on tungsten 2026-07-05: DNS -> realm join -> SSSD -> PAM
+# login -> auto home-dir -> Kerberos TGT. Idempotent: once a host is joined,
+# re-running only reconciles config. The join password is supplied at run time
+# (vault/--extra-vars) and is never written to disk or logged.
+---
+- name: Require a join password
+  ansible.builtin.assert:
+    that: solari_ad_join_password | length > 0
+    fail_msg: "solari_ad_join_password is required (supply via vault or --extra-vars)."
+    quiet: true
+
+- name: Install realmd / SSSD client stack
+  ansible.builtin.package:
+    name: "{{ solari_realmd_packages_debian if ansible_os_family == 'Debian' else solari_realmd_packages_suse }}"
+    state: present
+
+# ---- Point the resolver at the domain controller ---------------------------
+# AD discovery is SRV-record driven, so the host must resolve the realm via the
+# DC. We set resolv.conf for immediate effect and, where NetworkManager owns the
+# connection, persist the same DNS through it. We deliberately do NOT bounce the
+# connection (nmcli con up) - that would drop Ansible's own SSH transport.
+- name: Detect NetworkManager
+  ansible.builtin.command: systemctl is-active NetworkManager
+  register: solari_nm_active
+  changed_when: false
+  failed_when: false
+
+- name: Persist DC as DNS via NetworkManager (applied without bouncing the link)
+  ansible.builtin.shell: |
+    set -e
+    con=$(nmcli -t -f NAME connection show --active | head -1)
+    nmcli con mod "$con" ipv4.dns "{{ solari_ad_dc_ip }}" \
+      ipv4.dns-search "{{ solari_ad_domain }}" ipv4.ignore-auto-dns yes
+  when: solari_nm_active.stdout == 'active'
+  changed_when: true
+
+- name: Point resolv.conf at the DC (immediate effect)
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: "search {{ solari_ad_domain }}\nnameserver {{ solari_ad_dc_ip }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+# ---- Join the realm (idempotent) -------------------------------------------
+- name: Check current realm membership
+  ansible.builtin.command: realm list --name-only
+  register: solari_realm_list
+  changed_when: false
+  failed_when: false
+
+- name: Join the Active Directory realm
+  ansible.builtin.command:
+    cmd: "realm join --user={{ solari_ad_join_user }} {{ solari_ad_domain }}"
+    stdin: "{{ solari_ad_join_password }}"
+  register: solari_realm_join
+  when: solari_ad_domain not in (solari_realm_list.stdout | lower)
+  changed_when: solari_realm_join.rc == 0
+  no_log: true
+
+# ---- SSSD configuration (declarative; overrides realmd's generated file) ----
+- name: Deploy SSSD configuration
+  ansible.builtin.template:
+    src: sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart sssd
+
+# ---- Auto-create home directories on first login ---------------------------
+- name: Enable pam_mkhomedir (Debian family)
+  ansible.builtin.command: pam-auth-update --enable mkhomedir
+  register: solari_mkhomedir
+  changed_when: "'mkhomedir' not in solari_mkhomedir.stderr"
+  when: ansible_os_family == 'Debian'
+
+- name: Ensure oddjobd is running (mkhomedir helper)
+  ansible.builtin.service:
+    name: oddjobd
+    enabled: true
+    state: started
+  failed_when: false
+
+# ---- Sudo for an AD group ---------------------------------------------------
+- name: Grant sudo to an AD group
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/95-ad-sudo
+    content: "%{{ solari_ad_sudo_group | regex_replace(' ', '\\\\ ') }} ALL=(ALL:ALL) ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+  when: solari_ad_sudo_group | length > 0
+
+- name: Ensure SSSD is enabled and running
+  ansible.builtin.service:
+    name: sssd
+    enabled: true
+    state: started

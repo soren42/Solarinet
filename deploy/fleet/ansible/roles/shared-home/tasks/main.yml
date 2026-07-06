@@ -1,0 +1,45 @@
+# =============================================================================
+# shared-home role - on-demand NFS home directories for directory users.
+# =============================================================================
+# Each AD user's home lives once on the central data host (cesium) and is
+# automounted here under solari_home_mount_base via a wildcard autofs map, so
+# the same home follows the user to every joined host. Requires the directory
+# host's export to publish per-user subdirs owned by the users' (SID-mapped,
+# fleet-stable) uids. Pairs with directory-join (fallback_homedir == mount_base).
+---
+- name: Install autofs + NFS client
+  ansible.builtin.package:
+    name: "{{ solari_home_packages_debian if ansible_os_family == 'Debian' else solari_home_packages_suse }}"
+    state: present
+
+- name: Ensure the automount base exists
+  ansible.builtin.file:
+    path: "{{ solari_home_mount_base }}"
+    state: directory
+    mode: "0755"
+
+# ---- autofs wildcard map -----------------------------------------------------
+# /home/akoria/<user>  ->  cesium.akoria.org:/export/home/<user>  (on access)
+- name: Install auto.master entry for the home base
+  ansible.builtin.copy:
+    dest: /etc/auto.master.d/akoria-home.autofs
+    content: "{{ solari_home_mount_base }} /etc/auto.akoria-home --timeout={{ solari_home_autofs_timeout }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart autofs
+
+- name: Install the wildcard home map
+  ansible.builtin.copy:
+    dest: /etc/auto.akoria-home
+    content: "* {{ solari_home_mount_opts }} {{ solari_home_nfs_server }}:{{ solari_home_nfs_export }}/&\n"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart autofs
+
+- name: Enable and start autofs
+  ansible.builtin.service:
+    name: autofs
+    enabled: true
+    state: started

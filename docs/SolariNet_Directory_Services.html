@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SolariNet — Directory Services &amp; SSO</title>
+<style>
+  :root{
+    --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
+    --line:#222c39;--accent:#3fb6d3;--ok:#5dd39e;--warn:#e0794f;--warm:#e0a458;--crit:#e05252;
+    --code-bg:#0a0e14;--mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style",Palatino,Georgia,serif;
+    --sans:"Avenir Next","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  .wrap{max-width:940px;margin:0 auto;padding:44px 28px 90px}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  .sub{color:var(--ink-dim);font-style:italic;margin:0 0 28px}
+  h2{font-family:var(--serif);font-size:24px;margin:38px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  h3{font-family:var(--serif);font-size:18px;margin:24px 0 6px}
+  p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  td{background:var(--panel)}
+  .ok{color:var(--ok);font-weight:650}.warn{color:var(--warn);font-weight:650}.crit{color:var(--crit);font-weight:650}
+  ul{padding-left:22px} li{margin:5px 0}
+  .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 8px;border-radius:20px;border:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SolariNet — Directory Services &amp; SSO</h1>
+  <p class="sub">A cross-platform identity backbone for the homelab: Active Directory, Kerberos, LDAP, and web SSO — built on <code>radium</code> · 2026-07-05</p>
+
+  <div class="note">
+    <strong>What went live.</strong> <code>radium</code> (a Pi CM5, reinstalled to Debian 13 on NVMe)
+    is now a <b>Samba Active Directory domain controller</b> for <code>AKORIA.ORG</code>, with
+    <b>Keycloak</b> layered on top for web/OIDC single-sign-on federated to AD, a first fleet host
+    (<code>tungsten</code>) joined and proven end-to-end, an NFS home export live on <code>cesium</code>,
+    three new Ansible roles, and a complete (undeployed) OIDC integration for the SolariNet dashboard.
+  </div>
+
+  <h2>Architecture</h2>
+  <p>One directory, every platform. Samba AD DC is the authoritative identity store (Kerberos + LDAP +
+     DNS). Linux fleet hosts join it via SSSD/realmd; macOS/Windows can join natively; websites federate
+     through Keycloak (OIDC/SAML). Home directories live once on <code>cesium</code> and follow the user
+     to any host via autofs+NFS. UIDs are SID-algorithmic, so a user is the same numeric identity fleet-wide.</p>
+  <pre>  mac / windows / linux / ssh ──▶  Samba AD DC (radium.akoria.org)  ◀── SSSD/realmd (fleet)
+                                     ├─ Kerberos KDC (:88)   ├─ LDAP/LDAPS (:389/:636)   ├─ DNS (:53, zone akoria.org)
+  websites / dashboard ──OIDC──▶  Keycloak (sso.akoria.org:8443) ──LDAPS──▶ AD federation
+  any joined host ──login──▶  autofs /home/akoria/&lt;user&gt;  ──NFS──▶  cesium:/export/home/&lt;user&gt;</pre>
+
+  <h2>What's live</h2>
+  <table>
+    <tr><th>Component</th><th>Where</th><th>State</th></tr>
+    <tr><td>Samba AD DC — <code>AKORIA.ORG</code></td><td>radium 10.1.0.10</td><td class="ok">live · Kerberos/LDAP/DNS/SMB verified</td></tr>
+    <tr><td>Keycloak 26.6.4 (PostgreSQL, HTTPS :8443)</td><td>radium · sso.akoria.org</td><td class="ok">live · realm <code>akoria</code>, AD federated over LDAPS</td></tr>
+    <tr><td>OIDC client <code>solarinet-dashboard</code></td><td>Keycloak akoria realm</td><td class="ok">created · AD login → token verified</td></tr>
+    <tr><td>Fleet join proof</td><td>tungsten 10.5.0.5</td><td class="ok">joined · SSO login + auto-home + TGT verified</td></tr>
+    <tr><td>NFS home export</td><td>cesium <code>/export/home</code></td><td class="ok">live · root_squash, crossmnt</td></tr>
+    <tr><td>Ansible roles: directory-join / shared-home / dev-tools</td><td>deploy/fleet/ansible</td><td class="warn">authored + validated (check-mode) · uncommitted</td></tr>
+    <tr><td>Dashboard OIDC login</td><td>dashboard/api + public</td><td class="warn">code done + verified · not deployed/committed</td></tr>
+  </table>
+  <p class="sub">Credentials (AD Administrator, Keycloak admin, DB, dashboard client secret, AD user
+     <code>jason</code>) are stored in agent memory and in <code>/root/.kc-*</code> on radium — deliberately
+     kept out of this committed doc.</p>
+
+  <h2>Ansible (deploy/fleet/ansible)</h2>
+  <p>Three opt-in roles were added alongside the existing base-os/common-stack/solarinet-client, wired into
+     <code>site.yml</code> and gated by <code>solari_ad_enabled</code> / <code>solari_home_enabled</code> /
+     <code>solari_devtools_enabled</code>, with the AD contract in <code>group_vars/all.yml</code>:</p>
+  <ul>
+    <li><b>directory-join</b> — install SSSD/realmd stack, point DNS at the DC, idempotent <code>realm join</code>,
+      declarative <code>sssd.conf</code> (SID id-mapping for stable UIDs), mkhomedir, AD-group sudo. Join
+      password is supplied at run time via vault/<code>--extra-vars</code> and never stored.</li>
+    <li><b>shared-home</b> — autofs + NFS client; wildcard map mounts <code>/home/akoria/&lt;user&gt;</code>
+      from cesium on demand.</li>
+    <li><b>dev-tools</b> — the CLI toolset (zsh, jq, cloc, bat, ripgrep, eza, fd, cloc, starship, thefuck…),
+      system-wide oh-my-zsh + powerlevel10k, and the fleet-adapted dotfiles vendored from xenon (deployed via
+      <code>/etc/skel</code> so new directory-user homes inherit them).</li>
+  </ul>
+  <pre># run a role against a host (from benzene or xenon):
+ansible-playbook -i inventory playbooks/site.yml --limit &lt;host&gt; --tags ad \
+  -e solari_ad_enabled=true -e solari_ad_join_password='&lt;AD admin pw&gt;'</pre>
+
+  <div class="gap">
+    <strong>Dashboard OIDC — finalize before it goes live.</strong> The code is complete, additive, and
+    keeps local login untouched, but is intentionally <em>not deployed or committed</em>. To turn it on:
+    <ol>
+      <li>Add the dashboard's public callback (<code>https://&lt;dashboard-host&gt;/api/auth/oidc/callback</code>)
+        as a Valid Redirect URI on the <code>solarinet-dashboard</code> Keycloak client; add a
+        <em>Group Membership</em> mapper (claim <code>groups</code>) so <code>domain admins</code> maps to the admin role.</li>
+      <li>In <code>solari-auth.json</code> → <code>oidc</code>: set <code>enabled:true</code>,
+        <code>redirectUri</code>, and <code>caBundle</code> to a PEM trusting radium's cert
+        (<code>openssl s_client -connect sso.akoria.org:8443 … &gt; radium-ca.pem</code>).</li>
+      <li>Ensure the dashboard host resolves/reaches <code>sso.akoria.org:8443</code>; deploy; browser-test
+        the "Sign in with Akoria SSO" button.</li>
+    </ol>
+  </div>
+
+  <h2>Deferred (your call)</h2>
+  <ul>
+    <li>Commit the Ansible roles + dashboard OIDC work (currently in the working tree).</li>
+    <li>Roll out dev-tools/shared-home to real hosts; live end-to-end shared-home test (login → NFS home).</li>
+    <li>Join production hosts — xenon (⚠ the box the agent runs on; keep a fallback login), cesium, benzene.</li>
+    <li>DNS reach for non-fleet mac/Windows clients so they can find the DC.</li>
+    <li>Replace Keycloak's self-signed cert + Samba's autogenerated TLS cert with a proper CA/SAN cert.</li>
+    <li>Kerberized NFS (sec=krb5p) to replace sec=sys for the home export.</li>
+  </ul>
+
+  <div class="footer">
+    SolariNet · directory services + SSO · Samba AD DC + Keycloak + SSSD on radium · 2026-07-05
+  </div>
+</div>
+</body>
+</html>

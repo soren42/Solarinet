@@ -1,0 +1,6 @@
+# shared-home role handlers.
+---
+- name: Restart autofs
+  ansible.builtin.service:
+    name: autofs
+    state: restarted
