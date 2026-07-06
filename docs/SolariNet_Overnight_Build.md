@@ -53,6 +53,12 @@ Rule (from the user): **data is never entered manually** — the SoR is seeded f
 - **Goal 5 (NFC): designed + scaffolded** — finding: xenon has no NFC reader (bus5=Intel SMBus); hydrogen USB PC/SC is the path.
 - **Goal 6 (Tab5): scaffolded** — PlatformIO firmware; MQTT transport live via Mosquitto; flashing needs USB.
 
+## Morning — RC push (2026-07-06, per priorities: dashboard · DB · MQ · maturity/integration)
+- **DB maturity** — every table now has an integer AUTO_INCREMENT surrogate PK; name-identity uniqueness relaxed to plain indexes so collisions are the dashboard's concern, not a DB hard-fail (migration `netdb/sor/migrations/001`). Applied live to cesium, replicated to benzene; **replica reconfirmed** (both threads running, 0 behind, 48/48 entity parity).
+- **Dashboard/monitor maturity** — **app-layer health probes landed in the C control plane** (Codex-implemented, reviewed/built/deployed here): probeType/checkArg on targets → real DNS-resolve / LDAP-bind / MySQL+AMQP handshake / HTTP-health checks beyond TCP-connect; discovered hosts gain `mdnsName`. Migrations 008/009 applied to the monitoring DB; server+monitor redeployed from build-io; **30/30 tests pass, monitor verified probing, no regression**. Capability is deployed; *activation* per-service (asset→target sets probeType + server target-distribution) is a documented follow-up — deliberately not rushed pre-RC (handshake checks can false-down).
+- **Tab5 (stretch, DONE at software level)** — repurposed as the **SolariNet Authenticator**: TOTP · push-approval 2FA · vault PM-client · CSPRNG password generator · BLE-HID autotype. Working server broker `deploy/authbroker/` (ECDSA-P256 asymmetric approval signing; live-tested approve/deny/wrong-key vs real Mosquitto). Flashing + C6 BLE firmware are the only hardware-gated steps. NetMon (own repo) untouched; moving to another M5Stack.
+- **RC health snapshot** — core services active (server/monitor/client/notify); dashboard HTTP 200 + SSO enabled; monitoring 32/36 up; SoR primary+replica + RabbitMQ + Mosquitto all healthy.
+
 ### Final: live vs. scaffolded vs. hardware-blocked
 - **LIVE**: SoR (cesium primary + benzene replica), RabbitMQ, Mosquitto, notifyd (log+MQTT), DNS-from-SoR, dashboard infra views + Reachability fix.
 - **SCAFFOLDED (ready to finish)**: NFC 2FA (`deploy/nfc-2fa/`), Tab5 firmware (`firmware/tab5/`), SMS-via-Tachyon sender.
