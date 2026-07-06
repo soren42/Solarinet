@@ -25,12 +25,19 @@ return static function (Router $router): void {
               ORDER BY targetId'
         );
 
-        // One query for all current vantage rows, grouped in PHP.
+        // One query for all current vantage rows, grouped in PHP. LEFT JOIN the
+        // node roster so a vantage carries the reporting monitor's hostname when
+        // that monitor is an enrolled node. Monitor outposts are not always in
+        // the node table, so monitorFqdn may be NULL — monitorLabel() below then
+        // synthesizes a stable short label. Without SOME name here the SPA's
+        // matrix crashed (undefined.localeCompare) and blanked the screen.
         $current = Db::rows(
-            'SELECT targetId, monitorNode, outcome, rttMicros, jitterMicros,
-                    lossPermille, throughputKbps, serviceMeta, sampledAt
-               FROM probeCurrent
-              ORDER BY targetId, monitorNode'
+            'SELECT pc.targetId, pc.monitorNode, n.hostFqdn AS monitorFqdn,
+                    pc.outcome, pc.rttMicros, pc.jitterMicros,
+                    pc.lossPermille, pc.throughputKbps, pc.serviceMeta, pc.sampledAt
+               FROM probeCurrent pc
+          LEFT JOIN node n ON n.nodeId = pc.monitorNode
+              ORDER BY pc.targetId, pc.monitorNode'
         );
 
         /** @var array<string,array<int,array<string,mixed>>> $byTarget */
@@ -39,6 +46,8 @@ return static function (Router $router): void {
             $tid = (string) $r['targetId'];
             $byTarget[$tid][] = [
                 'monitorNode'    => Coerce::id($r['monitorNode']),
+                'monitorName'    => ProbeRollup::monitorLabel(
+                    $r['monitorFqdn'] ?? null, (string) $r['monitorNode']),
                 'outcome'        => $r['outcome'],
                 'rttMicros'      => Coerce::int($r['rttMicros']),
                 'jitterMicros'   => Coerce::int($r['jitterMicros']),
@@ -97,5 +106,26 @@ final class ProbeRollup
             return 'down';
         }
         return 'degraded'; // reachable from some vantages, not all
+    }
+
+    /**
+     * Human label for a reporting monitor. Prefers the enrolled node's hostname
+     * (short form, before the first dot); falls back to a stable synthesized
+     * label derived from the monitor's node id when the monitor is not in the
+     * roster (e.g. a portable monitor outpost). Never returns an empty string,
+     * so the dashboard's matrix column sort can never see undefined/null.
+     */
+    public static function monitorLabel(?string $fqdn, string $monitorNode): string
+    {
+        $fqdn = is_string($fqdn) ? trim($fqdn) : '';
+        if ($fqdn !== '') {
+            $short = strstr($fqdn, '.', true);
+            return $short !== false ? $short : $fqdn;
+        }
+        $id = trim($monitorNode);
+        if ($id === '') {
+            return 'monitor';
+        }
+        return 'mon-' . substr($id, -4);
     }
 }

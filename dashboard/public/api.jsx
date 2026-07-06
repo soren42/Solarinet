@@ -265,7 +265,12 @@
   function mapProbe(w) {
     var vantages = (w.vantages || []).map(function (v) {
       return {
-        monitorNode: v.monitorNode, monitorName: v.monitorName,
+        monitorNode: v.monitorNode,
+        // Always a non-empty string: the API supplies monitorName, but guard
+        // against older/partial payloads so the Reachability matrix (which sorts
+        // and renders column headers by name) can never hit undefined.
+        monitorName: v.monitorName
+          || (v.monitorNode != null ? ("mon-" + String(v.monitorNode).slice(-4)) : "monitor"),
         outcome: v.outcome,
         rttMicros: v.rttMicros || 0,
         jitterMicros: v.jitterMicros || 0,

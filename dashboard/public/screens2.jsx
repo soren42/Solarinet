@@ -27,8 +27,15 @@
 
     const monCols = useMemo(() => {
       const map = new Map();
-      S.probes.forEach((p) => p.vantages.forEach((v) => map.set(v.monitorNode, v.monitorName)));
-      return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+      // Fall back to a synthesized label if a vantage ever lacks a monitorName,
+      // so the header sort below can never dereference undefined and blank the
+      // whole screen (the live /api/probes payload once omitted monitorName).
+      S.probes.forEach((p) => (p.vantages || []).forEach((v) => {
+        const nm = v.monitorName || (v.monitorNode != null ? "mon-" + String(v.monitorNode).slice(-4) : "monitor");
+        map.set(v.monitorNode, nm);
+      }));
+      return [...map.entries()].map(([id, name]) => ({ id, name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
     }, []);
 
     const roll = { total: S.probes.length, up: 0, degraded: 0, down: 0 };
