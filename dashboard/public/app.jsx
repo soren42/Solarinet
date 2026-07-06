@@ -130,6 +130,32 @@
       scrollTop();
     }, []);
 
+    // Universal entity click-through. Every cross-view reference (Topology glyph,
+    // Alerts source, Reachability row, command palette) funnels through here so
+    // the SAME entity always lands on the SAME detail view. Accepts either a
+    // typed ref object {kind,id} or a bare ref: a node/asset object, an
+    // "asset-<id>"/"node-<id>" id string, or a probe targetId ("icmp:…","tcp:…").
+    const openEntity = useCallback((ref, opts) => {
+      opts = opts || {};
+      if (!ref && ref !== 0) return;
+      // typed form
+      if (typeof ref === "object" && ref.kind) {
+        if (ref.kind === "service" || ref.kind === "target") return openService(ref.id, opts.backRoute);
+        if (ref.kind === "pool") { setRoute({ name: "assets" }); scrollTop(); return; }
+        return openNode(ref.id != null ? ref.id : ref);   // node | asset
+      }
+      // a probe targetId looks like "<proto>:<host>[:port]" — route to ServiceDetail
+      if (typeof ref === "string" && /^(icmp|tcp|udp|https?):/.test(ref)) {
+        return openService(ref, opts.backRoute);
+      }
+      // everything else (node/asset object, "asset-13", numeric id) → openNode,
+      // which already forks adopted systems to AssetDetail and agents to NodeDetail.
+      return openNode(ref);
+    }, [openNode, openService]);
+    // Expose globally so any screen (or the command palette) can link an entity
+    // without threading a new prop through every layer.
+    useEffect(() => { window.__solariOpenEntity = openEntity; }, [openEntity]);
+
     const go = useCallback((id) => {
       setRoute({ name: id });
       if (window.innerWidth <= 980) setNavHidden(true);
@@ -205,9 +231,9 @@
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
             {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}
             {route.name === "service" && ServiceDetail && <ServiceDetail targetId={route.targetId} onBack={() => setRoute(route.backRoute)} />}
-            {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} rules={rules} setRules={setRules} toast={toast} />}
-            {route.name === "reachability" && <Reachability onOpenNode={openNode} />}
-            {route.name === "topology" && <Topology onOpenNode={openNode} />}
+            {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} onOpenEntity={openEntity} rules={rules} setRules={setRules} toast={toast} />}
+            {route.name === "reachability" && <Reachability onOpenNode={openNode} onOpenEntity={openEntity} />}
+            {route.name === "topology" && <Topology onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "discovery" && <Discovery onOpenNode={openNode} />}
             {route.name === "provision" && <Provisioning onOpenNode={openNode} />}
             {route.name === "settings" && <ConfigScreen onNav={go} />}

@@ -19,10 +19,17 @@ declare(strict_types=1);
 return static function (Router $router): void {
 
     $router->get('/api/probes', static function (): void {
+        // LEFT JOIN asset so each target can carry a click-through reference to
+        // its owning monitored system (Reachability row → AssetDetail). assetId
+        // is nullable (a target may predate adoption), so hostRef stays null and
+        // the SPA simply hides the "Open host" affordance when it is absent.
         $targets = Db::rows(
-            'SELECT targetId, host, port, proto, replFactor, label, segId
-               FROM probeTarget
-              ORDER BY targetId'
+            'SELECT pt.targetId, pt.host, pt.port, pt.proto, pt.replFactor,
+                    pt.label, pt.segId, pt.assetId,
+                    a.displayName AS assetName, a.host AS assetHost, a.ip AS assetIp
+               FROM probeTarget pt
+          LEFT JOIN asset a ON a.assetId = pt.assetId
+              ORDER BY pt.targetId'
         );
 
         // One query for all current vantage rows, grouped in PHP. LEFT JOIN the
@@ -61,6 +68,19 @@ return static function (Router $router): void {
         $out = array_map(static function (array $t) use ($byTarget): array {
             $tid      = (string) $t['targetId'];
             $vantages = $byTarget[$tid] ?? [];
+            // Cross-view link: when the target belongs to an adopted asset, expose
+            // an "asset-<id>" node ref (the SPA's fleet resolver maps this straight
+            // to AssetDetail) plus a friendly host label for the button.
+            $assetId  = $t['assetId'] !== null ? (int) $t['assetId'] : null;
+            $hostNode = $assetId !== null ? ('asset-' . $assetId) : null;
+            $hostName = null;
+            if ($assetId !== null) {
+                $hostName = ($t['assetName'] !== null && $t['assetName'] !== '')
+                    ? $t['assetName']
+                    : (($t['assetHost'] !== null && $t['assetHost'] !== '')
+                        ? $t['assetHost']
+                        : ($t['assetIp'] ?? $t['host']));
+            }
             return [
                 'targetId'   => $tid,
                 'host'       => $t['host'],
@@ -69,6 +89,9 @@ return static function (Router $router): void {
                 'replFactor' => Coerce::int($t['replFactor']),
                 'label'      => $t['label'],
                 'segId'      => $t['segId'],
+                'assetId'    => $assetId,
+                'hostNode'   => $hostNode,
+                'hostName'   => $hostName,
                 'state'      => ProbeRollup::state($vantages),
                 'vantages'   => $vantages,
             ];

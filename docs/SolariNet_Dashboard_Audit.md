@@ -193,6 +193,99 @@ metrics) is C-backend; the dashboard side is additive panels and click-through w
 
 ---
 
+## 7. Built (2026-07-06) — new-infra surfacing + cross-view linkage
+
+All items below are **live**: PHP is served from the repo working tree (php-fpm
+`SCRIPT_FILENAME` → repo), and the changed SPA files were copied to
+`/var/www/solarinet`. Everything is additive and gated (absent data renders as
+"—"/hidden, never throws).
+
+### Shipped
+
+1. **Core Services pool + new infra registered as monitored assets** (audit §5 P3).
+   Created via the existing mutation path (`POOL_NEW` + `ADOPT` over the solariCtl
+   bridge — no C changes). New pool **Core Services** (`poolId=7`) with:
+   - **radium** `10.1.0.10` — AD DC + Keycloak: probe targets `53,88,389,636,8443,9000` + ICMP (asset 13).
+   - **cesium** `10.1.0.200` — MariaDB SoR + Forgejo: `3306,3000` + ICMP (asset 14).
+   - **benzene** `10.5.2.50` — RabbitMQ: `5672,15672` + ICMP (asset 15).
+   - **xenon** `10.0.0.20` — added the **BIND** `tcp:53` DNS target to the existing
+     asset (kept in the Monitoring pool; asset 10).
+   Pi-holes helium/mercury were already adopted with `:53`. These now appear in
+   Fleet, Systems, Reachability, and AssetDetail. Probe state is `unknown` until
+   the monitor fleet's next round populates `probeCurrent` (expected/gated).
+   *How registered:* `POOL_NEW` was issued over the bridge; each host was scanned
+   with `DISCOVER cidr=<ip>/32 ports=…` then `ADOPT disc=<id> pool=7 services=…`
+   (ADOPT takes an explicit services CSV, so exact ports are controlled regardless
+   of what the scan fingerprinted). The PHP `POST /api/pools` route reaches
+   `POOL_NEW`, but asset/target creation is only reachable through `ADOPT` (needs a
+   `discovered` row) — hence the scripted DISCOVER→ADOPT via the bridge.
+
+2. **Cross-view click-through** (audit §5 P1/P2).
+   - `routes/probes.php`: `LEFT JOIN asset`; each probe row now carries `assetId`,
+     `hostNode` (`"asset-<id>"`, which the SPA fleet resolver maps straight to
+     AssetDetail), and a friendly `hostName`. Verified live on `/api/probes`.
+   - `api.jsx` (`mapProbe`): passes `hostName`/`assetId` through.
+   - `app.jsx`: added a universal **`openEntity(ref)`** — accepts a node/asset
+     object, an `"asset-<id>"`/`"node-<id>"` id, a probe `targetId`, or a typed
+     `{kind,id}` — and threaded it to Reachability, Topology, and Alerts
+     (`onOpenEntity`), plus `window.__solariOpenEntity`. `openNode` already forked
+     adopted systems → AssetDetail, so this unifies the seam without a big refactor.
+   - `screens2.jsx` (Reachability): the per-target "Open host …" button now works
+     on live data (previously a silent no-op — the §3 secondary follow-up), routes
+     via `openEntity`, shows the friendly `hostName`, and is hidden when a target
+     has no owning asset.
+
+3. **Identity & SSO panel** (audit §5 P5 / item #7).
+   - `routes/auth.php`: `GET /api/auth/config` enriched with non-secret identity
+     detail — `oidcProvider` (inferred: **Keycloak** for this deployment),
+     `oidcIssuer`, `oidcClientId`, `oidcScopes`, and a whitelisted `directory`
+     summary (`enabled` + `type/realm/domain/host`). `clientSecret`/`caBundle` are
+     never exposed. Verified live: issuer `https://sso.akoria.org:8443/realms/akoria`.
+   - `screens3.jsx`: new read-only **Identity & SSO** panel in Config&Rules → Global
+     (OIDC state + provider/issuer/client/scopes + "Test sign-in", directory bind
+     state, and the current session's auth source). Gated: shows a muted note if
+     the config read fails.
+
+4. **Discovery enrichment** (audit §4 / item #3, JSX side).
+   `screens3.jsx`: discovery rows now show an **mDNS** origin chip (for `via=mdns`
+   or `*.local` hosts — e.g. radium surfaced as `raspberrypi.local`), the
+   `sysDescr` line, and service chips that render `name:port` **plus** a
+   product/version sublabel+tooltip when the enriched object form is present. Added
+   `svcName/svcPort/svcDetail` helpers that read **both** the legacy `"ssh:22"`
+   string and the future `{port,name,product,version}` object form; `AdoptModal`'s
+   service parser was updated to the same, so the object form won't break adoption.
+
+### Verified
+- `php -l` clean on `routes/probes.php` and `routes/auth.php`.
+- All four changed JSX files transform cleanly through the vendored Babel preset.
+- Live authenticated `GET /api/probes` emits `hostNode/hostName/assetId` for every
+  target; `GET /api/pools` shows Core Services (3 assets); `GET /api/assets` shows
+  radium/cesium/benzene with the right target counts; public `GET /api/auth/config`
+  returns the Keycloak identity block. (A temporary local operator was added to
+  `solari-auth.json` for the authenticated curls and removed; the file is
+  byte-identical to its pre-change state — sha `43701601…`.)
+- Changed SPA files deployed to `/var/www/solarinet` (network-first SW; a reload
+  picks them up).
+
+### Remaining — C-backend TODOs (delegate to a separate codex effort)
+These need the C control/probe plane (off-limits here) and are the natural next
+pass; the dashboard already renders their data the moment it arrives (gated):
+- **App-layer health checks beyond TCP-connect** (audit §5 P4): a `probeType`
+  column + probe verbs for DNS-query-resolves, LDAP bind (anon/whoami on 389/636),
+  HTTP `200` on Keycloak `/health/ready` (:9000), MySQL ping (:3306), and AMQP
+  handshake (:5672). Today these targets are TCP-connect reachability only.
+- **avahi/mDNS name collection** (audit §4a): resolve `.local` names + `_services`
+  in the enrichment worker; a new `discovered.mdnsName VARCHAR` for the friendly
+  instance name (the SPA already renders an mDNS chip and will use `mdnsName`).
+- **Port-scan service fingerprint** (audit §4b): extend `services` entries to the
+  object form `{port,name,product,version}` (banner grab / `nmap -sV`); the SPA +
+  AdoptModal already accept both shapes.
+- **Per-service insight tiles** (audit §5 P6/P7/P8): DNS query-latency/NXDOMAIN,
+  MariaDB SoR up/replication/latency, RabbitMQ queue-depth/consumers — each a
+  gated AssetDetail panel (GearThroughput is the template) awaiting C metrics.
+
+---
+
 ## 6. Files changed in this audit
 
 - `dashboard/api/routes/probes.php` — LEFT JOIN node + `ProbeRollup::monitorLabel()`; each
@@ -205,3 +298,13 @@ metrics) is C-backend; the dashboard side is additive panels and click-through w
 No git commits made (per instructions). A temporary local test user added to
 `solari-auth.json` for authenticated verification was removed; the file is byte-identical to
 its pre-audit state.
+
+**Additional files changed in the 2026-07-06 build (§7):**
+- `dashboard/api/routes/probes.php` — `LEFT JOIN asset`; each probe carries `assetId`/`hostNode`/`hostName`.
+- `dashboard/api/routes/auth.php` — `/api/auth/config` enriched with non-secret OIDC + directory detail.
+- `dashboard/public/api.jsx` — `mapProbe` passes `hostName`/`assetId`.
+- `dashboard/public/app.jsx` — universal `openEntity()` + `onOpenEntity` wiring.
+- `dashboard/public/screens2.jsx` — Reachability "Open host" now links to AssetDetail (gated).
+- `dashboard/public/screens3.jsx` — Identity & SSO panel; Discovery mDNS/sysDescr/service-fingerprint display; dual-form service parser.
+- Deployed `api.jsx`, `app.jsx`, `screens2.jsx`, `screens3.jsx` to `/var/www/solarinet`.
+- Data: created pool **Core Services** (7) and adopted radium/cesium/benzene; added xenon `:53` — all via the solariCtl bridge (`POOL_NEW`/`DISCOVER`/`ADOPT`), no C changes.

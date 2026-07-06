@@ -16,6 +16,29 @@
   function refresh() { const a = api(); if (a && a.refresh) a.refresh().catch(function () {}); }
 
   /* ===================== DISCOVERY ===================== */
+  // A discovered service entry may be the legacy string form ("ssh:22") or the
+  // enriched object form ({port,name,product,version}) once the C fingerprinter
+  // lands. These read either shape without throwing.
+  function svcName(s) {
+    if (s && typeof s === "object") return s.name || s.service || ("port " + (s.port || "?"));
+    var str = String(s), c = str.lastIndexOf(":");
+    return c > 0 ? str.slice(0, c) : str;
+  }
+  function svcPort(s) {
+    if (s && typeof s === "object") return parseInt(s.port, 10) || 0;
+    var parts = String(s).split(":");
+    return parseInt(parts[1] || parts[0], 10) || 0;
+  }
+  // product/version fingerprint (object form only) — shown as a tooltip + sublabel.
+  function svcDetail(s) {
+    if (!s || typeof s !== "object") return "";
+    return [s.product, s.version].filter(Boolean).join(" ");
+  }
+  // A host learned over mDNS/zeroconf (or with a *.local name) gets an origin chip.
+  function isMdns(d) {
+    return d.via === "mdns" || (typeof d.host === "string" && /\.local$/i.test(d.host));
+  }
+
   function Discovery({ onOpenNode }) {
     const [staged, setStaged] = useState({});      // host -> "staged" | "ignored"
     const [auto, setAuto] = useState(!!S.config.autoDiscover);
@@ -122,15 +145,29 @@
               <Icon name={d.kind === "service" ? "link" : "host"} size={20} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
               <div className="disc-main">
                 <div className="disc-host">{d.host}<span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>{d.ip}</span>
+                  {isMdns(d) && <span className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)", marginLeft: 8 }}><Icon name="link" size={10} style={{ verticalAlign: "-1px", marginRight: 3 }} />mDNS</span>}
                   {d.deviceRole && <span className="svc-chip" style={{ borderColor: "var(--teal)", color: "var(--teal)", marginLeft: 8 }}>{d.deviceRole}</span>}
                 </div>
                 <div className="disc-svcs">
-                  {d.services.map((s) => <span key={s} className="svc-chip">{s}</span>)}
+                  {d.services.map((s, i) => {
+                    const det = svcDetail(s);
+                    return (
+                      <span key={i} className="svc-chip" title={det ? svcName(s) + " · " + det : undefined}>
+                        {svcName(s)}{svcPort(s) ? ":" + svcPort(s) : ""}
+                        {det ? <span className="muted" style={{ marginLeft: 4, fontSize: 10 }}>{det}</span> : null}
+                      </span>
+                    );
+                  })}
                 </div>
                 {(d.osName || d.vendor) && (
                   <div className="td-mono muted" style={{ fontSize: 11, marginTop: 3 }}>
                     {[d.vendor, d.osName].filter(Boolean).join(" · ")}
                     {d.mac ? <span style={{ opacity: 0.6 }}>{"  " + d.mac}</span> : null}
+                  </div>
+                )}
+                {d.sysDescr && (
+                  <div className="td-mono muted" style={{ fontSize: 11, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 520 }} title={d.sysDescr}>
+                    {d.sysDescr}
                   </div>
                 )}
               </div>
@@ -162,9 +199,11 @@
   // toggle the ICMP host heartbeat, name + classify it, and assign a pool.
   function AdoptModal({ disc, onClose, onAdopted }) {
     const pools = S.pools || [];
+    // Accept both the legacy "ssh:22" string form and the enriched object form
+    // ({port,name,product,version}); svcName/svcPort/svcDetail normalise either.
     const svcList = (disc.services || []).map(function (s) {
-      const parts = String(s).split(":");
-      return { label: String(s), port: parseInt(parts[1] || parts[0], 10) };
+      const det = svcDetail(s);
+      return { label: svcName(s) + (svcPort(s) ? ":" + svcPort(s) : "") + (det ? " (" + det + ")" : ""), port: svcPort(s) };
     }).filter(function (x) { return x.port > 0 && x.port <= 65535; });
 
     // Map the discovered deviceRole (nmap/SNMP/mDNS inference) onto the adopt
@@ -575,6 +614,78 @@
   }
 
   /* ===================== CONFIG & RULES ===================== */
+  /* Identity & SSO — read-only surface over /api/auth/config (OIDC) + the current
+     session's directory state. Gated: renders a muted note if the config read
+     fails, so it never disrupts the Config screen. No secrets are shown. */
+  function IdentityPanel() {
+    const [cfg, setCfg] = useState(null);
+    const [err, setErr] = useState(false);
+    useEffect(function () {
+      const a = api();
+      if (!a || !a.authConfig) { setErr(true); return; }
+      a.authConfig().then(function (c) { setCfg(c || {}); }).catch(function () { setErr(true); });
+    }, []);
+    const op = (S.operator) || null;
+    const dir = (cfg && cfg.directory) || {};
+    const Chip = function (props) {
+      const on = props.on;
+      return <span className="tag" style={{ color: on ? "var(--ok)" : "var(--unknown)", borderColor: on ? "var(--ok)" : "var(--line)" }}>{on ? "enabled" : "disabled"}</span>;
+    };
+    const Info = function (props) {
+      return <div className="cfg-info"><span className="kpi__k">{props.k}</span><span className="td-mono" style={{ maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={props.v}>{props.v}</span></div>;
+    };
+    return (
+      <div className="panel">
+        <div className="panel__head"><Icon name="shield" size={16} /><h3>Identity & SSO</h3><span className="tag">read-only</span></div>
+        <div className="panel__body">
+          {err && <div className="muted" style={{ fontSize: 12 }}>Identity config unavailable.</div>}
+          {!err && (
+            <>
+              <div className="kpi__k" style={{ margin: "2px 0 6px", display: "flex", alignItems: "center", gap: 8 }}>
+                Single sign-on (OIDC) <Chip on={cfg && cfg.oidcEnabled} />
+              </div>
+              {cfg && cfg.oidcEnabled ? (
+                <>
+                  <Info k="Provider" v={cfg.oidcProvider || "OpenID Connect"} />
+                  {cfg.oidcIssuer ? <Info k="Issuer" v={cfg.oidcIssuer} /> : null}
+                  {cfg.oidcClientId ? <Info k="Client" v={cfg.oidcClientId} /> : null}
+                  {cfg.oidcScopes ? <Info k="Scopes" v={cfg.oidcScopes} /> : null}
+                  <a href={cfg.oidcLoginUrl || "/api/auth/oidc/login"} className="backbtn" style={{ marginTop: 10, display: "inline-flex" }}>
+                    <Icon name="enter" size={13} />Test sign-in
+                  </a>
+                </>
+              ) : (
+                <div className="muted" style={{ fontSize: 11 }}>
+                  Configure the <code>oidc</code> block in <code>solari-auth.json</code> (issuer, clientId, clientSecret, redirectUri) to enable SSO.
+                </div>
+              )}
+              <div className="divider" />
+              <div className="kpi__k" style={{ margin: "2px 0 6px", display: "flex", alignItems: "center", gap: 8 }}>
+                Directory (AD / LDAP) <Chip on={dir.enabled} />
+              </div>
+              {dir.enabled ? (
+                <>
+                  {dir.type ? <Info k="Type" v={dir.type} /> : null}
+                  {dir.realm ? <Info k="Realm" v={dir.realm} /> : null}
+                  {dir.domain ? <Info k="Domain" v={dir.domain} /> : null}
+                  {dir.host ? <Info k="Host" v={dir.host} /> : null}
+                </>
+              ) : (
+                <div className="muted" style={{ fontSize: 11 }}>Directory bind not configured; local + SSO logins only.</div>
+              )}
+              {op && (
+                <>
+                  <div className="divider" />
+                  <Info k="This session" v={(op.displayName || op.name) + " · " + (op.source || "local")} />
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   function ConfigScreen({ onNav }) {
     const [tab, setTab] = useState("global");
     const [cfg, setCfg] = useState(JSON.parse(JSON.stringify(S.config)));
@@ -680,6 +791,7 @@
                 </div>
               </div>
             </div>
+            <IdentityPanel />
           </div>
         </div>
         )}

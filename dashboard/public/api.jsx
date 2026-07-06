@@ -283,7 +283,10 @@
     var anyBad = vantages.some(function (v) { return v.outcome !== "ok"; });
     var allBad = vantages.length > 0 && vantages.every(function (v) { return v.outcome !== "ok"; });
     return {
-      targetId: w.targetId, host: w.host, hostNode: w.hostNode,
+      targetId: w.targetId, host: w.host,
+      // Cross-view click-through: hostNode is an "asset-<id>" ref (or null) the
+      // app's fleet resolver maps to AssetDetail; hostName is a friendly label.
+      hostNode: w.hostNode, hostName: w.hostName || null, assetId: w.assetId,
       port: w.port, proto: w.proto, label: w.label,
       replFactor: w.replFactor != null ? w.replFactor : vantages.length,
       vantages: vantages,

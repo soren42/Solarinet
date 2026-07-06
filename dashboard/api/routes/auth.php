@@ -42,11 +42,43 @@ return static function (Router $router): void {
     // whether SSO is on and its button label. Without this the logged-out SPA
     // (which 401s on whoami) could never know an SSO option exists.
     $router->get('/api/auth/config', static function (): void {
+        // Non-secret identity surface. The issuer, clientId and scopes are already
+        // visible to the browser during the redirect, so exposing them here (for
+        // the login screen AND the Config → Identity & SSO panel) leaks nothing;
+        // clientSecret / caBundle are deliberately never included. A friendly
+        // provider name is inferred from the issuer URL (Keycloak realms etc.).
+        $oc       = Oidc::config();
+        $issuer   = (string) ($oc['issuer'] ?? '');
+        $provider = 'OpenID Connect';
+        if ($issuer !== '') {
+            if (stripos($issuer, 'keycloak') !== false || stripos($issuer, '/realms/') !== false) {
+                $provider = 'Keycloak';
+            } elseif (stripos($issuer, 'login.microsoftonline') !== false || stripos($issuer, 'sts.windows') !== false) {
+                $provider = 'Microsoft Entra ID';
+            } elseif (stripos($issuer, 'accounts.google') !== false) {
+                $provider = 'Google';
+            }
+        }
+        // Directory (AD/LDAP) block — surface only whitelisted, non-secret fields.
+        $dir     = Auth::directoryConfig();
+        $dirOut  = ['enabled' => (bool) ($dir['enabled'] ?? false)];
+        foreach (['type', 'realm', 'domain', 'host'] as $k) {
+            if (isset($dir[$k]) && is_string($dir[$k]) && $dir[$k] !== '') {
+                $dirOut[$k] = $dir[$k];
+            }
+        }
+
         Response::ok([
             'localEnabled' => true,                  // local login is always available
             'oidcEnabled'  => Oidc::isEnabled(),
             'oidcLabel'    => Oidc::buttonLabel(),
             'oidcLoginUrl' => '/api/auth/oidc/login',
+            // read-only identity detail (safe to expose; no secrets)
+            'oidcProvider' => $provider,
+            'oidcIssuer'   => $issuer,
+            'oidcClientId' => (string) ($oc['clientId'] ?? ''),
+            'oidcScopes'   => (string) ($oc['scopes'] ?? ''),
+            'directory'    => $dirOut,
         ]);
     });
 

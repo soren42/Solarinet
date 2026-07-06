@@ -14,7 +14,8 @@
   const GEAR_FILL = { gateway: "var(--violet)", switch: "var(--teal)", ap: "var(--warn)" };
 
   /* ===================== REACHABILITY MATRIX ===================== */
-  function Reachability({ onOpenNode }) {
+  function Reachability({ onOpenNode, onOpenEntity }) {
+    const openHost = onOpenEntity || onOpenNode;
     const [proto, setProto] = useState("all");
     const [stateF, setStateF] = useState("all");
     const [selId, setSelId] = useState(null);
@@ -151,7 +152,9 @@
                     ))}
                   </tbody>
                 </table>
-                <button className="backbtn" style={{ marginTop: 14 }} onClick={() => onOpenNode(sel.hostNode)}><Icon name="host" size={14} />Open host {sel.host.split(".")[0]}</button>
+                {sel.hostNode
+                  ? <button className="backbtn" style={{ marginTop: 14 }} onClick={() => openHost(sel.hostNode)}><Icon name="host" size={14} />Open host {sel.hostName || sel.host.split(".")[0]}</button>
+                  : <div className="muted" style={{ marginTop: 14, fontSize: 11 }}>Target not linked to a monitored system.</div>}
               </div>
             </div>
           )}
