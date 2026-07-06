@@ -1,0 +1,69 @@
+# SolariNet notification service — config (sample)
+#
+# Copy to notify.conf (same directory) and edit. notify.conf is gitignored —
+# it holds the AMQP credentials. Format: INI, read with Python's configparser.
+#
+#   cp deploy/notify/notify.conf.example deploy/notify/notify.conf
+#   chmod 600 deploy/notify/notify.conf
+
+[amqp]
+# vhost 'solari', durable topic exchange 'notify.events' (declared elsewhere;
+# notifyd only asserts it passively — it does not create the exchange).
+url = amqp://solari:CHANGE_ME@10.5.2.50:5672/solari
+exchange = notify.events
+# Durable queue notifyd owns and binds to the exchange.
+queue = notify.dispatch
+# Routing-key bindings for that queue. notify.# catches everything; narrow
+# this if you want a queue that only sees a subset of channels.
+binding_keys = notify.#
+# Seconds between reconnect attempts when the broker is unreachable.
+reconnect_delay_sec = 5
+
+[defaults]
+# Recipients used when a message doesn't specify "to". Comma-separated.
+default_sms_to = +15555550100
+default_push_to =
+# Fallback channel when a message's "channel" is "auto" or omitted.
+default_channel = log
+
+[routing]
+# Per-severity channel overrides, comma-separated list of sender names.
+# A message's own "channel" field (if not "auto") still wins over these;
+# these apply when channel=="auto". Senders always run in the listed order;
+# the log sender is normally included everywhere as a durable audit trail.
+crit = log,sms,push
+warn = log,push
+info = log
+
+[senders]
+# Comma-separated list of senders to load at startup. Each must have a
+# matching senders/<name>.py module exposing send(message, config).
+enabled = log,sms,push
+
+[sender.log]
+# 'file' writes plain lines to a local file; 'journald' relies on stdout
+# being captured by systemd (systemd/journald.py's format is used either way).
+path = /var/log/solarinet/notify.log
+
+[sender.sms]
+# Tachyon (tachyon.akoria.net / 10.6.6.10) is a Particle Tachyon SBC with a
+# cellular modem. The exact SMS mechanism is still being decided — see
+# deploy/notify/README.md "Open question: Tachyon SMS" for status.
+#
+# method: one of
+#   mmcli_ssh   - `mmcli --messaging` over SSH (ModemManager on Tachyon)
+#   at_ssh      - raw AT commands over SSH to a /dev/ttyUSB* modem port
+method = mmcli_ssh
+host = tachyon.akoria.net
+ssh_user = solari
+# Path to an SSH key notifyd's user can read (no passwords over SSH).
+ssh_key = /home/jason/.ssh/id_solari_tachyon
+# mmcli_ssh: which modem index to target ('' = auto-detect via `mmcli -L`).
+modem_index =
+# at_ssh: serial device on the Tachyon carrying the AT command interface.
+at_device = /dev/ttyUSB2
+at_baud = 115200
+
+[sender.push]
+# Stub — no working transport yet. Future SolariNet-dashboard/Tab5 push.
+endpoint =

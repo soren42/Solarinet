@@ -1,0 +1,6 @@
+# Real config holds the AMQP password and SSH key path — never commit it.
+notify.conf
+*.log
+__pycache__/
+*.pyc
+.venv/
