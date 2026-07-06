@@ -43,4 +43,8 @@ Rule (from the user): **data is never entered manually** — the SoR is seeded f
 - **me**: live infra (DB/MQ stand-up), hardware investigation (Tachyon/NFC/Tab5), integration + review + commits.
 
 ## Progress log
-- (updated as work lands)
+- **Goal 2 (MQ): DONE** — RabbitMQ live on benzene (podman, boot-persistent, mgmt :15672, exchanges sor/detect/act/notify.events).
+- **Goal 3 (notify): service LIVE** — `deploy/notify/` MQ-driven dispatcher, log sender smoke-tested end-to-end, running under systemd on xenon. SMS-via-Tachyon stubbed (Tachyon 10.6.6.10 unreachable tonight).
+- **Goal 4 (dashboard): Reachability FIXED** — root-caused (missing `monitorName` → `undefined.localeCompare()` blanked the route), fixed additively + deployed. Full audit in `docs/SolariNet_Dashboard_Audit.md`; infra-insight build agent in progress.
+- **Goal 1 (SoR): schema LIVE** — `netdb/sor/schema.sql` (30 tables + 3 views, provenance/audit, idempotent) applied to `sor` on cesium; population agent seeding from netdb/AD/Forgejo + wiring the generator's `load_source()` to render DNS FROM the SoR.
+- In flight: SoR population, dashboard infra views, NFC 2FA design, Tab5 firmware scaffold. Pending: benzene SoR replica (after seed), Tachyon SMS (hardware).
