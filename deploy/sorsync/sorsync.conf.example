@@ -52,3 +52,15 @@ reload = sudo pihole reloaddns
 ssh = jason@10.0.0.253
 custom_list = /DATA/AppData/pihole/etc/pihole/custom.list
 reload = sudo docker exec pihole pihole reloaddns
+
+# sor_apply_ad (deployed on radium, the DC): reconcile akoria.org from the SoR.
+[ad]
+dc = localhost
+zone = akoria.org
+admin_user = administrator
+admin_pw_file = /root/.ad-admin-pw
+protect = radium
+debounce_sec = 4
+# periodic self-heal reconcile even when idle (0 disables). Default 1h.
+reconcile_interval_sec = 3600
+state_file = /opt/solari-sorsync/ad-managed.json

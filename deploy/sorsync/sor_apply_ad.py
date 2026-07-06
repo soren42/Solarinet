@@ -149,6 +149,10 @@ def run():
     exchange = c.get("amqp", "exchange", fallback="sor.events")
     debounce = c.getfloat("ad", "debounce_sec", fallback=4.0)
     reconnect = c.getfloat("amqp", "reconnect_delay_sec", fallback=5.0)
+    # Periodic self-heal: reconcile even when idle, so out-of-band drift (a manual
+    # AD edit, events missed during a long outage) self-corrects. This is the job
+    # the retired hourly akoria-dns-reconcile.timer used to do. 0 disables it.
+    reconcile_interval = c.getfloat("ad", "reconcile_interval_sec", fallback=3600.0)
     queue = "sor.apply.ad"
 
     log("initial reconcile on startup")
@@ -156,6 +160,7 @@ def run():
         reconcile(c)
     except Exception as e:  # noqa: BLE001
         log(f"initial reconcile error: {e!r}")
+    last_reconcile = time.monotonic()
 
     while _run:
         try:
@@ -171,8 +176,10 @@ def run():
                 if not _run:
                     break
                 if method is None:
-                    if dirty:
+                    due = reconcile_interval > 0 and (time.monotonic() - last_reconcile) >= reconcile_interval
+                    if dirty or due:
                         reconcile(c)
+                        last_reconcile = time.monotonic()
                         dirty = False
                     continue
                 dirty = True
