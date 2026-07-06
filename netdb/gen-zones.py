@@ -24,7 +24,19 @@ SECONDARIES = ["10.1.0.10"]             # radium = akoria.net secondary
 
 def load_source(path=SRC):
     """Source-of-truth boundary. Returns (domain, hosts, ifaces, cnames).
-    Replace the body with a DB query when MySQL lands; nothing downstream cares."""
+
+    Two backends, selected by the NETDB_SOURCE env var (or --source arg):
+      * "yaml" (default) -- read akoria-hosts.yml, the interim source-of-truth.
+      * "sor"            -- render FROM the System of Record (MariaDB `sor` on
+                            cesium) via sor/source_sor.py. This closes the loop:
+                            DNS becomes a rendered view of the SoR. Requires
+                            SOR_DB_PASSWORD (see sor/source_sor.py).
+    """
+    backend = os.environ.get("NETDB_SOURCE", "yaml").lower()
+    if backend == "sor":
+        sys.path.insert(0, os.path.join(HERE, "sor"))
+        from source_sor import load_source as sor_load_source
+        return sor_load_source()
     d = yaml.safe_load(open(path))
     return d["domain"], d["hosts"], d.get("ifaces", {}), d["cnames"]
 
@@ -89,6 +101,11 @@ def named_conf(domain, revs):
 
 
 def main():
+    # allow `gen-zones.py --source sor` as a shorthand for NETDB_SOURCE=sor
+    if "--source" in sys.argv:
+        i = sys.argv.index("--source")
+        if i + 1 < len(sys.argv):
+            os.environ["NETDB_SOURCE"] = sys.argv[i + 1]
     domain, hosts, ifaces, cnames = load_source()
     os.makedirs(OUT, exist_ok=True)
     open(os.path.join(OUT, f"db.{domain}"), "w").write(forward(domain, hosts, ifaces, cnames))
