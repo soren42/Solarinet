@@ -1,0 +1,18 @@
+; SolariNet SoR sync — AD applier (sor.events -> akoria.org). Deployed ON radium
+; (the DC) at /opt/solari-sorsync/; runs as root for samba-tool + /root/.ad-admin-pw.
+[Unit]
+Description=SolariNet SoR sync — AD applier (sor.events -> akoria.org)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/solari-sorsync
+Environment=SORSYNC_CONF=/opt/solari-sorsync/sorsync.conf
+ExecStart=/opt/solari-sorsync/.venv/bin/python3 /opt/solari-sorsync/sor_apply_ad.py
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+[Install]
+WantedBy=multi-user.target
