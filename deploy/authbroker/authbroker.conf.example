@@ -1,0 +1,45 @@
+# SolariNet Authenticator broker — config (example)
+#
+# Copy to authbroker.conf (same dir) and edit. authbroker.conf is gitignored;
+# it holds the MQTT password and the dashboard bearer token.
+#
+#   cp deploy/authbroker/authbroker.conf.example deploy/authbroker/authbroker.conf
+#   chmod 600 deploy/authbroker/authbroker.conf
+#
+# Format: INI (Python configparser).
+
+[mqtt]
+# Mosquitto on benzene. TLS on :8883 is a follow-up; :1883 for now.
+host = 10.5.2.50
+port = 1883
+username = solari
+password = CHANGE_ME
+tls = false
+; ca_cert = /etc/solarinet/mqtt-ca.pem   ; required when tls = true
+client_id = authbrokerd
+
+[http]
+# The tiny HTTP API the dashboard calls. Keep it bound to localhost (or the
+# dashboard host) — it must NOT be internet-reachable. `token` is a shared
+# bearer secret the dashboard sends in `Authorization: Bearer <token>`.
+bind = 127.0.0.1
+port = 9444
+token = CHANGE_ME_LONG_RANDOM
+
+[broker]
+# Topic namespace: requests on <prefix>/request/<id>, responses on
+# <prefix>/response/<id>. request_ttl_sec bounds how long a login waits.
+topic_prefix = auth
+request_ttl_sec = 60
+
+# ---- Enrolled devices ------------------------------------------------------
+# One [device.<id>] section per Tab5. <id> must match the device_id the
+# firmware reports in its signed responses. The pubkey is PUBLIC — safe to
+# store here; the matching private key lives only in the Tab5's encrypted NVS.
+# Generate a pair with:  ./enroll_device.py tab5-desk
+#
+# [device.tab5-desk]
+# pubkey_pem =
+#     -----BEGIN PUBLIC KEY-----
+#     MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+#     -----END PUBLIC KEY-----

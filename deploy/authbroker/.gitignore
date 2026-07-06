@@ -1,0 +1,7 @@
+# Secrets — never commit
+authbroker.conf
+*.key
+*.pem
+keys/
+.venv/
+__pycache__/

@@ -1,17 +1,20 @@
-# SolariNet Companion (Tab5) — Design notes
+# SolariNet Authenticator (Tab5) — Design notes
 
-Security model for on-device secrets, and the notification-transport decision.
+Security model for on-device secrets, the push-approval signing scheme, the BLE
+autotype path, and the transport decisions.
 
 ---
 
 ## 1. On-device secret storage
 
-Two classes of secret live on the Tab5:
+Three classes of secret live on the Tab5:
 
-- **TOTP seeds** — RFC 6238 Base32 shared secrets. Long-lived, high value: a
-  leaked seed lets an attacker mint codes forever.
+- **TOTP seeds** — RFC 6238 Base32 shared secrets. A leaked seed mints codes
+  forever.
+- **Push-approval device key** — a P-256 private scalar that signs approval
+  responses. A leaked key lets an attacker approve logins. **Highest value.**
 - **Password-manager key material** — enough to unlock the vault (a KDF-derived
-  protected key + cached tokens). Also high value.
+  protected key + cached tokens).
 
 ### 1.1 Storage layout
 
@@ -19,100 +22,151 @@ Everything is in **NVS**, split across two partitions (`partitions.csv`):
 
 | Partition | Namespace | Contents |
 |-----------|-----------|----------|
-| `nvs` (default) | `cfg` | non-secret settings: SSID, server URLs, TZ, KDF params |
-| `secrets` (dedicated) | `totp`, `pm` | TOTP seeds, PM key blob, Wi-Fi PSK |
+| `nvs` (default) | `cfg` | non-secret: SSID, broker host, device id, PM URL, TZ, KDF params |
+| `secrets` (dedicated) | `totp`, `pm`, `dev` | TOTP seeds, PM key blob, **device signing key + pubkey**, Wi-Fi PSK |
 
-A **dedicated `secrets` partition** exists so we can **panic-wipe just the
-secrets** (`Config::panicWipeSecrets`) without erasing app or settings, and so
-secret access is isolated behind its own NVS handles.
+A **dedicated `secrets` partition** lets us **panic-wipe just the secrets**
+(`Config::panicWipeSecrets` — now also clears `dev`) without erasing app/settings,
+and isolates secret access behind its own NVS handles.
 
 ### 1.2 Encryption at rest — ESP32-P4 flash encryption
 
-The protection that matters for a physical desk device is **flash
-encryption**: the ESP32-P4 flash controller transparently AES-encrypts flash
-contents with a key held in **eFuse** that the CPU cannot read out and that
-does not leave the chip. With it enabled, dumping the SPI flash (chip-off or
-via the bootloader) yields ciphertext — TOTP seeds and PM keys included.
+The protection that matters for a physical desk device is **flash encryption**:
+the P4 flash controller transparently AES-encrypts flash with a key in **eFuse**
+the CPU cannot read out. Dumping the SPI flash then yields ciphertext — TOTP
+seeds, PM keys, and the **device signing key** included. NVS encryption rides on
+this. **Secure Boot** additionally stops flashing modified firmware that would
+dump decrypted secrets at runtime — recommended for a release authenticator; the
+eFuse burn is effectively one-way.
 
-- **NVS encryption** rides on this: the `secrets` NVS partition is encrypted
-  along with the rest of flash. (ESP-IDF also supports a separate NVS-encryption
-  scheme with an `nvs_keys` partition; with flash encryption already on, the
-  simpler flash-level encryption is sufficient here — see the `partitions.csv`
-  TODO if a keys partition turns out to be required by the pinned core.)
-- **Secure Boot** (optional, stronger) additionally stops an attacker from
-  flashing modified firmware that would dump the decrypted secrets at runtime.
-  Recommended for a release unit; note the eFuse burn is effectively one-way.
-
-**Rollout policy (decide before release):**
-- *Development mode* flash encryption allows re-flashing with the encryption
-  key present — good for iterating. *Release mode* disables the serial
-  re-flash path. Burn release-mode eFuses only on a unit whose firmware is
-  finished. Document which unit is which; a mis-burn bricks re-flashing.
+**Rollout policy (decide before release):** development-mode encryption allows
+re-flashing (good for iterating); release-mode disables the serial re-flash path.
+Burn release eFuses only on a finished unit; a mis-burn bricks re-flashing.
 
 ### 1.3 In-RAM hygiene
 
-- The PM **master password is never persisted.** From it we derive the master
-  key, immediately stretch + unwrap the user key, then **zeroize the master key
-  buffer** (`vault.cpp` overwrites `s_masterKey`). `Vault::lock()` zeroizes the
-  user enc/mac keys and clears decrypted caches.
-- TOTP `compute()` wipes the decoded key and HMAC buffers off the stack before
-  returning.
-- Decrypted **passwords/TOTPs are revealed on demand**, not held in the list.
-  The clipboard buffer auto-clears (default 20 s).
-- **Auto-lock** (TODO in `ui.cpp`): re-lock the vault after an idle timeout and
-  on returning to the home screen, so a walk-away doesn't leave it unlocked.
+- The push-approval **private scalar** is loaded only to sign, then the heap copy
+  is zeroized (`approvals.cpp` wipes the `priv` buffer after each sign/keygen).
+- The PM **master password is never persisted**; the master key is stretched,
+  used to unwrap the user key, then zeroized. `Vault::lock()` clears derived keys
+  and caches.
+- TOTP `compute()` wipes decoded key + HMAC buffers off the stack.
+- Generated passwords: `pwgen` overwrites its working buffer, and the "last
+  generated" value is cleared on `clear()` / idle (see UI auto-lock TODO).
+- The on-screen clipboard auto-clears (default 20 s).
 
 ### 1.4 Threat model boundaries (honest scope)
 
-- **Covered:** flash read-out at rest (encryption), tamper of vault ciphertext
-  (AES-CBC **+ HMAC-SHA256** verify before decrypt — `decryptEncString_` checks
-  the MAC constant-time and rejects on mismatch), wrong-password rejection
-  offline (key unwrap HMAC fails).
-- **Not covered by this device alone:** a live attacker with the unlocked
-  device in hand; sophisticated hardware glitching of eFuse protections; a
-  malicious/self-signed MQTT or PM server if cert verification is left off
-  (hence the `setCACert` TODOs — pin the private CA, do **not** ship
-  `setInsecure()`).
+- **Covered:** flash read-out at rest (encryption); approval forgery (server
+  holds only the public key; responses are ECDSA-signed and nonce-bound);
+  replay (per-request nonce + TTL + single-use ids); vault ciphertext tamper
+  (AES-CBC + HMAC verify before decrypt); wrong-password rejection offline.
+- **Not covered by the device alone:** a live attacker with the *unlocked*
+  device in hand (approving on their behalf) — mitigated only by physical
+  possession + optional device unlock; sophisticated eFuse glitching; a
+  malicious MQTT/PM server if cert verification is left off (hence the
+  `setCACert` TODOs — pin the private CA, never ship `setInsecure()`).
 
 ---
 
-## 2. Notification transport decision
+## 2. Push-approval — flow + signing scheme
 
-**Chosen: MQTT over TLS**, with a server-side notifyd sender
-(`server-shim/mqtt.py`) bridging RabbitMQ → MQTT. The Tab5 subscribes to
-`notify/#`.
+### 2.1 Flow
 
-### Options considered
+```
+dashboard (or Keycloak)          authbrokerd                 Tab5
+   |  primary auth OK               |                          |
+   |-- POST /auth/request --------->|                          |
+   |                                |-- MQTT auth/request/<id>->|  (Approve/Deny + TTL)
+   |                                |                          |-- operator taps
+   |                                |<- MQTT auth/response/<id>-|  (SIGNED)
+   |                                |  verify sig+nonce+ttl     |
+   |<------ {decision} -------------|                          |
+   |  establish session iff approve |                          |
+```
 
-| Option | On-ESP cost | Server change | Verdict |
-|--------|-------------|---------------|---------|
-| **AMQP direct** (talk to RabbitMQ) | High — no good lightweight AMQP client for Arduino/ESP; connection + channel + topic semantics are heavy | none | ✗ too heavy on device |
-| **HTTP long-poll** | Low client, but needs a new stateful endpoint + poll loop; latency/battery tradeoff; misses if offline | new service | ✗ new server surface, worse latency |
-| **WebSocket push** | Medium — WS client + framing + reconnect + a new push service holding per-device connections | new service | ✗ most server work |
-| **MQTT/TLS** | **Low** — mature `PubSubClient`, tiny footprint, native pub/sub + auto-reconnect + QoS1 | **one sender plugin** reusing existing notifyd sender interface + a Mosquitto broker | ✓ **chosen** |
+### 2.2 Why this shape
 
-### Why MQTT wins here
+- **Asymmetric, not shared-secret.** The device signs with a P-256 **private**
+  key; the broker verifies with the **public** key only. A broker or dashboard
+  compromise cannot mint approvals — the possession factor is genuinely bound to
+  the Tab5. (A shared HMAC secret would put a forgeable credential on the server.)
+- **MQTT, not a new push channel.** SolariNet already has Mosquitto; the device
+  already speaks MQTT for notifications. Approvals reuse the **same shared bus**
+  (`mqttbus.*`) — one TLS connection, two topic families. No per-device HTTP/WS
+  push service to run.
+- **Broker mediates, device stays simple.** The dashboard makes one blocking
+  HTTP call; the broker owns request state, nonce, TTL, and verification. The
+  device just renders a prompt and signs.
 
-- **Smallest device code.** MQTT is the de-facto ESP messaging protocol;
-  `PubSubClient` is a few KB and handles subscribe/reconnect. AMQP on ESP is a
-  poor fit.
-- **Smallest server change.** SolariNet's notify service is already a
-  fan-out-to-pluggable-senders design (`deploy/notify/senders/`). The bridge is
-  **one new sender** (`mqtt.py`) plus a REGISTRY line — `notifyd.py` is
-  untouched, and MQTT delivery becomes just another routable channel per
-  severity, exactly like `sms`/`push`.
-- **Right semantics.** Topic hierarchy (`notify/<severity>`) maps cleanly onto
-  the existing routing keys; the Tab5 can subscribe broadly (`notify/#`) or
-  narrowly. QoS1 gives at-least-once; the device just displays messages, so
-  occasional duplicates are harmless.
-- **Reuses the JSON contract.** The shim forwards `notifyd`'s existing message
-  dict verbatim (minus `_private` fields), so device and server never diverge on
-  schema.
+### 2.3 Signing details
 
-### Cost of the choice
+- Curve **secp256r1 (P-256)**, **ECDSA / SHA-256**, DER signature, base64 in
+  `sig`. P-256 ECDSA is present in the IDF's bundled mbedTLS (no extra
+  component), and Python `cryptography` verifies it in three lines — hence chosen
+  over Ed25519 (whose on-device mbedTLS support is not guaranteed on the pinned
+  core).
+- **Canonical signed bytes** (both sides build identically, UTF-8):
+  `"<v>\n<id>\n<decision>\n<nonce>\n<device_id>"`. Fixed field order, newline
+  delimited, no JSON-canonicalization ambiguity.
+- **Anti-replay:** the broker generates a 32-byte random `nonce` per request; the
+  device echoes it inside the signed bytes. The broker checks the nonce matches
+  the outstanding request, the id is still pending (single-use), and the response
+  arrived within TTL. Any mismatch ⇒ ignored ⇒ login times out (fails closed).
+- **Key custody:** generated on-device (`mbedtls_ecp_gen_keypair` seeded from the
+  hardware TRNG via CTR-DRBG), stored as the 32-byte scalar in `secrets` NVS
+  (`dev/privkey`). Only the public point is exported for enrollment.
 
-One new daemon: **Mosquitto**, co-located on benzene with RabbitMQ. Two MQTT
-users (notifyd publish, tab5 subscribe), TLS with the self-hosted CA. That is
-the entire server-side footprint. If a broker is truly unwanted later, the same
-`mqtt.py` sender shape could be swapped for an HTTP-push sender without touching
-the device's feed/UI logic — but MQTT is the simplest correct path today.
+The server half, the exact contract, and the live-test evidence are in
+`deploy/authbroker/README.md`.
+
+---
+
+## 3. Password generator — randomness
+
+`pwgen.*` draws from **`esp_random`**, the ESP32-P4 hardware TRNG (also feeds the
+mbedTLS entropy pool used for signing). Indices are drawn by **rejection
+sampling** (`uniform(n)` discards the biased tail of the 32-bit draw) so every
+character and every shuffle swap is unbiased — no modulo bias, never `rand()`.
+The policy guarantees ≥1 character per enabled class, then a Fisher-Yates
+shuffle removes positional bias from those guaranteed characters.
+
+---
+
+## 4. BLE on the co-processor (autotype)
+
+The Tab5's ESP32-P4 has **no native radio**. Wi-Fi *and* BLE are provided by the
+on-board **ESP32-C6** over the **esp-hosted** link (SDIO/UART). Consequences for
+BLE HID:
+
+- BLE runs on the **C6**; the P4 drives it as an HCI host over the hosted
+  **VHCI** transport. Standard NimBLE-Arduino then works from P4 application code
+  — *if* the controller is exposed.
+- This requires the **C6 hosted firmware to include the Bluetooth controller /
+  HCI**. Many esp-hosted builds are **Wi-Fi-only** and expose no BT — on such a
+  build BLE HID cannot work until the C6 is reflashed with a hosted build that
+  includes BT. This is the honest wrinkle: `blehid.cpp` is guarded by
+  `SOLARI_HAS_BLE` (default 0) and `begin()` reports `Unavailable` unless the
+  controller comes up, so the app degrades gracefully (the "Type" actions
+  disable) rather than failing to boot.
+- Build side: enable NimBLE-Arduino (`platformio.ini` lib, commented until
+  ready) and the IDF `CONFIG_BT_ENABLED` / `CONFIG_BT_NIMBLE_ENABLED` +
+  esp-hosted BT transport. `TODO(hosted-bt)` / `TODO(nimble)` mark the exact
+  spots.
+- **Keymap:** US-QWERTY. `asciiToHid()` maps printable ASCII to HID usage codes
+  and applies Left-Shift (0x02) for uppercase and shifted symbols; unmappable
+  characters are skipped rather than mistyped. Reports are the 8-byte boot
+  keyboard format with a press/release pair and a small pacing delay.
+
+---
+
+## 5. MQTT transport decision (recap)
+
+**Chosen: MQTT over TLS**, one **shared** client (`mqttbus.*`) for both
+push-approval and background notifications. MQTT is the de-facto ESP messaging
+protocol (`PubSubClient`, a few KB, native pub/sub + auto-reconnect); AMQP on ESP
+is a poor fit and HTTP/WS push would mean a new stateful per-device service.
+Notifications reuse SolariNet's pluggable notifyd sender (`server-shim/mqtt.py`);
+approvals reuse the same broker with a distinct topic family. The only new infra
+is Mosquitto on benzene (already assumed) + the `authbrokerd` bridge. Moving to
+`:8883` TLS with the self-hosted CA is the documented follow-up.

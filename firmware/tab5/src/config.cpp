@@ -6,6 +6,7 @@ namespace {
 constexpr const char* kCfgNs = "cfg";
 constexpr const char* kTotpNs = "totp";
 constexpr const char* kPmNs = "pm";
+constexpr const char* kDevNs = "dev";
 // The Preferences library selects a partition by label. "secrets" matches the
 // encrypted NVS partition declared in partitions.csv.
 constexpr const char* kSecretsPart = "secrets";
@@ -27,7 +28,9 @@ bool Config::begin() {
   s_.mqttPort = prefsCfg_.getUShort("mqttp", s_.mqttPort);
   s_.mqttUser = prefsCfg_.getString("mqttu", s_.mqttUser);
   s_.mqttPass = prefsCfg_.getString("mqttpw", s_.mqttPass);
-  s_.mqttTopic = prefsCfg_.getString("mqttt", s_.mqttTopic);
+  s_.notifyTopic = prefsCfg_.getString("ntfyt", s_.notifyTopic);
+  s_.deviceId = prefsCfg_.getString("devid", s_.deviceId);
+  s_.pmType = prefsCfg_.getUChar("pmtype", s_.pmType);
   s_.pmBaseUrl = prefsCfg_.getString("pmurl", s_.pmBaseUrl);
   s_.pmEmail = prefsCfg_.getString("pmmail", s_.pmEmail);
 
@@ -36,6 +39,7 @@ bool Config::begin() {
   // in the pinned core; otherwise use nvs_flash_init_partition + raw nvs API.
   prefsTotp_.begin(kTotpNs, false, kSecretsPart);
   prefsPm_.begin(kPmNs, false, kSecretsPart);
+  prefsDev_.begin(kDevNs, false, kSecretsPart);
   return true;
 }
 
@@ -50,7 +54,9 @@ bool Config::saveSettings() {
   ok &= prefsCfg_.putUShort("mqttp", s_.mqttPort);
   ok &= prefsCfg_.putString("mqttu", s_.mqttUser) >= 0;
   ok &= prefsCfg_.putString("mqttpw", s_.mqttPass) >= 0;
-  ok &= prefsCfg_.putString("mqttt", s_.mqttTopic) >= 0;
+  ok &= prefsCfg_.putString("ntfyt", s_.notifyTopic) >= 0;
+  ok &= prefsCfg_.putString("devid", s_.deviceId) >= 0;
+  ok &= prefsCfg_.putUChar("pmtype", s_.pmType);
   ok &= prefsCfg_.putString("pmurl", s_.pmBaseUrl) >= 0;
   ok &= prefsCfg_.putString("pmmail", s_.pmEmail) >= 0;
   return ok;
@@ -138,9 +144,28 @@ bool Config::loadPmKeyBlob(std::vector<uint8_t>& out) {
 
 bool Config::clearPmKeyBlob() { return prefsPm_.remove("keyblob"); }
 
+// ---- Approval device key ---------------------------------------------------
+bool Config::saveDeviceKey(const uint8_t* priv32, size_t len) {
+  return prefsDev_.putBytes("privkey", priv32, len) == len;
+}
+
+bool Config::loadDeviceKey(std::vector<uint8_t>& out) {
+  size_t len = prefsDev_.getBytesLength("privkey");
+  if (len == 0) return false;
+  out.resize(len);
+  return prefsDev_.getBytes("privkey", out.data(), len) == len;
+}
+
+bool Config::saveDevicePubHex(const String& hex) {
+  return prefsDev_.putString("pubhex", hex) >= 0;
+}
+
+String Config::loadDevicePubHex() { return prefsDev_.getString("pubhex", ""); }
+
 void Config::panicWipeSecrets() {
   prefsTotp_.clear();
   prefsPm_.clear();
+  prefsDev_.clear();
 }
 
 }  // namespace solari

@@ -1,14 +1,15 @@
-// main.cpp — SolariNet Companion firmware entry point (M5Stack Tab5 / ESP32-P4).
+// main.cpp — SolariNet Authenticator firmware entry point (M5Stack Tab5 / P4).
+//
+// The Tab5 is a dedicated authentication & authorization device. Feature set:
+//   TOTP · push-approval (2FA/access) · vault (PM client) · password generator
+//   · BLE-keyboard autotype.
 //
 // Boot order:
 //   1. M5Unified init (display, touch, RTC, PSRAM).
-//   2. Config load from NVS (non-secret + encrypted secrets).
+//   2. Config load from NVS (non-secret + encrypted secrets, incl. device key).
 //   3. Seed the system clock from the RTC (so TOTP works pre-network).
-//   4. Bring up Wi-Fi via the ESP32-C6 co-processor (WiFi.h through
-//      esp_wifi_remote), then start SNTP time discipline.
-//   5. Start the notification (MQTT) client + UI.
-//
-// The three features live in totp.*, vault.*, notify.*; ui.* renders them.
+//   4. Bring up Wi-Fi via the ESP32-C6 co-processor, then SNTP discipline.
+//   5. Start the shared MQTT bus + approvals + notifications + BLE HID + UI.
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <WiFi.h>
@@ -16,7 +17,10 @@
 #include "config.h"
 #include "totp.h"
 #include "vault.h"
+#include "mqttbus.h"
+#include "approvals.h"
 #include "notify.h"
+#include "blehid.h"
 #include "ui.h"
 
 using namespace solari;
@@ -35,7 +39,7 @@ void setup() {
   M5.begin(cfg);  // display, touch, RTC (RX8130), I2C, PSRAM
 
   Serial.begin(115200);
-  Serial.println("SolariNet Companion booting");
+  Serial.println("SolariNet Authenticator booting");
 
   if (!config().begin()) {
     Serial.println("FATAL: NVS/config init failed");
@@ -48,9 +52,20 @@ void setup() {
   ui().begin();
 
   wifiBegin();
-  notify().begin();
 
-  // Wire crit/warn notifications to a UI toast.
+  // Shared MQTT transport, then the features that ride it.
+  mqttBus().begin();
+  approvals().begin();   // subscribes auth/request/#, ensures device key
+  notify().begin();      // subscribes notify/# for background toasts
+  bleHid().begin();      // BLE HID keyboard (Unavailable unless SOLARI_HAS_BLE)
+
+  // A new approval request wakes the screen with a toast + jumps to the prompt.
+  approvals().onAlert([](const ApprovalRequest& r) {
+    ui().toast("Approval: " + r.subject + " -> " + r.detail, TFT_YELLOW, 4000);
+    ui().goTo(Screen::Approval);
+  });
+
+  // Wire crit/warn notifications to a UI toast (secondary surface).
   notify().onToast([](const Notification& n) {
     uint16_t c = (n.severity == Severity::Crit) ? TFT_RED : TFT_ORANGE;
     ui().toast(n.title.isEmpty() ? n.body : n.title, c, 5000);
@@ -67,11 +82,12 @@ void loop() {
     s_ntpStarted = true;
   }
 
-  notify().loop();  // MQTT connect/reconnect + inbound
-  ui().loop();      // touch + render
+  mqttBus().loop();     // one connection: approvals + notifications
+  approvals().loop();   // expire stale approval requests
+  bleHid().loop();      // BLE connection state
+  ui().loop();          // touch + render
 
-  // TODO(power): the Tab5 is mains-powered on a desk here, so we keep the
-  // panel awake. If battery use matters, add a dim/sleep timeout and a
-  // touch-to-wake, and lower CPU freq when idle.
+  // TODO(power): the Tab5 is mains-powered on a desk here, so we keep the panel
+  // awake. If battery use matters, add a dim/sleep timeout and touch-to-wake.
   delay(5);
 }

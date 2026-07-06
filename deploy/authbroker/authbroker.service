@@ -1,0 +1,45 @@
+# SolariNet Authenticator approval broker (authbrokerd) as a systemd unit.
+#
+# Bridges dashboard/Keycloak auth events to the Tab5 over MQTT and waits for a
+# signed push-approval. See README.md for the message contract + signing scheme.
+#
+# Install:
+#   cp deploy/authbroker/authbroker.conf.example deploy/authbroker/authbroker.conf
+#   $EDITOR deploy/authbroker/authbroker.conf   # MQTT password, HTTP token, devices
+#   chmod 600 deploy/authbroker/authbroker.conf
+#   python3 -m venv deploy/authbroker/.venv
+#   deploy/authbroker/.venv/bin/pip install paho-mqtt cryptography
+#   sudo cp deploy/authbroker/authbroker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now authbroker
+#
+# Paths assume the repo at /home/jason/Code/Solarinet, matching the other
+# deploy/*.service units. Run it on the dashboard host (xenon) so the HTTP API
+# stays on localhost.
+
+[Unit]
+Description=SolariNet Authenticator approval broker (authbrokerd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/authbroker
+ExecStart=/home/jason/Code/Solarinet/deploy/authbroker/.venv/bin/python3 \
+    /home/jason/Code/Solarinet/deploy/authbroker/authbrokerd.py \
+    --config /home/jason/Code/Solarinet/deploy/authbroker/authbroker.conf
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Hardening: the broker needs only network + its config.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jason/Code/Solarinet/deploy/authbroker
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
