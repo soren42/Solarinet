@@ -17,16 +17,37 @@
 
 #define ASSET_REMOVE_TARGET_CAP 512
 
-/* Upsert a TCP service target for an asset. */
+/* Map a well-known service port to an app-layer probe type. These checks verify
+ * the server actually speaks the protocol WITHOUT authenticating (LDAP accepts
+ * any BindResponse incl. an anonymous-bind rejection; MySQL/AMQP just validate
+ * the server greeting/handshake), so they never false-down on auth-required
+ * services. Everything else stays a plain TCP-connect. TLS-wrapped ports (636
+ * ldaps, 5671 amqps) are intentionally excluded — the checks are plaintext. */
+static const char *probeTypeForPort(int port)
+{
+    switch (port) {
+        case 389:  return "ldap";
+        case 3306: return "mysql";
+        case 5672: return "amqp";
+        default:   return "tcp";
+    }
+}
+
+/* Upsert a service target for an asset. TCP by transport; the probeType column
+ * upgrades well-known ports to an app-layer health check (see probeTypeForPort).
+ * The "tcp:" tid prefix is a stable namespace for service targets (opaque key),
+ * not the check type — kept stable so probeType upgrades update in place. */
 static void assetAddService(serverContext *ctx, const char *ip, int port,
                             const char *name, const char *segId, uint64_t assetId)
 {
     char tid[160], label[160];
+    const char *probeType;
     if (port <= 0 || port > 65535) return;
+    probeType = probeTypeForPort(port);
     (void)snprintf(tid, sizeof tid, "tcp:%s:%d", ip, port);
     (void)snprintf(label, sizeof label, "%s (%s)", (name && name[0]) ? name : "tcp", ip);
     (void)serverDbUpsertProbeTarget(ctx->db, tid, ip, port, "tcp", 2, label,
-                                    segId, assetId, "tcp", NULL);
+                                    segId, assetId, probeType, NULL);
 }
 
 /* Add ports from an explicit CSV ("22,53,80") as TCP targets. */
