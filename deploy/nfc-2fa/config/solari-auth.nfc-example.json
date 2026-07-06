@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "_comment": "Example fragments to merge into the live solari-auth.json to enable NFC 2FA. Do NOT commit real hashes. See ../DESIGN.md sections 3.1 and 4.",
+
+  "nfc2fa": {
+    "enabled": false,
+    "enforce": "enrolled",
+    "maxFailures": 5,
+    "lockoutSeconds": 900,
+    "challengeTtlSeconds": 60,
+    "readerHmacKeyRef": "env:SOLARI_NFC_READER_KEY"
+  },
+
+  "users": [
+    {
+      "username": "jason",
+      "passwordHash": "$2y$........REDACTED........",
+      "role": "admin",
+      "displayName": "Jason",
+      "nfcCards": [
+        {
+          "id": "card-a1b2c3d4",
+          "mode": "uid",
+          "label": "Blue keyfob",
+          "uidSalt": "<base64 16-byte random>",
+          "uidHash": "sha256:<base64>",
+          "cardType": "NTAG215",
+          "enrolledAt": "2026-07-06T04:00:00Z",
+          "enrolledBy": "jason",
+          "lastUsedAt": null,
+          "revoked": false,
+          "revokedAt": null,
+          "keyRef": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+# SolariNet NFC 2FA reader daemon (loopback only).
+# Install: copy to /etc/systemd/system/, edit ExecStart backend/origin, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now solari-nfc-reader
+# On the mock/dev host use --backend mock; on a real reader host use --backend pcsc.
+[Unit]
+Description=SolariNet NFC 2FA reader daemon
+After=pcscd.service
+Wants=pcscd.service
+
+[Service]
+Type=simple
+# Adjust the path to where nfc-reader.py is deployed.
+ExecStart=/usr/bin/python3 /opt/solarinet/nfc-2fa/reader/nfc-reader.py --backend pcsc --host 127.0.0.1 --port 8770 --origin https://xenon:9443
+Restart=on-failure
+RestartSec=2
+# Hardening: loopback-only daemon holding no secrets.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# pcsc backend needs the pcscd socket; i2c/libnfc backends may need device access
+# (add DeviceAllow=/dev/i2c-5 rw and SupplementaryGroups=i2c as appropriate).
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
