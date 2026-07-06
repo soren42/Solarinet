@@ -47,4 +47,13 @@ Rule (from the user): **data is never entered manually** — the SoR is seeded f
 - **Goal 3 (notify): service LIVE** — `deploy/notify/` MQ-driven dispatcher, log sender smoke-tested end-to-end, running under systemd on xenon. SMS-via-Tachyon stubbed (Tachyon 10.6.6.10 unreachable tonight).
 - **Goal 4 (dashboard): Reachability FIXED** — root-caused (missing `monitorName` → `undefined.localeCompare()` blanked the route), fixed additively + deployed. Full audit in `docs/SolariNet_Dashboard_Audit.md`; infra-insight build agent in progress.
 - **Goal 1 (SoR): schema LIVE** — `netdb/sor/schema.sql` (30 tables + 3 views, provenance/audit, idempotent) applied to `sor` on cesium; population agent seeding from netdb/AD/Forgejo + wiring the generator's `load_source()` to render DNS FROM the SoR.
-- In flight: SoR population, dashboard infra views, NFC 2FA design, Tab5 firmware scaffold. Pending: benzene SoR replica (after seed), Tachyon SMS (hardware).
+- **Goal 1 (SoR): FULLY DONE** — seeded from netdb/AD/Forgejo (48 entities, 52 IPs, 40 hw, 38 groups); DNS renders byte-identically FROM the SoR (`gen-zones.py --source sor`); **benzene replica live** (dedicated container, real-time, write-tested).
+- **Goal 3 (notify): two channels LIVE** — MQ → notifyd → {log, MQTT}. Mosquitto broker live on benzene (:1883/:9001). SMS gated on Tachyon (unreachable).
+- **Goal 4 (dashboard): substantially DONE** — Reachability fixed; new infra (AD/Keycloak/SoR/RabbitMQ/BIND) registered as monitored assets; cross-view `openEntity()`; SSO panel; Discovery enrichment. C-backend TODOs (app-layer health checks, avahi collection, port-scan fingerprint) documented in the audit.
+- **Goal 5 (NFC): designed + scaffolded** — finding: xenon has no NFC reader (bus5=Intel SMBus); hydrogen USB PC/SC is the path.
+- **Goal 6 (Tab5): scaffolded** — PlatformIO firmware; MQTT transport live via Mosquitto; flashing needs USB.
+
+### Final: live vs. scaffolded vs. hardware-blocked
+- **LIVE**: SoR (cesium primary + benzene replica), RabbitMQ, Mosquitto, notifyd (log+MQTT), DNS-from-SoR, dashboard infra views + Reachability fix.
+- **SCAFFOLDED (ready to finish)**: NFC 2FA (`deploy/nfc-2fa/`), Tab5 firmware (`firmware/tab5/`), SMS-via-Tachyon sender.
+- **HARDWARE-BLOCKED**: Tachyon SMS (10.6.6.10 unreachable), NFC reader (xenon has none — use hydrogen), Tab5 flashing (needs USB).
