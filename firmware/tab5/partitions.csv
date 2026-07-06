@@ -1,0 +1,18 @@
+# SolariNet Tab5 partition table (16 MB flash)
+# ---------------------------------------------------------------------------
+# `secrets` is a dedicated NVS partition holding TOTP seeds + PM key material.
+# With flash encryption enabled (see DESIGN.md), the whole flash — including
+# this NVS partition — is encrypted at rest by the ESP32-P4 flash controller.
+# Keeping secrets in their own NVS namespace/partition makes it easy to wipe
+# just the secrets on a "panic erase" without reflashing the app.
+#
+# Name,      Type, SubType,  Offset,   Size,   Flags
+nvs,         data, nvs,      0x9000,   0x6000,
+otadata,     data, ota,      0xf000,   0x2000,
+phy_init,    data, phy,      0x11000,  0x1000,
+factory,     app,  factory,  0x20000,  0x400000,
+secrets,     data, nvs,      0x420000, 0x20000,
+littlefs,    data, spiffs,   0x440000, 0xB80000,
+# TODO(build): if flash-encryption key generation needs an `nvs_keys`
+# partition (NVS encryption in "flash-enc" mode reuses the flash key, so this
+# is usually NOT required), add it here and mark subtype nvs_keys, encrypted.
