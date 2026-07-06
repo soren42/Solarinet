@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Response.php';
 require_once __DIR__ . '/Db.php';
+require_once __DIR__ . '/Sor.php';
 require_once __DIR__ . '/Router.php';
 require_once __DIR__ . '/Coerce.php';
 require_once __DIR__ . '/Rollup.php';

@@ -106,12 +106,14 @@ return static function (Router $router): void {
         $op = Operator::name();
         if ($op !== '') $args['op'] = $op;
         SolariCtl::call('ASSET_SET', $args);
+        Sor::upsertHost((string) $cur['ip'], $name);   // mirror edit/rename into the SoR (fail-soft)
         Response::ok(['assetId' => $aid, 'status' => 'updated']);
     });
 
     $router->post('/api/assets/{assetId}/remove', static function (array $p): void {
         $aid = asset_id($p['assetId']);
-        if (Db::row('SELECT assetId FROM asset WHERE assetId = :i', [':i' => $aid]) === null) {
+        $cur = Db::row('SELECT assetId, ip FROM asset WHERE assetId = :i', [':i' => $aid]);
+        if ($cur === null) {
             Response::error('not_found', "No asset $aid", 404);
         }
         $b  = solari_json_body();
@@ -124,6 +126,7 @@ return static function (Router $router): void {
             'asset' => (string) $aid,
             'op'    => $op,
         ]);
+        Sor::removeHost((string) $cur['ip']);   // soft-delete the SoR host (fail-soft) -> drops from DNS
         Response::ok([
             'assetId' => $aid,
             'status'  => 'removed',

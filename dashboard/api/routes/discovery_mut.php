@@ -85,6 +85,11 @@ return static function (Router $router): void {
         if ($op !== '') $args['op'] = $op;
 
         $reply = SolariCtl::call('ADOPT', $args);
+        // mirror the adopt into the SoR immediately (fail-soft; sor_reconcile is the net)
+        $disc = Db::row('SELECT ip, host, mdnsName FROM discovered WHERE discId = :i', [':i' => $discId]);
+        if ($disc !== null) {
+            Sor::upsertHost((string) $disc['ip'], $args['name'] ?? ($disc['host'] ?: ($disc['mdnsName'] ?: null)));
+        }
         Response::ok([
             'discId'  => $discId,
             'assetId' => isset($reply['assetId']) ? (int) $reply['assetId'] : null,
