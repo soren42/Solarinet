@@ -25,6 +25,8 @@ ops glue (the accepted non-C exception); the SoR + MQ do the heavy lifting.
 |---|---|
 | `sor_emitd.py` | Drains `sor_outbox` (CDC triggers) → publishes `sor.<table>.<action>` to `sor.events`; advances `sor_sync_state.emit_checkpoint`. At-least-once. |
 | `sor_apply_dnsd.py` | Consumes DNS-relevant `sor.events`, debounces, re-renders zones (`gen-zones.py --source sor`), diffs vs live BIND, deploys + `rndc reload` only on change. Idempotent + startup reconcile. |
+| `sor_apply_pihole.py` | Render target: SoR host set → `custom.list` on each Pi-hole (helium/mercury) over ssh; reload only on change. Runs on xenon. |
+| `sor_apply_ad.py` | Render target: SoR host set → AD `akoria.org` via `samba-tool dns`. Runs **on radium** (the DC) as root; state-file deletion policy never touches AD infra. |
 | `sor_reconcile_discovery.py` | Folds **adopted, named** `discovered` hosts into the SoR (correlated by IP, v4-mapped-aware), tagged `solarinet_monitor`. New hosts then flow forward to DNS automatically. |
 
 ## Data-capture
@@ -56,8 +58,15 @@ Live on xenon (reaches cesium SoR + benzene MQ). `sor_reconcile_discovery.py
 - **Zone serial** — `gen-zones` uses `YYYYMMDDnn` (fixed nn); the primary serves
   fresh data on reload, but same-day multi-change secondary AXFR needs a monotonic
   serial. Bump it in the applier (or gen-zones) for correct secondary propagation.
-- **More render targets** — AD, Pi-hole, and config are also SoR *views*; add
-  appliers binding the same `sor.events` (e.g. `sor_apply_ad`) as needed.
+- **More render targets** — AD (`sor_apply_ad`, on radium) and Pi-hole
+  (`sor_apply_pihole`, on xenon) DONE. Config/other are also SoR views; add
+  appliers binding the same `sor.events` as needed. The hourly AXFR-based
+  `akoria-dns-reconcile` on radium is now redundant with `sor_apply_ad` (both keep
+  akoria.org in sync from the SoR) — can be retired once the applier proves out.
+- **Deploy note** — appliers run near their targets: emit/apply-dns/apply-pihole/
+  reconcile on **xenon** (`deploy/sorsync/`), apply-ad on **radium**
+  (`/opt/solari-sorsync/`, as root). Each host has its own gitignored `sorsync.conf`.
+  Pi-hole CNAMEs (dnsmasq `cname=`) not yet rendered — A records only.
 - **Dashboard write path — DONE.** `dashboard/api/lib/Sor.php` mirrors operator
   mutations into the SoR (fail-soft): ADOPT + ASSET_SET → `upsertHost`, ASSET_REMOVE
   → `removeHost` (soft-delete). Needs `SOR_DB_*` in the php-fpm pool
