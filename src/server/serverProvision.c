@@ -582,19 +582,69 @@ static int provFirstPort(const char *services)
     return 0;
 }
 
-solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
-                                        const char *probeSpec)
+solariStatus serverProvisionDispatchTarget(serverContext *ctx,
+                                           const char *probeSpec)
 {
-    serverDiscEntity ent;
     uint8_t payload[PROV_PAYLOAD_CAP];
     uint8_t frame[PROV_FRAME_CAP];
     size_t  payloadLen = 0, frameLen = 0;
     uint16_t tlvCount = 0;
+    uint64_t owner;
+    uint64_t fleet[1];
+    solariStatus st;
+
+    if (!ctx || !probeSpec || !probeSpec[0]) return ERR_INVALID_ARG;
+
+    /* HRW-select the owning monitor for this target. The shared serverDb API
+     * exposes no "list active monitors" query (CONTRACT GAP, see file footer),
+     * so with no fleet view available we fall back to a fleet of one - this
+     * server's own node id - which still produces a deterministic, correct
+     * single-owner dispatch the monitor accepts; once a fleet enumerator
+     * exists, pass the real list to provHrwTopOwner for true k-of-n spread. */
+    fleet[0] = ctx->nodeId;
+    owner = provHrwTopOwner(probeSpec, fleet, 1);
+
+    if ((st = provBuildAdoptPayload(probeSpec, payload, sizeof payload,
+                                    &payloadLen, &tlvCount)) != SOLARI_OK) {
+        return st;
+    }
+    if ((st = provAssembleFrame(ctx, SCP_MSG_CONTROL, tlvCount,
+                                payload, payloadLen,
+                                frame, sizeof frame, &frameLen)) != SOLARI_OK) {
+        return st;
+    }
+
+    st = provSendControl(ctx, frame, frameLen);
+    if (st == ERR_CONN_RETRY) {
+        /* Owner unreachable/link down/no pub bound right now; this is benign -
+         * the caller has already persisted intent to the DB (source of truth)
+         * and can retry. Propagate ERR_CONN_RETRY as-is (rather than masking
+         * it to SOLARI_OK) so callers that need to distinguish "deferred" from
+         * "delivered" - e.g. serverProvisionAdoptTarget's discovered-row status
+         * transition - can still tell the two apart; callers that don't care
+         * (e.g. serverAssets.c) already treat any non-OK return as log+continue. */
+        solariLogf(SOLARI_LOG_WARN,
+                   "provision/dispatch: monitor %llu unreachable; adoption "
+                   "pending for target=%s", (unsigned long long)owner,
+                   probeSpec);
+        return ERR_CONN_RETRY;
+    }
+    if (st != SOLARI_OK) return st;
+
+    solariLogf(SOLARI_LOG_INFO,
+               "provision/dispatch: target=%s -> monitor %llu (%zu B)",
+               probeSpec, (unsigned long long)owner, frameLen);
+    return SOLARI_OK;
+}
+
+solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
+                                        const char *probeSpec)
+{
+    serverDiscEntity ent;
     char specBuf[PROV_PAYLOAD_CAP];
     int port;
     const char *proto;
     const char *label;
-    uint64_t owner;
     solariStatus st;
 
     if (!ctx || !ctx->db || discId == 0) return ERR_INVALID_ARG;
@@ -653,38 +703,11 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
      * not resurface it as "new". */
     (void)serverDbSetDiscoveredStatus(ctx->db, discId, "adopting");
 
-    /* HRW-select the owning monitor for this target. The shared serverDb API
-     * exposes no "list active monitors" query (CONTRACT GAP, see file footer),
-     * so with no fleet view available we fall back to a fleet of one - this
-     * server's own node id - which still produces a deterministic, correct
-     * single-owner dispatch the monitor accepts; once a fleet enumerator
-     * exists, pass the real list to provHrwTopOwner for true k-of-n spread. */
-    {
-        uint64_t fleet[1];
-        fleet[0] = ctx->nodeId;
-        owner = provHrwTopOwner(ent.ip, fleet, 1);
-    }
-
-    /* Build CTRL_ADOPT_TARGET and dispatch to the owning monitor. */
-    if ((st = provBuildAdoptPayload(specBuf, payload, sizeof payload,
-                                    &payloadLen, &tlvCount)) != SOLARI_OK) {
-        (void)serverDbSetDiscoveredStatus(ctx->db, discId, "new");
-        return st;
-    }
-    if ((st = provAssembleFrame(ctx, SCP_MSG_CONTROL, tlvCount,
-                                payload, payloadLen,
-                                frame, sizeof frame, &frameLen)) != SOLARI_OK) {
-        (void)serverDbSetDiscoveredStatus(ctx->db, discId, "new");
-        return st;
-    }
-
-    st = provSendControl(ctx, frame, frameLen);
+    st = serverProvisionDispatchTarget(ctx, specBuf);
     if (st == ERR_CONN_RETRY) {
-        /* Owner unreachable now; leave row 'adopting' to retry, not an error. */
-        solariLogf(SOLARI_LOG_WARN,
-                   "provision/adopt: owner %llu unreachable; adoption pending "
-                   "for disc %llu", (unsigned long long)owner,
-                   (unsigned long long)discId);
+        /* Owner unreachable/no pub bound right now; leave the row "adopting"
+         * so it is retried later rather than resurfacing as "new". Already
+         * logged by serverProvisionDispatchTarget. */
         return SOLARI_OK;
     }
     if (st != SOLARI_OK) {
@@ -694,23 +717,22 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
 
     (void)serverDbSetDiscoveredStatus(ctx->db, discId, "adopted");
     solariLogf(SOLARI_LOG_INFO,
-               "provision/adopt: disc=%llu target=%s -> monitor %llu (%zu B)",
-               (unsigned long long)discId, specBuf,
-               (unsigned long long)owner, frameLen);
+               "provision/adopt: disc=%llu target=%s adopted",
+               (unsigned long long)discId, specBuf);
     return SOLARI_OK;
 }
 
 /*
  * CONTRACT GAPS (for the integrator - do not edit server.h here):
  *
- * 1. serverProvisionAdoptTarget needs the live monitor fleet for true HRW
+ * 1. serverProvisionDispatchTarget needs the live monitor fleet for true HRW
  *    k-of-n owner selection, but serverDb exposes no "list nodes by role/state"
  *    query. The pure provHrwTopOwner()/provHrwWeight() helpers implement the
  *    same rendezvous keying as monitorPeer.c and are ready to consume a real
- *    fleet list; today they are fed a single-element fleet (this server's node
- *    id) so dispatch stays deterministic and correct for one owner. Recommend
- *    adding e.g. serverDbListNodesByRole(db, ROLE_MONITOR, uint64_t *out,
- *    size_t *count) and a replication factor k.
+ *    fleet list; today dispatch feeds them a single-element fleet (this
+ *    server's node id) so dispatch stays deterministic and correct for one
+ *    owner. Recommend adding e.g. serverDbListNodesByRole(db, ROLE_MONITOR,
+ *    uint64_t *out, size_t *count) and a replication factor k.
  *
  * 2. Build-convergence "tracking" for /api/builds is served by the existing
  *    serverDbBuildConvergence() (join over nodeConfig.appliedEpoch); this file

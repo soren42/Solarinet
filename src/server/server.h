@@ -516,6 +516,10 @@ solariStatus serverProvisionRetire(serverContext *ctx, uint64_t nodeId);
  * monitors (HRW-selected). Marks the discovered row 'adopting'/'adopted'. */
 solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
                                         const char *probeSpec);
+/* Dispatch an already-formed monitor probe spec as CTRL_ADOPT_TARGET. This does
+ * not touch discovered/probe-target tables; callers persist intent first. */
+solariStatus serverProvisionDispatchTarget(serverContext *ctx,
+                                           const char *probeSpec);
 
 /* ===================================================================== */
 /* serverDiscovery.c - DISCOVERY_ADVERT consumer (Handoff §7.1)           */

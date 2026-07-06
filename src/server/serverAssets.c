@@ -40,14 +40,24 @@ static const char *probeTypeForPort(int port)
 static void assetAddService(serverContext *ctx, const char *ip, int port,
                             const char *name, const char *segId, uint64_t assetId)
 {
-    char tid[160], label[160];
+    char tid[160], label[160], spec[320];
     const char *probeType;
+    solariStatus st;
     if (port <= 0 || port > 65535) return;
     probeType = probeTypeForPort(port);
     (void)snprintf(tid, sizeof tid, "tcp:%s:%d", ip, port);
     (void)snprintf(label, sizeof label, "%s (%s)", (name && name[0]) ? name : "tcp", ip);
-    (void)serverDbUpsertProbeTarget(ctx->db, tid, ip, port, "tcp", 2, label,
-                                    segId, assetId, probeType, NULL);
+    st = serverDbUpsertProbeTarget(ctx->db, tid, ip, port, "tcp", 2, label,
+                                   segId, assetId, probeType, NULL);
+    if (st != SOLARI_OK) return;
+
+    (void)snprintf(spec, sizeof spec, "%s:%s:%d : %s", probeType, ip, port, label);
+    st = serverProvisionDispatchTarget(ctx, spec);
+    if (st != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "assets/adopt: dispatch for %s failed: %s (continuing)",
+                   spec, solariStrError(st));
+    }
 }
 
 /* Add ports from an explicit CSV ("22,53,80") as TCP targets. */
@@ -101,9 +111,20 @@ static void assetSyncHeartbeat(serverContext *ctx, const char *ip, bool on,
     (void)snprintf(tid, sizeof tid, "icmp:%s", ip);
     if (on) {
         char label[96];
+        char spec[192];
+        solariStatus st;
         (void)snprintf(label, sizeof label, "ping (%s)", ip);
-        (void)serverDbUpsertProbeTarget(ctx->db, tid, ip, 0, "icmp", 2, label,
-                                        segId, assetId, "icmp", NULL);
+        st = serverDbUpsertProbeTarget(ctx->db, tid, ip, 0, "icmp", 2, label,
+                                       segId, assetId, "icmp", NULL);
+        if (st != SOLARI_OK) return;
+
+        (void)snprintf(spec, sizeof spec, "icmp:%s : %s", ip, label);
+        st = serverProvisionDispatchTarget(ctx, spec);
+        if (st != SOLARI_OK) {
+            solariLogf(SOLARI_LOG_WARN,
+                       "assets/adopt: dispatch for %s failed: %s (continuing)",
+                       spec, solariStrError(st));
+        }
     } else {
         (void)serverDbDeleteProbeTarget(ctx->db, tid);
     }
