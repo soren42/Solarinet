@@ -23,6 +23,8 @@ reconnect_delay_sec = 5
 # Recipients used when a message doesn't specify "to". Comma-separated.
 default_sms_to = +15555550100
 default_push_to =
+# Apple IDs / phone numbers for native cross-device iMessage alerts (apple sender)
+default_apple_to = you@icloud.com
 # Fallback channel when a message's "channel" is "auto" or omitted.
 default_channel = log
 
@@ -79,3 +81,11 @@ password = CHANGE_ME
 topic_prefix = notify
 tls = false
 client_id = notifyd-mqtt
+
+[sender.apple]
+# Native Apple notifications via iMessage: SSH to a Mac (always-on, GUI
+# logged in, Messages signed in) and osascript-send to default_apple_to.
+# iCloud delivers to iPhone/iPad/Watch/Mac. Add 'apple' to [senders] enabled
+# and to [routing]. Mac-side: grant the SSH login Automation control of Messages.
+ssh = jason@hydrogen.akoria.net
+ssh_opts = -o ConnectTimeout=8 -o BatchMode=yes -o StrictHostKeyChecking=accept-new

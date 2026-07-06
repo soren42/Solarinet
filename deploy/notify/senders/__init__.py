@@ -35,6 +35,7 @@ REGISTRY = {
     "mqtt": "senders.mqtt",
     "sms": "senders.sms_tachyon",
     "push": "senders.push",
+    "apple": "senders.apple",
 }
 
 

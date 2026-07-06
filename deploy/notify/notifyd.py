@@ -54,6 +54,7 @@ class Dispatcher:
         self.default_channel = cfg.get("defaults", "default_channel", fallback="log")
         self.default_sms_to = _split_csv(cfg.get("defaults", "default_sms_to", fallback=""))
         self.default_push_to = _split_csv(cfg.get("defaults", "default_push_to", fallback=""))
+        self.default_apple_to = _split_csv(cfg.get("defaults", "default_apple_to", fallback=""))
 
         self.routing = {}
         if cfg.has_section("routing"):
@@ -87,6 +88,8 @@ class Dispatcher:
             return list(self.default_sms_to)
         if sender_name == "push":
             return list(self.default_push_to)
+        if sender_name == "apple":
+            return list(self.default_apple_to)
         return []
 
     def dispatch(self, message, routing_key):
