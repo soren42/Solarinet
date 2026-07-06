@@ -1,0 +1,131 @@
+# =============================================================================
+# Akoria network source-of-truth  (INTERIM)
+# =============================================================================
+# Authoritative record for host identity + DNS today. Deliberate stepping-stone:
+# a generator renders everything downstream from it (BIND akoria.net + reverse
+# zones, AD akoria.org reconciliation, Pi-hole forwarders). When the central
+# MySQL DB lands it replaces THIS file behind the same generator, and the
+# SolariNet dashboard becomes the CRUD front-end over it.
+#
+# Schema (mirrors the eventual DB tables):
+#   hosts{} : name -> {ip, hw, role, status?}   # element/compound identity = A
+#   ifaces{}: extra A records (a host's other NICs)
+#   cnames{}: function -> host                   # functional alias = CNAME
+#
+# Rules: A = element/compound identity; CNAME = function; 2nd instance gets
+# -alt/-secondary/-backup; 3+ enumerate (dns1/2/3, ns0-3).
+# -----------------------------------------------------------------------------
+domain:    akoria.net
+ad_domain: akoria.org          # authoritative on radium (AD/BIND9_DLZ); mirrored hourly
+
+hosts:
+  # ---- core networking (10.0.0.1-20) ----
+  chemistry:  { ip: 10.0.0.1,   hw: "UDR7 Dream Router 7",  role: "gateway / firewall / UniFi" }
+  halogen:    { ip: 10.0.0.2,   hw: "UGC Max",              role: "old primary router", status: "offline (pending minirack redeploy)" }
+  laboratory: { ip: 10.0.0.3,   hw: "USW Pro Max 16",       role: "primary switch (etherlighting)" }
+  beaker:     { ip: 10.0.0.7,   hw: "Ubiquiti U7 Pro",      role: "WiFi 7 AP" }
+  flask:      { ip: 10.0.0.8,   hw: "Ubiquiti U7 Pro",      role: "WiFi 7 AP" }
+  # ---- core services (grandfathered in 10.0.0.x) ----
+  xenon:      { ip: 10.0.0.20,  hw: "YouYeeToo X1 (x86_64)", role: "SolariNet monitoring + dashboard + BIND primary" }
+  carbon:     { ip: 10.0.0.10,  hw: "UGREEN DXP4800",       role: "NAS" }
+  helium:     { ip: 10.0.0.254, hw: "Raspberry Pi",         role: "Pi-hole primary / resolver" }
+  mercury:    { ip: 10.0.0.253, hw: "ZimaBoard",            role: "Pi-hole secondary / resolver" }
+  scandium:   { ip: 10.0.0.12,  hw: "ZimaBoard",            role: "services (n8n / Uptime-Kuma)", status: "planned (offline)" }
+  silver:     { ip: 10.0.0.85,  hw: "Epson ET-8550",        role: "printer (grandfathered IP)" }
+  hydrogen:   { ip: 10.0.1.50,  hw: "Mac Mini M4 Pro",      role: "primary workstation" }
+  # ---- production (10.1.0.x) ----
+  radium:     { ip: 10.1.0.10,  hw: "Raspberry Pi CM5",     role: "AD DC + Keycloak (authoritative akoria.org)" }
+  amino:      { ip: 10.1.0.100, hw: "ZimaBoard",            role: "n8n" }
+  cesium:     { ip: 10.1.0.200, hw: "Dell PowerEdge R410",  role: "Forgejo + data repo" }
+  # ---- workstations / SBC (10.5.x) ----
+  astatine:   { ip: 10.5.2.10,  hw: "Argon41 OneUp",        role: "SBC workstation" }
+  nitrogen:   { ip: 10.5.2.20,  hw: "Raspberry Pi 500",     role: "dev / IDE" }
+  benzene:    { ip: 10.5.2.50,  hw: "HP EliteDesk G800",    role: "MariaDB / fleet-provisioning" }
+  tungsten:   { ip: 10.5.0.5,   hw: "Minisforum MS-R1",     role: "AI / dev (AD-joined)" }
+  # ---- IoT (10.2.x) ----
+  sodium:     { ip: 10.2.0.20,  hw: "-",                    role: "Home Assistant" }
+  plutonium:  { ip: 10.2.0.100, hw: "Echo Dot",             role: "voice assistant" }
+  ytterbium:  { ip: 10.2.2.2,   hw: "Sony PlayStation 5",   role: "media / console" }
+  phosphorus: { ip: 10.2.2.10,  hw: "Google TV 4K",         role: "media (Family Room)" }
+  soren:      { ip: 10.2.3.10,  hw: "LR4",                  role: "MBR appliance" }
+  dihydroxide: { ip: 10.2.3.20,  hw: "Pawaii",               role: "smart water dish" }
+  freon:      { ip: 10.2.4.10,  hw: "Nest",                 role: "thermostat" }
+  # ---- peripherals (10.3.x) ----
+  radio:      { ip: 10.3.0.34,  hw: "Radio Pi",             role: "radio backend" }
+  quartz:     { ip: 10.3.0.33,  hw: "?",                    role: "? (recovered from live DNS)" }
+  bromide:    { ip: 10.3.0.80,  hw: "Epson RR-600W",        role: "scanner" }
+  platinum:   { ip: 10.3.0.100, hw: "EufyMake E1",          role: "UV printer" }
+  # ---- personal (10.4.x) ----
+  tardis:     { ip: 10.4.4.10,  hw: "Tesla Model 3",        role: "vehicle" }
+  callisto:   { ip: 10.4.1.10,  hw: "iPad Pro 12.9",        role: "tablet" }
+  # ---- network mgmt (10.6.x) ----
+  quanta:     { ip: 10.6.0.10,  hw: "Raspberry Pi 5",       role: "Grafana node" }
+  neutrino:   { ip: 10.6.0.50,  hw: "Luckfox",              role: "control panel" }
+  cassini:    { ip: 10.6.0.66,  hw: "Nettool.io Pro 2",     role: "network tool" }
+  tachyon:    { ip: 10.6.6.10,  hw: "Particle Tachyon",     role: "GPS/PTP time source" }
+  # ---- security (10.7.x) ----
+  photon:     { ip: 10.7.0.1,   hw: "Eufybase",             role: "NVR hub" }
+  # ---- recovered from live DNS (segment placement / hw to confirm) ----
+  accelerant: { ip: 10.0.0.91,  hw: "?",                    role: "?" }
+  bunsen:     { ip: 10.0.0.9,   hw: "?",                    role: "?" }
+  catalyst:   { ip: 10.0.0.90,  hw: "MoCA adapter",         role: "Family Room MoCA" }
+  boson:      { ip: 10.0.1.125, hw: "ArkKVM",               role: "KVM" }
+  muon:       { ip: 10.0.1.126, hw: "ArkKVM",               role: "KVM unit 2" }
+  gallifrey:  { ip: 10.0.1.100, hw: "?",                    role: "2nd NAS (was nas-craft-pi02) - confirm canonical name" }
+  strangeness: { ip: 10.0.1.120, hw: "?",                   role: "?" }
+  tin:        { ip: 10.3.0.60,  hw: "?",                    role: "?" }
+  eleksmaker: { ip: 10.5.87.15, hw: "EleksMaker",           role: "?" }
+
+# extra A records (a host's additional interfaces)
+ifaces:
+  tungsten-alt:  10.5.0.6
+  neutrino-wifi: 10.6.0.51
+  tachyon-wifi:  10.6.6.11
+  radium-wifi:   10.1.0.11
+  quanta-wifi:   10.6.0.11
+
+# functional CNAMEs  (function -> host)
+cnames:
+  ns0: chemistry        # default fallback resolver (UDR7)
+  ns1: xenon            # BIND authoritative primary
+  ns2: helium           # Pi-hole primary
+  ns3: mercury          # Pi-hole secondary
+  router: chemistry
+  gw: chemistry
+  unifi: chemistry
+  ad: radium
+  sso: radium
+  ldap: radium
+  kdc: radium
+  git: cesium
+  ad-backup: cesium     # future RODC
+  dashboard: xenon
+  monitor: xenon
+  solari: xenon
+  nas: carbon
+  nas-x: carbon         # legacy alias (family devices know this)
+  db: benzene           # -> iron once the ZimaBlade is reprovisioned
+  n8n: amino
+  hass: sodium
+  grafana: quanta
+  ntp: tachyon
+  hole: helium
+  hole2: mercury
+  printer: silver
+  scanner: bromide
+  arkkvm1: boson
+  arkkvm2: muon
+  dev: nitrogen
+  laptop: astatine
+  solarianmedia: xenon
+  umr: bunsen            # pi-hole had "bunden" (typo)
+  he: helium             # periodic-symbol aliases
+  c: carbon
+  sn: tin
+  dns: xenon             # compat for old dns/dns1/dns2 names -> the new NS boxes
+  dns1: helium
+  dns2: mercury
+
+# reserved names (not live yet)
+reserved:
+  iron: { ip: 10.0.0.11, hw: "ZimaBlade", role: "db (post-reprovision); db CNAME repoints here" }

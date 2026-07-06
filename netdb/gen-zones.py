@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Render BIND zones from the Akoria network source-of-truth.
+
+The interim source is netdb/akoria-hosts.yml. `load_source()` is the ONLY seam
+that knows the source format — swap its body for a MySQL query later and every
+downstream renderer is unchanged. Emits into netdb/zones/:
+  - db.akoria.net           forward zone (A + CNAME)
+  - db.<rev>.in-addr.arpa   one reverse (PTR) zone per /24 in use
+  - named.conf.akoria       zone{} declarations for BIND
+Serial is date-based (YYYYMMDDnn); bump nn for multiple renders in a day.
+"""
+import os, sys, datetime, yaml
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SRC  = os.path.join(HERE, "akoria-hosts.yml")
+OUT  = os.path.join(HERE, "zones")
+HOSTMASTER = "hostmaster.akoria.net."
+ZONEDIR    = "/etc/bind/zones"          # where the files land on the BIND host
+# Authoritative nameservers for akoria.net (must be real A-record hosts, never
+# CNAMEs). xenon = primary/master, radium = secondary (plain-BIND AXFR works).
+NS_HOSTS   = ["xenon", "radium"]
+SECONDARIES = ["10.1.0.10"]             # radium = akoria.net secondary
+
+
+def load_source(path=SRC):
+    """Source-of-truth boundary. Returns (domain, hosts, ifaces, cnames).
+    Replace the body with a DB query when MySQL lands; nothing downstream cares."""
+    d = yaml.safe_load(open(path))
+    return d["domain"], d["hosts"], d.get("ifaces", {}), d["cnames"]
+
+
+def serial(nn="01"):
+    return datetime.date.today().strftime("%Y%m%d") + nn
+
+
+def _soa(origin):
+    primary = f"{NS_HOSTS[0]}.akoria.net."
+    return [f"$ORIGIN {origin}.", "$TTL 300", "",
+            f"@   IN SOA {primary} {HOSTMASTER} (",
+            f"            {serial()} ; serial",
+            "            3600       ; refresh",
+            "            600        ; retry",
+            "            604800     ; expire",
+            "            300 )      ; minimum", ""]
+
+
+def forward(domain, hosts, ifaces, cnames):
+    L = _soa(domain)
+    for h in NS_HOSTS:
+        L.append(f"@              IN NS    {h}")
+    L.append("")
+    L.append("; ---- hosts (identity) ----")
+    for n in sorted(hosts):
+        L.append(f"{n:<14} IN A     {hosts[n]['ip']}")
+    L += ["", "; ---- extra interfaces ----"]
+    for n in sorted(ifaces):
+        L.append(f"{n:<14} IN A     {ifaces[n]}")
+    L += ["", "; ---- functional aliases (CNAME) ----"]
+    for fn in sorted(cnames):
+        L.append(f"{fn:<14} IN CNAME {cnames[fn]}")
+    return "\n".join(L) + "\n"
+
+
+def reverses(domain, hosts, ifaces):
+    a = {n: v["ip"] for n, v in hosts.items()}
+    a.update(ifaces)
+    by24 = {}
+    for name, ip in a.items():
+        o = ip.split(".")
+        by24.setdefault(".".join(o[:3]), []).append((int(o[3]), name))
+    out = {}
+    for net, recs in by24.items():
+        o = net.split(".")
+        rev = f"{o[2]}.{o[1]}.{o[0]}.in-addr.arpa"
+        L = _soa(rev) + [f"@ IN NS {h}.akoria.net." for h in NS_HOSTS] + [""]
+        for last, name in sorted(recs):
+            L.append(f"{last:<4} IN PTR {name}.{domain}.")
+        out[rev] = "\n".join(L) + "\n"
+    return out
+
+
+def named_conf(domain, revs):
+    xfer = "; ".join(f"{ip}" for ip in SECONDARIES)
+    L = [f'zone "{domain}" {{ type primary; file "{ZONEDIR}/db.{domain}"; '
+         f'allow-transfer {{ {xfer}; }}; notify yes; }};']
+    for rev in revs:
+        L.append(f'zone "{rev}" {{ type primary; file "{ZONEDIR}/db.{rev}"; }};')
+    return "\n".join(L) + "\n"
+
+
+def main():
+    domain, hosts, ifaces, cnames = load_source()
+    os.makedirs(OUT, exist_ok=True)
+    open(os.path.join(OUT, f"db.{domain}"), "w").write(forward(domain, hosts, ifaces, cnames))
+    revs = reverses(domain, hosts, ifaces)
+    for rev, txt in revs.items():
+        open(os.path.join(OUT, f"db.{rev}"), "w").write(txt)
+    open(os.path.join(OUT, "named.conf.akoria"), "w").write(named_conf(domain, revs))
+    print(f"rendered db.{domain} + {len(revs)} reverse zones + named.conf.akoria")
+    print(f"  A records: {len(hosts) + len(ifaces)}   CNAMEs: {len(cnames)}   reverse /24s: {len(revs)}")
+
+
+if __name__ == "__main__":
+    main()
