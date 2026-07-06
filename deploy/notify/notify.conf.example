@@ -67,3 +67,15 @@ at_baud = 115200
 [sender.push]
 # Stub — no working transport yet. Future SolariNet-dashboard/Tab5 push.
 endpoint =
+
+[sender.mqtt]
+# Republish notifications to an MQTT broker (Mosquitto on benzene) under
+# notify/<severity>. Consumed by the Tab5 firmware + a future dashboard surface.
+# Add 'mqtt' to [senders] enabled and to the [routing] lines to activate.
+host = 10.5.2.50
+port = 1883
+username = solari
+password = CHANGE_ME
+topic_prefix = notify
+tls = false
+client_id = notifyd-mqtt

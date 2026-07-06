@@ -32,6 +32,7 @@ log = logging.getLogger("notify.senders")
 # short config name -> module name under deploy/notify/senders/
 REGISTRY = {
     "log": "senders.log",
+    "mqtt": "senders.mqtt",
     "sms": "senders.sms_tachyon",
     "push": "senders.push",
 }
