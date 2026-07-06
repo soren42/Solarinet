@@ -95,7 +95,7 @@ def named_conf(domain, revs):
     xfer = "; ".join(f"{ip}" for ip in SECONDARIES)
     L = [f'zone "{domain}" {{ type primary; file "{ZONEDIR}/db.{domain}"; '
          f'allow-transfer {{ {xfer}; }}; notify yes; }};']
-    for rev in revs:
+    for rev in sorted(revs):
         L.append(f'zone "{rev}" {{ type primary; file "{ZONEDIR}/db.{rev}"; }};')
     return "\n".join(L) + "\n"
 
