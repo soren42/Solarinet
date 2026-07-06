@@ -25,7 +25,8 @@ static void assetAddService(serverContext *ctx, const char *ip, int port,
     if (port <= 0 || port > 65535) return;
     (void)snprintf(tid, sizeof tid, "tcp:%s:%d", ip, port);
     (void)snprintf(label, sizeof label, "%s (%s)", (name && name[0]) ? name : "tcp", ip);
-    (void)serverDbUpsertProbeTarget(ctx->db, tid, ip, port, "tcp", 2, label, segId, assetId);
+    (void)serverDbUpsertProbeTarget(ctx->db, tid, ip, port, "tcp", 2, label,
+                                    segId, assetId, "tcp", NULL);
 }
 
 /* Add ports from an explicit CSV ("22,53,80") as TCP targets. */
@@ -80,7 +81,8 @@ static void assetSyncHeartbeat(serverContext *ctx, const char *ip, bool on,
     if (on) {
         char label[96];
         (void)snprintf(label, sizeof label, "ping (%s)", ip);
-        (void)serverDbUpsertProbeTarget(ctx->db, tid, ip, 0, "icmp", 2, label, segId, assetId);
+        (void)serverDbUpsertProbeTarget(ctx->db, tid, ip, 0, "icmp", 2, label,
+                                        segId, assetId, "icmp", NULL);
     } else {
         (void)serverDbDeleteProbeTarget(ctx->db, tid);
     }

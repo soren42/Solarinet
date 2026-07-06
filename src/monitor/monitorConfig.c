@@ -44,19 +44,37 @@ void monitorConfigDefaults(monitorConfig *out)
     out->peerTtlSec        = 90;
 }
 
-static probeProto protoFromStr(const char *s)
+typedef struct {
+    const char   *name;
+    probeProto    proto;
+    probeAppCheck appCheck;
+    uint16_t      defaultPort;
+} targetProtoDesc;
+
+static const targetProtoDesc *protoFromStr(const char *s)
 {
-    if (!strcmp(s, "tcp"))  return PROBE_TCP;
-    if (!strcmp(s, "udp"))  return PROBE_UDP;
-    if (!strcmp(s, "icmp")) return PROBE_ICMP;
-    return (probeProto)0;
+    static const targetProtoDesc protos[] = {
+        { "tcp",   PROBE_TCP,  APP_CHECK_NONE, 0    },
+        { "udp",   PROBE_UDP,  APP_CHECK_NONE, 0    },
+        { "icmp",  PROBE_ICMP, APP_CHECK_NONE, 0    },
+        { "dns",   PROBE_UDP,  APP_CHECK_DNS,  53   },
+        { "ldap",  PROBE_TCP,  APP_CHECK_LDAP, 389  },
+        { "http",  PROBE_TCP,  APP_CHECK_HTTP, 0    },
+        { "mysql", PROBE_TCP,  APP_CHECK_MYSQL, 3306 },
+        { "amqp",  PROBE_TCP,  APP_CHECK_AMQP, 5672 }
+    };
+    size_t i;
+    for (i = 0; i < sizeof protos / sizeof protos[0]; i++)
+        if (!strcmp(s, protos[i].name)) return &protos[i];
+    return NULL;
 }
 
 solariStatus monitorParseTarget(const char *spec, monitorTarget *out)
 {
     char work[MONITOR_TARGETID_MAX];
     const char *sep;
-    char *c1, *c2, *rest;
+    const targetProtoDesc *pd;
+    char *c1, *c2, *c3, *rest;
     size_t leftLen, L;
 
     if (!spec || !out) return ERR_INVALID_ARG;
@@ -75,14 +93,42 @@ solariStatus monitorParseTarget(const char *spec, monitorTarget *out)
     c1 = strchr(work, ':');                          /* proto:rest */
     if (!c1) return ERR_INVALID_ARG;
     *c1 = '\0';
-    out->proto = protoFromStr(work);
-    if (out->proto == 0) return ERR_INVALID_ARG;
+    pd = protoFromStr(work);
+    if (!pd) return ERR_INVALID_ARG;
+    out->proto = pd->proto;
+    out->appCheck = pd->appCheck;
     rest = c1 + 1;
 
     if (out->proto == PROBE_ICMP) {
         strncpy(out->host, rest, sizeof out->host - 1);
         out->port = 0;
-        snprintf(out->targetId, sizeof out->targetId, "icmp:%s", out->host);
+        snprintf(out->targetId, sizeof out->targetId, "%s:%s", pd->name, out->host);
+    } else if (out->appCheck == APP_CHECK_HTTP) {
+        c2 = strchr(rest, ':');                       /* host:port[:path] */
+        if (!c2) return ERR_INVALID_ARG;
+        *c2 = '\0';
+        c3 = strchr(c2 + 1, ':');
+        if (c3) *c3 = '\0';
+        strncpy(out->host, rest, sizeof out->host - 1);
+        out->port = (uint16_t)strtoul(c2 + 1, NULL, 10);
+        if (out->port == 0) return ERR_INVALID_ARG;
+        snprintf(out->appArg, sizeof out->appArg, "%s", (c3 && c3[1]) ? c3 + 1 : "/");
+        L = (size_t)snprintf(out->targetId, sizeof out->targetId, "%s:%s:%u:",
+                             pd->name, out->host, (unsigned)out->port);
+        if (L >= sizeof out->targetId) return ERR_BUFFER_FULL;
+        strncat(out->targetId, out->appArg, sizeof out->targetId - L - 1);
+    } else if (out->appCheck != APP_CHECK_NONE) {
+        c2 = strrchr(rest, ':');                      /* host[:port] */
+        if (c2) {
+            *c2 = '\0';
+            out->port = (uint16_t)strtoul(c2 + 1, NULL, 10);
+        } else {
+            out->port = pd->defaultPort;
+        }
+        if (out->port == 0) return ERR_INVALID_ARG;
+        strncpy(out->host, rest, sizeof out->host - 1);
+        snprintf(out->targetId, sizeof out->targetId, "%s:%s:%u",
+                 pd->name, out->host, (unsigned)out->port);
     } else {
         c2 = strrchr(rest, ':');                     /* host:port */
         if (!c2) return ERR_INVALID_ARG;
@@ -90,7 +136,7 @@ solariStatus monitorParseTarget(const char *spec, monitorTarget *out)
         strncpy(out->host, rest, sizeof out->host - 1);
         out->port = (uint16_t)strtoul(c2 + 1, NULL, 10);
         snprintf(out->targetId, sizeof out->targetId, "%s:%s:%u",
-                 out->proto == PROBE_TCP ? "tcp" : "udp", out->host, (unsigned)out->port);
+                 pd->name, out->host, (unsigned)out->port);
     }
     return SOLARI_OK;
 }

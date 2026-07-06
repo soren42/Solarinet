@@ -113,6 +113,50 @@ static void test_apply_blob_bad_json_is_noop(void)
     TEST_ASSERT_EQUAL_MEMORY(&before, &cfg, sizeof cfg);
 }
 
+static void test_parse_app_check_targets(void)
+{
+    monitorTarget t;
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        monitorParseTarget("http:host:9000:/health/ready : keycloak", &t));
+    TEST_ASSERT_EQUAL_UINT8(PROBE_TCP, t.proto);
+    TEST_ASSERT_EQUAL_UINT8(APP_CHECK_HTTP, t.appCheck);
+    TEST_ASSERT_EQUAL_UINT16(9000, t.port);
+    TEST_ASSERT_EQUAL_STRING("host", t.host);
+    TEST_ASSERT_EQUAL_STRING("/health/ready", t.appArg);
+    TEST_ASSERT_EQUAL_STRING("keycloak", t.label);
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorParseTarget("ldap:host:389", &t));
+    TEST_ASSERT_EQUAL_UINT8(PROBE_TCP, t.proto);
+    TEST_ASSERT_EQUAL_UINT8(APP_CHECK_LDAP, t.appCheck);
+    TEST_ASSERT_EQUAL_UINT16(389, t.port);
+    TEST_ASSERT_EQUAL_STRING("", t.appArg);
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorParseTarget("mysql:host:3306", &t));
+    TEST_ASSERT_EQUAL_UINT8(PROBE_TCP, t.proto);
+    TEST_ASSERT_EQUAL_UINT8(APP_CHECK_MYSQL, t.appCheck);
+    TEST_ASSERT_EQUAL_UINT16(3306, t.port);
+    TEST_ASSERT_EQUAL_STRING("", t.appArg);
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorParseTarget("amqp:host:5672", &t));
+    TEST_ASSERT_EQUAL_UINT8(PROBE_TCP, t.proto);
+    TEST_ASSERT_EQUAL_UINT8(APP_CHECK_AMQP, t.appCheck);
+    TEST_ASSERT_EQUAL_UINT16(5672, t.port);
+    TEST_ASSERT_EQUAL_STRING("", t.appArg);
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorParseTarget("dns:host:53", &t));
+    TEST_ASSERT_EQUAL_UINT8(PROBE_UDP, t.proto);
+    TEST_ASSERT_EQUAL_UINT8(APP_CHECK_DNS, t.appCheck);
+    TEST_ASSERT_EQUAL_UINT16(53, t.port);
+    TEST_ASSERT_EQUAL_STRING("", t.appArg);
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorParseTarget("tcp:host:443", &t));
+    TEST_ASSERT_EQUAL_UINT8(PROBE_TCP, t.proto);
+    TEST_ASSERT_EQUAL_UINT8(APP_CHECK_NONE, t.appCheck);
+    TEST_ASSERT_EQUAL_UINT16(443, t.port);
+    TEST_ASSERT_EQUAL_STRING("", t.appArg);
+}
+
 /* ---- directive handling ---- */
 
 static void test_handle_adopt_target(void)
@@ -222,6 +266,7 @@ int main(void)
     RUN_TEST(test_apply_blob_tuning_and_targets);
     RUN_TEST(test_apply_blob_target_set_replaces);
     RUN_TEST(test_apply_blob_bad_json_is_noop);
+    RUN_TEST(test_parse_app_check_targets);
     RUN_TEST(test_handle_adopt_target);
     RUN_TEST(test_handle_set_config_epoch_flow);
     RUN_TEST(test_handle_addressing_and_garbage);

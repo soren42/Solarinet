@@ -24,6 +24,8 @@ typedef struct {
     char       host[SOLARI_TARGETHOST_MAX];
     uint16_t   port;
     probeProto proto;
+    probeAppCheck appCheck;
+    char       appArg[128];
 } monitorTarget;
 
 typedef struct {
@@ -59,7 +61,7 @@ typedef struct {
 void monitorConfigDefaults(monitorConfig *out);
 /* Load a monitor .conf (sec 13). Absent keys take defaults. */
 solariStatus monitorConfigFromFile(const char *path, monitorConfig *out);
-/* Parse "proto:host[:port][ : label]" into a target (proto = tcp|udp|icmp). */
+/* Parse "proto:host[:port][ : label]" into a target. */
 solariStatus monitorParseTarget(const char *spec, monitorTarget *out);
 
 /* Live scheduler add path (sec 8, Phase 3 Handoff sec 4.2/7.4): parse `spec`

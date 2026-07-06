@@ -162,7 +162,9 @@ solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
                                        const char *host, int port,
                                        const char *proto, int replFactor,
                                        const char *label, const char *segId,
-                                       uint64_t assetId);
+                                       uint64_t assetId,
+                                       const char *probeType,
+                                       const char *checkArg);
 /* Delete a probe target by id (e.g. when a host heartbeat is turned off). */
 solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *targetId);
 /* Delete probeCurrent + probeHistory rows for a target before removing catalog. */
@@ -270,7 +272,7 @@ typedef struct {
     char     ip[SERVER_IP_MAX];          /* required, part of unique key    */
     char     kind[12];                   /* "host"|"service"|"network"|"other" */
     char     via[12];                    /* "mdns"|"arp"|"scp_advert"|"portscan"|"lldp" */
-    char     servicesJson[512];          /* ["ssh:22","http:80"]; may be "" */
+    char     servicesJson[1024];         /* ["ssh:22","http:80"]; may be "" */
     char     segId[SERVER_SEGID_MAX];
     char     arch[SOLARI_ARCH_MAX];
     char     mac[18];
@@ -278,6 +280,7 @@ typedef struct {
     char     osName[64];
     char     deviceRole[24];
     char     sysDescr[256];
+    char     mdnsName[128];
 } serverDiscEntity;
 /* Upsert a discovered candidate keyed (ip, kind): insert new or bump seenCount
  * + lastSeenAt. *discId returns the row id. */

@@ -15,6 +15,15 @@
 typedef enum { PROBE_ICMP = 1, PROBE_TCP = 2, PROBE_UDP = 3 } probeProto;
 
 typedef enum {
+    APP_CHECK_NONE = 0,
+    APP_CHECK_DNS,
+    APP_CHECK_LDAP,
+    APP_CHECK_HTTP,
+    APP_CHECK_MYSQL,
+    APP_CHECK_AMQP
+} probeAppCheck;
+
+typedef enum {
     PROBE_OK = 0,
     PROBE_TIMEOUT,
     PROBE_REFUSED,
@@ -31,6 +40,8 @@ typedef struct {
     uint16_t    count;               /* probes per round (>=1); for loss/jitter */
     uint32_t    timeoutMs;           /* per-attempt timeout                 */
     const char *expectBanner;        /* optional TCP banner substring match */
+    probeAppCheck appCheck;          /* optional application-layer check    */
+    const char *appArg;              /* optional app check argument         */
 } probeSpec;
 
 /* Run one probe round per spec, filling *out (sec 5.7): outcome, avg RTT,

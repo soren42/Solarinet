@@ -591,6 +591,9 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
     size_t  payloadLen = 0, frameLen = 0;
     uint16_t tlvCount = 0;
     char specBuf[PROV_PAYLOAD_CAP];
+    int port;
+    const char *proto;
+    const char *label;
     uint64_t owner;
     solariStatus st;
 
@@ -605,16 +608,20 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
         return st;
     }
 
+    port = provFirstPort(ent.servicesJson);
+    proto = port ? "tcp" : "icmp";
+    label = ent.host[0] ? ent.host : ent.ip;
+
     /* The probe spec is operator-supplied, or synthesized from the discovered
-     * entity (ip is its stable HRW key, kind chooses a default proto). The
-     * synthesized form "ip|kind|services" is what a monitor's target loader
-     * accepts; an explicit probeSpec overrides it verbatim. */
+     * entity in the monitor target grammar: proto:host[:port][ : label].
+     * An explicit probeSpec overrides it verbatim. */
     if (probeSpec && probeSpec[0]) {
         (void)snprintf(specBuf, sizeof specBuf, "%s", probeSpec);
+    } else if (port) {
+        (void)snprintf(specBuf, sizeof specBuf, "tcp:%s:%d : %s",
+                       ent.ip, port, label);
     } else {
-        (void)snprintf(specBuf, sizeof specBuf, "%s|%s|%s",
-                       ent.ip, ent.kind[0] ? ent.kind : "host",
-                       ent.servicesJson[0] ? ent.servicesJson : "");
+        (void)snprintf(specBuf, sizeof specBuf, "icmp:%s : %s", ent.ip, label);
     }
     if (specBuf[0] == '\0' || ent.ip[0] == '\0') {
         solariLogf(SOLARI_LOG_ERROR,
@@ -629,15 +636,13 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
      * proto/port are derived from the first discovered service; a host with no
      * known TCP service falls back to an ICMP reachability target. */
     {
-        int         port  = provFirstPort(ent.servicesJson);
-        const char *proto = port ? "tcp" : "icmp";
-        const char *label = ent.host[0] ? ent.host : ent.ip;
         char        targetId[160];
         solariStatus prc;
         if (port) (void)snprintf(targetId, sizeof targetId, "tcp:%s:%d", ent.ip, port);
         else      (void)snprintf(targetId, sizeof targetId, "icmp:%s", ent.ip);
         prc = serverDbUpsertProbeTarget(ctx->db, targetId, ent.ip, port, proto,
-                                        2 /* replFactor */, label, ent.segId, 0);
+                                        2 /* replFactor */, label, ent.segId, 0,
+                                        proto, NULL);
         if (prc != SOLARI_OK)
             solariLogf(SOLARI_LOG_WARN,
                        "provision/adopt: probeTarget upsert for disc %llu failed: %s "

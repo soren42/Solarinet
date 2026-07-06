@@ -142,6 +142,231 @@ static probeOutcome udpOnce(const struct addrinfo *ai, uint32_t timeoutMs, uint3
       close(fd); return oc; }
 }
 
+static probeOutcome tcpConnectFd(const struct addrinfo *ai, uint32_t timeoutMs, int *outFd)
+{
+    int fd, fl, err = 0;
+    socklen_t el = sizeof err;
+    int rc;
+
+    fd = socket(ai->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) return PROBE_PROTO_ERR;
+    fl = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+
+    rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+    if (rc != 0) {
+        if (errno != EINPROGRESS) {
+            probeOutcome oc = errnoToOutcome(errno);
+            close(fd);
+            return oc;
+        } else {
+            struct pollfd pfd;
+            pfd.fd = fd; pfd.events = POLLOUT;
+            rc = poll(&pfd, 1, (int)timeoutMs);
+            if (rc == 0) { close(fd); return PROBE_TIMEOUT; }
+            if (rc < 0)  { close(fd); return PROBE_PROTO_ERR; }
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
+            if (err != 0) { close(fd); return errnoToOutcome(err); }
+        }
+    }
+
+    *outFd = fd;
+    return PROBE_OK;
+}
+
+static probeOutcome sendAllPoll(int fd, const void *buf, size_t len, uint32_t timeoutMs)
+{
+    const uint8_t *p = buf;
+    size_t off = 0;
+
+    while (off < len) {
+        ssize_t n = send(fd, p + off, len - off, 0);
+        if (n > 0) { off += (size_t)n; continue; }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pfd;
+            int pr;
+            pfd.fd = fd; pfd.events = POLLOUT;
+            pr = poll(&pfd, 1, (int)timeoutMs);
+            if (pr == 0) return PROBE_TIMEOUT;
+            if (pr < 0)  return PROBE_PROTO_ERR;
+            continue;
+        }
+        return errnoToOutcome(errno);
+    }
+    return PROBE_OK;
+}
+
+static ssize_t recvPoll(int fd, void *buf, size_t cap, uint32_t timeoutMs,
+                        probeOutcome *oc)
+{
+    struct pollfd pfd;
+    int pr;
+
+    pfd.fd = fd; pfd.events = POLLIN;
+    pr = poll(&pfd, 1, (int)timeoutMs);
+    if (pr == 0) { *oc = PROBE_TIMEOUT; return -1; }
+    if (pr < 0)  { *oc = PROBE_PROTO_ERR; return -1; }
+    {
+        ssize_t r = recv(fd, buf, cap, 0);
+        if (r <= 0) { *oc = (r == 0) ? PROBE_PROTO_ERR : errnoToOutcome(errno); return -1; }
+        return r;
+    }
+}
+
+static probeOutcome appCheckDns(const struct addrinfo *ai, uint32_t timeoutMs,
+                                uint32_t *rtt)
+{
+    uint8_t q[] = {
+        0x53, 0x4e, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01
+    };
+    uint8_t buf[512];
+    struct pollfd pfd;
+    int fd, pr;
+    ssize_t r;
+    uint64_t t0;
+
+    fd = socket(ai->ai_family, SOCK_DGRAM, 0);
+    if (fd < 0) return PROBE_PROTO_ERR;
+    t0 = solariMonotonicMicros();
+    if (connect(fd, ai->ai_addr, ai->ai_addrlen) != 0) {
+        probeOutcome oc = errnoToOutcome(errno); close(fd); return oc;
+    }
+    if (send(fd, q, sizeof q, 0) != (ssize_t)sizeof q) {
+        probeOutcome oc = errnoToOutcome(errno); close(fd); return oc;
+    }
+    pfd.fd = fd; pfd.events = POLLIN;
+    pr = poll(&pfd, 1, (int)timeoutMs);
+    if (pr == 0) { close(fd); return PROBE_TIMEOUT; }
+    if (pr < 0)  { close(fd); return PROBE_PROTO_ERR; }
+    r = recv(fd, buf, sizeof buf, 0);
+    *rtt = (uint32_t)(solariMonotonicMicros() - t0);
+    close(fd);
+    if (r < 12) return PROBE_PROTO_ERR;
+    if (buf[0] != q[0] || buf[1] != q[1]) return PROBE_PROTO_ERR;
+    if ((buf[2] & 0x80) == 0) return PROBE_PROTO_ERR;
+    return PROBE_OK;
+}
+
+static int berLen(const uint8_t *buf, size_t cap, size_t *hdrLen, size_t *valLen)
+{
+    size_t n, i;
+    if (cap < 2) return 0;
+    if ((buf[1] & 0x80) == 0) {
+        *hdrLen = 2;
+        *valLen = buf[1];
+        return *hdrLen + *valLen <= cap;
+    }
+    n = buf[1] & 0x7f;
+    if (n == 0 || n > 2 || cap < 2 + n) return 0;
+    *valLen = 0;
+    for (i = 0; i < n; i++) *valLen = (*valLen << 8) | buf[2 + i];
+    *hdrLen = 2 + n;
+    return *hdrLen + *valLen <= cap;
+}
+
+static probeOutcome appCheckLdap(int fd, uint32_t timeoutMs)
+{
+    static const uint8_t bindReq[] = {
+        0x30, 0x0c, 0x02, 0x01, 0x01, 0x60, 0x07,
+        0x02, 0x01, 0x03, 0x04, 0x00, 0x80, 0x00
+    };
+    uint8_t buf[512];
+    size_t hdrLen, valLen, pos, end;
+    ssize_t r;
+    probeOutcome oc;
+
+    oc = sendAllPoll(fd, bindReq, sizeof bindReq, timeoutMs);
+    if (oc != PROBE_OK) return oc;
+    r = recvPoll(fd, buf, sizeof buf, timeoutMs, &oc);
+    if (r < 0) return oc;
+    if (buf[0] != 0x30 || !berLen(buf, (size_t)r, &hdrLen, &valLen)) return PROBE_PROTO_ERR;
+    pos = hdrLen;
+    end = hdrLen + valLen;
+    if (end < pos + 5 || buf[pos] != 0x02 || buf[pos + 1] != 0x01) return PROBE_PROTO_ERR;
+    pos += 2 + buf[pos + 1];
+    if (pos >= end || buf[pos] != 0x61) return PROBE_PROTO_ERR;
+    return PROBE_OK;
+}
+
+static probeOutcome appCheckHttp(int fd, uint32_t timeoutMs, const char *host,
+                                 const char *path)
+{
+    char req[512];
+    char buf[512];
+    ssize_t r;
+    int n, code;
+    probeOutcome oc;
+
+    if (!path || !*path) path = "/";
+    n = snprintf(req, sizeof req,
+                 "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                 path, host ? host : "");
+    if (n <= 0 || (size_t)n >= sizeof req) return PROBE_PROTO_ERR;
+    oc = sendAllPoll(fd, req, (size_t)n, timeoutMs);
+    if (oc != PROBE_OK) return oc;
+    r = recvPoll(fd, buf, sizeof buf - 1, timeoutMs, &oc);
+    if (r < 0) return oc;
+    buf[r] = '\0';
+    if (sscanf(buf, "HTTP/%*u.%*u %d", &code) == 1 && code >= 200 && code < 300)
+        return PROBE_OK;
+    return PROBE_PROTO_ERR;
+}
+
+static probeOutcome appCheckMysql(int fd, uint32_t timeoutMs)
+{
+    uint8_t buf[512];
+    ssize_t r;
+    probeOutcome oc;
+
+    r = recvPoll(fd, buf, sizeof buf, timeoutMs, &oc);
+    if (r < 0) return oc;
+    if (r < 5) return PROBE_PROTO_ERR;
+    if (buf[3] != 0x00 || buf[4] != 0x0a) return PROBE_PROTO_ERR;
+    if ((buf[0] | (buf[1] << 8) | (buf[2] << 16)) == 0) return PROBE_PROTO_ERR;
+    return PROBE_OK;
+}
+
+static probeOutcome appCheckAmqp(int fd, uint32_t timeoutMs)
+{
+    static const uint8_t hdr[] = { 'A', 'M', 'Q', 'P', 0x00, 0x00, 0x09, 0x01 };
+    uint8_t buf[512];
+    ssize_t r;
+    probeOutcome oc;
+
+    oc = sendAllPoll(fd, hdr, sizeof hdr, timeoutMs);
+    if (oc != PROBE_OK) return oc;
+    r = recvPoll(fd, buf, sizeof buf, timeoutMs, &oc);
+    if (r < 0) return oc;
+    if (r < 11) return PROBE_PROTO_ERR;
+    if (buf[0] != 0x01) return PROBE_PROTO_ERR;       /* METHOD frame */
+    if (((uint16_t)buf[7] << 8 | buf[8]) != 10) return PROBE_PROTO_ERR;
+    return PROBE_OK;
+}
+
+static probeOutcome tcpAppOnce(const struct addrinfo *ai, uint32_t timeoutMs,
+                               uint32_t *rtt, const probeSpec *spec)
+{
+    int fd = -1;
+    uint64_t t0;
+    probeOutcome oc;
+
+    t0 = solariMonotonicMicros();
+    oc = tcpConnectFd(ai, timeoutMs, &fd);
+    if (oc == PROBE_OK) {
+        switch (spec->appCheck) {
+            case APP_CHECK_LDAP:  oc = appCheckLdap(fd, timeoutMs); break;
+            case APP_CHECK_HTTP:  oc = appCheckHttp(fd, timeoutMs, spec->targetHost, spec->appArg); break;
+            case APP_CHECK_MYSQL: oc = appCheckMysql(fd, timeoutMs); break;
+            case APP_CHECK_AMQP:  oc = appCheckAmqp(fd, timeoutMs); break;
+            default:              oc = PROBE_PROTO_ERR; break;
+        }
+    }
+    *rtt = (uint32_t)(solariMonotonicMicros() - t0);
+    if (fd >= 0) close(fd);
+    return oc;
+}
+
 static uint16_t icmpChecksum(const void *data, size_t len)
 {
     const uint16_t *p = data;
@@ -244,9 +469,13 @@ solariStatus probeRun(const probeSpec *spec, solariProbeResult *out)
     for (i = 0; i < count; i++) {
         uint32_t rtt = 0;
         probeOutcome oc;
-        if      (spec->proto == PROBE_TCP) oc = tcpOnce(ai, timeout, &rtt, spec->expectBanner);
+        if (spec->appCheck == APP_CHECK_DNS) oc = appCheckDns(ai, timeout, &rtt);
+        else if (spec->appCheck != APP_CHECK_NONE && spec->proto == PROBE_TCP)
+            oc = tcpAppOnce(ai, timeout, &rtt, spec);
+        else if (spec->appCheck != APP_CHECK_NONE) oc = PROBE_PROTO_ERR;
+        else if (spec->proto == PROBE_TCP) oc = tcpOnce(ai, timeout, &rtt, spec->expectBanner);
         else if (spec->proto == PROBE_UDP) oc = udpOnce(ai, timeout, &rtt);
-        else                               oc = icmpOnce(ai, timeout, &rtt, (uint16_t)(i + 1));
+        else oc = icmpOnce(ai, timeout, &rtt, (uint16_t)(i + 1));
         if (oc == PROBE_OK) { if (nr < PROBE_RTT_SAMPLES) rtts[nr++] = rtt; ok++; }
         else lastFail = oc;
     }

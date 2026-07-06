@@ -74,6 +74,8 @@ static void runRound(const monitorConfig *cfg, uint64_t self,
         spec.proto     = t->proto;
         spec.count     = cfg->probesPerRound;
         spec.timeoutMs = cfg->probeTimeoutMs;
+        spec.appCheck  = t->appCheck;
+        spec.appArg    = t->appArg[0] ? t->appArg : NULL;
 
         if (probeRun(&spec, &res) != SOLARI_OK) continue;
         printf("  %-26s %-5s %-11s rtt=%.2fms jit=%.2fms loss=%.1f%%  %s\n",

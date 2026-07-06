@@ -134,8 +134,9 @@ WEAK solariStatus serverScanRun(serverContext *c, const char *cidr,
 { (void)c;(void)cidr;(void)ports; if(found)*found=0; return SOLARI_OK; }
 WEAK solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *tid,
     const char *host, int port, const char *proto, int repl,
-    const char *label, const char *seg, uint64_t asset)
-{ (void)db;(void)tid;(void)host;(void)port;(void)proto;(void)repl;(void)label;(void)seg;(void)asset; return SOLARI_OK; }
+    const char *label, const char *seg, uint64_t asset,
+    const char *probeType, const char *checkArg)
+{ (void)db;(void)tid;(void)host;(void)port;(void)proto;(void)repl;(void)label;(void)seg;(void)asset;(void)probeType;(void)checkArg; return SOLARI_OK; }
 WEAK solariStatus serverDbDeleteProbeTarget(serverDb *db, const char *tid)
 { (void)db;(void)tid; return SOLARI_OK; }
 WEAK solariStatus serverDbPurgeProbeState(serverDb *db, const char *tid)
