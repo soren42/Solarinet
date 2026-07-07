@@ -271,7 +271,19 @@ if [ -n "${FORGEJO_CONFIG:-}" ] && [ -f "$FORGEJO_CONFIG" ]; then
     FORGEJO_PATH=$(resolve_bin "${FORGEJO_BIN:-forgejo}" || true)
     if [ -n "$FORGEJO_PATH" ]; then
         dest="${TARGET_DIR}/forgejo-${DATE}.zip"
-        tmp="${dest}.tmp.$$"
+        # forgejo refuses to run as root and (as FORGEJO_RUN_AS) cannot write the
+        # root-only TARGET_DIR, so dump into a run-as-user-owned temp dir, then
+        # move it into place as root below.
+        forgejo_tmpdir=
+        if [ -n "${FORGEJO_RUN_AS:-}" ]; then
+            forgejo_tmpdir=$(run_as_user "$FORGEJO_RUN_AS" mktemp -d) || {
+                echo "solari-backup: could not create forgejo temp dir as $FORGEJO_RUN_AS" >&2
+                exit 74
+            }
+            tmp="${forgejo_tmpdir}/forgejo-${DATE}.zip"
+        else
+            tmp="${dest}.tmp.$$"
+        fi
         ACTIVE_TMP=$tmp
         forgejo_cmd=("$FORGEJO_PATH" dump --config "$FORGEJO_CONFIG" --file "$tmp")
         [ -n "${FORGEJO_WORK_PATH:-}" ] && forgejo_cmd+=(--work-path "$FORGEJO_WORK_PATH")
@@ -297,6 +309,7 @@ if [ -n "${FORGEJO_CONFIG:-}" ] && [ -f "$FORGEJO_CONFIG" ]; then
         mv -f -- "$tmp" "$dest"
         chmod 600 "$dest"
         ACTIVE_TMP=
+        [ -n "${forgejo_tmpdir:-}" ] && rm -rf -- "$forgejo_tmpdir"
         forgejo_result=" forgejo=$(bytes_of "$dest")B"
     fi
 fi
