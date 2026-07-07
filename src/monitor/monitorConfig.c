@@ -76,6 +76,7 @@ solariStatus monitorParseTarget(const char *spec, monitorTarget *out)
     const targetProtoDesc *pd;
     char *c1, *c2, *c3, *rest;
     size_t leftLen, L;
+    int n;
 
     if (!spec || !out) return ERR_INVALID_ARG;
     memset(out, 0, sizeof *out);
@@ -104,15 +105,24 @@ solariStatus monitorParseTarget(const char *spec, monitorTarget *out)
         out->port = 0;
         snprintf(out->targetId, sizeof out->targetId, "%s:%s", pd->name, out->host);
     } else if (out->appCheck == APP_CHECK_HTTP) {
-        c2 = strchr(rest, ':');                       /* host:port[:path|status] */
-        if (!c2) return ERR_INVALID_ARG;
-        *c2 = '\0';
+        if (rest[0] == '[') {                         /* [ipv6]:port[:path|status] */
+            c2 = strchr(rest + 1, ']');
+            if (!c2 || c2[1] != ':') return ERR_INVALID_ARG;
+            *c2 = '\0';
+            c2++;
+            strncpy(out->host, rest + 1, sizeof out->host - 1);
+        } else {
+            c2 = strchr(rest, ':');                   /* host:port[:path|status] */
+            if (!c2) return ERR_INVALID_ARG;
+            *c2 = '\0';
+            strncpy(out->host, rest, sizeof out->host - 1);
+        }
         c3 = strchr(c2 + 1, ':');
         if (c3) *c3 = '\0';
-        strncpy(out->host, rest, sizeof out->host - 1);
         out->port = (uint16_t)strtoul(c2 + 1, NULL, 10);
         if (out->port == 0) return ERR_INVALID_ARG;
-        snprintf(out->appArg, sizeof out->appArg, "%s", (c3 && c3[1]) ? c3 + 1 : "/");
+        n = snprintf(out->appArg, sizeof out->appArg, "%s", (c3 && c3[1]) ? c3 + 1 : "/");
+        if (n < 0 || n >= (int)sizeof out->appArg) return ERR_BUFFER_FULL;
         L = (size_t)snprintf(out->targetId, sizeof out->targetId, "%s:%s:%u:",
                              pd->name, out->host, (unsigned)out->port);
         if (L >= sizeof out->targetId) return ERR_BUFFER_FULL;

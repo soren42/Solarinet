@@ -27,7 +27,6 @@ static const char *probeTypeForPort(int port)
 {
     switch (port) {
         case 80:
-        case 443:
         case 3000:
         case 8080:
         case 9000:
@@ -41,7 +40,7 @@ static const char *probeTypeForPort(int port)
 
 static const char *defaultHttpCheckArgForPort(int port)
 {
-    if (port == 9000) return "/health/ready|200";
+    (void)port;
     return "/|2xx";
 }
 

@@ -299,6 +299,7 @@ static probeOutcome appCheckHttp(int fd, uint32_t timeoutMs, const char *host,
     const char *want = NULL;
     const char *bar;
     size_t pathLen;
+    size_t len, pos, versionLen;
     ssize_t r;
     int n, code, wantCode = -1, wantClass = -1;
     probeOutcome oc;
@@ -337,11 +338,28 @@ static probeOutcome appCheckHttp(int fd, uint32_t timeoutMs, const char *host,
     r = recvPoll(fd, buf, sizeof buf - 1, timeoutMs, &oc);
     if (r < 0) return oc;
     buf[r] = '\0';
-    if (sscanf(buf, "HTTP/%*u.%*u %d", &code) == 1) {
-        if (wantCode >= 0 && code == wantCode) return PROBE_OK;
-        if (wantClass >= 0 && code / 100 == wantClass) return PROBE_OK;
-        if (!want && code >= 200 && code < 300) return PROBE_OK;
+    len = (size_t)r;
+    if (len < 5 || memcmp(buf, "HTTP/", 5) != 0) return PROBE_PROTO_ERR;
+    pos = 5;
+    versionLen = 0;
+    while (pos < len && buf[pos] != ' ' && versionLen < 8) {
+        if (!((buf[pos] >= '0' && buf[pos] <= '9') || buf[pos] == '.')) return PROBE_PROTO_ERR;
+        pos++;
+        versionLen++;
     }
+    if (pos >= len || buf[pos] != ' ') return PROBE_PROTO_ERR;
+    pos++;
+    if (pos + 3 > len ||
+        buf[pos] < '0' || buf[pos] > '9' ||
+        buf[pos + 1] < '0' || buf[pos + 1] > '9' ||
+        buf[pos + 2] < '0' || buf[pos + 2] > '9' ||
+        (pos + 3 < len && buf[pos + 3] >= '0' && buf[pos + 3] <= '9')) {
+        return PROBE_PROTO_ERR;
+    }
+    code = (buf[pos] - '0') * 100 + (buf[pos + 1] - '0') * 10 + (buf[pos + 2] - '0');
+    if (wantCode >= 0 && code == wantCode) return PROBE_OK;
+    if (wantClass >= 0 && code / 100 == wantClass) return PROBE_OK;
+    if (!want && code >= 200 && code < 300) return PROBE_OK;
     return PROBE_PROTO_ERR;
 }
 
