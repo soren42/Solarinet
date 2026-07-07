@@ -682,9 +682,13 @@ static int dmesgLineCritical(const char *line)
     static int ataReOk = 0;
 
     if (containsNoCase(line, "btrfs") &&
-        (containsNoCase(line, "error") ||
-         containsNoCase(line, "critical") ||
-         containsNoCase(line, "emergency")))
+        !containsNoCase(line, "btrfs warning") &&
+        !containsNoCase(line, "btrfs info") &&
+        (containsNoCase(line, "btrfs critical") ||
+         containsNoCase(line, "btrfs error") ||
+         containsNoCase(line, "emergency") ||
+         containsNoCase(line, "forced readonly") ||
+         containsNoCase(line, "forced read-only")))
         return 1;
     if (containsNoCase(line, "i/o error")) return 1;
     if (containsNoCase(line, "ext4-fs error")) return 1;
