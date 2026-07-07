@@ -10,5 +10,6 @@ OnFailure=solari-notify-failure@%i.service
 Type=oneshot
 User=root
 Group=root
+UMask=0077
 Environment=SOLARI_BACKUP_CONF=/etc/solari-backup-%i.conf
 ExecStart=/opt/solari-backups/solari-backup.sh /etc/solari-backup-%i.conf

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 usage() {
     echo "usage: $0 [config-file]" >&2
@@ -59,6 +60,44 @@ validate_uint() {
     esac
 }
 
+require_secret_file_safe() {
+    path=$1
+    label=$2
+    if [ ! -f "$path" ]; then
+        echo "solari-backup: $label is not a regular file: $path" >&2
+        exit 66
+    fi
+
+    stat_out=$(stat -c '%u %a' "$path" 2>/dev/null) || {
+        echo "solari-backup: cannot stat $label: $path" >&2
+        exit 66
+    }
+    owner_uid=${stat_out%% *}
+    mode=${stat_out#* }
+    if [ "$owner_uid" != "0" ]; then
+        echo "solari-backup: $label must be owned by root: $path" >&2
+        exit 66
+    fi
+    case "$mode" in
+        400|600) ;;
+        *)
+            echo "solari-backup: $label must have mode 0600 or 0400: $path (mode $mode)" >&2
+            exit 66
+            ;;
+    esac
+}
+
+validate_artifact_prefix() {
+    case "$1" in
+        ''|*/*|*'..'*|*'*'*|*'?'*|*'['*|*']'*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
 shell_quote_args() {
     quoted=
     for arg in "$@"; do
@@ -79,10 +118,30 @@ run_as_user() {
 }
 
 CONFIG_FILE=$(resolve_config "$@")
+lock_dir=/run/lock
+if [ ! -d "$lock_dir" ] || [ ! -w "$lock_dir" ]; then
+    lock_dir=${TMPDIR:-/tmp}
+fi
+lock_instance=$(basename -- "$CONFIG_FILE")
+lock_instance=${lock_instance%.conf}
+if [ -z "$lock_instance" ]; then
+    lock_instance=default
+fi
+lockfile="${lock_dir}/solari-backup-${lock_instance}.lock"
+if ! exec 9>"$lockfile"; then
+    echo "solari-backup: cannot open lock file: $lockfile" >&2
+    exit 75
+fi
+if ! flock -n 9; then
+    echo "solari-backup: another run is already in progress for $CONFIG_FILE (lock: $lockfile)" >&2
+    exit 75
+fi
+
 if [ ! -r "$CONFIG_FILE" ]; then
     echo "solari-backup: config not readable: $CONFIG_FILE" >&2
     exit 66
 fi
+require_secret_file_safe "$CONFIG_FILE" "config"
 
 # Defaults; the config file may override them.
 DB_NAMES=
@@ -109,6 +168,7 @@ if [ -n "${MYSQL_ENV_FILE:-}" ]; then
         echo "solari-backup: MYSQL_ENV_FILE not readable: $MYSQL_ENV_FILE" >&2
         exit 66
     fi
+    require_secret_file_safe "$MYSQL_ENV_FILE" "MYSQL_ENV_FILE"
     set -a
     # shellcheck source=/dev/null
     . "$MYSQL_ENV_FILE"
@@ -120,6 +180,7 @@ if [ -n "${MYSQL_PASSWORD_FILE:-}" ]; then
         echo "solari-backup: MYSQL_PASSWORD_FILE not readable: $MYSQL_PASSWORD_FILE" >&2
         exit 66
     fi
+    require_secret_file_safe "$MYSQL_PASSWORD_FILE" "MYSQL_PASSWORD_FILE"
     IFS= read -r MYSQL_PWD < "$MYSQL_PASSWORD_FILE"
 fi
 export MYSQL_PWD
@@ -149,6 +210,9 @@ if [ -n "${MYSQL_DEFAULTS_EXTRA_FILE:-}" ] && [ ! -r "$MYSQL_DEFAULTS_EXTRA_FILE
     echo "solari-backup: MYSQL_DEFAULTS_EXTRA_FILE not readable: $MYSQL_DEFAULTS_EXTRA_FILE" >&2
     exit 66
 fi
+if [ -n "${MYSQL_DEFAULTS_EXTRA_FILE:-}" ]; then
+    require_secret_file_safe "$MYSQL_DEFAULTS_EXTRA_FILE" "MYSQL_DEFAULTS_EXTRA_FILE"
+fi
 
 MYSQLDUMP_PATH=$(resolve_bin "$MYSQLDUMP_BIN" || true)
 if [ -z "$MYSQLDUMP_PATH" ]; then
@@ -157,15 +221,17 @@ if [ -z "$MYSQLDUMP_PATH" ]; then
 fi
 DATE=$(date +%F)
 results=
+DB_LIST=()
 
 for db in $DB_NAMES; do
-    case "$db" in
-        ''|*/*|*'..'*)
-            echo "solari-backup: unsafe database name for filename: $db" >&2
-            exit 64
-            ;;
-    esac
+    if ! validate_artifact_prefix "$db"; then
+        echo "solari-backup: unsafe database name for filename: $db" >&2
+        exit 64
+    fi
+    DB_LIST+=("$db")
+done
 
+for db in "${DB_LIST[@]}"; do
     dest="${TARGET_DIR}/${db}-${DATE}.sql.gz"
     tmp="${dest}.tmp.$$"
     ACTIVE_TMP=$tmp
@@ -187,6 +253,7 @@ for db in $DB_NAMES; do
             exit 74
         fi
         mv -f -- "$tmp" "$dest"
+        chmod 600 "$dest"
         ACTIVE_TMP=
     else
         rm -f -- "$tmp"
@@ -198,7 +265,9 @@ for db in $DB_NAMES; do
 done
 
 forgejo_result=
+prune_forgejo=0
 if [ -n "${FORGEJO_CONFIG:-}" ] && [ -f "$FORGEJO_CONFIG" ]; then
+    prune_forgejo=1
     FORGEJO_PATH=$(resolve_bin "${FORGEJO_BIN:-forgejo}" || true)
     if [ -n "$FORGEJO_PATH" ]; then
         dest="${TARGET_DIR}/forgejo-${DATE}.zip"
@@ -226,20 +295,32 @@ if [ -n "${FORGEJO_CONFIG:-}" ] && [ -f "$FORGEJO_CONFIG" ]; then
             exit 74
         fi
         mv -f -- "$tmp" "$dest"
+        chmod 600 "$dest"
         ACTIVE_TMP=
         forgejo_result=" forgejo=$(bytes_of "$dest")B"
     fi
 fi
 
 pruned=0
-while IFS= read -r old; do
-    rm -f -- "$old"
-    pruned=$((pruned + 1))
-done < <(
-    find "$TARGET_DIR" -maxdepth 1 -type f \
-        \( -name '*-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].sql.gz' \
-           -o -name 'forgejo-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].zip' \) \
-        -mtime +"$RETENTION_DAYS" -print
-)
+for db in "${DB_LIST[@]}"; do
+    while IFS= read -r old; do
+        rm -f -- "$old"
+        pruned=$((pruned + 1))
+    done < <(
+        find "$TARGET_DIR" -maxdepth 1 -type f \
+            -name "${db}-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].sql.gz" \
+            -mtime +"$RETENTION_DAYS" -print
+    )
+done
+if [ "$prune_forgejo" -eq 1 ]; then
+    while IFS= read -r old; do
+        rm -f -- "$old"
+        pruned=$((pruned + 1))
+    done < <(
+        find "$TARGET_DIR" -maxdepth 1 -type f \
+            -name 'forgejo-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].zip' \
+            -mtime +"$RETENTION_DAYS" -print
+    )
+fi
 
 echo "solari-backup: ok date=${DATE} target=${TARGET_DIR} backups=${results}${forgejo_result} pruned=${pruned}"
