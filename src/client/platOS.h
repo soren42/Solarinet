@@ -43,6 +43,11 @@ solariStatus platNetIfaces(solariIfaceEntry *ifaces, uint8_t cap, uint8_t *count
 /* Per-USB-bus throughput vs capacity. The Linux reference reports none yet
  * (sets *count=0); kept in the contract for parity with the report struct. */
 solariStatus platUsbThroughput(solariUsbEntry *bus, uint8_t cap, uint8_t *count);
+/* Host-health signals (fs-readonly / missing block dev / SMART / failed
+ * systemd units / dmesg-critical). Defensive: a missing tool or unreadable
+ * source zeroes the corresponding field rather than erroring or crashing.
+ * Returns SOLARI_OK on success (h fully written, possibly all-zero fields). */
+solariStatus platHostHealth(solariHostHealth *h);
 
 /* ---- process & log watch ---- */
 
