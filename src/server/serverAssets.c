@@ -26,11 +26,23 @@
 static const char *probeTypeForPort(int port)
 {
     switch (port) {
+        case 80:
+        case 443:
+        case 3000:
+        case 8080:
+        case 9000:
+            return "http";
         case 389:  return "ldap";
         case 3306: return "mysql";
         case 5672: return "amqp";
         default:   return "tcp";
     }
+}
+
+static const char *defaultHttpCheckArgForPort(int port)
+{
+    if (port == 9000) return "/health/ready|200";
+    return "/|2xx";
 }
 
 /* Upsert a service target for an asset. TCP by transport; the probeType column
@@ -42,16 +54,23 @@ static void assetAddService(serverContext *ctx, const char *ip, int port,
 {
     char tid[160], label[160], spec[320];
     const char *probeType;
+    const char *checkArg;
     solariStatus st;
     if (port <= 0 || port > 65535) return;
     probeType = probeTypeForPort(port);
+    checkArg = strcmp(probeType, "http") == 0 ? defaultHttpCheckArgForPort(port) : NULL;
     (void)snprintf(tid, sizeof tid, "tcp:%s:%d", ip, port);
     (void)snprintf(label, sizeof label, "%s (%s)", (name && name[0]) ? name : "tcp", ip);
     st = serverDbUpsertProbeTarget(ctx->db, tid, ip, port, "tcp", 2, label,
-                                   segId, assetId, probeType, NULL);
+                                   segId, assetId, probeType, checkArg);
     if (st != SOLARI_OK) return;
 
-    (void)snprintf(spec, sizeof spec, "%s:%s:%d : %s", probeType, ip, port, label);
+    if (checkArg) {
+        (void)snprintf(spec, sizeof spec, "%s:%s:%d:%s : %s",
+                       probeType, ip, port, checkArg, label);
+    } else {
+        (void)snprintf(spec, sizeof spec, "%s:%s:%d : %s", probeType, ip, port, label);
+    }
     st = serverProvisionDispatchTarget(ctx, spec);
     if (st != SOLARI_OK) {
         solariLogf(SOLARI_LOG_WARN,

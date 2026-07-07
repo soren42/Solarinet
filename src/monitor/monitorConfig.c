@@ -104,7 +104,7 @@ solariStatus monitorParseTarget(const char *spec, monitorTarget *out)
         out->port = 0;
         snprintf(out->targetId, sizeof out->targetId, "%s:%s", pd->name, out->host);
     } else if (out->appCheck == APP_CHECK_HTTP) {
-        c2 = strchr(rest, ':');                       /* host:port[:path] */
+        c2 = strchr(rest, ':');                       /* host:port[:path|status] */
         if (!c2) return ERR_INVALID_ARG;
         *c2 = '\0';
         c3 = strchr(c2 + 1, ':');

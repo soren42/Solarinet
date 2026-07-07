@@ -290,15 +290,44 @@ static probeOutcome appCheckLdap(int fd, uint32_t timeoutMs)
 }
 
 static probeOutcome appCheckHttp(int fd, uint32_t timeoutMs, const char *host,
-                                 const char *path)
+                                 const char *pathSpec)
 {
+    char pathBuf[256];
     char req[512];
     char buf[512];
+    const char *path = pathSpec;
+    const char *want = NULL;
+    const char *bar;
+    size_t pathLen;
     ssize_t r;
-    int n, code;
+    int n, code, wantCode = -1, wantClass = -1;
     probeOutcome oc;
 
     if (!path || !*path) path = "/";
+    bar = strchr(path, '|');
+    if (bar) {
+        pathLen = (size_t)(bar - path);
+        want = bar + 1;
+        if (pathLen == 0) {
+            path = "/";
+        } else {
+            if (pathLen >= sizeof pathBuf) return PROBE_PROTO_ERR;
+            memcpy(pathBuf, path, pathLen);
+            pathBuf[pathLen] = '\0';
+            path = pathBuf;
+        }
+        if (want[0] >= '0' && want[0] <= '9' &&
+            want[1] >= '0' && want[1] <= '9' &&
+            want[2] >= '0' && want[2] <= '9' &&
+            want[3] == '\0') {
+            wantCode = (want[0] - '0') * 100 + (want[1] - '0') * 10 + (want[2] - '0');
+        } else if (want[0] >= '0' && want[0] <= '9' &&
+                   want[1] == 'x' && want[2] == 'x' && want[3] == '\0') {
+            wantClass = want[0] - '0';
+        } else {
+            return PROBE_PROTO_ERR;
+        }
+    }
     n = snprintf(req, sizeof req,
                  "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
                  path, host ? host : "");
@@ -308,8 +337,11 @@ static probeOutcome appCheckHttp(int fd, uint32_t timeoutMs, const char *host,
     r = recvPoll(fd, buf, sizeof buf - 1, timeoutMs, &oc);
     if (r < 0) return oc;
     buf[r] = '\0';
-    if (sscanf(buf, "HTTP/%*u.%*u %d", &code) == 1 && code >= 200 && code < 300)
-        return PROBE_OK;
+    if (sscanf(buf, "HTTP/%*u.%*u %d", &code) == 1) {
+        if (wantCode >= 0 && code == wantCode) return PROBE_OK;
+        if (wantClass >= 0 && code / 100 == wantClass) return PROBE_OK;
+        if (!want && code >= 200 && code < 300) return PROBE_OK;
+    }
     return PROBE_PROTO_ERR;
 }
 
