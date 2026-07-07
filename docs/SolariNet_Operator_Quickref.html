@@ -95,6 +95,15 @@
     <p class="dim">Combined network + monitoring map — nodes, interconnects, and their health,
     from real LLDP-over-SNMP.</p>
   </div>
+  <div class="card">
+    <h3>Host health &amp; alerts</h3>
+    <p class="dim">Every client reports host-local telemetry each cycle — fs-readonly, missing
+    block devices, SMART, failed systemd units, dmesg-critical lines — independent of whatever
+    app is running there. <span class="crit">fs-readonly / missing-device / SMART-fail</span>
+    are <b>crit</b>, sustained immediately (no debounce); failed-units and dmesg-crit are
+    <span class="warn">warn</span>. A <b>dead-man's-switch</b> also watches the monitor itself:
+    a node silent past 3× its sample interval pages on its own.</p>
+  </div>
 </div>
 
 <!-- ============ THE GOLDEN RULE ============ -->
@@ -190,6 +199,17 @@
     <p><code>dig +short &lt;name&gt;.akoria.org @radium</code></p>
     <p class="dim">Appliers are idempotent + self-reconcile (AD hourly), so drift self-corrects.</p>
   </div>
+  <div class="card">
+    <h3>Is a host actually healthy?</h3>
+    <p class="dim">Port-open isn't healthy (see the cesium incident). Check the per-host
+    telemetry in <b>Assets → host</b>, or the underlying columns on <code>hostCurrent</code>
+    (<code>fsReadonlyCount</code>, <code>blockDevMissing</code>, <code>smartFailCount</code>,
+    <code>failedUnitCount</code>, <code>dmesgCritCount</code>). A real host-fault alert lands on
+    your Apple devices via iMessage as <span class="crit">crit</span>/<span class="warn">warn</span>
+    with the metric + detail in the body (e.g. <code>fsReadonly: /data (ro)</code>) — same channel
+    as any other alert, plus a synthetic <code>node &lt;X&gt; stopped reporting</code> if the host
+    goes silent instead of erroring.</p>
+  </div>
 </div>
 <div class="note warnb" style="margin-top:14px">
   <b>Credentials never live in the repo.</b> They're in <code>/root/.*-pw</code> on each host
@@ -198,7 +218,9 @@
 
 <div class="foot">
   Deeper reading: <code>docs/SolariNet_RC_Handoff.md</code> (release-candidate handoff),
-  <code>docs/SolariNet_Overnight_Build.md</code>, and per-component READMEs under
+  <code>docs/SolariNet_Overnight_Build.md</code>, <code>docs/design/HOST_HEALTH_CONTRACT.md</code>
+  (host-health + HTTP probe contract), <code>docs/SolariNet_Incident_2026-07-07_cesium.md</code>
+  (the cesium post-mortem), and per-component READMEs under
   <code>deploy/notify/</code>, <code>deploy/sorsync/</code>, <code>netdb/sor/</code>.
   &nbsp;·&nbsp; Repo: github.com/soren42/Solarinet
 </div>
