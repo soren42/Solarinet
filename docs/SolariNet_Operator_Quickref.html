@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet — Operator Quick Reference</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#171e26; --panel2:#1c252f; --line:#2a3642;
+    --ink:#e6edf3; --dim:#9db0c0; --accent:#5fd0c8; --accent2:#7aa2f7;
+    --ok:#5fd07a; --warn:#e0b050; --crit:#e06c75; --chip:#223040;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px}
+  h1{margin:0 0 4px;font-size:26px;letter-spacing:.2px}
+  h1 .n{color:var(--accent)}
+  .sub{color:var(--dim);font-size:14px}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);
+    margin:34px 0 12px;border-left:3px solid var(--accent);padding-left:10px}
+  h3{font-size:15px;margin:18px 0 6px;color:var(--accent2)}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  code,kbd{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+  code{background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:#cfe3ff}
+  .grid{display:grid;gap:14px}
+  @media(min-width:720px){.grid.two{grid-template-columns:1fr 1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card h3{margin-top:0}
+  .big{background:linear-gradient(160deg,#1c2a34,#161d25);border:1px solid #2f4b52}
+  .big .url{font-size:22px;font-weight:600;color:#fff}
+  table{width:100%;border-collapse:collapse;margin:4px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:20px;
+    background:var(--chip);color:var(--accent);border:1px solid var(--line)}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .crit{color:var(--crit)} .dim{color:var(--dim)}
+  ol.flow{counter-reset:s;list-style:none;padding:0;margin:0}
+  ol.flow li{position:relative;padding:6px 0 6px 30px;border-bottom:1px dashed var(--line)}
+  ol.flow li:last-child{border-bottom:none}
+  ol.flow li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:6px;
+    width:20px;height:20px;border-radius:50%;background:var(--accent);color:#06222a;
+    font-size:12px;font-weight:700;text-align:center;line-height:20px}
+  .arrow{color:var(--accent);font-weight:700}
+  .note{background:#141d17;border:1px solid #2b4030;border-radius:8px;padding:10px 12px;font-size:13.5px;color:#bfe0c8}
+  .note.warnb{background:#241f13;border-color:#4a3d1c;color:#e6d3a3}
+  .kv{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0}
+  .foot{margin-top:40px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1><span class="n">SolariNet</span> — Operator Quick Reference</h1>
+  <div class="sub">How you actually touch the akoria network — dashboard-first. &nbsp;·&nbsp; Snapshot 2026-07-07, post-patch (xenon on kernel 7.0.0-27).</div>
+</header>
+
+<!-- ============ THE DASHBOARD ============ -->
+<div class="card big">
+  <h3 style="color:#8fe;">▶ Start here — the dashboard</h3>
+  <div class="url"><a href="https://xenon.akoria.net:9443/">https://xenon.akoria.net:9443/</a></div>
+  <div class="kv" style="margin-top:8px">
+    <span class="tag">TLS self-signed</span>
+    <span class="tag">Local login</span>
+    <span class="tag">Keycloak OIDC (akoria.org)</span>
+  </div>
+  <p class="dim" style="margin:10px 0 0">
+    Two ways in: a <b>local admin</b> account, or <b>Sign in with Keycloak</b> — your AD
+    identity on <code>akoria.org</code>. Domain Admins map to dashboard <b>admin</b>; everyone else read-only.
+  </p>
+</div>
+
+<!-- ============ WHAT THE DASHBOARD DOES ============ -->
+<h2>What each area is for</h2>
+<div class="grid two">
+  <div class="card">
+    <h3>Assets / Inventory</h3>
+    <p class="dim">The live CMDB view. Every discovered + adopted host, its IPs, OS, role,
+    and monitoring state. This is the human face of the <b>System of Record</b>.</p>
+  </div>
+  <div class="card">
+    <h3>Discovery</h3>
+    <p class="dim">Newly-seen hosts on the network (nmap/mDNS sweep). You <b>Adopt</b> the ones
+    worth tracking — that promotes them into the SoR and starts monitoring them.</p>
+  </div>
+  <div class="card">
+    <h3>Monitoring / Health</h3>
+    <p class="dim">~49 targets, app-layer aware: not just ping, but real
+    <span class="ok">LDAP / MySQL / AMQP / DNS / HTTP</span> checks on the infra that matters.</p>
+  </div>
+  <div class="card">
+    <h3>Topology</h3>
+    <p class="dim">Combined network + monitoring map — nodes, interconnects, and their health,
+    from real LLDP-over-SNMP.</p>
+  </div>
+</div>
+
+<!-- ============ THE GOLDEN RULE ============ -->
+<h2>The one thing to understand</h2>
+<div class="note">
+  <b>The dashboard writes the System of Record, and the SoR drives everything else — automatically.</b>
+  You never hand-edit a zone file, a Pi-hole list, or AD again. Make the change once, in the dashboard,
+  and it fans out.
+</div>
+<div class="card" style="margin-top:14px">
+  <div style="font-size:14px;line-height:2">
+    <b>Dashboard edit</b> <span class="arrow">→</span> <b>SoR</b> (MariaDB, cesium)
+    <span class="arrow">→</span> CDC outbox <span class="arrow">→</span> <code>sor.events</code> (RabbitMQ)
+    <span class="arrow">→</span> appliers fan out to:
+  </div>
+  <table style="margin-top:10px">
+    <tr><td><b>BIND</b></td><td><code>akoria.net</code> forward/reverse</td><td class="dim">xenon · auto rndc reload on real change</td></tr>
+    <tr><td><b>Active Directory</b></td><td><code>akoria.org</code></td><td class="dim">radium · safe deletes (never touches AD infra records)</td></tr>
+    <tr><td><b>Pi-hole</b></td><td>helium + mercury <code>custom.list</code></td><td class="dim">reload on change</td></tr>
+  </table>
+  <p class="dim" style="margin:8px 0 0">And the reverse: a host you <b>Adopt</b> in Discovery flows the same
+  way — into the SoR, then out to DNS — with no extra step.</p>
+</div>
+
+<!-- ============ COMMON TASKS ============ -->
+<h2>Common tasks</h2>
+<div class="grid two">
+  <div class="card">
+    <h3>Add a host to DNS</h3>
+    <ol class="flow">
+      <li>Find it in <b>Discovery</b> (or add in Assets).</li>
+      <li>Click <b>Adopt</b> / set its name.</li>
+      <li>Done — A + PTR appear in <code>akoria.net</code> within seconds; AD + Pi-hole follow.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Rename or remove a host</h3>
+    <ol class="flow">
+      <li>Edit the name (or <b>Remove</b>) in <b>Assets</b>.</li>
+      <li>SoR updates; DNS re-renders and reloads automatically.</li>
+      <li>Removal soft-deletes → record drops from all three DNS targets.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Start monitoring a service</h3>
+    <p class="dim">Adopt with the ports you care about. Ports
+    <code>389</code>/<code>3306</code>/<code>5672</code> auto-upgrade from a bare TCP check to a real
+    <b>LDAP / MySQL / AMQP</b> app-layer probe. CLI equivalent:</p>
+    <p><code>ADOPT disc=&lt;id&gt; services=389,3306 heartbeat=1</code> <span class="dim">→ <code>run/solariCtl.sock</code></span></p>
+  </div>
+  <div class="card">
+    <h3>Get alerts</h3>
+    <p class="dim">Alerts publish to <code>notify.events</code> and fan out by severity:</p>
+    <table>
+      <tr><td><span class="ok">info</span></td><td>log + MQTT only (quiet)</td></tr>
+      <tr><td><span class="warn">warn</span></td><td>+ <b>Apple</b> (iMessage → all your devices)</td></tr>
+      <tr><td><span class="crit">crit</span></td><td>+ <b>Apple</b></td></tr>
+    </table>
+    <p class="dim" style="margin:6px 0 0">Apple channel relays via <b>hydrogen</b> → iCloud → iPhone/iPad/Watch/Mac.</p>
+  </div>
+</div>
+
+<!-- ============ ENDPOINTS ============ -->
+<h2>Endpoints &amp; hosts</h2>
+<div class="card">
+<table>
+  <tr><th>Service</th><th>Address</th><th>Notes</th></tr>
+  <tr><td>Dashboard</td><td><code>xenon.akoria.net:9443</code></td><td>Apache, TLS, local + OIDC</td></tr>
+  <tr><td>System of Record</td><td><code>cesium 10.1.0.200:3306</code></td><td>MariaDB, 30-table CMDB/IPAM</td></tr>
+  <tr><td>SoR replica</td><td><code>benzene 10.5.2.50:3307</code></td><td>real-time mirror (podman)</td></tr>
+  <tr><td>RabbitMQ</td><td><code>benzene 10.5.2.50:5672</code> · UI <code>:15672</code></td><td>vhost <code>solari</code></td></tr>
+  <tr><td>MQTT (Mosquitto)</td><td><code>benzene 10.5.2.50:1883</code> · ws <code>:9001</code></td><td></td></tr>
+  <tr><td>DNS — internal</td><td><code>xenon</code> BIND</td><td><code>akoria.net</code> authoritative</td></tr>
+  <tr><td>DNS — AD</td><td><code>radium 10.1.0.10</code></td><td><code>akoria.org</code>, Samba AD DC + Keycloak</td></tr>
+  <tr><td>Pi-hole</td><td><code>helium 10.0.0.254</code>, <code>mercury 10.0.0.253</code></td><td>ad-block + local records</td></tr>
+  <tr><td>Apple-notify relay</td><td><code>hydrogen 10.0.1.50</code></td><td>Mac; Messages signed in as jason.kay@mac.com</td></tr>
+</table>
+</div>
+
+<!-- ============ IF SOMETHING LOOKS WRONG ============ -->
+<h2>If something looks off</h2>
+<div class="grid two">
+  <div class="card">
+    <h3>Is the pipeline flowing?</h3>
+    <p class="dim">On <b>xenon</b>:</p>
+    <p><code>systemctl is-active sor-emit sor-apply-dns sor-apply-pihole sor-reconcile notify</code></p>
+    <p class="dim">On <b>radium</b> (AD applier lives here):</p>
+    <p><code>systemctl is-active sor-apply-ad</code></p>
+  </div>
+  <div class="card">
+    <h3>Did a change reach DNS?</h3>
+    <p><code>dig +short &lt;name&gt;.akoria.net @xenon</code></p>
+    <p><code>dig +short &lt;name&gt;.akoria.org @radium</code></p>
+    <p class="dim">Appliers are idempotent + self-reconcile (AD hourly), so drift self-corrects.</p>
+  </div>
+</div>
+<div class="note warnb" style="margin-top:14px">
+  <b>Credentials never live in the repo.</b> They're in <code>/root/.*-pw</code> on each host
+  (and private agent memory). If a doc or config shows a password, that's a bug — tell me.
+</div>
+
+<div class="foot">
+  Deeper reading: <code>docs/SolariNet_RC_Handoff.md</code> (release-candidate handoff),
+  <code>docs/SolariNet_Overnight_Build.md</code>, and per-component READMEs under
+  <code>deploy/notify/</code>, <code>deploy/sorsync/</code>, <code>netdb/sor/</code>.
+  &nbsp;·&nbsp; Repo: github.com/soren42/Solarinet
+</div>
+</div>
+</body>
+</html>
