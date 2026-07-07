@@ -41,9 +41,8 @@ typedef struct {
 } solariHostHealth;
 ```
 
-**TLV codes:** allocate a new contiguous block in the client-report TLV enum in
-`lib/solari/solariMsg.c` starting at **0x40** (`TLV_CR_HEALTH_FS=0x40` … keep them
-grouped; pick concrete values consistent with the existing scheme). Encode scalars +
+**TLV codes:** allocate a new contiguous block in the client-report TLV enum.
+**(As implemented: `include/solari/solariTlv.h`, block `0x1010`–`0x1014`.)** Encode scalars +
 the four strings. **Backward compatibility is mandatory:** `solariMsgParseClientReport`
 MUST tolerate a report with no health TLVs (older client) → zeroed `health`. Add a
 round-trip unit test in `tests/unit/` mirroring `test_msg.c`.
