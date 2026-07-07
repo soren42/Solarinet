@@ -1,0 +1,14 @@
+; SolariNet backups. Instance selects /etc/solari-backup-%i.conf.
+[Unit]
+Description=SolariNet backup (%i)
+After=network-online.target mariadb.service mysql.service
+Wants=network-online.target
+; Stub for Unit D's alert bridge to fill in; the script itself does not notify.
+OnFailure=solari-notify-failure@%i.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=SOLARI_BACKUP_CONF=/etc/solari-backup-%i.conf
+ExecStart=/opt/solari-backups/solari-backup.sh /etc/solari-backup-%i.conf

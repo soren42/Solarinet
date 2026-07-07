@@ -1,0 +1,13 @@
+; Nightly SolariNet backup timer. Enable an instance, for example:
+;   systemctl enable --now solari-backup@cesium.timer
+[Unit]
+Description=Nightly SolariNet backup (%i)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=solari-backup@%i.service
+
+[Install]
+WantedBy=timers.target

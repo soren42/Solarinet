@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -37,6 +38,41 @@ static void copyStr(char *out, size_t cap, const char *src)
     if (!cap) return;
     strncpy(out, src ? src : "", cap - 1);
     out[cap - 1] = '\0';
+}
+
+static int startsWith(const char *s, const char *prefix)
+{
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+static void appendCsv(char *out, size_t cap, const char *item)
+{
+    size_t len, ilen, room;
+    if (!out || cap == 0 || !item || item[0] == '\0') return;
+    len = strlen(out);
+    if (len >= cap - 1) return;
+    if (len > 0) {
+        out[len++] = ',';
+        out[len] = '\0';
+        if (len >= cap - 1) return;
+    }
+    ilen = strlen(item);
+    room = cap - 1 - len;
+    if (ilen > room) ilen = room;
+    memcpy(out + len, item, ilen);
+    out[len + ilen] = '\0';
+}
+
+static int containsNoCase(const char *s, const char *needle)
+{
+    size_t nl;
+    if (!s || !needle) return 0;
+    nl = strlen(needle);
+    if (nl == 0) return 1;
+    for (; *s; s++) {
+        if (strncasecmp(s, needle, nl) == 0) return 1;
+    }
+    return 0;
 }
 
 /* Sleep for a measurement window; never the wall clock for timing decisions. */
@@ -322,6 +358,328 @@ solariStatus platUsbThroughput(solariUsbEntry *bus, uint8_t cap, uint8_t *count)
     SOLARI_UNUSED(cap);
     if (!count) return ERR_INVALID_ARG;
     *count = 0;
+    return SOLARI_OK;
+}
+
+/* ---- host health --------------------------------------------------------- */
+
+#define HEALTH_BLOCKDEV_BASELINE "/var/lib/solari/blockdev.baseline"
+#define HEALTH_DMESG_CURSOR      "/var/lib/solari/dmesg.cursor"
+#define HEALTH_STATE_DIR         "/var/lib/solari"
+#define HEALTH_MAX_BLOCK_DEVS    256
+#define HEALTH_DEV_NAME_MAX      64
+#define HEALTH_JOURNAL_LINE_MAX  512
+
+typedef struct {
+    char name[HEALTH_MAX_BLOCK_DEVS][HEALTH_DEV_NAME_MAX];
+    size_t count;
+} healthBlockDevs;
+
+typedef struct {
+    char text[HEALTH_JOURNAL_LINE_MAX];
+} healthJournalLine;
+
+static int fsReadonlySkipType(const char *type)
+{
+    static const char *skip[] = {
+        "proc","sysfs","devtmpfs","tmpfs","cgroup","cgroup2","devpts",
+        "securityfs","debugfs","pstore","mqueue","hugetlbfs","tracefs",
+        "configfs","fusectl","binfmt_misc","autofs","squashfs","iso9660",
+        "overlay","udf","bpf","ramfs","nsfs","selinuxfs", NULL
+    };
+    int i;
+    for (i = 0; skip[i]; i++) if (!strcmp(type, skip[i])) return 1;
+    return 0;
+}
+
+static int hasMountOptToken(const char *opts, const char *want)
+{
+    size_t wlen;
+    const char *p;
+    if (!opts || !want) return 0;
+    wlen = strlen(want);
+    p = opts;
+    while (*p) {
+        const char *end = strchr(p, ',');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len == wlen && strncmp(p, want, wlen) == 0) return 1;
+        if (!end) break;
+        p = end + 1;
+    }
+    return 0;
+}
+
+static void collectFsReadonly(solariHostHealth *h)
+{
+    FILE *m;
+    struct mntent *e;
+
+    m = setmntent("/proc/mounts", "r");
+    if (!m) return;
+    while ((e = getmntent(m)) != NULL) {
+        if (fsReadonlySkipType(e->mnt_type)) continue;
+        if (!hasMountOptToken(e->mnt_opts, "ro")) continue;
+        appendCsv(h->fsReadonlyList, sizeof h->fsReadonlyList, e->mnt_dir);
+        if (h->fsReadonlyCount < 255) h->fsReadonlyCount++;
+    }
+    endmntent(m);
+}
+
+static int healthBlockSkip(const char *name)
+{
+    return startsWith(name, "loop") || startsWith(name, "zram") ||
+           startsWith(name, "sr");
+}
+
+static int collectBlockDevs(healthBlockDevs *devs)
+{
+    DIR *d;
+    struct dirent *de;
+
+    memset(devs, 0, sizeof *devs);
+    d = opendir("/sys/block");
+    if (!d) return 0;
+    while ((de = readdir(d)) != NULL && devs->count < HEALTH_MAX_BLOCK_DEVS) {
+        if (de->d_name[0] == '.') continue;
+        if (healthBlockSkip(de->d_name)) continue;
+        copyStr(devs->name[devs->count], HEALTH_DEV_NAME_MAX, de->d_name);
+        devs->count++;
+    }
+    closedir(d);
+    return 1;
+}
+
+static int blockDevPresent(const healthBlockDevs *devs, const char *name)
+{
+    size_t i;
+    for (i = 0; i < devs->count; i++) {
+        if (strcmp(devs->name[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+static void ensureHealthStateDir(void)
+{
+    if (mkdir(HEALTH_STATE_DIR, 0755) != 0 && errno != EEXIST) return;
+}
+
+static void writeBlockDevBaseline(const healthBlockDevs *devs)
+{
+    FILE *f;
+    size_t i;
+
+    ensureHealthStateDir();
+    f = fopen(HEALTH_BLOCKDEV_BASELINE, "w");
+    if (!f) return;
+    for (i = 0; i < devs->count; i++) {
+        fprintf(f, "%s\n", devs->name[i]);
+    }
+    fclose(f);
+}
+
+static void collectBlockDevMissing(solariHostHealth *h,
+                                   const healthBlockDevs *devs)
+{
+    FILE *f;
+    char line[HEALTH_DEV_NAME_MAX];
+
+    f = fopen(HEALTH_BLOCKDEV_BASELINE, "r");
+    if (!f) {
+        if (errno == ENOENT) writeBlockDevBaseline(devs);
+        return;
+    }
+    while (fgets(line, sizeof line, f)) {
+        size_t len = strcspn(line, "\r\n");
+        line[len] = '\0';
+        if (line[0] == '\0') continue;
+        if (!blockDevPresent(devs, line) && h->blockDevMissing < 255)
+            h->blockDevMissing++;
+    }
+    fclose(f);
+}
+
+static const char *smartctlCommand(void)
+{
+    if (access("/usr/sbin/smartctl", X_OK) == 0) return "/usr/sbin/smartctl";
+    if (access("/sbin/smartctl", X_OK) == 0) return "/sbin/smartctl";
+    return "smartctl";
+}
+
+static void collectSmartHealth(solariHostHealth *h, const healthBlockDevs *devs)
+{
+    const char *smartctl = smartctlCommand();
+    size_t i;
+
+    for (i = 0; i < devs->count; i++) {
+        char cmd[256], line[512], result[64] = "";
+        FILE *p;
+        snprintf(cmd, sizeof cmd, "%s -H /dev/%s 2>/dev/null",
+                 smartctl, devs->name[i]);
+        p = popen(cmd, "r");
+        if (!p) continue;
+        while (fgets(line, sizeof line, p)) {
+            char *r;
+            if (!strstr(line, "SMART overall-health self-assessment test result:"))
+                continue;
+            r = strchr(line, ':');
+            if (!r) continue;
+            r++;
+            while (*r && isspace((unsigned char)*r)) r++;
+            copyStr(result, sizeof result, r);
+            result[strcspn(result, " \t\r\n")] = '\0';
+            break;
+        }
+        pclose(p);
+        if (result[0] == '\0' || strcasecmp(result, "PASSED") == 0) continue;
+        if (h->smartFailCount < 255) h->smartFailCount++;
+        {
+            char item[HEALTH_DEV_NAME_MAX + 70];
+            snprintf(item, sizeof item, "%s:%s", devs->name[i], result);
+            appendCsv(h->smartFailList, sizeof h->smartFailList, item);
+        }
+    }
+}
+
+static const char *systemctlCommand(void)
+{
+    if (access("/usr/bin/systemctl", X_OK) == 0) return "/usr/bin/systemctl";
+    if (access("/bin/systemctl", X_OK) == 0) return "/bin/systemctl";
+    return "systemctl";
+}
+
+static void collectFailedUnits(solariHostHealth *h)
+{
+    const char *systemctl = systemctlCommand();
+    char cmd[256], line[512];
+    FILE *p;
+
+    snprintf(cmd, sizeof cmd, "%s --failed --no-legend --plain 2>/dev/null",
+             systemctl);
+    p = popen(cmd, "r");
+    if (!p) return;
+    while (fgets(line, sizeof line, p)) {
+        char unit[256];
+        if (sscanf(line, "%255s", unit) != 1) continue;
+        if (!strchr(unit, '.')) continue;
+        appendCsv(h->failedUnitList, sizeof h->failedUnitList, unit);
+        if (h->failedUnitCount < 65535) h->failedUnitCount++;
+    }
+    pclose(p);
+}
+
+static int journalctlPresent(void)
+{
+    return access("/usr/bin/journalctl", X_OK) == 0 ||
+           access("/bin/journalctl", X_OK) == 0;
+}
+
+static int readDmesgCursor(char *out, size_t cap)
+{
+    FILE *f = fopen(HEALTH_DMESG_CURSOR, "r");
+    if (!f) return 0;
+    if (!fgets(out, cap, f)) out[0] = '\0';
+    out[strcspn(out, "\r\n")] = '\0';
+    fclose(f);
+    return 1;
+}
+
+static void writeDmesgCursor(const char *line)
+{
+    FILE *f;
+    if (!line || line[0] == '\0') return;
+    ensureHealthStateDir();
+    f = fopen(HEALTH_DMESG_CURSOR, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", line);
+    fclose(f);
+}
+
+static int dmesgLineCritical(const char *line)
+{
+    if (containsNoCase(line, "btrfs") &&
+        (containsNoCase(line, "error") ||
+         containsNoCase(line, "critical") ||
+         containsNoCase(line, "emergency")))
+        return 1;
+    if (containsNoCase(line, "i/o error")) return 1;
+    if (containsNoCase(line, "ext4-fs error")) return 1;
+    if (containsNoCase(line, "ata") &&
+        (containsNoCase(line, "error") || containsNoCase(line, "reset")))
+        return 1;
+    if (containsNoCase(line, "out of memory")) return 1;
+    if (containsNoCase(line, "md/raid") && containsNoCase(line, "fail"))
+        return 1;
+    return 0;
+}
+
+static void collectDmesgCritical(solariHostHealth *h)
+{
+    char prev[HEALTH_JOURNAL_LINE_MAX] = "";
+    int hadCursor;
+    healthJournalLine *lines = NULL;
+    size_t cap = 0, n = 0, i, start;
+    FILE *p;
+
+    if (!journalctlPresent()) return;
+    hadCursor = readDmesgCursor(prev, sizeof prev);
+    p = popen("journalctl -k -o short-iso --no-pager 2>/dev/null", "r");
+    if (!p) return;
+    while (1) {
+        char line[HEALTH_JOURNAL_LINE_MAX];
+        healthJournalLine *grown;
+        if (!fgets(line, sizeof line, p)) break;
+        line[strcspn(line, "\r\n")] = '\0';
+        if (n == cap) {
+            size_t newCap = cap ? cap * 2u : 256u;
+            grown = (healthJournalLine *)realloc(lines,
+                     newCap * sizeof *lines);
+            if (!grown) break;
+            lines = grown;
+            cap = newCap;
+        }
+        copyStr(lines[n].text, sizeof lines[n].text, line);
+        n++;
+    }
+    pclose(p);
+    if (n == 0) { free(lines); return; }
+
+    start = n;
+    if (hadCursor && prev[0]) {
+        for (i = n; i > 0; i--) {
+            if (strcmp(lines[i - 1].text, prev) == 0) {
+                start = i;
+                break;
+            }
+        }
+        if (start == n && strcmp(lines[n - 1].text, prev) != 0) start = 0;
+    } else if (hadCursor) {
+        start = 0;
+    }
+
+    for (i = start; i < n; i++) {
+        if (!dmesgLineCritical(lines[i].text)) continue;
+        if (h->dmesgCritCount < 65535) h->dmesgCritCount++;
+        copyStr(h->dmesgCritSample, sizeof h->dmesgCritSample, lines[i].text);
+    }
+    writeDmesgCursor(lines[n - 1].text);
+    free(lines);
+}
+
+solariStatus platHostHealth(solariHostHealth *h)
+{
+    healthBlockDevs devs;
+    int haveBlockDevs;
+
+    if (!h) return ERR_INVALID_ARG;
+    memset(h, 0, sizeof *h);
+    collectFsReadonly(h);
+    haveBlockDevs = collectBlockDevs(&devs);
+    if (haveBlockDevs) {
+        collectBlockDevMissing(h, &devs);
+        collectSmartHealth(h, &devs);
+    }
+    collectFailedUnits(h);
+    collectDmesgCritical(h);
     return SOLARI_OK;
 }
 
