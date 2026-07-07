@@ -1,0 +1,48 @@
+# SolariNet alert->MQ bridge + dead-man's-switch config (sample).
+#
+# Copy to alertbridge.conf (gitignored — it may hold the AMQP password) and
+# edit. INI format, read with Python's configparser.
+#
+#   cp deploy/alertbridge/alertbridge.conf.example deploy/alertbridge/alertbridge.conf
+#   chmod 600 deploy/alertbridge/alertbridge.conf
+
+[db]
+# The xenon `solarinet` MariaDB (server-local). The systemd unit sources
+# run/db.env, which `export`s SOLARI_DB_PASS — leave `password` blank (or a
+# CHANGE_ME placeholder) to use that env var instead of putting the secret
+# here. Same convention as deploy/systemd/solarinet-snmp.service.
+host = 127.0.0.1
+port = 3306
+user = solari
+name = solarinet
+password =
+
+[amqp]
+# RabbitMQ on benzene, vhost 'solari'. Reuse the exact url from
+# deploy/notify/notify.conf so alerts land on the same broker notifyd drains.
+# Format: amqp://user:pass@host:5672/vhost
+url = amqp://solari:CHANGE_ME@10.5.2.50:5672/solari
+# Durable topic exchange notifyd consumes; the bridge only publishes to it.
+exchange = notify.events
+# Seconds to wait before reconnecting when the broker/DB is unreachable.
+reconnect_delay_sec = 5
+
+[bridge]
+# How often to poll alertEvent for new rows and run the dead-man's-switch.
+poll_interval_sec = 10
+# Max alertEvent rows to publish per cycle.
+batch = 500
+# Provenance tag put in each message's "source" field (see notify README).
+source = alertbridge
+
+[deadman]
+# Master switch for the "monitor the monitor" guard.
+enabled = true
+# Expected client report cadence (client.conf sampleIntervalSec, default 15).
+# A node is declared silent after max(120s, 3 x sample_interval_sec).
+sample_interval_sec = 15
+
+[state]
+# Persisted checkpoint (max published eventId) + set of currently-silent nodes.
+# Default: alertbridge.state.json next to this config (gitignored).
+# file = /var/lib/solari/alertbridge.state.json
