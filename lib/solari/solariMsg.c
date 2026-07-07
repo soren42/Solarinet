@@ -22,6 +22,13 @@ static void copyBounded(char *dst, size_t dstCap, const uint8_t *src, uint16_t s
     dst[n] = '\0';
 }
 
+static size_t boundedStrLen(const char *s, size_t cap)
+{
+    size_t n = 0;
+    while (n < cap && s[n] != '\0') n++;
+    return n;
+}
+
 /* ============================ CLIENT_REPORT ============================ */
 
 solariStatus solariMsgBuildClientReport(const solariClientReport *rep,
@@ -128,23 +135,35 @@ solariStatus solariMsgBuildClientReport(const solariClientReport *rep,
             return st;
     }
     if (rep->health.fsReadonlyList[0]) {
-        if ((st = solariTlvAppendStr(&w, TLV_CR_HEALTH_FS_LIST,
-                                     rep->health.fsReadonlyList)) != SOLARI_OK)
+        size_t len = boundedStrLen(rep->health.fsReadonlyList,
+                                   sizeof rep->health.fsReadonlyList);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_FS_LIST,
+                                  rep->health.fsReadonlyList,
+                                  (uint16_t)len)) != SOLARI_OK)
             return st;
     }
     if (rep->health.smartFailList[0]) {
-        if ((st = solariTlvAppendStr(&w, TLV_CR_HEALTH_SMART_LIST,
-                                     rep->health.smartFailList)) != SOLARI_OK)
+        size_t len = boundedStrLen(rep->health.smartFailList,
+                                   sizeof rep->health.smartFailList);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_SMART_LIST,
+                                  rep->health.smartFailList,
+                                  (uint16_t)len)) != SOLARI_OK)
             return st;
     }
     if (rep->health.failedUnitList[0]) {
-        if ((st = solariTlvAppendStr(&w, TLV_CR_HEALTH_UNIT_LIST,
-                                     rep->health.failedUnitList)) != SOLARI_OK)
+        size_t len = boundedStrLen(rep->health.failedUnitList,
+                                   sizeof rep->health.failedUnitList);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_UNIT_LIST,
+                                  rep->health.failedUnitList,
+                                  (uint16_t)len)) != SOLARI_OK)
             return st;
     }
     if (rep->health.dmesgCritSample[0]) {
-        if ((st = solariTlvAppendStr(&w, TLV_CR_HEALTH_DMESG_SAMPLE,
-                                     rep->health.dmesgCritSample)) != SOLARI_OK)
+        size_t len = boundedStrLen(rep->health.dmesgCritSample,
+                                   sizeof rep->health.dmesgCritSample);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_DMESG_SAMPLE,
+                                  rep->health.dmesgCritSample,
+                                  (uint16_t)len)) != SOLARI_OK)
             return st;
     }
 

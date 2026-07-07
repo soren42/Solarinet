@@ -31,9 +31,20 @@ import os
 import signal
 import sys
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 import pika
+import pika.exceptions
 import pymysql
+
+# Message-level publish failures we retry (checkpoint NOT advanced). Connection-
+# level pika errors also subclass AMQPError; treating them as a delivery failure
+# here is safe because the outer loop reconnects on the next process_data_events.
+PUBLISH_FAILURES = (
+    pika.exceptions.UnroutableError,   # mandatory=True: broker returned the msg
+    pika.exceptions.NackError,         # publisher confirms: broker nacked
+    pika.exceptions.AMQPError,
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONF = os.environ.get("ALERTBRIDGE_CONF",
@@ -44,6 +55,25 @@ _run = True
 def log(msg):
     print(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} alertbridge: {msg}",
           flush=True)
+
+
+def redact_amqp_url(url):
+    """Return the amqp url with any user:pass@ password masked, safe to log.
+
+    Never expose the broker credential in logs. On any parse trouble we fall
+    back to a fully-opaque string rather than risk echoing the raw url (which
+    still carries the password)."""
+    try:
+        p = urlsplit(url)
+        if not p.password:
+            return url  # nothing secret to hide
+        host = p.hostname or ""
+        if p.port:
+            host = f"{host}:{p.port}"
+        userinfo = f"{p.username or ''}:***"
+        return urlunsplit((p.scheme, f"{userinfo}@{host}", p.path, p.query, p.fragment))
+    except Exception:  # noqa: BLE001 — a malformed url must never leak via repr
+        return "<amqp url unparseable; redacted>"
 
 
 # --------------------------------------------------------------------------- #
@@ -108,8 +138,10 @@ def load_state(path):
 
 
 def save_state(path, state):
-    """Atomically persist state (write temp + rename) so a crash mid-write
-    can't corrupt the checkpoint."""
+    """Atomically persist state (write temp + fsync + rename) so a crash
+    mid-write can't corrupt the checkpoint. Returns True on success, False if
+    the state could not be durably persisted — callers must stop advancing the
+    checkpoint on False, or a restart would replay already-delivered events."""
     tmp = f"{path}.tmp"
     try:
         with open(tmp, "w") as f:
@@ -117,15 +149,25 @@ def save_state(path, state):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        return True
     except OSError as e:
         log(f"WARNING: could not save state {path}: {e!r}")
+        return False
 
 
 # --------------------------------------------------------------------------- #
 # MQ publish                                                                   #
 # --------------------------------------------------------------------------- #
 def publish(ch, exchange, message):
-    """Publish one notify-contract message; routing key notify.<severity>."""
+    """Publish one notify-contract message; routing key notify.<severity>.
+
+    The channel runs in publisher-confirm mode (ch.confirm_delivery()), so this
+    call BLOCKS until the broker acks the message and returns None, or raises:
+      - UnroutableError if mandatory=True and no queue is bound (msg returned),
+      - NackError if the broker nacks (e.g. disk-alarm),
+      - another AMQPError on a connection/channel fault.
+    A raise here therefore means the event is NOT delivered; the caller must not
+    advance the checkpoint."""
     severity = (message.get("severity") or "info").strip().lower()
     if severity not in ("info", "warn", "crit"):
         severity = "info"
@@ -135,17 +177,31 @@ def publish(ch, exchange, message):
         body=json.dumps(message),
         properties=pika.BasicProperties(delivery_mode=2,
                                         content_type="application/json"),
+        mandatory=True,   # broker returns (-> UnroutableError) if nothing bound
     )
 
 
 # --------------------------------------------------------------------------- #
 # (1) bridge: alertEvent -> notify.events                                      #
 # --------------------------------------------------------------------------- #
-def bridge_alerts(db, ch, exchange, source, state, batch):
-    """Publish alertEvent rows past the checkpoint. Advance the checkpoint one
-    event at a time, only after that event's publish returns, so a failure
-    mid-batch resumes from the last confirmed publish (at-least-once)."""
-    cp = int(state["checkpoint"])
+def bridge_alerts(db, ch, exchange, source, state, batch, spath):
+    """Publish alertEvent rows past the checkpoint. For EACH row we (a) publish
+    with publisher confirms + mandatory, (b) advance the checkpoint only after
+    the broker CONFIRMS delivery, and (c) durably save_state() that new
+    checkpoint before touching the next row. This makes a kill mid-batch unable
+    to re-send an already-delivered event (exactly the "replay on restart" bug):
+    the on-disk checkpoint never lags a confirmed publish, and never leads an
+    unconfirmed one.
+
+    Failure handling, both fail-soft (never crash the loop):
+      - publish raises (unroutable / nack / any AMQP error): the event is NOT
+        delivered -> do not advance, stop the batch, retry next cycle.
+      - save_state() fails: the event IS delivered but we can't persist the new
+        checkpoint -> revert the in-memory checkpoint to the last persisted
+        value and stop the batch, so we neither publish more rows on an
+        unpersisted checkpoint (unbounded replay on restart) nor silently lose
+        the fact we haven't caught up. Retry next cycle."""
+    persisted_cp = int(state["checkpoint"])
     with db.cursor() as cur:
         cur.execute(
             "SELECT e.eventId, e.severity, e.detail, e.targetId, "
@@ -156,24 +212,35 @@ def bridge_alerts(db, ch, exchange, source, state, batch):
             "LEFT JOIN node n ON n.nodeId = e.nodeId "
             "LEFT JOIN alertRule r ON r.ruleId = e.ruleId "
             "WHERE e.eventId > %s ORDER BY e.eventId LIMIT %s",
-            (cp, batch))
+            (persisted_cp, batch))
         rows = cur.fetchall()
 
     published = 0
     for r in rows:
+        eid = int(r["eventId"])
         try:
             msg = event_to_message(r, source)
-            publish(ch, exchange, msg)
-        except Exception as e:  # noqa: BLE001 — one bad row must not stall the loop
-            log(f"ERROR publishing eventId={r.get('eventId')}: {e!r}; "
-                f"stopping batch, will retry from checkpoint={cp}")
+            publish(ch, exchange, msg)   # blocks for broker confirm; raises on failure
+        except PUBLISH_FAILURES as e:
+            log(f"DELIVERY FAILURE eventId={eid}: {e!r}; not advancing "
+                f"checkpoint (still {persisted_cp}), retry next cycle")
             break
-        cp = int(r["eventId"])
-        state["checkpoint"] = cp   # advance only after successful publish
+        except Exception as e:  # noqa: BLE001 — one bad row must not stall the loop
+            log(f"ERROR building/publishing eventId={eid}: {e!r}; "
+                f"stopping batch, will retry from checkpoint={persisted_cp}")
+            break
+        # Confirmed delivered. Advance + durably persist BEFORE the next row.
+        state["checkpoint"] = eid
+        if not save_state(spath, state):
+            state["checkpoint"] = persisted_cp   # keep in-memory == on-disk
+            log(f"ERROR: checkpoint {eid} delivered but not persisted; stopping "
+                f"batch this cycle to avoid unbounded replay, retry next cycle")
+            break
+        persisted_cp = eid
         published += 1
 
     if published:
-        log(f"bridged {published} alertEvent(s); checkpoint={cp}")
+        log(f"bridged {published} alertEvent(s); checkpoint={persisted_cp}")
     return published
 
 
@@ -243,9 +310,19 @@ def node_ages(db):
     return ages
 
 
-def dead_mans_switch(db, ch, exchange, source, state, threshold):
+def dead_mans_switch(db, ch, exchange, source, state, threshold, spath):
     """Emit ONE crit per node that has gone silent past `threshold`; re-arm
-    (and emit an info recovery) when it reports again."""
+    (and emit an info recovery) when it reports again.
+
+    Every state transition is committed only after the corresponding notify has
+    been CONFIRMED delivered, and is then durably persisted:
+      - arming: publish the crit first; only mark the node silent (and persist)
+        after the broker confirms. A failed/undelivered crit leaves the node
+        un-armed so we retry next cycle rather than swallowing the alert.
+      - recovery: publish the info first; only clear the silent flag (and
+        persist) after confirmation. If the recovery can't be delivered or
+        persisted we keep the node ARMED and retry later, so we never drop the
+        "resumed reporting" signal or re-fire a duplicate crit."""
     ages = node_ages(db)
     silent = state["silent"]
 
@@ -264,11 +341,18 @@ def dead_mans_switch(db, ch, exchange, source, state, threshold):
                     "source": source,
                 }
                 try:
-                    publish(ch, exchange, msg)
-                    silent[nid] = {"fqdn": fqdn, "sinceTs": int(time.time())}
-                    log(f"DEAD-MAN: {fqdn} silent {age}s > {threshold}s -> crit emitted")
-                except Exception as e:  # noqa: BLE001
-                    log(f"ERROR emitting dead-man crit for {fqdn}: {e!r}")
+                    publish(ch, exchange, msg)   # confirmed before we arm
+                except Exception as e:  # noqa: BLE001 — fail-soft: retry next cycle
+                    log(f"ERROR emitting dead-man crit for {fqdn}: {e!r}; "
+                        f"leaving node un-armed, retry later")
+                    continue
+                silent[nid] = {"fqdn": fqdn, "sinceTs": int(time.time())}
+                if not save_state(spath, state):
+                    del silent[nid]   # not persisted -> not armed; retry later
+                    log(f"ERROR: could not persist dead-man arm for {fqdn}; "
+                        f"retry later")
+                    return
+                log(f"DEAD-MAN: {fqdn} silent {age}s > {threshold}s -> crit emitted")
         else:
             if nid in silent:
                 # recovered -> re-arm and announce
@@ -279,10 +363,18 @@ def dead_mans_switch(db, ch, exchange, source, state, threshold):
                     "source": source,
                 }
                 try:
-                    publish(ch, exchange, msg)
-                except Exception as e:  # noqa: BLE001
-                    log(f"ERROR emitting dead-man recovery for {fqdn}: {e!r}")
-                del silent[nid]
+                    publish(ch, exchange, msg)   # confirmed before we re-arm
+                except Exception as e:  # noqa: BLE001 — keep armed, retry later
+                    log(f"ERROR emitting dead-man recovery for {fqdn}: {e!r}; "
+                        f"keeping node armed, retry later")
+                    continue
+                prev = silent[nid]
+                del silent[nid]   # only after the recovery is confirmed delivered
+                if not save_state(spath, state):
+                    silent[nid] = prev   # keep armed until we can persist
+                    log(f"ERROR: could not persist dead-man recovery for {fqdn}; "
+                        f"keeping node armed, retry later")
+                    return
                 log(f"DEAD-MAN: {fqdn} recovered (age {age}s) -> re-armed")
 
 
@@ -293,6 +385,10 @@ def run(conf_path):
     c = load_cfg(conf_path)
     exchange = c.get("amqp", "exchange", fallback="notify.events")
     url = c.get("amqp", "url")
+    # The durable queue + binding notifyd owns; declaring them defensively (see
+    # below) matches deploy/notify/notify.conf defaults.
+    notify_queue = c.get("amqp", "queue", fallback="notify.dispatch")
+    notify_binding = c.get("amqp", "binding_key", fallback="notify.#")
     poll = c.getfloat("bridge", "poll_interval_sec", fallback=10.0)
     batch = c.getint("bridge", "batch", fallback=500)
     source = c.get("bridge", "source", fallback="alertbridge")
@@ -302,30 +398,51 @@ def run(conf_path):
     threshold = max(120, 3 * sample_interval)
     deadman_enabled = c.getboolean("deadman", "enabled", fallback=True)
 
+    # Parse the AMQP url ONCE, up front, and never log the raw url (it carries
+    # the broker password). Guard the parse so a malformed url can't dump the
+    # credential via an exception repr.
+    url_safe = redact_amqp_url(url)
+    try:
+        amqp_params = pika.URLParameters(url)
+    except Exception:  # noqa: BLE001 — do NOT interpolate the exception (may echo the url)
+        log(f"FATAL: cannot parse amqp url ({url_safe}); check [amqp] url in config")
+        sys.exit(2)
+
     spath = state_path(c)
-    log(f"config {conf_path}; exchange={exchange} poll={poll}s "
+    log(f"config {conf_path}; amqp={url_safe} exchange={exchange} poll={poll}s "
         f"deadman_threshold={threshold}s state={spath}")
 
     while _run:
         db = mq = ch = None
         try:
             db = db_connect(c)
-            mq = pika.BlockingConnection(pika.URLParameters(url))
+            mq = pika.BlockingConnection(amqp_params)
             ch = mq.channel()
+            # Publisher confirms: basic_publish now BLOCKS for a broker ack and
+            # raises on nack/return, so we only ever advance the checkpoint after
+            # an event is truly on the broker (no silent alert loss).
+            ch.confirm_delivery()
             # notifyd declares the same durable topic exchange; asserting it
             # here is harmless and lets the bridge come up before notifyd.
             ch.exchange_declare(exchange=exchange, exchange_type="topic", durable=True)
+            # Defensively declare the durable queue + binding notifyd expects, so
+            # a message published before notifyd has ever run isn't dropped by the
+            # topic exchange (which discards messages matching no binding). With
+            # mandatory=True this is belt-and-suspenders — we do both.
+            ch.queue_declare(queue=notify_queue, durable=True)
+            ch.queue_bind(exchange=exchange, queue=notify_queue,
+                          routing_key=notify_binding)
 
             state = load_state(spath)
             log(f"connected; checkpoint={state['checkpoint']} "
                 f"tracked_silent={list(state['silent'])}")
 
             while _run:
-                dirty = bridge_alerts(db, ch, exchange, source, state, batch)
+                # Both helpers advance + durably persist state per confirmed
+                # publish, so a kill mid-cycle can't replay delivered events.
+                bridge_alerts(db, ch, exchange, source, state, batch, spath)
                 if deadman_enabled:
-                    dead_mans_switch(db, ch, exchange, source, state, threshold)
-                # persist every cycle so checkpoint + silent-set survive restart
-                save_state(spath, state)
+                    dead_mans_switch(db, ch, exchange, source, state, threshold, spath)
                 # keep AMQP heartbeats alive, then idle
                 mq.process_data_events(0)
                 time.sleep(poll)

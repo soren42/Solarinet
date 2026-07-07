@@ -9,6 +9,10 @@
 Description=SolariNet alert->MQ bridge + dead-man's-switch
 After=network-online.target mariadb.service
 Wants=network-online.target
+; Rate-limit restarts. These are [Unit] directives (systemd moved them here);
+; leaving them in [Service] makes systemd ignore the limit.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -20,8 +24,6 @@ Environment=ALERTBRIDGE_CONF=/home/jason/Code/Solarinet/deploy/alertbridge/alert
 ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /home/jason/Code/Solarinet/deploy/alertbridge/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/alertbridge/alertbridge.py'
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

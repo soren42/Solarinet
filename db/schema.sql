@@ -30,11 +30,11 @@ CREATE TABLE hostCurrent (
   ramUsedKb     BIGINT UNSIGNED, ramTotalKb BIGINT UNSIGNED,
   swapUsedKb    BIGINT UNSIGNED, swapTotalKb BIGINT UNSIGNED,
   disks         JSON, ifaces JSON, usbBuses JSON,
-  fsReadonlyCount  TINYINT   NOT NULL DEFAULT 0,
-  blockDevMissing  TINYINT   NOT NULL DEFAULT 0,
-  smartFailCount   TINYINT   NOT NULL DEFAULT 0,
-  failedUnitCount  SMALLINT  NOT NULL DEFAULT 0,
-  dmesgCritCount   SMALLINT  NOT NULL DEFAULT 0,
+  fsReadonlyCount  TINYINT UNSIGNED   NOT NULL DEFAULT 0,
+  blockDevMissing  TINYINT UNSIGNED   NOT NULL DEFAULT 0,
+  smartFailCount   TINYINT UNSIGNED   NOT NULL DEFAULT 0,
+  failedUnitCount  SMALLINT UNSIGNED  NOT NULL DEFAULT 0,
+  dmesgCritCount   SMALLINT UNSIGNED  NOT NULL DEFAULT 0,
   fsReadonlyList   VARCHAR(256) NOT NULL DEFAULT '',
   smartFailList    VARCHAR(256) NOT NULL DEFAULT '',
   failedUnitList   VARCHAR(256) NOT NULL DEFAULT '',
@@ -50,11 +50,11 @@ CREATE TABLE hostHistory (
   cpuAvgMilli   INT UNSIGNED, ramUsedKb BIGINT UNSIGNED,
   swapUsedKb    BIGINT UNSIGNED, diskMinFreePct SMALLINT,
   netKbps       BIGINT UNSIGNED,             -- aggregate iface rx+tx throughput
-  fsReadonlyCount TINYINT NOT NULL DEFAULT 0,
-  blockDevMissing TINYINT NOT NULL DEFAULT 0,
-  smartFailCount  TINYINT NOT NULL DEFAULT 0,
-  failedUnitCount SMALLINT NOT NULL DEFAULT 0,
-  dmesgCritCount  SMALLINT NOT NULL DEFAULT 0,
+  fsReadonlyCount TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  blockDevMissing TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  smartFailCount  TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  failedUnitCount SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  dmesgCritCount  SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY(id, sampledAt), INDEX(nodeId, sampledAt)
 ) ENGINE=InnoDB
   PARTITION BY RANGE (TO_DAYS(sampledAt)) (
@@ -117,7 +117,8 @@ CREATE TABLE alertRule (
   metric   VARCHAR(64) NOT NULL,        -- e.g. "cpuAvgMilli","lossPermille"
   op       ENUM('gt','lt','eq','transition') NOT NULL,
   threshold DOUBLE, forSeconds INT, severity ENUM('info','warn','crit'),
-  enabled  BOOLEAN NOT NULL DEFAULT TRUE
+  enabled  BOOLEAN NOT NULL DEFAULT TRUE,
+  UNIQUE KEY uq_alertrule_scope_metric (scope, metric)
 ) ENGINE=InnoDB;
 
 CREATE TABLE alertEvent (
