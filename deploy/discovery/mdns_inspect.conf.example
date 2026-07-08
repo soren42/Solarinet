@@ -1,0 +1,20 @@
+# mdns_inspect — LIVE mDNS/zeroconf/Bonjour inspector config (sample).
+#
+# Copy to mdns_inspect.conf (gitignored — it may hold the DB password) and
+# edit. INI format, read with Python's configparser — same [db] shape as
+# avahi_import.conf.example (mdns_inspect.py reuses avahi_import's own
+# load_cfg()/db_connect()).
+#
+#   cp deploy/discovery/mdns_inspect.conf.example deploy/discovery/mdns_inspect.conf
+#   chmod 600 deploy/discovery/mdns_inspect.conf
+
+[db]
+# The xenon `solarinet` MariaDB (server-local). Leave `password` blank (or a
+# CHANGE_ME placeholder) to source it from $SOLARI_DB_PASS instead — e.g. by
+# `source run/db.env` before running, same convention as
+# deploy/alertbridge/alertbridge.py and deploy/discovery/avahi_import.conf.example.
+host = 127.0.0.1
+port = 3306
+user = solari
+name = solarinet
+password =
