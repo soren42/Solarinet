@@ -258,14 +258,26 @@
   // ---- alert events derived from fleet ----
   const alerts = [];
   let eid = 9000;
-  function fire(node, rule, detail, mins, cleared) {
-    alerts.push({
+  // extra: { clearedMinAgo, ackedMinAgo, ackedBy, opieReportId }
+  function fire(node, rule, detail, mins, cleared, extra) {
+    extra = extra || {};
+    const clearedMinAgo = cleared ? (extra.clearedMinAgo != null ? extra.clearedMinAgo : Math.min(mins, rint(2, 55))) : null;
+    const acked = extra.ackedMinAgo != null;
+    const a = {
       eventId: eid++, ruleId: rule.ruleId, ruleName: rule.name,
       node: node ? node.name : null, nodeId: node ? node.nodeId : null,
       segName: node ? node.segName : null,
       severity: rule.severity, detail, firedMinAgo: mins,
       cleared: !!cleared,
-    });
+      clearedMinAgo,
+      ackedAt: acked ? true : null,
+      ackedBy: acked ? (extra.ackedBy || "operator") : null,
+      ackedMinAgo: acked ? extra.ackedMinAgo : null,
+      status: acked ? "acked" : (cleared ? "cleared" : "active"),
+      opieReportId: extra.opieReportId != null ? extra.opieReportId : null,
+    };
+    alerts.push(a);
+    return a;
   }
   nodes.forEach((n) => {
     if (n.state === "down") {
@@ -286,16 +298,144 @@
       fire({ name: p.host.split(".")[0], nodeId: p.hostNode, segName: "—" }, rules[5], `${p.targetId}: ${v.outcome} from monitor '${v.monitorName}' (split vantage)`, rint(1, 25), false);
     }
   });
-  // a few cleared (historical) ones
-  for (let i = 0; i < 8; i++) {
+  // a few cleared (historical, retired >60m ago — land in History)
+  for (let i = 0; i < 6; i++) {
     const n = pick(nodes.filter((x) => x.state === "up"));
-    fire(n, pick([rules[0], rules[1], rules[5]]), `Auto-cleared after recovery`, rint(60, 1200), true);
+    fire(n, pick([rules[0], rules[1], rules[5]]), `Auto-cleared after recovery`, rint(120, 1200), true, { clearedMinAgo: rint(70, 900) });
+  }
+  // a recently-cleared one (resolved <60m ago) — stays on the live board, styled resolved
+  {
+    const n = pick(nodes.filter((x) => x.state === "up"));
+    fire(n, rules[1], `RAM pressure eased — back under tolerance`, rint(30, 55), true, { clearedMinAgo: rint(4, 40) });
+  }
+  // an already-acknowledged one — shows the Acked badge + owner in History
+  {
+    const n = pick(nodes.filter((x) => x.state === "up"));
+    fire(n, rules[0], `CPU spike during nightly backup — acknowledged, expected`, rint(80, 400), false, { ackedMinAgo: rint(10, 120), ackedBy: "jason" });
   }
   alerts.sort((a, b) => {
     const sev = { crit: 0, warn: 1, info: 2 };
     if (a.cleared !== b.cleared) return a.cleared ? 1 : -1;
     if (sev[a.severity] !== sev[b.severity]) return sev[a.severity] - sev[b.severity];
     return a.firedMinAgo - b.firedMinAgo;
+  });
+
+  // ---- Opie / Analysis reports (LLM incident write-ups) ----
+  // Attach a finished report to the two most severe active crit alerts, plus a
+  // couple of standalone reports (one still investigating, one failed) so the
+  // panel demonstrates every status. firstEventId links back to the alert.
+  const opie = [];
+  let orid = 4200;
+  function opieFor(alert, o) {
+    const reportId = orid++;
+    if (alert) alert.opieReportId = reportId;
+    opie.push(Object.assign({
+      reportId,
+      incidentKey: (alert ? (alert.node || "fleet") : "fleet") + "/" + reportId,
+      triggerKind: o.triggerKind || (alert && alert.severity === "crit" ? "crit" : "warn-storm"),
+      firstEventId: alert ? alert.eventId : null,
+      nodeId: alert ? alert.nodeId : null,
+      hostFqdn: (alert && alert.node ? alert.node + ".akoria.net" : null),
+      severity: alert ? alert.severity : "warn",
+      status: "done",
+      summary: "",
+      analysis: "",
+      model: "fable-5",
+      durationSec: rint(9, 48),
+      startedMinAgo: rint(1, 40),
+      finishedMinAgo: rint(0, 3),
+    }, o));
+  }
+  const critActive = alerts.filter((a) => a.severity === "crit" && !a.cleared && !a.ackedAt);
+  if (critActive[0]) {
+    const a = critActive[0];
+    opieFor(a, {
+      status: "done", triggerKind: "crit", durationSec: 31,
+      summary: `${a.node || "host"} stopped reporting — Opie correlated the silence to a kernel OOM-kill of the agent`,
+      analysis: [
+        `## Incident summary`,
+        ``,
+        `**${a.node || "host"}** went silent at the last report window. Opie cross-checked the`,
+        `final telemetry burst, the segment's reachability matrix, and peer nodes on the same`,
+        `switch before the agent dropped off.`,
+        ``,
+        `### What happened`,
+        ``,
+        `1. RAM crossed **96%** for ~4 minutes while a nightly \`rsync\` fanned out.`,
+        `2. The kernel OOM-killer reaped the largest RSS process — which was \`solariAgent\`.`,
+        `3. With no agent, reporting stopped; ICMP from two vantages still succeeds, so the`,
+        `   **host is up, the agent is down** (not a hardware fault).`,
+        ``,
+        `### Evidence`,
+        ``,
+        `| Signal | Last value | Threshold |`,
+        `| --- | --- | --- |`,
+        `| RAM used | 96.4% | 90% |`,
+        `| Swap used | 71% | 60% |`,
+        `| Agent heartbeat | none for ${a.firedMinAgo}m | 2× interval |`,
+        ``,
+        `> ICMP to the host still answers from \`neon\` and \`argon\` — this is an **agent** outage,`,
+        `> not a node outage.`,
+        ``,
+        `### Recommended action`,
+        ``,
+        `- \`systemctl restart solariAgent\` on the host to restore reporting.`,
+        `- Add a \`MemoryHigh=\` cgroup guard to the agent unit so it is never the OOM victim.`,
+        `- Consider staggering the nightly \`rsync\` fan-out to flatten the memory spike.`,
+        ``,
+        `_No data loss expected; historical samples resume on agent restart._`,
+      ].join("\n"),
+    });
+  }
+  if (critActive[1]) {
+    const a = critActive[1];
+    opieFor(a, {
+      status: "done", triggerKind: "crit", durationSec: 22,
+      summary: `Watched process crashed on ${a.node || "host"} — restart loop detected, root cause is a config typo`,
+      analysis: [
+        `## Root cause: crash-loop on a bad config key`,
+        ``,
+        `The watched process on **${a.node || "host"}** is in a restart loop. Opie pulled the last`,
+        `three exit records and the process would come up, fail readiness, and exit within seconds.`,
+        ``,
+        `### Timeline`,
+        ``,
+        `- \`T-6m\` process exits \`code=78\` (\`EX_CONFIG\`)`,
+        `- \`T-6m\` supervisor restarts it`,
+        `- \`T-5m … now\` the loop repeats every ~40s`,
+        ``,
+        `\`\`\``,
+        `fatal: unknown directive "lisen_addr" at /etc/svc/site.conf:14`,
+        `\`\`\``,
+        ``,
+        `The directive **\`lisen_addr\`** is a typo for \`listen_addr\`. The parser rejects the file`,
+        `and the service never binds.`,
+        ``,
+        `### Fix`,
+        ``,
+        `1. Correct \`lisen_addr\` → \`listen_addr\` in \`/etc/svc/site.conf\`.`,
+        `2. Validate with \`svc --check-config\` before reload.`,
+        `3. The alert auto-clears once the readiness probe passes.`,
+      ].join("\n"),
+    });
+  }
+  // one still investigating (no analysis yet) — a warn storm across a segment
+  opie.push({
+    reportId: orid++, incidentKey: "iot/warn-storm", triggerKind: "warn-storm",
+    firstEventId: null, nodeId: null, hostFqdn: "seg-iot.akoria.net",
+    severity: "warn", status: "investigating",
+    summary: "Warn storm on the IoT segment — 11 probes flapping; Opie is correlating vantages",
+    analysis: null, model: "fable-5", durationSec: null,
+    startedMinAgo: 1, finishedMinAgo: null,
+  });
+  // one failed (model/tooling error) — surfaced so the operator knows to retry
+  opie.push({
+    reportId: orid++, incidentKey: "cesium/disk", triggerKind: "crit",
+    firstEventId: null, nodeId: null, hostFqdn: "cesium.akoria.net",
+    severity: "crit", status: "failed",
+    summary: "Analysis failed — model call timed out after 60s; retry from the report",
+    analysis: null, model: "fable-5", durationSec: 60,
+    startedMinAgo: 18, finishedMinAgo: 17,
   });
 
   // ---- discovered (not-yet-monitored) ----
@@ -388,7 +528,7 @@
 
   window.SOLARI = {
     nodes, segments: SEGMENTS, segRollups, fleetRoll, summary,
-    probes, rules, alerts, discovered, builds, enrollments, config, netgear: NETGEAR,
+    probes, rules, alerts, opie, discovered, builds, enrollments, config, netgear: NETGEAR,
     monitors,
     server: {
       primary: primary.name, primaryId: primary.nodeId,
@@ -396,8 +536,8 @@
       leaseEpoch: 4471, leaseHealthy: true, leaseTtlSec: 15, leaseAgeSec: 2,
       dbHost: "127.0.0.1", historyDays: 90,
     },
-    activeCrit: alerts.filter((a) => !a.cleared && a.severity === "crit").length,
-    activeWarn: alerts.filter((a) => !a.cleared && a.severity === "warn").length,
+    activeCrit: alerts.filter((a) => !a.ackedAt && !a.cleared && a.severity === "crit").length,
+    activeWarn: alerts.filter((a) => !a.ackedAt && !a.cleared && a.severity === "warn").length,
     fmt: {
       kb(kb) { if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB"; if (kb >= 1024) return (kb / 1024).toFixed(0) + " MB"; return kb + " KB"; },
       mbps(m) { if (m >= 1000) return (m / 1000).toFixed(1) + " Gb/s"; return m + " Mb/s"; },

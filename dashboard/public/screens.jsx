@@ -816,10 +816,22 @@
     );
   }
 
-  function AlertsScreen({ onOpenNode, rules, setRules, toast }) {
-    const [tab, setTab] = useState("active");
+  function AlertsScreen({ onOpenNode, onOpenOpie, rules, setRules, toast }) {
+    const [tab, setTab] = useState("active");            // "active" | "history"
     const [acked, setAcked] = useState({});   // eventId -> true (optimistic, until refresh)
-    const list = S.alerts.filter((a) => tab === "all" ? true : !a.cleared);
+    const [confirmAll, setConfirmAll] = useState(false); // arm the Ack-All confirm
+    const [ackingAll, setAckingAll] = useState(false);
+
+    // ---- lifecycle derivation (mirrors the API's status rule) ----
+    const isAcked = (a) => !!(a.ackedAt || acked[a.eventId]);
+    const isCleared = (a) => !!(a.cleared || a.clearedAt);
+    const rowStatus = (a) => isAcked(a) ? "acked" : isCleared(a) ? "cleared" : "active";
+    // ACTIVE board = unacked AND (never cleared OR cleared within the last 60 min).
+    const inActive = (a) => !isAcked(a) && (!isCleared(a) || (a.clearedMinAgo != null ? a.clearedMinAgo : 0) < 60);
+    // "unhandled" = still firing (drives the KPI tiles + nav-badge parity).
+    const unhandled = (a) => !isAcked(a) && !isCleared(a);
+
+    const list = S.alerts.filter((a) => tab === "history" ? !inActive(a) : inActive(a));
     // group events by owning node (nodeless events group under "Fleet / probes");
     // S.alerts is pre-sorted uncleared+crit first, so group order inherits severity.
     const groups = [];
@@ -831,7 +843,7 @@
         byKey.get(k).events.push(a);
       });
     }
-    // POST /api/alerts/{eventId}/ack, then refresh the model
+    // POST /api/alerts/ack {eventId}, then refresh the model
     function ackAlert(a) {
       const x = api();
       if (x && x.ackAlert) {
@@ -845,9 +857,31 @@
         toast("Acknowledged (offline — not persisted)", "check");
       }
     }
-    const crit = S.alerts.filter((a) => !a.cleared && a.severity === "crit").length;
-    const warn = S.alerts.filter((a) => !a.cleared && a.severity === "warn").length;
-    const info = S.alerts.filter((a) => !a.cleared && a.severity === "info").length;
+    // POST /api/alerts/ack-all — ack every currently-ACTIVE alert; report the count.
+    function ackAll() {
+      const x = api();
+      const localIds = S.alerts.filter(inActive).map((a) => a.eventId);
+      const finish = (n) => {
+        setAcked((m) => { const c = { ...m }; localIds.forEach((id) => { c[id] = true; }); return c; });
+        setConfirmAll(false); setAckingAll(false);
+        toast(`Acknowledged ${n} alert${n === 1 ? "" : "s"}`, "check");
+      };
+      if (x && x.ackAllAlerts) {
+        setAckingAll(true);
+        x.ackAllAlerts().then((r) => {
+          const n = (r && (r.count != null ? r.count : r.acked)) != null ? (r.count != null ? r.count : r.acked) : localIds.length;
+          if (x.refresh) x.refresh().catch(() => {});
+          finish(n);
+        }).catch((e) => { setAckingAll(false); toast(`Ack-all failed: ${e && e.message || "error"}`, "close"); });
+      } else {
+        finish(localIds.length);   // offline optimistic
+      }
+    }
+
+    const crit = S.alerts.filter((a) => unhandled(a) && a.severity === "crit").length;
+    const warn = S.alerts.filter((a) => unhandled(a) && a.severity === "warn").length;
+    const info = S.alerts.filter((a) => unhandled(a) && a.severity === "info").length;
+    const activeCount = S.alerts.filter(inActive).length;   // what Ack-All targets
 
     const api = () => (window.SOLARI && window.SOLARI.api) || null;
     // edit threshold locally; persist on commit (POST /api/rules/{id})
@@ -902,9 +936,25 @@
         <div className="page-head">
           <div><h1 className="page-title">Alerts & Tolerances</h1><div className="page-sub">{crit + warn + info} active · {rules.filter((r) => r.enabled).length}/{rules.length} rules armed</div></div>
           <div className="page-head__right">
+            {tab === "active" && (
+              confirmAll ? (
+                <div className="ackall-confirm">
+                  <span className="ackall-confirm__q">Ack {activeCount} active alert{activeCount === 1 ? "" : "s"}?</span>
+                  <button className="btn-primary" disabled={ackingAll} onClick={ackAll}>
+                    <Icon name="check" size={14} />{ackingAll ? "Acking…" : "Confirm"}
+                  </button>
+                  <button className="btn-ghost" disabled={ackingAll} onClick={() => setConfirmAll(false)}>Cancel</button>
+                </div>
+              ) : (
+                <button className={"btn-ghost btn-ackall" + (activeCount === 0 ? " disabled" : "")} disabled={activeCount === 0}
+                  onClick={() => setConfirmAll(true)} title="Acknowledge every active alert">
+                  <Icon name="check" size={14} />Ack all{activeCount > 0 ? ` · ${activeCount}` : ""}
+                </button>
+              )
+            )}
             <div className="seg">
-              <button className={tab === "active" ? "on" : ""} onClick={() => setTab("active")}>Active</button>
-              <button className={tab === "all" ? "on" : ""} onClick={() => setTab("all")}>All</button>
+              <button className={tab === "active" ? "on" : ""} onClick={() => { setTab("active"); setConfirmAll(false); }}>Active</button>
+              <button className={tab === "history" ? "on" : ""} onClick={() => { setTab("history"); setConfirmAll(false); }}>History</button>
             </div>
           </div>
         </div>
@@ -917,10 +967,10 @@
 
         <div className="two-col" style={{ alignItems: "start" }}>
           <div>
-            <div className="page-sub" style={{ marginBottom: 12 }}>{tab === "active" ? "Active events · by node" : "All events (incl. cleared) · by node"}</div>
-            {list.length === 0 && <div className="empty">No alerts — all systems nominal.</div>}
+            <div className="page-sub" style={{ marginBottom: 12 }}>{tab === "active" ? "Live board · by node" : "Retired events (acked or auto-cleared) · by node"}</div>
+            {list.length === 0 && <div className="empty">{tab === "active" ? "No active alerts — all systems nominal." : "No retired alerts yet."}</div>}
             {groups.map((g) => {
-              const open = g.events.filter((a) => !a.cleared);
+              const open = g.events.filter((a) => unhandled(a));
               const gc = open.filter((a) => a.severity === "crit").length;
               const gw = open.filter((a) => a.severity === "warn").length;
               return (
@@ -936,20 +986,34 @@
                       <span className="alert-group__n">{g.events.length} event{g.events.length === 1 ? "" : "s"}</span>
                     </span>
                   </div>
-                  {g.events.map((a) => (
-                    <div key={a.eventId} className={"alert-row " + a.severity + (a.cleared ? " cleared" : "")} onClick={() => a.nodeId && onOpenNode(a.nodeId)}>
+                  {g.events.map((a) => {
+                    const st = rowStatus(a);
+                    return (
+                    <div key={a.eventId} className={"alert-row " + a.severity + (st !== "active" ? " cleared" : "")} onClick={() => a.nodeId && onOpenNode(a.nodeId)}>
                       <span className={"alert-sev " + a.severity}>{a.severity}</span>
                       <div className="alert-main">
                         <div className="t">{a.ruleName}</div>
                         <div className="d">{a.detail}</div>
                       </div>
-                      {!a.cleared && (acked[a.eventId]
-                        ? <span className="tag" style={{ color: "var(--ok)", borderColor: "var(--ok)" }}>ack’d</span>
+                      <span className={"alert-stat " + st} title={st === "acked" && a.ackedBy ? "Acknowledged by " + a.ackedBy : ("Status: " + st)}>
+                        {st === "acked" ? "Acked" : st === "cleared" ? "Cleared" : "Active"}
+                      </span>
+                      {a.opieReportId != null && onOpenOpie && (
+                        <button className="btn-ghost btn-opie" onClick={(ev) => { ev.stopPropagation(); onOpenOpie(a.opieReportId); }}
+                          title="Open Opie's analysis of this incident"><Icon name="pulse" size={13} />Opie</button>
+                      )}
+                      {isAcked(a)
+                        ? <span className="alert-ackby" title={a.ackedBy ? "Acknowledged by " + a.ackedBy : "Acknowledged"}><Icon name="check" size={12} />{a.ackedBy || "ack’d"}</span>
                         : <button className="btn-ghost btn-ack" onClick={(ev) => { ev.stopPropagation(); ackAlert(a); }}
-                            title="Acknowledge this event"><Icon name="check" size={13} />Ack</button>)}
-                      <div className="alert-meta">{a.cleared ? "cleared" : ""}<div>{fmt.ago(a.firedMinAgo)}</div></div>
+                            title="Acknowledge this event"><Icon name="check" size={13} />Ack</button>}
+                      <div className="alert-meta">
+                        {st === "cleared" ? <div>cleared {a.clearedMinAgo != null ? fmt.ago(a.clearedMinAgo) : ""}</div>
+                          : st === "acked" && a.ackedMinAgo != null ? <div>acked {fmt.ago(a.ackedMinAgo)}</div> : null}
+                        <div>{fmt.ago(a.firedMinAgo)}</div>
+                      </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               );
             })}
