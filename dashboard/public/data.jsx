@@ -526,9 +526,40 @@
     uptimeStr: "134d 06h",                 // controller (active server) uptime
   };
 
+  // ---- maintenance windows (scheduled downtime; times stored in UTC) ----
+  // The API returns startsAt/endsAt as UTC DATETIME strings ("YYYY-MM-DD HH:MM:SS");
+  // the UI converts them to the browser's local zone for display. One live window
+  // (on an expected-down host, so it reads "maintenance" not "down") and one
+  // upcoming window on a probe-only host ("benzene", not an enrolled node).
+  function utcStamp(ms) {
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate()) +
+      " " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + ":" + p(d.getUTCSeconds());
+  }
+  const _now = Date.now();
+  const maintTarget = nodes.find((n) => n.state === "down") || nodes[10];
+  const maintenance = [
+    {
+      windowId: 8001, scope: "node",
+      nodeId: maintTarget.nodeId, hostFqdn: maintTarget.hostFqdn, ipAddr: maintTarget.ip,
+      reason: "Kernel upgrade + reboot",
+      startsAt: utcStamp(_now - 32 * 60000), endsAt: utcStamp(_now + 88 * 60000),
+      status: "active", createdBy: "jason", live: true,
+    },
+    {
+      windowId: 8002, scope: "node",
+      nodeId: null, hostFqdn: "benzene", ipAddr: "10.1.0.32",
+      reason: "RAM swap on the probe-only outpost",
+      startsAt: utcStamp(_now + 2 * 3600000), endsAt: utcStamp(_now + 4 * 3600000),
+      status: "scheduled", createdBy: "jason", live: false,
+    },
+  ];
+
   window.SOLARI = {
     nodes, segments: SEGMENTS, segRollups, fleetRoll, summary,
     probes, rules, alerts, opie, discovered, builds, enrollments, config, netgear: NETGEAR,
+    maintenance,
     monitors,
     server: {
       primary: primary.name, primaryId: primary.nodeId,

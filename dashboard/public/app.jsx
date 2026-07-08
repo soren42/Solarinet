@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, MaintenanceScreen } = window;
 
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
@@ -202,6 +202,7 @@
         { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${(S.assets || []).length} monitored` },
         { id: "go-disc", group: "Navigate", label: "Discovery", icon: "discovery", action: () => go("discovery"), sub: `${S.discovered.length} new` },
         { id: "go-prov", group: "Navigate", label: "Provisioning", icon: "provision", action: () => go("provision"), sub: `${S.enrollments.length} pending` },
+        { id: "go-maint", group: "Navigate", label: "Maintenance", icon: "maintenance", action: () => go("maintenance"), sub: `${((S.maintenance || []).filter((w) => w.live || w.status === "active")).length} live` },
         { id: "go-cfg", group: "Navigate", label: "Config & Rules", icon: "settings", action: () => go("settings") },
         { id: "view-heat", group: "Actions", label: "Fleet: Heatmap view", icon: "grid", action: () => { setFleetView("heat"); go("fleet"); } },
         { id: "view-table", group: "Actions", label: "Fleet: Table view", icon: "table", action: () => { setFleetView("table"); go("fleet"); } },
@@ -246,6 +247,7 @@
             {route.name === "topology" && <Topology onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "discovery" && <Discovery onOpenNode={openNode} />}
             {route.name === "provision" && <Provisioning onOpenNode={openNode} />}
+            {route.name === "maintenance" && MaintenanceScreen && <MaintenanceScreen onOpenNode={openNode} toast={toast} />}
             {route.name === "settings" && <ConfigScreen onNav={go} />}
           </div>
         </div>

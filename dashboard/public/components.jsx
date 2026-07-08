@@ -178,6 +178,7 @@
     { id: "assets", label: "Systems", icon: "host" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
+    { id: "maintenance", label: "Maintenance", icon: "maintenance" },
     { id: "settings", label: "Config & Rules", icon: "settings" },
   ];
 

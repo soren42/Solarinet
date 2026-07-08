@@ -306,6 +306,7 @@
   function Cell({ n, dense, onOpenNode }) {
     const load = n.state === "down" ? 0 : n.cpuPct;
     const stale = isStale(n);
+    const MaintenanceBadge = window.MaintenanceBadge;
     return (
       <div className={"cell " + n.state + (dense ? "" : " cozy-cell")} onClick={() => onOpenNode(n)}
         title={`${n.hostFqdn} — ${n.state}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`}>
@@ -313,7 +314,7 @@
           <span className="cell__name">{n.name}</span>
           <span className="cell__dot" style={{ background: STATE_COLOR[n.state], boxShadow: n.state !== "unknown" ? `0 0 6px ${STATE_COLOR[n.state]}` : "none" }} />
         </div>
-        <div className="cell__meta">{n.role === "client" ? n.ip : n.role.toUpperCase()}{stale && <span className="stale-tag">stale</span>}</div>
+        <div className="cell__meta">{n.role === "client" ? n.ip : n.role.toUpperCase()}{stale && <span className="stale-tag">stale</span>}{MaintenanceBadge && <MaintenanceBadge node={n} />}</div>
         {n.alertsCount > 0 && <span className="cell__badge">{n.alertsCount}</span>}
         <div className="cell__spark"><Sparkline data={n.hist.cpu} color={STATE_COLOR[n.state]} h={dense ? 20 : 26} fill={true} strokeW={1.5} /></div>
         <div className="cell__load"><i style={{ width: load + "%", background: metricColor(load), boxShadow: `0 0 5px ${metricColor(load)}` }} /></div>
@@ -362,6 +363,7 @@
   }
 
   function TableView({ nodes, sort, setSort, onOpenNode }) {
+    const MaintenanceBadge = window.MaintenanceBadge;
     const sorted = useMemo(() => {
       const arr = [...nodes];
       const k = sort.key;
@@ -394,7 +396,7 @@
             {sorted.map((n) => (
               <tr key={n.nodeId} onClick={() => onOpenNode(n)}>
                 <td><StatusDot state={n.state} /></td>
-                <td><div className="td-host"><Icon name={ROLE_ICON[n.role]} size={15} className="ico" />{n.name}<span className="td-mono" style={{ fontSize: 10, color: "var(--ink-faint)" }}>.akoria.net</span></div></td>
+                <td><div className="td-host"><Icon name={ROLE_ICON[n.role]} size={15} className="ico" />{n.name}<span className="td-mono" style={{ fontSize: 10, color: "var(--ink-faint)" }}>.akoria.net</span>{MaintenanceBadge && <MaintenanceBadge node={n} style={{ marginLeft: 6 }} />}</div></td>
                 <td><span className="tag">{n.role}</span></td>
                 <td className="td-mono">{n.segName} <span style={{ color: "var(--ink-faint)" }}>{n.ip}</span></td>
                 <td style={{ textAlign: "right" }}><Bar pct={n.cpuPct} /></td>
@@ -817,6 +819,7 @@
   }
 
   function AlertsScreen({ onOpenNode, onOpenOpie, rules, setRules, toast }) {
+    const MaintenanceBadge = window.MaintenanceBadge;
     const [tab, setTab] = useState("active");            // "active" | "history"
     const [acked, setAcked] = useState({});   // eventId -> true (optimistic, until refresh)
     const [confirmAll, setConfirmAll] = useState(false); // arm the Ack-All confirm
@@ -980,6 +983,7 @@
                     <Icon name={g.node ? "host" : "reachability"} size={14} className="ico" />
                     <span className="alert-group__name">{g.key}</span>
                     {g.segName && <span className="alert-group__seg">{g.segName}</span>}
+                    {MaintenanceBadge && <MaintenanceBadge nodeId={g.nodeId} hostFqdn={g.node ? g.node + ".akoria.net" : null} />}
                     <span className="alert-group__counts">
                       {gc > 0 && <span className="attn__pill crit">{gc} crit</span>}
                       {gw > 0 && <span className="attn__pill warn">{gw} warn</span>}

@@ -975,3 +975,43 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
 .md-table td { font-family: var(--mono); font-size: 12px; color: var(--ink); }
 .md a { color: var(--teal); text-decoration: none; }
 .md a:hover { text-decoration: underline; }
+
+/* ===================== MAINTENANCE ===================== */
+/* small "In Maintenance" badge — surfaced on Fleet + Alerts so an expected-down
+   host reads as suppressed maintenance (calm violet), not a red alarm. */
+.maint-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--violet); background: rgba(139,108,255,.14); border: 1px solid var(--violet);
+  border-radius: 5px; padding: 1px 6px; white-space: nowrap; vertical-align: 1px; line-height: 1.5;
+}
+.maint-badge svg { display: block; flex: 0 0 auto; }
+
+/* schedule form + window list */
+.maint-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.maint-form .full { grid-column: 1 / -1; }
+@media (max-width: 720px) { .maint-form { grid-template-columns: 1fr; } }
+.maint-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; opacity: .6; margin-bottom: 5px; display: block; }
+.maint-input {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line-glow, rgba(255,255,255,0.14)); background: rgba(255,255,255,0.04);
+  color: inherit; font-family: inherit; font-size: 13px;
+}
+
+.maint-list { margin-top: 4px; }
+.maint-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border: 1px solid var(--line); border-left: 3px solid var(--violet);
+  border-radius: var(--r-md); background: var(--panel); margin-bottom: 8px;
+}
+.maint-row.is-live { border-left-color: var(--ok); }
+.maint-row.is-past { opacity: .6; border-left-color: var(--line-2); }
+.maint-row__main { flex: 1; min-width: 0; }
+.maint-row__host { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.maint-row__host .fqdn { color: var(--ink-faint); font-weight: 400; }
+.maint-row__when { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); margin-top: 4px; }
+.maint-row__reason { font-size: 12px; color: var(--ink-faint); margin-top: 2px; }
+.maint-live-pill {
+  font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 20px; background: var(--ok-bg); color: var(--ok);
+}
