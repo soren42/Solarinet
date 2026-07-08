@@ -19,6 +19,28 @@ import datetime
 import os
 import sys
 
+# The server clock is UTC, but you think in local time. Windows are STORED in UTC
+# (to match MySQL NOW()), but the CLI ACCEPTS and DISPLAYS your local timezone so
+# "--from 3:00 PM" and the listing both mean what you expect.
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo(os.environ.get("SOLARI_TZ", "America/New_York"))
+except Exception:  # noqa: BLE001 — fall back to fixed EDT if tzdata is missing
+    LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=-4), "EDT")
+UTC = datetime.timezone.utc
+
+
+def now_utc_naive():
+    return datetime.datetime.now(UTC).replace(tzinfo=None)
+
+
+def local_to_utc(dt_naive_local):
+    return dt_naive_local.replace(tzinfo=LOCAL_TZ).astimezone(UTC).replace(tzinfo=None)
+
+
+def utc_to_local(dt_naive_utc):
+    return dt_naive_utc.replace(tzinfo=UTC).astimezone(LOCAL_TZ)
+
 try:
     import pymysql
 except ImportError:
@@ -54,16 +76,17 @@ def resolve_target(cur, host):
 
 
 def parse_dt(s):
+    """Parse a local-time 'YYYY-MM-DD HH:MM' into a naive-UTC datetime for storage."""
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M"):
         try:
-            return datetime.datetime.strptime(s, fmt)
+            return local_to_utc(datetime.datetime.strptime(s, fmt))
         except ValueError:
             continue
-    sys.exit(f"bad datetime {s!r} (use 'YYYY-MM-DD HH:MM')")
+    sys.exit(f"bad datetime {s!r} (use local 'YYYY-MM-DD HH:MM')")
 
 
 def cmd_schedule(conn, args):
-    now = datetime.datetime.now()
+    now = now_utc_naive()   # stored/compared in UTC to match MySQL NOW()
     if args.hours:
         start, end = now, now + datetime.timedelta(hours=args.hours)
     elif args.from_ and args.to:
@@ -91,7 +114,8 @@ def cmd_schedule(conn, args):
     if node_id is not None: kind.append("client-node")
     if ip: kind.append(f"probe-target {ip}")
     tgt = "ALL HOSTS" if scope == "all" else f"{fqdn} ({', '.join(kind) or 'unresolved'})"
-    print(f"scheduled window #{wid}: {tgt}  {start:%Y-%m-%d %H:%M} -> {end:%H:%M}"
+    ls, le = utc_to_local(start), utc_to_local(end)
+    print(f"scheduled window #{wid}: {tgt}  {ls:%Y-%m-%d %I:%M %p} -> {le:%I:%M %p %Z}"
           f"  ({args.reason or 'maintenance'})")
     active = start <= now <= end
     print("  -> ACTIVE NOW: suppression in effect." if active
@@ -112,8 +136,9 @@ def cmd_list(conn, args):
     for r in rows:
         tgt = "ALL" if r["scope"] == "all" else (r["hostFqdn"] or "?")
         flag = "● LIVE" if r["live"] else f"  {r['status']}"
+        s, e = utc_to_local(r["startsAt"]), utc_to_local(r["endsAt"])
         print(f"#{r['windowId']:<4} {flag:8} {tgt:<22} "
-              f"{r['startsAt']:%m-%d %H:%M}->{r['endsAt']:%H:%M}  {r['reason'] or ''}")
+              f"{s:%m-%d %I:%M %p}->{e:%I:%M %p}  {r['reason'] or ''}")
 
 
 def cmd_cancel(conn, args):
