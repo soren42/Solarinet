@@ -1,14 +1,25 @@
-# avahi_import — Avahi/mDNS discovery importer
+# mDNS/zeroconf discovery — live inspector + file importer
 
-Augments the SolariNet Discovery asset table (`discovered`) with mDNS host
-names and advertised-service summaries pulled from an **Avahi Browser**
-JSON export (the mobile/desktop app's "export" feature — top-level
-`{"hosts": [...]}`, one entry per mDNS host with its `addresses` and
-`services`). Ops/infra glue — Python, not part of the C `solariServer`/
-`solariMonitor` core (accepted per `CLAUDE.md`, same convention as
-`deploy/sorsync/` and `deploy/alertbridge/`).
+Two tools, one shared upsert core, both augmenting the SolariNet Discovery
+asset table (`discovered`) with mDNS host names and advertised-service
+summaries:
 
-## What it does
+- **`mdns_inspect.py`** (primary, LIVE) — actively browses mDNS/zeroconf/
+  Bonjour on the wire for a bounded window and upserts whatever it resolves.
+  This is what a discovery probe runs.
+- **`avahi_import.py`** (secondary, file-based) — the original one-shot
+  importer: reads a previously-saved **Avahi Browser** app JSON export
+  (top-level `{"hosts": [...]}`) and upserts it. Still useful for replaying
+  a capture from a phone/tablet that can reach a segment the probe host
+  can't. `mdns_inspect.py` imports this module and calls its upsert logic
+  directly rather than reimplementing it — the two tools share one
+  correlate/UPDATE/INSERT code path.
+
+Ops/infra glue — Python, not part of the C `solariServer`/`solariMonitor`
+core (accepted per `CLAUDE.md`, same convention as `deploy/sorsync/` and
+`deploy/alertbridge/`).
+
+## What it does (shared upsert logic)
 
 For each host in the export with at least one IPv4 address:
 
@@ -35,7 +46,79 @@ Idempotent — re-running the same export is a no-op beyond `seenCount`/
 logged and skipped; the run keeps going and exits non-zero only if any row
 errored.
 
-## Usage
+## mdns_inspect.py — LIVE inspector
+
+Actively browses mDNS/DNS-SD for a bounded window (`--timeout`, default 8s)
+instead of reading a saved export, then upserts exactly like `avahi_import.py`
+would for the equivalent hosts/services (it imports `avahi_import` as a module
+and calls its `load_cfg()`/`db_connect()`/`import_export()` directly — the
+correlate-by-IPv4 / UPDATE-`mdnsName`+`mdnsServices` / INSERT-`via='mdns'`
+logic lives in exactly one place).
+
+Two browse backends, tried in order:
+
+1. **python-zeroconf** (`pip install zeroconf`), if importable — pure-Python,
+   no external binary needed.
+2. **`avahi-browse -aprtk`** (all types, parsable, resolve, terminate,
+   raw/no-db-lookup type names), shelled out to if the binary is on `PATH`.
+   Same tool `serverScan.c`'s `scanEnrichMdns()` already shells out to
+   per-host during a portscan sweep — this is the standalone, DB-writing,
+   whole-LAN equivalent.
+
+If **neither** is available, it logs one line and exits **0** — a probe host
+without mDNS tooling installed must never fail a discovery run over it.
+
+```
+python3 -m venv .venv && .venv/bin/pip install pymysql
+# optional but preferred: .venv/bin/pip install zeroconf
+cp mdns_inspect.conf.example mdns_inspect.conf && $EDITOR mdns_inspect.conf
+chmod 600 mdns_inspect.conf
+
+# Preview only, no writes, single pass:
+source ../../run/db.env   # exports SOLARI_DB_PASS
+.venv/bin/python3 mdns_inspect.py --once --dry-run
+
+# Apply, single pass (what the systemd oneshot unit runs):
+.venv/bin/python3 mdns_inspect.py --once
+
+# Standalone continuous mode (no --once): browses, upserts, sleeps
+# --interval seconds (default 60), repeats until SIGTERM/SIGINT.
+.venv/bin/python3 mdns_inspect.py
+```
+
+Flags: `--once` (single pass then exit — what the oneshot unit uses),
+`--timeout SECONDS` (per-pass active browse duration, default 8),
+`--interval SECONDS` (sleep between passes in the non-`--once` loop, default
+60), `--dry-run`, `--conf PATH` (default `mdns_inspect.conf` next to the
+script, or `$MDNS_INSPECT_CONF`). DB creds come from `mdns_inspect.conf` (same
+`[db]` shape as `avahi_import.conf`) or `$SOLARI_DB_PASS` — source
+`run/db.env` first, same convention as `deploy/alertbridge/alertbridge.py`.
+
+### Wiring into a discovery probe
+
+`mdns_inspect.py`/`solari-mdns-inspect.service` are standalone — the C
+control plane (`solariServer`'s `serverScan.c` / `solariMonitor`) is **not**
+modified to call them. Two ways to make "runs with each discovery probe" real
+without touching the C core:
+
+1. **Scan hook (recommended).** `serverScanRun()` (`serverScan.h`) is the
+   entry point an operator-driven discovery scan already funnels through
+   (`solariCtl` -> `serverScan.c`). Add a thin wrapper around whatever
+   invokes a scan (an operator script, a cron/systemd-timer, or a future
+   `solariCtl scan` post-hook) that does, after the scan:
+   `systemctl start solari-mdns-inspect.service` (or, run from the repo
+   directly, `deploy/discovery/.venv/bin/python3
+   deploy/discovery/mdns_inspect.py --once`). This keeps the mDNS browse
+   fully out-of-process from `solariServer` — same arm's-length relationship
+   `avahi_import.py` already had to the core.
+2. **Its own cadence.** Since `mdns_inspect.py --once` is cheap
+   (`--timeout`-bounded, a handful of seconds) and idempotent, it's also fine
+   to just enable a `systemd` timer (`solari-mdns-inspect.timer`, not
+   included — copy the pattern from `deploy/backups/`) firing every few
+   minutes independent of when a portscan-style discovery sweep runs; either
+   way it lands in the same `discovered` table a scan does, correlated by IP.
+
+## avahi_import.py — file importer
 
 ```
 python3 -m venv .venv && .venv/bin/pip install pymysql

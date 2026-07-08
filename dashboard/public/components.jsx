@@ -176,6 +176,7 @@
     { id: "opie", label: "Analysis", icon: "pulse", badge: "opie" },
     { group: "Manage" },
     { id: "assets", label: "Systems", icon: "host" },
+    { id: "inventory", label: "Inventory", icon: "inventory" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
     { id: "settings", label: "Config & Rules", icon: "settings" },

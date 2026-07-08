@@ -177,6 +177,19 @@
     logout:       "/api/auth/logout",
     whoami:       "/api/auth/whoami",
     authConfig:   "/api/auth/config",   // public: which sign-in options to show
+
+    // ---- inventory (SoR migration 014) ----
+    inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
+    invUnits:     "/api/inventory/units",    // GET list / POST create
+    invUnit:      function (id) { return "/api/inventory/units/" + encodeURIComponent(id); },   // POST update
+    invModels:    "/api/inventory/models",   // GET list / POST create
+    invLocations: "/api/inventory/locations",// GET tree / POST create
+    invReceipts:  "/api/inventory/receipts", // GET list / POST create (multipart scan upload)
+    invProjects:  "/api/inventory/projects", // GET list / POST create
+    invProject:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id); },
+    invAllocations: "/api/inventory/allocations",   // POST create (commit owned unit OR add needed model)
+    invAllocation:  function (id) { return "/api/inventory/allocations/" + encodeURIComponent(id); },
+    invShopping:  function (pid) { return "/api/inventory/projects/" + encodeURIComponent(pid) + "/shopping"; },
   };
 
   // =====================================================================
@@ -452,6 +465,9 @@
       getJSON(EP.whoami).catch(function () { return null; }),
       // Opie / Analysis reports — never let a missing panel break the boot.
       getJSON(EP.opie + "?status=all").catch(function () { return []; }),
+      // Inventory (SoR migration 014) — tolerate absence so it never forces the
+      // whole dashboard offline; the Inventory screen also re-reads on mount.
+      getJSON(EP.inventory).catch(function () { return null; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -472,6 +488,13 @@
       var poolsW = A(res[11]);
       var assetsW = A(res[12]);
       var opieW = A(res[14]);
+      // inventory — combined read; normalise each list, tolerate a null/partial payload.
+      var invW = res[15] && typeof res[15] === "object" ? res[15] : {};
+      var inventory = {
+        models: A(invW.models), units: A(invW.units), locations: A(invW.locations),
+        receipts: A(invW.receipts), projects: A(invW.projects), allocations: A(invW.allocations),
+        seq: (FIXTURE.inventory && FIXTURE.inventory.seq) || { unit: 100, location: 100, receipt: 100, project: 100, allocation: 100, model: 100 },
+      };
       // whoami -> S.operator {name, role, displayName, source, directoryEnabled}
       var whoW = res[13];
       var operator = (whoW && whoW.operator) ? {
@@ -565,6 +588,7 @@
         probes: probes, rules: rules, alerts: alerts, opie: opie, discovered: discovered,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
+        inventory: inventory,
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
@@ -718,6 +742,35 @@
 
     // survey (already in base §11.2)
     survey: function (scope) { return post(EP.survey, { scope: scope || "all" }); },
+
+    // ---- inventory (SoR migration 014) ----
+    // Combined read → {models,units,locations,receipts,projects,allocations}.
+    inventory:        function () { return getJSON(EP.inventory); },
+    // components (hardware_units)
+    createUnit:       function (body) { return post(EP.invUnits, body || {}); },
+    updateUnit:       function (id, body) { return post(EP.invUnit(id), body || {}); },
+    // models catalog (hardware_models)
+    createModel:      function (body) { return post(EP.invModels, body || {}); },
+    // locations (drawer/tray/bin hierarchy)
+    createLocation:   function (body) { return post(EP.invLocations, body || {}); },
+    // receipts — scan upload is multipart (FormData); pass a FormData for the file.
+    createReceipt:    function (body) { return post(EP.invReceipts, body || {}); },
+    uploadReceipt:    function (form) {
+      // form is a FormData (vendor, purchased_on, subtotal_cents, order_ref, scan file).
+      var url = EP.invReceipts.charAt(0) === "/" ? EP.invReceipts : (BASE + EP.invReceipts);
+      return fetch(url, { method: "POST", credentials: "same-origin", body: form })
+        .then(function (r) { return r.json().then(unwrap); });
+    },
+    // projects + allocations
+    createProject:    function (body) { return post(EP.invProjects, body || {}); },
+    updateProject:    function (id, body) { return post(EP.invProject(id), body || {}); },
+    // Commit an owned unit (allocation:'committed'|'installed') OR add a needed
+    // model (allocation:'needed', hardware_model_id). The DB double-commit guard
+    // SIGNALs SQLSTATE 45000 → the server maps it to HTTP 409; callers catch it.
+    createAllocation: function (body) { return post(EP.invAllocations, body || {}); },
+    updateAllocation: function (id, body) { return post(EP.invAllocation(id), body || {}); },
+    // per-project shopping list (v_project_shopping): needed items with no owned unit.
+    shopping:         function (projectId) { return getJSON(EP.invShopping(projectId)); },
 
     // refresh the whole model in place (re-runs loadLive, keeps fmt/api). Mutates
     // window.SOLARI in place so captured `const S = window.SOLARI` refs stay live.
