@@ -1,0 +1,33 @@
+; SolariNet MAC->vendor OUI enricher (oui_enrich.py, one-shot).
+; Reads `discovered` rows with a mac set but vendor unset, resolves the OUI
+; (first 3 octets) against a LOCAL offline table (nmap-mac-prefixes, or the
+; `manuf` python lib as a fallback), and UPDATEs vendor + enrichedAt, then
+; exits — Type=oneshot. Meant to be run alongside
+; solari-mdns-inspect.service after a discovery scan (see README.md "Wiring
+; into a discovery probe" — mac is populated by the ARP/portscan/SNMP
+; enrichment path in serverScan.c, this tool only fills in vendor from it),
+; not on a timer of its own. Install: see deploy/discovery/README.md.
+; Assumes repo at /home/jason/Code/Solarinet.
+;
+; The DB password is NOT in oui_enrich.conf: run/db.env (KEY=VALUE with an
+; `export`, mode 0600) provides SOLARI_DB_PASS, sourced here — same
+; convention as deploy/alertbridge/alertbridge.service /
+; deploy/discovery/solari-mdns-inspect.service.
+[Unit]
+Description=SolariNet MAC->vendor OUI enricher (one enrich-and-update pass)
+After=network.target mariadb.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/discovery
+Environment=OUI_ENRICH_CONF=/home/jason/Code/Solarinet/deploy/discovery/oui_enrich.conf
+; Source run/db.env (exports SOLARI_DB_PASS) then run one pass and exit.
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /home/jason/Code/Solarinet/deploy/discovery/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/discovery/oui_enrich.py'
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

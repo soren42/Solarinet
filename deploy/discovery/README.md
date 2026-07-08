@@ -1,8 +1,7 @@
-# mDNS/zeroconf discovery — live inspector + file importer
+# Discovery enrichment — mDNS inspector/importer + MAC->vendor OUI enricher
 
-Two tools, one shared upsert core, both augmenting the SolariNet Discovery
-asset table (`discovered`) with mDNS host names and advertised-service
-summaries:
+Three tools augmenting the SolariNet Discovery asset table (`discovered`)
+with mDNS host names/services and a vendor name derived from each host's MAC:
 
 - **`mdns_inspect.py`** (primary, LIVE) — actively browses mDNS/zeroconf/
   Bonjour on the wire for a bounded window and upserts whatever it resolves.
@@ -14,6 +13,10 @@ summaries:
   can't. `mdns_inspect.py` imports this module and calls its upsert logic
   directly rather than reimplementing it — the two tools share one
   correlate/UPDATE/INSERT code path.
+- **`oui_enrich.py`** — offline MAC->vendor lookup. Reads `discovered` rows
+  where `mac` is set (populated by the ARP/portscan/SNMP enrichment path in
+  `serverScan.c`, not by this repo's mDNS tools) but `vendor` is still NULL,
+  and fills in `vendor` from a local OUI table. See its own section below.
 
 Ops/infra glue — Python, not part of the C `solariServer`/`solariMonitor`
 core (accepted per `CLAUDE.md`, same convention as `deploy/sorsync/` and
@@ -110,13 +113,19 @@ without touching the C core:
    directly, `deploy/discovery/.venv/bin/python3
    deploy/discovery/mdns_inspect.py --once`). This keeps the mDNS browse
    fully out-of-process from `solariServer` — same arm's-length relationship
-   `avahi_import.py` already had to the core.
+   `avahi_import.py` already had to the core. **`oui_enrich.py` should run
+   in the same hook, right alongside `solari-mdns-inspect.service`**
+   (`systemctl start solari-oui-enrich.service`) — a scan freshly populates
+   `discovered.mac` via ARP/portscan/SNMP, so this is the natural point to
+   also fill in `vendor` from it.
 2. **Its own cadence.** Since `mdns_inspect.py --once` is cheap
    (`--timeout`-bounded, a handful of seconds) and idempotent, it's also fine
    to just enable a `systemd` timer (`solari-mdns-inspect.timer`, not
    included — copy the pattern from `deploy/backups/`) firing every few
    minutes independent of when a portscan-style discovery sweep runs; either
    way it lands in the same `discovered` table a scan does, correlated by IP.
+   `oui_enrich.py` is cheap the same way (a table lookup + one UPDATE per
+   unenriched row, no network I/O) and could share that timer.
 
 ## avahi_import.py — file importer
 
@@ -143,11 +152,65 @@ fresh export, or wire it into a cron/systemd-timer the same way
 `run/db.env` for `SOLARI_DB_PASS` first (same convention as
 `deploy/alertbridge/alertbridge.service`).
 
+## oui_enrich.py — MAC->vendor OUI enricher
+
+Reads `discovered` rows with a non-empty `mac` and a NULL/empty `vendor`,
+resolves the OUI (first 3 octets) to a manufacturer name via a **local,
+offline** table — no network MAC-vendor lookup API is called — and `UPDATE`s
+`vendor` + `enrichedAt`.
+
+OUI source, tried in order: **`/usr/share/nmap/nmap-mac-prefixes`** (present
+wherever nmap is installed, e.g. xenon — plain text, `XXXXXX Vendor Name`
+per line), then the python **`manuf`** library if importable as a fallback.
+If neither is available it logs a clear message and exits 0 — a probe host
+missing both must never fail a discovery run over it.
+
+```
+python3 -m venv .venv && .venv/bin/pip install pymysql
+# optional fallback if nmap-mac-prefixes isn't present: .venv/bin/pip install manuf
+cp oui_enrich.conf.example oui_enrich.conf && $EDITOR oui_enrich.conf
+chmod 600 oui_enrich.conf
+
+# Preview only, no writes — also prints a vendor/mac coverage count:
+source ../../run/db.env   # exports SOLARI_DB_PASS
+.venv/bin/python3 oui_enrich.py --dry-run
+
+# Apply (what the systemd oneshot unit runs):
+.venv/bin/python3 oui_enrich.py
+```
+
+Flags: `--dry-run` (report would-be updates without writing), `--conf PATH`
+(default `oui_enrich.conf` next to the script, or `$OUI_ENRICH_CONF`),
+`--nmap-prefixes PATH` (default `/usr/share/nmap/nmap-mac-prefixes`, or
+`$OUI_ENRICH_NMAP_PREFIXES`). DB creds come from `oui_enrich.conf` (same
+`[db]` shape as `avahi_import.conf`) or `$SOLARI_DB_PASS` — source
+`run/db.env` first, same convention as `deploy/alertbridge/alertbridge.py`.
+
+MAC normalization: `:`/`-`/`.` separators stripped, uppercased, first 6 hex
+chars taken as the OUI; a MAC that doesn't reduce to 6 valid hex chars is
+skipped (logged, fail-soft, doesn't abort the run) rather than erroring.
+
+Idempotent — only rows with `vendor IS NULL OR vendor = ''` are selected, so
+re-running after every row is enriched (or every OUI is simply not in the
+table) is a no-op. Exits non-zero only if a per-row DB error occurred; an
+unresolved OUI (not in the table) is not an error.
+
+`solari-oui-enrich.service` is the matching systemd oneshot unit — same
+shape as `solari-mdns-inspect.service` (sources `run/db.env`, `Type=oneshot`,
+started by the scan hook, see "Wiring into a discovery probe" above). It
+should run **alongside** `solari-mdns-inspect.service` after a discovery
+scan: the scan is what populates `discovered.mac` in the first place (via
+`serverScan.c`'s ARP/portscan/SNMP enrichment), so triggering both from the
+same post-scan hook keeps `vendor` current with `mac`.
+
 ## Schema
 
 `db/migrations/013_mdns_services.sql` adds `discovered.mdnsServices
 VARCHAR(512) NULL`, additive/idempotent, alongside the existing `mdnsName`
-(`009_mdns_name.sql`). `db/schema.sql` is the baseline-only (migration 001)
+(`009_mdns_name.sql`). `db/migrations/007_discovery_enrichment.sql` adds
+`discovered.mac VARCHAR(17)`, `vendor VARCHAR(64)`, `enrichedAt DATETIME`
+(among others) — `oui_enrich.py` only ever reads `mac` and writes
+`vendor`/`enrichedAt`. `db/schema.sql` is the baseline-only (migration 001)
 canonical schema and doesn't define `discovered` at all — that table (and
 every other migration since 002) already isn't mirrored there, so this
 migration follows the same, established precedent.
