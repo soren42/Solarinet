@@ -34,14 +34,58 @@
     if (!s || typeof s !== "object") return "";
     return [s.product, s.version].filter(Boolean).join(" ");
   }
-  // A host learned over mDNS/zeroconf (or with a *.local name) gets an origin chip.
+  // A host learned over mDNS/zeroconf (or with a *.local name, an mDNS record, or
+  // advertised service types) gets an origin chip. Matches "mdns"/"mDNS" via.
   function isMdns(d) {
-    return d.via === "mdns" || (typeof d.host === "string" && /\.local$/i.test(d.host));
+    return /mdns/i.test(String(d.via || ""))
+      || !!d.mdnsName
+      || (Array.isArray(d.mdnsServices) && d.mdnsServices.length > 0)
+      || (typeof d.host === "string" && /\.local$/i.test(d.host));
   }
+
+  // Normalise seenCount + mac + mdns into small render helpers used by the table.
+  const numOr0 = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+  // "3m ago" / "2h 04m ago" / "—" from a minutes-ago integer.
+  function seenAgo(mins) {
+    const m = numOr0(mins);
+    if (!m) return "just now";
+    if (m < 60) return m + "m ago";
+    const h = Math.floor(m / 60);
+    return h + "h " + String(m % 60).padStart(2, "0") + "m ago";
+  }
+  // A compact "sw-core-01 · Gi1/0/12" neighbor label, or null.
+  function neighborLabel(n) {
+    if (!n) return null;
+    const parts = [];
+    if (n.gearName) parts.push(n.gearName);
+    if (n.peerPort) parts.push(n.peerPort);
+    else if (n.localIf) parts.push(n.localIf);
+    return parts.length ? parts.join(" · ") : null;
+  }
+  const ROLE_TONE = {
+    server: "var(--teal)", nas: "var(--violet)", printer: "var(--warn)",
+    camera: "var(--warn)", iot: "var(--warn)", network: "var(--violet)",
+    ap: "var(--violet)", gateway: "var(--violet)", workstation: "var(--teal)",
+    host: "var(--teal)",
+  };
 
   function Discovery({ onOpenNode }) {
     const [staged, setStaged] = useState({});      // host -> "staged" | "ignored"
     const [auto, setAuto] = useState(!!S.config.autoDiscover);
+
+    // Full candidate list. Boot with the fixture/boot slice (S.discovered), then
+    // pull the complete set (every status) from /api/discovery so the screen can
+    // filter across new/adopted/ignored without a reload. Offline → keep S.
+    const [rows, setRows] = useState(S.discovered || []);
+    useEffect(function () {
+      const a = api();
+      if (!a || !a.listDiscovered) return;
+      let live = true;
+      a.listDiscovered("all").then(function (list) {
+        if (live && Array.isArray(list) && list.length) setRows(list);
+      }).catch(function () { /* keep the boot slice */ });
+      return function () { live = false; };
+    }, []);
 
     // Persist the toggle: POST /api/config with the full effective global config
     // (same body shape ConfigScreen saves) so it survives reloads. On load the
@@ -65,10 +109,28 @@
     const [cidr, setCidr] = useState("");
     const [scanning, setScanning] = useState(false);
     const [adoptDisc, setAdoptDisc] = useState(null);   // discovered entity in the adopt dialog
-    const items = S.discovered;
-    const active = items.filter((d) => staged[d.host] !== "ignored");
+
+    // ---- filter / search / sort state ----
+    const [q, setQ] = useState("");
+    const [statusFilter, setStatusFilter] = useState("new");  // new | adopted | ignored | all
+    const [viaFilter, setViaFilter] = useState("all");
+    const [sort, setSort] = useState({ key: "seen", dir: 1 });
+
+    // Effective status after the local optimistic overlay (ignore/stage).
+    function effStatus(d) {
+      const ov = staged[d.host];
+      if (ov === "ignored") return "ignored";
+      if (ov === "staged") return "adopted";
+      return d.status || "new";
+    }
+
+    // via-method breakdown (raw via string is consistent within one data source).
     const byVia = {};
-    items.forEach((d) => { byVia[d.via] = (byVia[d.via] || 0) + 1; });
+    rows.forEach((d) => { if (d.via) byVia[d.via] = (byVia[d.via] || 0) + 1; });
+    const viaKeys = Object.keys(byVia).sort();
+
+    const statusCounts = { new: 0, adopted: 0, ignored: 0, all: rows.length };
+    rows.forEach((d) => { const s = effStatus(d); if (statusCounts[s] != null) statusCounts[s]++; });
 
     // "+ Monitor" opens the adopt dialog (pick services, heartbeat, name, pool).
     function stage(d) { setAdoptDisc(d); }
@@ -112,10 +174,59 @@
       }).finally(function () { setScanning(false); });
     }
 
+    // ---- filter → search → sort pipeline ----
+    const ql = q.trim().toLowerCase();
+    let view = rows.filter(function (d) {
+      if (statusFilter !== "all" && effStatus(d) !== statusFilter) return false;
+      if (viaFilter !== "all" && d.via !== viaFilter) return false;
+      if (!ql) return true;
+      // Search covers vendor / service / role / segment plus identity + SNMP.
+      const svcHay = (d.services || []).map(function (s) { return svcName(s); }).join(" ");
+      const hay = [
+        d.host, d.ip, d.mac, d.vendor, d.osName, d.deviceRole, d.sysDescr,
+        d.mdnsName, (d.mdnsServices || []).join(" "), svcHay, d.seg, d.via,
+        d.neighbor && d.neighbor.gearName, d.neighbor && d.neighbor.peerPort,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return hay.indexOf(ql) >= 0;
+    });
+    function keyOf(d) {
+      switch (sort.key) {
+        case "host": return (d.host || d.ip || "").toLowerCase();
+        case "vendor": return (d.vendor || "").toLowerCase();
+        case "os": return (d.osName || "").toLowerCase();
+        case "role": return (d.deviceRole || "").toLowerCase();
+        case "seg": return (d.seg || "").toLowerCase();
+        case "via": return (d.via || "").toLowerCase();
+        case "neighbor": return ((d.neighbor && d.neighbor.gearName) || "").toLowerCase();
+        case "seen": return numOr0(d.seen);
+        default: return 0;
+      }
+    }
+    view = view.slice().sort(function (a, b) {
+      const ka = keyOf(a), kb = keyOf(b);
+      if (ka < kb) return -sort.dir;
+      if (ka > kb) return sort.dir;
+      return 0;
+    });
+    function th(key, label, right) {
+      const on = sort.key === key;
+      return <th style={{ cursor: "pointer", textAlign: right ? "right" : undefined, whiteSpace: "nowrap" }}
+        onClick={function () { setSort(function (s) { return { key: key, dir: s.key === key ? -s.dir : 1 }; }); }}>
+        {label}{on ? <span style={{ color: "var(--teal)", marginLeft: 4 }}>{sort.dir > 0 ? "▲" : "▼"}</span> : null}
+      </th>;
+    }
+
+    const STATUS_CHIPS = [
+      { k: "new", label: "New" },
+      { k: "adopted", label: "Adopted" },
+      { k: "ignored", label: "Ignored" },
+      { k: "all", label: "All" },
+    ];
+
     return (
       <div className="page">
         <div className="page-head">
-          <div><h1 className="page-title">Discovery</h1><div className="page-sub">{items.length} candidates found · not yet monitored</div></div>
+          <div><h1 className="page-title">Discovery</h1><div className="page-sub">{statusCounts.new} candidates · {rows.length} assets seen</div></div>
           <div className="page-head__right">
             <input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="192.168.1.0/24"
               onKeyDown={(e) => { if (e.key === "Enter") scanNow(); }}
@@ -130,63 +241,142 @@
         </div>
 
         <div className="kpis">
-          <div className="kpi teal"><div className="kpi__k">Candidates</div><div className="kpi__v">{active.filter((d) => staged[d.host] !== "staged").length}</div><div className="kpi__sub">awaiting decision</div><div className="kpi__bar" /></div>
-          <div className="kpi ok"><div className="kpi__k">Staged</div><div className="kpi__v">{Object.values(staged).filter((v) => v === "staged").length}</div><div className="kpi__sub">enrollment issued</div><div className="kpi__bar" /></div>
-          {Object.entries(byVia).slice(0, 3).map(([via, n]) => (
-            <div className="kpi" key={via}><div className="kpi__k">{via}</div><div className="kpi__v" style={{ color: "var(--violet)" }}>{n}</div><div className="kpi__sub">via this method</div><div className="kpi__bar" style={{ background: "var(--violet)" }} /></div>
+          <div className="kpi teal"><div className="kpi__k">Candidates</div><div className="kpi__v">{statusCounts.new}</div><div className="kpi__sub">awaiting decision</div><div className="kpi__bar" /></div>
+          <div className="kpi ok"><div className="kpi__k">Adopted</div><div className="kpi__v">{statusCounts.adopted}</div><div className="kpi__sub">now monitored</div><div className="kpi__bar" /></div>
+          {viaKeys.slice(0, 3).map((via) => (
+            <div className="kpi" key={via}><div className="kpi__k">{via}</div><div className="kpi__v" style={{ color: "var(--violet)" }}>{byVia[via]}</div><div className="kpi__sub">via this method</div><div className="kpi__bar" style={{ background: "var(--violet)" }} /></div>
           ))}
         </div>
 
-        <div className="page-sub" style={{ margin: "4px 0 12px" }}>Discovered hosts & services</div>
-        {active.map((d) => {
-          const isStaged = staged[d.host] === "staged";
-          return (
-            <div key={d.host} className="disc-row">
-              <Icon name={d.kind === "service" ? "link" : "host"} size={20} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
-              <div className="disc-main">
-                <div className="disc-host">{d.host}<span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>{d.ip}</span>
-                  {isMdns(d) && <span className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)", marginLeft: 8 }}><Icon name="link" size={10} style={{ verticalAlign: "-1px", marginRight: 3 }} />mDNS</span>}
-                  {d.deviceRole && <span className="svc-chip" style={{ borderColor: "var(--teal)", color: "var(--teal)", marginLeft: 8 }}>{d.deviceRole}</span>}
-                </div>
-                <div className="disc-svcs">
-                  {d.services.map((s, i) => {
-                    const det = svcDetail(s);
-                    return (
-                      <span key={i} className="svc-chip" title={det ? svcName(s) + " · " + det : undefined}>
-                        {svcName(s)}{svcPort(s) ? ":" + svcPort(s) : ""}
-                        {det ? <span className="muted" style={{ marginLeft: 4, fontSize: 10 }}>{det}</span> : null}
-                      </span>
-                    );
-                  })}
-                </div>
-                {(d.osName || d.vendor) && (
-                  <div className="td-mono muted" style={{ fontSize: 11, marginTop: 3 }}>
-                    {[d.vendor, d.osName].filter(Boolean).join(" · ")}
-                    {d.mac ? <span style={{ opacity: 0.6 }}>{"  " + d.mac}</span> : null}
-                  </div>
-                )}
-                {d.sysDescr && (
-                  <div className="td-mono muted" style={{ fontSize: 11, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 520 }} title={d.sysDescr}>
-                    {d.sysDescr}
-                  </div>
-                )}
-              </div>
-              <div className="disc-meta">
-                <span className="tag">{d.via}</span>
-                <span className="td-mono muted">{d.seg} · {d.arch}</span>
-                <span className="td-mono muted">{d.seen}m ago</span>
-              </div>
-              {isStaged ? (
-                <span className="alert-sev info" style={{ flex: "0 0 auto" }}><Icon name="check" size={12} style={{ verticalAlign: "-2px" }} /> staged</span>
-              ) : (
-                <div className="disc-actions">
-                  <button className="btn-ghost" onClick={() => ignore(d)}>Ignore</button>
-                  <button className="btn-primary" onClick={() => stage(d)}><Icon name="plus" size={14} />Monitor</button>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {/* status + via filters, then search */}
+        <div className="filters">
+          {STATUS_CHIPS.map((c) => (
+            <button key={c.k} className={"chip" + (statusFilter === c.k ? " on" : "")} onClick={() => setStatusFilter(c.k)}>
+              {c.label}<span className="chip__n">{statusCounts[c.k]}</span>
+            </button>
+          ))}
+          <span style={{ width: 1, height: 20, background: "var(--line)", margin: "0 2px" }} />
+          <button className={"chip" + (viaFilter === "all" ? " on" : "")} onClick={() => setViaFilter("all")}>All vias</button>
+          {viaKeys.map((via) => (
+            <button key={via} className={"chip" + (viaFilter === via ? " on" : "")} onClick={() => setViaFilter(via)}>
+              {via}<span className="chip__n">{byVia[via]}</span>
+            </button>
+          ))}
+          <div className="search" style={{ marginLeft: "auto", maxWidth: 280, height: 36 }}>
+            <Icon name="search" size={15} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="vendor · service · role · segment" />
+          </div>
+        </div>
+
+        {view.length === 0 && <div className="empty">No assets match these filters.</div>}
+        {view.length > 0 && (
+          <div className="tablewrap" style={{ overflowX: "auto" }}>
+            <table className="grid">
+              <thead><tr>
+                {th("host", "Host / IP")}
+                {th("vendor", "Vendor · MAC")}
+                {th("os", "OS · Role")}
+                <th style={{ whiteSpace: "nowrap" }}>mDNS &amp; services</th>
+                <th style={{ whiteSpace: "nowrap" }}>SNMP sysDescr</th>
+                {th("neighbor", "Neighbor")}
+                {th("via", "Via · Seg")}
+                {th("seen", "Seen", false)}
+                <th aria-label="actions" />
+              </tr></thead>
+              <tbody>
+                {view.map((d) => {
+                  const st = effStatus(d);
+                  const nbr = neighborLabel(d.neighbor);
+                  const mdns = isMdns(d);
+                  return (
+                    <tr key={d.discId != null ? "d" + d.discId : d.host} style={{ cursor: "default" }}>
+                      {/* Host / IP + kind + mDNS origin */}
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                          <Icon name={d.kind === "service" ? "link" : "host"} size={15} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
+                          <span className="td-mono" style={{ fontWeight: 600 }}>{d.host}</span>
+                          {mdns && <span className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)" }}>mDNS</span>}
+                        </div>
+                        <div className="td-mono muted" style={{ fontSize: 11, marginTop: 2, marginLeft: 22 }}>{d.ip}{d.kind ? " · " + d.kind : ""}</div>
+                      </td>
+
+                      {/* Vendor · MAC */}
+                      <td>
+                        <div style={{ fontSize: 12.5 }}>{d.vendor || <span className="muted">—</span>}</div>
+                        {d.mac && <div className="td-mono muted" style={{ fontSize: 10.5, marginTop: 2 }}>{d.mac}</div>}
+                      </td>
+
+                      {/* OS · Role */}
+                      <td>
+                        <div style={{ fontSize: 12.5 }}>{d.osName || <span className="muted">—</span>}</div>
+                        {d.deviceRole && <span className="svc-chip" style={{ borderColor: ROLE_TONE[d.deviceRole] || "var(--teal)", color: ROLE_TONE[d.deviceRole] || "var(--teal)", marginTop: 3, display: "inline-block" }}>{d.deviceRole}</span>}
+                      </td>
+
+                      {/* mDNS name + mdns service chips + TCP service chips */}
+                      <td>
+                        {d.mdnsName && <div className="td-mono muted" style={{ fontSize: 10.5, marginBottom: 3 }}>{d.mdnsName}</div>}
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", maxWidth: 320 }}>
+                          {(d.mdnsServices || []).map((s, i) => (
+                            <span key={"m" + i} className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)" }} title={"mDNS service · " + s}>{s}</span>
+                          ))}
+                          {(d.services || []).map((s, i) => {
+                            const det = svcDetail(s);
+                            return (
+                              <span key={"s" + i} className="svc-chip" title={det ? svcName(s) + " · " + det : undefined}>
+                                {svcName(s)}{svcPort(s) ? ":" + svcPort(s) : ""}
+                              </span>
+                            );
+                          })}
+                          {(!d.mdnsServices || !d.mdnsServices.length) && (!d.services || !d.services.length) && <span className="muted">—</span>}
+                        </div>
+                      </td>
+
+                      {/* SNMP sysDescr (truncated, full on hover) */}
+                      <td style={{ maxWidth: 260, whiteSpace: "normal" }}>
+                        {d.sysDescr
+                          ? <div className="td-mono muted" style={{ fontSize: 10.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }} title={d.sysDescr}>{d.sysDescr}</div>
+                          : <span className="muted">—</span>}
+                      </td>
+
+                      {/* LLDP / topology neighbor */}
+                      <td>
+                        {nbr
+                          ? <span title={d.neighbor && d.neighbor.viaLldp ? "via LLDP" : "via uplink"}>
+                              <span className="td-mono" style={{ fontSize: 11.5 }}>{nbr}</span>
+                              {d.neighbor && d.neighbor.viaLldp && <span className="svc-chip" style={{ borderColor: "var(--teal)", color: "var(--teal)", marginLeft: 6 }}>LLDP</span>}
+                            </span>
+                          : <span className="muted">—</span>}
+                      </td>
+
+                      {/* Via · Seg */}
+                      <td>
+                        <span className="tag">{d.via}</span>
+                        {d.seg && <div className="td-mono muted" style={{ fontSize: 10.5, marginTop: 3 }}>{d.seg}{d.arch ? " · " + d.arch : ""}</div>}
+                      </td>
+
+                      {/* Seen */}
+                      <td className="td-mono muted" style={{ fontSize: 11.5 }}>{seenAgo(d.seen)}</td>
+
+                      {/* actions / status */}
+                      <td style={{ textAlign: "right" }}>
+                        {st === "new" ? (
+                          <div className="disc-actions" style={{ justifyContent: "flex-end" }}>
+                            <button className="btn-ghost" onClick={() => ignore(d)}>Ignore</button>
+                            <button className="btn-primary" onClick={() => stage(d)}><Icon name="plus" size={14} />Monitor</button>
+                          </div>
+                        ) : st === "ignored" ? (
+                          <span className="alert-sev" style={{ opacity: 0.7 }}>ignored</span>
+                        ) : (
+                          <span className="alert-sev info"><Icon name="check" size={12} style={{ verticalAlign: "-2px" }} /> adopted</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {adoptDisc && <AdoptModal disc={adoptDisc} onClose={() => setAdoptDisc(null)}
                                   onAdopted={onAdopted} />}
