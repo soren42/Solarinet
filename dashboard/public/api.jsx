@@ -344,6 +344,13 @@
   }
 
   function mapDiscovered(w) {
+    // mdnsServices arrives as an array from /api/discovery; tolerate the legacy
+    // comma-joined string (and null) so an old server never breaks the chips.
+    var mdnsSvcs = Array.isArray(w.mdnsServices)
+      ? w.mdnsServices
+      : (typeof w.mdnsServices === "string"
+        ? w.mdnsServices.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
+        : []);
     return {
       discId: w.discId,
       host: w.host || w.ip,
@@ -356,6 +363,8 @@
       seg: w.segId || w.seg,
       arch: w.arch,
       status: w.status,
+      lastSeenAt: w.lastSeenAt || null,
+      firstSeenAt: w.firstSeenAt || null,
       // enrichment (nmap/SNMP/mDNS/OUI) — any may be null on an un-enriched record
       mac: w.mac || null,
       vendor: w.vendor || null,
@@ -363,6 +372,10 @@
       deviceRole: w.deviceRole || null,
       sysDescr: w.sysDescr || null,
       enrichedAt: w.enrichedAt || null,
+      mdnsName: w.mdnsName || null,
+      mdnsServices: mdnsSvcs,
+      // best-effort LLDP/topology neighbor {gearName,peerPort,localIf,linkType,speedMbps,rssi,viaLldp} or null
+      neighbor: w.neighbor || null,
     };
   }
 
@@ -668,6 +681,13 @@
     },
 
     // discovery
+    // Full candidate list for the Discovery screen (status: new|ignored|adopting|
+    // adopted|all). Returns mapped rows so the screen renders identical shapes to
+    // the boot fixture; defaults to every status so the screen can filter locally.
+    listDiscovered: function (status) {
+      return getJSON(EP.discovery + "?status=" + encodeURIComponent(status || "all"))
+        .then(function (w) { return (Array.isArray(w) ? w : []).map(mapDiscovered); });
+    },
     discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
     ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },

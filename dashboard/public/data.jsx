@@ -440,14 +440,14 @@
 
   // ---- discovered (not-yet-monitored) ----
   const discovered = [
-    { host: "tungsten.akoria.net", ip: "10.42.11.84", via: "mDNS", kind: "host", services: ["ssh:22", "http:80"], seen: 4, seg: "compute", arch: "x86_64" },
-    { host: "10.42.50.119", ip: "10.42.50.119", via: "ARP sweep", kind: "host", services: ["mqtt:1883"], seen: 11, seg: "iot", arch: "armv7" },
-    { host: "osmium.akoria.net", ip: "10.42.21.40", via: "SCP advert", kind: "service", services: ["minio:9000", "minio:9001"], seen: 2, seg: "storage", arch: "arm64" },
-    { host: "10.42.30.66", ip: "10.42.30.66", via: "port scan", kind: "service", services: ["https:443"], seen: 19, seg: "dmz", arch: "x86_64" },
-    { host: "rhenium.akoria.net", ip: "10.42.12.7", via: "mDNS", kind: "host", services: ["ssh:22", "postgres:5432", "node-exp:9100"], seen: 1, seg: "compute", arch: "arm64" },
-    { host: "10.42.40.158", ip: "10.42.40.158", via: "ARP sweep", kind: "host", services: ["ssh:22"], seen: 33, seg: "lab", arch: "armv7" },
-    { host: "iridium.akoria.net", ip: "10.42.20.91", via: "SCP advert", kind: "service", services: ["nfs:2049", "smb:445"], seen: 6, seg: "storage", arch: "x86_64" },
-    { host: "10.42.50.204", ip: "10.42.50.204", via: "port scan", kind: "host", services: ["coap:5683"], seen: 47, seg: "iot", arch: "armv7" },
+    { host: "tungsten.akoria.net", ip: "10.42.11.84", via: "mDNS", kind: "host", services: ["ssh:22", "http:80"], seen: 4, seg: "compute", arch: "x86_64", status: "new", mac: "b8:27:eb:41:9a:c2", vendor: "Dell Inc.", osName: "Debian 12", deviceRole: "server", mdnsName: "tungsten._workstation._tcp", mdnsServices: ["_ssh._tcp", "_workstation._tcp", "_http._tcp"], neighbor: { gearName: "sw-core-01", peerPort: "Gi1/0/12", localIf: "eth0", linkType: "wired", speedMbps: 1000, viaLldp: true } },
+    { host: "10.42.50.119", ip: "10.42.50.119", via: "ARP sweep", kind: "host", services: ["mqtt:1883"], seen: 11, seg: "iot", arch: "armv7", status: "new", mac: "d8:3a:dd:0f:2b:71", vendor: "Espressif Inc.", deviceRole: "iot", mdnsName: "sensor-hub", mdnsServices: ["_mqtt._tcp", "_arduino._tcp"] },
+    { host: "osmium.akoria.net", ip: "10.42.21.40", via: "SCP advert", kind: "service", services: ["minio:9000", "minio:9001"], seen: 2, seg: "storage", arch: "arm64", status: "new", mac: "dc:a6:32:8e:44:10", vendor: "Raspberry Pi Trading Ltd", osName: "Raspberry Pi OS", deviceRole: "nas", sysDescr: "MinIO object storage, RELEASE.2024-01-16" },
+    { host: "10.42.30.66", ip: "10.42.30.66", via: "port scan", kind: "service", services: ["https:443"], seen: 19, seg: "dmz", arch: "x86_64", status: "new", deviceRole: "server" },
+    { host: "rhenium.akoria.net", ip: "10.42.12.7", via: "mDNS", kind: "host", services: ["ssh:22", "postgres:5432", "node-exp:9100"], seen: 1, seg: "compute", arch: "arm64", status: "new", mac: "dc:a6:32:11:aa:5f", vendor: "Raspberry Pi Trading Ltd", osName: "Ubuntu 24.04", deviceRole: "server", mdnsName: "rhenium", mdnsServices: ["_ssh._tcp", "_postgresql._tcp"], neighbor: { gearName: "sw-edge-02", peerPort: "Gi0/5", localIf: "eth0", linkType: "wired", speedMbps: 1000, viaLldp: true } },
+    { host: "10.42.40.158", ip: "10.42.40.158", via: "ARP sweep", kind: "host", services: ["ssh:22"], seen: 33, seg: "lab", arch: "armv7", status: "new" },
+    { host: "iridium.akoria.net", ip: "10.42.20.91", via: "SCP advert", kind: "service", services: ["nfs:2049", "smb:445"], seen: 6, seg: "storage", arch: "x86_64", status: "new", mac: "00:11:32:5c:9d:e8", vendor: "Synology Incorporated", osName: "DSM 7.2", deviceRole: "nas", sysDescr: "Synology DS1520+ NAS", mdnsName: "iridium", mdnsServices: ["_smb._tcp", "_nfs._tcp", "_afpovertcp._tcp", "_device-info._tcp"] },
+    { host: "10.42.50.204", ip: "10.42.50.204", via: "port scan", kind: "host", services: ["coap:5683"], seen: 47, seg: "iot", arch: "armv7", status: "new", mac: "b0:4e:26:77:31:a2", vendor: "TP-Link Technologies", deviceRole: "iot", mdnsName: "livingroom-bulb", mdnsServices: ["_spotify-connect._tcp", "_airplay._tcp", "_hap._tcp"] },
   ];
 
   // ---- binary builds / deploy convergence ----

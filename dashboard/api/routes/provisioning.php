@@ -2,69 +2,19 @@
 declare(strict_types=1);
 
 /**
- * Discovery, enrollments, and builds read endpoints (§6):
- *   GET /api/discovery?status=new|all
+ * Enrollments and builds read endpoints (§6):
  *   GET /api/enrollments?status=
  *   GET /api/builds
  *
- * Backed by: discovered, enrollment, buildArtifact, node, nodeConfig.
+ * Backed by: enrollment, buildArtifact, node, nodeConfig.
  * (The adopt/ignore/approve/reject/provision POSTs are added by the follow-up
  * mutation layer; they route through solariCtl. PHP never holds CA material.)
+ *
+ * NOTE: GET /api/discovery moved to routes/discovery.php, which enriches the
+ * candidate list with mDNS services + LLDP neighbor cross-reference.
  */
 
 return static function (Router $router): void {
-
-    // GET /api/discovery?status=new|all  (default new == status='new')
-    $router->get('/api/discovery', static function (): void {
-        $status = (string) ($_GET['status'] ?? 'new');
-
-        $params = [];
-        $where  = '';
-        if ($status === 'all') {
-            $where = '';
-        } elseif (in_array($status, ['new', 'ignored', 'adopting', 'adopted'], true)) {
-            $where           = 'WHERE status = :status';
-            $params[':status'] = $status;
-        } else {
-            Response::error('bad_request',
-                "status must be one of: new, ignored, adopting, adopted, all", 400);
-        }
-
-        $rows = Db::rows(
-            "SELECT discId, host, ip, kind, via, services, segId, arch,
-                    mac, vendor, osName, deviceRole, sysDescr, enrichedAt,
-                    seenCount, firstSeenAt, lastSeenAt, status
-               FROM discovered
-               $where
-              ORDER BY lastSeenAt DESC",
-            $params
-        );
-
-        $out = array_map(static function (array $r): array {
-            return [
-                'discId'      => Coerce::id($r['discId']),
-                'host'        => $r['host'],
-                'ip'          => $r['ip'],
-                'kind'        => $r['kind'],
-                'via'         => $r['via'],
-                'services'    => Coerce::json($r['services']),
-                'segId'       => $r['segId'],
-                'arch'        => $r['arch'],
-                'mac'         => $r['mac'],
-                'vendor'      => $r['vendor'],
-                'osName'      => $r['osName'],
-                'deviceRole'  => $r['deviceRole'],
-                'sysDescr'    => $r['sysDescr'],
-                'enrichedAt'  => Coerce::iso($r['enrichedAt']),
-                'seenCount'   => Coerce::int($r['seenCount']),
-                'firstSeenAt' => Coerce::iso($r['firstSeenAt']),
-                'lastSeenAt'  => Coerce::iso($r['lastSeenAt']),
-                'status'      => $r['status'],
-            ];
-        }, $rows);
-
-        Response::ok($out);
-    });
 
     // GET /api/enrollments?status=
     $router->get('/api/enrollments', static function (): void {
