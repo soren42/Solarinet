@@ -39,6 +39,11 @@ enum solariTlvType {
     TLV_PROC_WATCH        = 0x100B,  /* repeated proc entry                */
     TLV_LOGFILE_STAT      = 0x100C,  /* repeated: {path, sizeDelta, matchCt} */
     TLV_NET_ADDR          = 0x100D,  /* repeated: interface IP/MAC         */
+    TLV_CR_HEALTH_SCALARS = 0x1010,  /* u8,u8,u8,u16,u16 health counters   */
+    TLV_CR_HEALTH_FS_LIST = 0x1011,  /* utf8: fsReadonlyList               */
+    TLV_CR_HEALTH_SMART_LIST = 0x1012,  /* utf8: smartFailList             */
+    TLV_CR_HEALTH_UNIT_LIST = 0x1013,  /* utf8: failedUnitList             */
+    TLV_CR_HEALTH_DMESG_SAMPLE = 0x1014,  /* utf8: dmesgCritSample        */
     /* --- probe results (0x11xx) --- */
     TLV_PROBE_RESULT      = 0x1101,  /* repeated solariProbeResult (§5.7)  */
     TLV_LINK_STAT         = 0x1102,  /* repeated link stat per peer        */

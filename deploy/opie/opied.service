@@ -1,0 +1,21 @@
+[Unit]
+Description=Opie — AI on-call SA (Opus-4.8 read-only failure investigation)
+After=network-online.target mariadb.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+Environment=OPIE_CONF=/home/jason/Code/Solarinet/deploy/opie/opie.conf
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/opie
+; Source run/db.env (exports SOLARI_DB_PASS), then exec. `claude` lives in
+; ~/.local/bin, so keep the user's PATH/HOME for CLI auth (~/.claude).
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /home/jason/Code/Solarinet/deploy/opie/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/opie/opied.py'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1062,23 +1062,38 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     static const char *SQL_CUR =
         "INSERT INTO hostCurrent "
         "  (nodeId, sampledAt, cpuLoadMilli, ramUsedKb, ramTotalKb, "
-        "   swapUsedKb, swapTotalKb, disks, ifaces, usbBuses) "
-        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?, ?) "
+        "   swapUsedKb, swapTotalKb, disks, ifaces, usbBuses, "
+        "   fsReadonlyCount, blockDevMissing, smartFailCount, failedUnitCount, "
+        "   dmesgCritCount, fsReadonlyList, smartFailList, failedUnitList, "
+        "   dmesgCritSample) "
+        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON DUPLICATE KEY UPDATE "
         "  sampledAt=UTC_TIMESTAMP(), cpuLoadMilli=VALUES(cpuLoadMilli), "
         "  ramUsedKb=VALUES(ramUsedKb), ramTotalKb=VALUES(ramTotalKb), "
         "  swapUsedKb=VALUES(swapUsedKb), swapTotalKb=VALUES(swapTotalKb), "
-        "  disks=VALUES(disks), ifaces=VALUES(ifaces), usbBuses=VALUES(usbBuses)";
+        "  disks=VALUES(disks), ifaces=VALUES(ifaces), usbBuses=VALUES(usbBuses), "
+        "  fsReadonlyCount=VALUES(fsReadonlyCount), "
+        "  blockDevMissing=VALUES(blockDevMissing), "
+        "  smartFailCount=VALUES(smartFailCount), "
+        "  failedUnitCount=VALUES(failedUnitCount), "
+        "  dmesgCritCount=VALUES(dmesgCritCount), "
+        "  fsReadonlyList=VALUES(fsReadonlyList), "
+        "  smartFailList=VALUES(smartFailList), "
+        "  failedUnitList=VALUES(failedUnitList), "
+        "  dmesgCritSample=VALUES(dmesgCritSample)";
     static const char *SQL_HIST =
         "INSERT INTO hostHistory "
-        "  (nodeId, sampledAt, cpuAvgMilli, ramUsedKb, swapUsedKb, diskMinFreePct, netKbps) "
-        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?)";
+        "  (nodeId, sampledAt, cpuAvgMilli, ramUsedKb, swapUsedKb, diskMinFreePct, netKbps, "
+        "   fsReadonlyCount, blockDevMissing, smartFailCount, failedUnitCount, dmesgCritCount) "
+        "VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     MYSQL      *conn;
     MYSQL_STMT *st;
-    MYSQL_BIND  b[10];
+    MYSQL_BIND  b[20];
     unsigned long long vNode, vRamU, vRamT, vSwapU, vSwapT, vNet;
+    unsigned long long vFsRo, vBlockMissing, vSmartFail, vFailedUnits, vDmesgCrit;
     int cpuAvg, diskMin;
     unsigned long lCpu, lDisks, lIfaces, lUsb;
+    unsigned long lFsRoList, lSmartFailList, lFailedUnitList, lDmesgCritSample;
     char cpuJson[512], disksJson[4096], ifacesJson[2048];
     static const char *usbJson = "[]";
     solariStatus rc;
@@ -1090,6 +1105,11 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     vNode  = nodeId;
     vRamU  = rep->ramUsedKb;  vRamT = rep->ramTotalKb;
     vSwapU = rep->swapUsedKb; vSwapT = rep->swapTotalKb;
+    vFsRo = rep->health.fsReadonlyCount;
+    vBlockMissing = rep->health.blockDevMissing;
+    vSmartFail = rep->health.smartFailCount;
+    vFailedUnits = rep->health.failedUnitCount;
+    vDmesgCrit = rep->health.dmesgCritCount;
     cpuAvg = (int)dbAvgCpuMilli(rep);
     diskMin = dbMinDiskFreePct(rep);
     vNet = dbSumNetKbps(rep);
@@ -1111,7 +1131,16 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbBindStr(&b[6], disksJson,  &lDisks);
     dbBindStr(&b[7], ifacesJson, &lIfaces);
     dbBindStr(&b[8], usbJson,    &lUsb);
-    rc = dbStmtRunWrite(st, b, 9);
+    dbBindU64(&b[9], &vFsRo);
+    dbBindU64(&b[10], &vBlockMissing);
+    dbBindU64(&b[11], &vSmartFail);
+    dbBindU64(&b[12], &vFailedUnits);
+    dbBindU64(&b[13], &vDmesgCrit);
+    dbBindStr(&b[14], rep->health.fsReadonlyList,  &lFsRoList);
+    dbBindStr(&b[15], rep->health.smartFailList,   &lSmartFailList);
+    dbBindStr(&b[16], rep->health.failedUnitList,  &lFailedUnitList);
+    dbBindStr(&b[17], rep->health.dmesgCritSample, &lDmesgCritSample);
+    rc = dbStmtRunWrite(st, b, 18);
     mysql_stmt_close(st);
     if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
 
@@ -1126,7 +1155,12 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbBindU64(&b[3], &vSwapU);
     dbBindI32(&b[4], &diskMin);
     dbBindU64(&b[5], &vNet);
-    rc = dbStmtRunWrite(st, b, 6);
+    dbBindU64(&b[6], &vFsRo);
+    dbBindU64(&b[7], &vBlockMissing);
+    dbBindU64(&b[8], &vSmartFail);
+    dbBindU64(&b[9], &vFailedUnits);
+    dbBindU64(&b[10], &vDmesgCrit);
+    rc = dbStmtRunWrite(st, b, 11);
     mysql_stmt_close(st);
     if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
 

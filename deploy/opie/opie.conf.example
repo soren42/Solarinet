@@ -1,0 +1,33 @@
+# Opie (AI on-call SA) config. Copy to opie.conf (gitignored) and edit.
+#   cp opie.conf.example opie.conf && chmod 600 opie.conf
+
+[db]
+host = 127.0.0.1
+port = 3306
+user = solari
+name = solarinet
+# Leave blank to use $SOLARI_DB_PASS (the systemd unit sources run/db.env).
+password =
+
+[amqp]
+# Reuse the exact url from deploy/notify/notify.conf so the summary lands where
+# notifyd drains it (-> iMessage). Format: amqp://user:pass@host:5672/vhost
+url =
+exchange = notify.events
+
+[trigger]
+# crit ALWAYS investigates. warn investigates only as a storm:
+storm_count = 3            # >= this many warn FIREDs on one node...
+storm_window_sec = 600     # ...within this window
+hourly_cap = 8             # max investigations started per rolling hour (cost guard)
+
+[opie]
+model = claude-opus-4-8
+poll_interval_sec = 15
+batch = 50
+timeout_sec = 600          # per investigation
+probe_cmd = opie-probe     # must match the installed read-only probe (allowedTools)
+workdir = /home/jason/Code/Solarinet/deploy/opie
+
+[state]
+# file = /home/jason/Code/Solarinet/deploy/opie/opie.state.json

@@ -134,7 +134,45 @@ static bool alertClientMetric(const solariClientReport *rep, const char *metric,
     if (strcmp(metric, "procCount") == 0)  { *out = (double)rep->procCount;  return true; }
     if (strcmp(metric, "ifaceCount") == 0) { *out = (double)rep->ifaceCount; return true; }
     if (strcmp(metric, "diskCount") == 0)  { *out = (double)rep->diskCount;  return true; }
+    if (strcmp(metric, "health.fsReadonly") == 0) {
+        *out = (double)rep->health.fsReadonlyCount;
+        return true;
+    }
+    if (strcmp(metric, "health.blockDevMissing") == 0) {
+        *out = (double)rep->health.blockDevMissing;
+        return true;
+    }
+    if (strcmp(metric, "health.smartFail") == 0) {
+        *out = (double)rep->health.smartFailCount;
+        return true;
+    }
+    if (strcmp(metric, "health.failedUnits") == 0) {
+        *out = (double)rep->health.failedUnitCount;
+        return true;
+    }
+    if (strcmp(metric, "health.dmesgCrit") == 0) {
+        *out = (double)rep->health.dmesgCritCount;
+        return true;
+    }
     return false;
+}
+
+/* Optional detail text for health metrics whose scalar alone is not actionable.
+ * Empty/NULL means the alert detail line stays in the generic form. */
+static const char *alertClientMetricDetail(const solariClientReport *rep,
+                                           const char *metric)
+{
+    if (strcmp(metric, "health.fsReadonly") == 0)
+        return rep->health.fsReadonlyList;
+    if (strcmp(metric, "health.blockDevMissing") == 0)
+        return "";
+    if (strcmp(metric, "health.smartFail") == 0)
+        return rep->health.smartFailList;
+    if (strcmp(metric, "health.failedUnits") == 0)
+        return rep->health.failedUnitList;
+    if (strcmp(metric, "health.dmesgCrit") == 0)
+        return rep->health.dmesgCritSample;
+    return NULL;
 }
 
 /* Resolve a probe-scope metric name to a scalar value from a single probe
@@ -175,13 +213,22 @@ static void alertProbeTargetId(const solariProbeResult *p, char *buf, size_t cap
 
 /* Compose the human-readable alertEvent / notification detail line. */
 static void alertBuildDetail(char *buf, size_t cap, const serverAlertRule *r,
-                             const char *targetId, double value, bool firing)
+                             const char *targetId, double value, bool firing,
+                             const char *extraDetail)
 {
-    snprintf(buf, cap, "%s %s %s(%s) %s %g [observed=%g sev=%s]",
-             firing ? "FIRED" : "CLEARED",
-             r->scope, r->metric,
-             (targetId && targetId[0]) ? targetId : "-",
-             r->op, r->threshold, value, r->severity);
+    if (extraDetail && extraDetail[0]) {
+        snprintf(buf, cap, "%s %s %s(%s) %s %g [observed=%g sev=%s] detail=%s",
+                 firing ? "FIRED" : "CLEARED",
+                 r->scope, r->metric,
+                 (targetId && targetId[0]) ? targetId : "-",
+                 r->op, r->threshold, value, r->severity, extraDetail);
+    } else {
+        snprintf(buf, cap, "%s %s %s(%s) %s %g [observed=%g sev=%s]",
+                 firing ? "FIRED" : "CLEARED",
+                 r->scope, r->metric,
+                 (targetId && targetId[0]) ? targetId : "-",
+                 r->op, r->threshold, value, r->severity);
+    }
 }
 
 /* Find (or, if create, allocate) the breach-state slot for a rule instance.
@@ -298,7 +345,8 @@ static void alertPublish(serverContext *ctx, const char *severity,
  * instead. */
 static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
                                const serverAlertRule *r, const char *targetId,
-                               double value, bool urgent)
+                               double value, bool urgent,
+                               const char *extraDetail)
 {
     uint64_t          nowMs = solariNowUnixMs();
     bool              isTransition = (strcmp(r->op, "transition") == 0);
@@ -330,7 +378,8 @@ static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
                             ? (uint64_t)r->forSeconds * 1000u : 0u;
             bool fireNow = urgent || isTransition || sustainedMs >= needMs;
             if (fireNow) {
-                alertBuildDetail(detail, sizeof(detail), r, targetId, value, true);
+                alertBuildDetail(detail, sizeof(detail), r, targetId, value, true,
+                                 extraDetail);
                 st = serverDbWriteAlertEvent(ctx->db, r->ruleId, nodeId,
                                              (targetId && targetId[0]) ? targetId : NULL,
                                              r->severity, detail, nowMs);
@@ -350,7 +399,8 @@ static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
     } else {
         s->breachSinceMs = 0;
         if (s->fired) {
-            alertBuildDetail(detail, sizeof(detail), r, targetId, value, false);
+            alertBuildDetail(detail, sizeof(detail), r, targetId, value, false,
+                             extraDetail);
             st = serverDbWriteAlertEvent(ctx->db, r->ruleId, nodeId,
                                          (targetId && targetId[0]) ? targetId : NULL,
                                          r->severity, detail, nowMs);
@@ -399,7 +449,8 @@ solariStatus serverAlertEvalClient(serverContext *ctx, uint64_t nodeId,
             continue;
         }
         /* host scope has a single subject (the node); no per-target id */
-        st = alertApply(ctx, nodeId, &rules[i], "", value, urgent);
+        st = alertApply(ctx, nodeId, &rules[i], "", value, urgent,
+                        alertClientMetricDetail(rep, rules[i].metric));
         if (st != SOLARI_OK) return st;
     }
     return SOLARI_OK;
@@ -436,7 +487,7 @@ solariStatus serverAlertEvalMonitor(serverContext *ctx, uint64_t nodeId,
                 continue;
             known = true;
             alertProbeTargetId(&rep->probes[p], targetId, sizeof(targetId));
-            st = alertApply(ctx, nodeId, &rules[i], targetId, value, urgent);
+            st = alertApply(ctx, nodeId, &rules[i], targetId, value, urgent, NULL);
             if (st != SOLARI_OK) return st;
         }
         if (!known && nProbes > 0) {

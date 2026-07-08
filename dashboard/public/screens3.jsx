@@ -1361,5 +1361,274 @@
     );
   }
 
-  Object.assign(window, { Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail });
+  /* ===================== MARKDOWN (self-contained, CSP-safe) ===================== */
+  // A small, dependency-free Markdown → React renderer. Text is placed as React
+  // children (auto-escaped), and links are scheme-filtered, so no raw HTML is ever
+  // injected. Supports: headings, bold/italic/inline-code, code fences, ordered &
+  // unordered lists, blockquotes, tables, horizontal rules, links, and paragraphs.
+  function mdSplitRow(line) {
+    let s = line.trim();
+    if (s.charAt(0) === "|") s = s.slice(1);
+    if (s.charAt(s.length - 1) === "|") s = s.slice(0, -1);
+    return s.split("|").map((c) => c.trim());
+  }
+  function mdInline(text, kp) {
+    const nodes = [];
+    let rest = String(text == null ? "" : text);
+    let i = 0;
+    const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\([^)]+\))|(\*[^*]+\*)|(_[^_]+_)/;
+    while (rest) {
+      const m = re.exec(rest);
+      if (!m) { nodes.push(rest); break; }
+      if (m.index > 0) nodes.push(rest.slice(0, m.index));
+      const tok = m[0];
+      const k = kp + "-i" + (i++);
+      if (tok.charAt(0) === "`") nodes.push(<code key={k} className="md-code">{tok.slice(1, -1)}</code>);
+      else if (tok.slice(0, 2) === "**") nodes.push(<strong key={k}>{tok.slice(2, -2)}</strong>);
+      else if (tok.charAt(0) === "[") {
+        const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok);
+        const href = mm[2];
+        const safe = /^(https?:|\/|#|mailto:)/i.test(href) ? href : "#";
+        nodes.push(<a key={k} href={safe} target="_blank" rel="noopener noreferrer">{mm[1]}</a>);
+      } else nodes.push(<em key={k}>{tok.slice(1, -1)}</em>);
+      rest = rest.slice(m.index + tok.length);
+    }
+    return nodes;
+  }
+  function Markdown({ source }) {
+    if (!source) return null;
+    const lines = String(source).replace(/\r\n/g, "\n").split("\n");
+    const blocks = [];
+    let i = 0, key = 0;
+    const K = () => "md" + (key++);
+    const isBlockStart = (l) => /^```|^\s*[-*+]\s+|^\s*\d+[.)]\s+|^#{1,6}\s+|^\s*>\s?/.test(l) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(l);
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^```/.test(line.trim())) {
+        const buf = [];
+        i++;
+        while (i < lines.length && !/^```/.test(lines[i].trim())) { buf.push(lines[i]); i++; }
+        i++;
+        blocks.push(<pre key={K()} className="md-pre"><code>{buf.join("\n")}</code></pre>);
+        continue;
+      }
+      if (line.trim() === "") { i++; continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { blocks.push(<hr key={K()} className="md-hr" />); i++; continue; }
+      const h = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (h) {
+        const lvl = Math.min(h[1].length, 4);
+        const Tag = "h" + (lvl + 1);
+        blocks.push(<Tag key={K()} className={"md-h md-h" + lvl}>{mdInline(h[2], K())}</Tag>);
+        i++; continue;
+      }
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length && lines[i + 1].indexOf("-") >= 0 && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+        const header = mdSplitRow(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim() !== "") { rows.push(mdSplitRow(lines[i])); i++; }
+        blocks.push(
+          <div key={K()} className="md-tablewrap"><table className="md-table">
+            <thead><tr>{header.map((c, ci) => <th key={ci}>{mdInline(c, K() + "h" + ci)}</th>)}</tr></thead>
+            <tbody>{rows.map((r, ri) => <tr key={ri}>{r.map((c, ci) => <td key={ci}>{mdInline(c, K() + "r" + ri + "c" + ci)}</td>)}</tr>)}</tbody>
+          </table></div>
+        );
+        continue;
+      }
+      if (/^\s*>\s?/.test(line)) {
+        const buf = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+        blocks.push(<blockquote key={K()} className="md-quote">{mdInline(buf.join(" "), K())}</blockquote>);
+        continue;
+      }
+      if (/^\s*[-*+]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s+/, "")); i++; }
+        blocks.push(<ul key={K()} className="md-ul">{items.map((it, ii) => <li key={ii}>{mdInline(it, K() + "l" + ii)}</li>)}</ul>);
+        continue;
+      }
+      if (/^\s*\d+[.)]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+[.)]\s+/, "")); i++; }
+        blocks.push(<ol key={K()} className="md-ol">{items.map((it, ii) => <li key={ii}>{mdInline(it, K() + "o" + ii)}</li>)}</ol>);
+        continue;
+      }
+      const buf = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "" && !isBlockStart(lines[i])) { buf.push(lines[i]); i++; }
+      blocks.push(<p key={K()} className="md-p">{mdInline(buf.join(" "), K())}</p>);
+    }
+    return <div className="md">{blocks}</div>;
+  }
+
+  /* ===================== OPIE / ANALYSIS ===================== */
+  const OPIE_STATUS = {
+    investigating: { label: "Investigating", tone: "warn", icon: "pulse" },
+    done:          { label: "Done", tone: "ok", icon: "check" },
+    failed:        { label: "Failed", tone: "crit", icon: "close" },
+  };
+  const TRIGGER_LABEL = { crit: "Critical", "warn-storm": "Warn storm" };
+  function opieAgo(r) {
+    const m = r.startedMinAgo != null ? r.startedMinAgo : (r.startedAt ? Math.max(0, Math.round((Date.now() - Date.parse(r.startedAt)) / 60000)) : null);
+    if (m == null || isNaN(m)) return "—";
+    return (fmt && fmt.ago) ? fmt.ago(m) : (m + "m ago");
+  }
+  function opieDuration(sec) {
+    if (sec == null) return "—";
+    return sec >= 90 ? (sec / 60).toFixed(1) + "m" : sec + "s";
+  }
+  function OpieStatusPill({ status }) {
+    const s = OPIE_STATUS[status] || OPIE_STATUS.investigating;
+    return (
+      <span className={"opie-stat " + s.tone}>
+        <Icon name={s.icon} size={12} />{s.label}
+      </span>
+    );
+  }
+
+  function OpieScreen({ initialReportId, onOpenNode }) {
+    const [list, setList] = useState(() => (S.opie || []).slice());
+    const [selId, setSelId] = useState(initialReportId != null ? initialReportId : null);
+    const [detail, setDetail] = useState(null);
+    const [detErr, setDetErr] = useState(null);
+    const [filter, setFilter] = useState("all");   // all | investigating | done
+
+    // jump straight to a report when opened from an alert row
+    useEffect(() => { if (initialReportId != null) setSelId(initialReportId); }, [initialReportId]);
+
+    // (re)load the list from the API when live; fall back to the fixture.
+    useEffect(() => {
+      const a = api();
+      if (a && a.opieList) {
+        a.opieList("all").then((rows) => { if (Array.isArray(rows)) setList(rows); }).catch(() => {});
+      }
+    }, []);
+
+    // load the selected report's full analysis (detail read carries the markdown)
+    useEffect(() => {
+      if (selId == null) { setDetail(null); setDetErr(null); return; }
+      setDetail(null); setDetErr(null);
+      const a = api();
+      const local = (list.concat(S.opie || [])).find((r) => String(r.reportId) === String(selId));
+      if (a && a.opieReport) {
+        a.opieReport(selId)
+          .then((r) => setDetail(r || local || null))
+          .catch(() => { if (local) setDetail(local); else setDetErr("Couldn't load this report."); });
+      } else {
+        setDetail(local || null);
+        if (!local) setDetErr("Report not found.");
+      }
+    }, [selId]);
+
+    // ---------- detail view ----------
+    if (selId != null) {
+      const r = detail;
+      const goBack = () => setSelId(null);
+      if (detErr) return (<div className="page"><button className="btn-ghost" onClick={goBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back to reports</button><div className="muted" style={{ marginTop: 16 }}>{detErr}</div></div>);
+      if (!r) return (<div className="page"><button className="btn-ghost" onClick={goBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back to reports</button><div className="muted" style={{ marginTop: 16 }}>Loading analysis…</div></div>);
+      const host = r.hostFqdn || (r.nodeId != null ? "node " + r.nodeId : "Fleet");
+      return (
+        <div className="page">
+          <button className="btn-ghost" onClick={goBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back to reports</button>
+          <div className="page-head">
+            <div>
+              <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <Icon name="pulse" size={20} style={{ color: "var(--teal)" }} />
+                Opie analysis
+                <OpieStatusPill status={r.status} />
+              </h1>
+              <div className="page-sub">
+                {(r.hostFqdn && r.nodeId != null)
+                  ? <span className="opie-hostlink" onClick={() => onOpenNode && onOpenNode(r.nodeId)}>{host}</span>
+                  : host}
+                {" · "}{TRIGGER_LABEL[r.triggerKind] || r.triggerKind || "incident"} trigger
+                {r.model ? " · " + r.model : ""}
+              </div>
+            </div>
+            <div className="page-head__right">
+              <span className={"alert-sev " + r.severity}>{r.severity}</span>
+            </div>
+          </div>
+
+          <div className="kpis" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", marginBottom: 16 }}>
+            <div className="kpi"><div className="kpi__k">Status</div><div className="kpi__v" style={{ fontSize: 16, color: "var(--" + (OPIE_STATUS[r.status] || OPIE_STATUS.investigating).tone + ")" }}>{(OPIE_STATUS[r.status] || OPIE_STATUS.investigating).label}</div></div>
+            <div className="kpi"><div className="kpi__k">Analysis time</div><div className="kpi__v" style={{ fontSize: 16 }}>{opieDuration(r.durationSec)}</div></div>
+            <div className="kpi"><div className="kpi__k">Started</div><div className="kpi__v" style={{ fontSize: 16 }}>{opieAgo(r)}</div></div>
+            <div className="kpi"><div className="kpi__k">Model</div><div className="kpi__v" style={{ fontSize: 16 }}>{r.model || "—"}</div></div>
+          </div>
+
+          {r.summary && (
+            <div className="opie-summary">
+              <Icon name="pulse" size={16} style={{ color: "var(--teal)", flex: "0 0 auto", marginTop: 1 }} />
+              <div>{r.summary}</div>
+            </div>
+          )}
+
+          <div className="panel" style={{ marginTop: 16 }}>
+            <div className="panel__head"><Icon name="activity" size={16} /><h3>Analysis</h3></div>
+            <div className="panel__body">
+              {r.status === "investigating" && !r.analysis && (
+                <div className="opie-note"><Icon name="pulse" size={15} style={{ color: "var(--warn)" }} />Opie is still investigating this incident — the write-up will appear here when it finishes.</div>
+              )}
+              {r.status === "failed" && !r.analysis && (
+                <div className="opie-note"><Icon name="close" size={15} style={{ color: "var(--crit)" }} />Analysis failed to complete. {r.summary || "Re-run it from the incident when the model is reachable."}</div>
+              )}
+              {r.analysis
+                ? <Markdown source={r.analysis} />
+                : (r.status === "done" ? <div className="muted">No analysis text was recorded for this report.</div> : null)}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- list view ----------
+    const shown = list.filter((r) => filter === "all" ? true : r.status === filter);
+    const inv = list.filter((r) => r.status === "investigating").length;
+    const done = list.filter((r) => r.status === "done").length;
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: 10 }}><Icon name="pulse" size={22} style={{ color: "var(--teal)" }} />Opie · Analysis</h1>
+            <div className="page-sub">{list.length} report{list.length === 1 ? "" : "s"} · {inv} investigating · {done} done</div>
+          </div>
+          <div className="page-head__right">
+            <div className="seg">
+              <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>All</button>
+              <button className={filter === "investigating" ? "on" : ""} onClick={() => setFilter("investigating")}>Investigating</button>
+              <button className={filter === "done" ? "on" : ""} onClick={() => setFilter("done")}>Done</button>
+            </div>
+          </div>
+        </div>
+
+        {shown.length === 0 && <div className="empty">No analysis reports{filter !== "all" ? " in this state" : " yet — Opie writes one up when a critical alert fires or a warn storm forms."}.</div>}
+
+        <div className="opie-list">
+          {shown.map((r) => {
+            const host = r.hostFqdn || (r.nodeId != null ? "node " + r.nodeId : "Fleet");
+            return (
+              <div key={r.reportId} className={"opie-row " + r.severity} onClick={() => setSelId(r.reportId)} role="button" tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelId(r.reportId); } }}>
+                <span className={"alert-sev " + r.severity}>{r.severity}</span>
+                <div className="opie-row__main">
+                  <div className="opie-row__top">
+                    <span className="opie-row__host">{host}</span>
+                    <span className="opie-row__trig">{TRIGGER_LABEL[r.triggerKind] || r.triggerKind || "incident"}</span>
+                  </div>
+                  <div className="opie-row__summary">{r.summary || "—"}</div>
+                </div>
+                <OpieStatusPill status={r.status} />
+                <div className="opie-row__meta">
+                  <div>{opieAgo(r)}</div>
+                  <div className="muted">{opieDuration(r.durationSec)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  Object.assign(window, { Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Markdown });
 })();

@@ -153,6 +153,8 @@ static solariStatus provBuildAdoptPayload(const char *probeSpec,
     solariTlvWriterInit(&w, out, cap);
     if ((st = solariTlvAppendU8(&w, TLV_CTRL_VERB, (uint8_t)CTRL_ADOPT_TARGET)) != SOLARI_OK)
         return st;
+    /* Preserve the monitor target grammar verbatim, including HTTP
+     * path|status and any trailing " : label" suffix. */
     if (probeSpec && probeSpec[0]) {
         if ((st = solariTlvAppendStr(&w, TLV_CTRL_PAYLOAD, probeSpec)) != SOLARI_OK)
             return st;

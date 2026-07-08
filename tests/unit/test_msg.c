@@ -44,6 +44,16 @@ static void test_clientReport_roundTrip(void)
     strcpy(in.logs[0].path, "/var/log/syslog");
     in.logs[0].sizeDelta = 4096; in.logs[0].matchCount = 3; in.logs[0].lastOffset = 99999;
 
+    in.health.fsReadonlyCount = 1;
+    in.health.blockDevMissing = 1;
+    in.health.smartFailCount = 1;
+    in.health.failedUnitCount = 2;
+    in.health.dmesgCritCount = 3;
+    strcpy(in.health.fsReadonlyList, "/data");
+    strcpy(in.health.smartFailList, "sde:FAILING");
+    strcpy(in.health.failedUnitList, "nginx.service,forgejo.service");
+    strcpy(in.health.dmesgCritSample, "btrfs: error: forced readonly");
+
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         solariMsgBuildClientReport(&in, payload, sizeof payload, &outLen, &tlvCount));
     TEST_ASSERT_TRUE(outLen > 0);
@@ -67,6 +77,41 @@ static void test_clientReport_roundTrip(void)
     TEST_ASSERT_EQUAL_UINT32(38, out.procs[0].nSockets);
     TEST_ASSERT_EQUAL_STRING("/var/log/syslog", out.logs[0].path);
     TEST_ASSERT_EQUAL_UINT32(3, out.logs[0].matchCount);
+    TEST_ASSERT_EQUAL_UINT8(1, out.health.fsReadonlyCount);
+    TEST_ASSERT_EQUAL_UINT8(1, out.health.blockDevMissing);
+    TEST_ASSERT_EQUAL_UINT8(1, out.health.smartFailCount);
+    TEST_ASSERT_EQUAL_UINT16(2, out.health.failedUnitCount);
+    TEST_ASSERT_EQUAL_UINT16(3, out.health.dmesgCritCount);
+    TEST_ASSERT_EQUAL_STRING("/data", out.health.fsReadonlyList);
+    TEST_ASSERT_EQUAL_STRING("sde:FAILING", out.health.smartFailList);
+    TEST_ASSERT_EQUAL_STRING("nginx.service,forgejo.service", out.health.failedUnitList);
+    TEST_ASSERT_EQUAL_STRING("btrfs: error: forced readonly", out.health.dmesgCritSample);
+}
+
+static void test_clientReport_zeroHealth_roundTrip(void)
+{
+    solariClientReport in, out;
+    uint8_t payload[2048];
+    size_t outLen = 0;
+    uint16_t tlvCount = 0;
+
+    memset(&in, 0, sizeof in);
+    strcpy(in.hostFqdn, "clean.akoria.net");
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariMsgBuildClientReport(&in, payload, sizeof payload, &outLen, &tlvCount));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariMsgParseClientReport(payload, outLen, &out));
+
+    TEST_ASSERT_EQUAL_UINT8(0, out.health.fsReadonlyCount);
+    TEST_ASSERT_EQUAL_UINT8(0, out.health.blockDevMissing);
+    TEST_ASSERT_EQUAL_UINT8(0, out.health.smartFailCount);
+    TEST_ASSERT_EQUAL_UINT16(0, out.health.failedUnitCount);
+    TEST_ASSERT_EQUAL_UINT16(0, out.health.dmesgCritCount);
+    TEST_ASSERT_EQUAL_STRING("", out.health.fsReadonlyList);
+    TEST_ASSERT_EQUAL_STRING("", out.health.smartFailList);
+    TEST_ASSERT_EQUAL_STRING("", out.health.failedUnitList);
+    TEST_ASSERT_EQUAL_STRING("", out.health.dmesgCritSample);
 }
 
 static void test_monitorReport_roundTrip(void)
@@ -200,6 +245,7 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_clientReport_roundTrip);
+    RUN_TEST(test_clientReport_zeroHealth_roundTrip);
     RUN_TEST(test_monitorReport_roundTrip);
     RUN_TEST(test_hello_roundTrip);
     RUN_TEST(test_control_roundTrip);

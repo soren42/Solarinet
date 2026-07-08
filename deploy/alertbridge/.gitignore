@@ -1,0 +1,8 @@
+# Real config may hold the AMQP password; state holds the live checkpoint.
+alertbridge.conf
+alertbridge.state.json
+alertbridge.state.json.tmp
+*.log
+__pycache__/
+*.pyc
+.venv/
