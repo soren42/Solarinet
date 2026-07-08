@@ -526,10 +526,34 @@
     uptimeStr: "134d 06h",                 // controller (active server) uptime
   };
 
+  // ---- maintenance windows (migration 014) ----
+  // Planned outages: a host under an ACTIVE window is expected-down (the bridge
+  // suppresses its alerts + dead-man's-switch), so the UI reads it as
+  // "maintenance", not "down". One LIVE window on a real fleet node (so the badge
+  // surfaces on Nodes/Alerts) + one upcoming window on a probe-only host typed by
+  // hand (benzene — no client agent), matched by hostFqdn/ip.
+  const isoAt = (min) => new Date(Date.now() + min * 60000).toISOString();
+  const maintNode = nodes.find((n) => n.state === "down")
+    || nodes.find((n) => n.role === "client") || nodes[0];
+  const maintenance = [
+    {
+      windowId: 5001, scope: "node", nodeId: maintNode.nodeId,
+      hostFqdn: maintNode.hostFqdn, ipAddr: maintNode.ip,
+      reason: "NVMe swap + firmware flash", startsAt: isoAt(-35), endsAt: isoAt(85),
+      status: "active", live: true, createdBy: "jason",
+    },
+    {
+      windowId: 5002, scope: "node", nodeId: null,
+      hostFqdn: "benzene.akoria.net", ipAddr: "10.1.0.240",
+      reason: "Oculink + ARC B580 eGPU install", startsAt: isoAt(180), endsAt: isoAt(420),
+      status: "scheduled", live: false, createdBy: "jason",
+    },
+  ];
+
   window.SOLARI = {
     nodes, segments: SEGMENTS, segRollups, fleetRoll, summary,
     probes, rules, alerts, opie, discovered, builds, enrollments, config, netgear: NETGEAR,
-    monitors,
+    monitors, maintenance,
     server: {
       primary: primary.name, primaryId: primary.nodeId,
       failover: failover.name, failoverId: failover.nodeId,

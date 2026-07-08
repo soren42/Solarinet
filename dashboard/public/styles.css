@@ -464,6 +464,29 @@ table.grid tbody tr:active { background: var(--panel-2); }
   padding: 2px 8px; border-radius: 5px; background: var(--panel-3); color: var(--ink-dim); border: 1px solid var(--line);
 }
 
+/* ===================== MAINTENANCE ===================== */
+/* "In Maintenance" pill — violet, distinct from warn(amber)/crit(red) so an
+   expected-down host reads as planned, not as an incident. */
+.maint-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 20px; white-space: nowrap;
+  color: var(--violet); background: rgba(139, 108, 255, .12); border: 1px solid rgba(139, 108, 255, .35);
+}
+.maint-badge svg { flex: 0 0 auto; }
+/* LIVE indicator (Maintenance screen window list) */
+.maint-live {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  padding: 2px 9px; border-radius: 20px; color: var(--violet);
+  background: rgba(139, 108, 255, .14); border: 1px solid rgba(139, 108, 255, .40);
+}
+.maint-live .pulse-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--violet);
+  box-shadow: 0 0 calc(7px*var(--glow)) var(--violet); animation: maintPulse 1.6s ease-in-out infinite;
+}
+@keyframes maintPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
 /* ===================== CARDS (grouped) ===================== */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
 .scard { border: 1px solid var(--line); border-radius: var(--r-lg); background: linear-gradient(180deg, var(--panel-2), var(--panel)); overflow: hidden; }

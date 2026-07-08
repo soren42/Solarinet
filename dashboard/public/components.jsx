@@ -176,6 +176,7 @@
     { id: "opie", label: "Analysis", icon: "pulse", badge: "opie" },
     { group: "Manage" },
     { id: "assets", label: "Systems", icon: "host" },
+    { id: "maintenance", label: "Maintenance", icon: "wrench", badge: "maintenance" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
     { id: "settings", label: "Config & Rules", icon: "settings" },
@@ -266,6 +267,7 @@
                 )}
                 {item.badge === "discovery" && window.SOLARI.discovered.length > 0 && <span className="nav-item__count" style={{ background: "var(--ok-bg)", color: "var(--ok)" }}>{window.SOLARI.discovered.length}</span>}
                 {item.badge === "opie" && (() => { const n = (window.SOLARI.opie || []).filter((r) => r.status === "investigating").length; return n > 0 ? <span className="nav-item__count" style={{ background: "rgba(53,224,208,.13)", color: "var(--teal)" }}>{n}</span> : null; })()}
+                {item.badge === "maintenance" && (() => { const n = (window.SOLARI.maintenance || []).filter((w) => w.live).length; return n > 0 ? <span className="nav-item__count" style={{ background: "rgba(139,108,255,.14)", color: "var(--violet)" }}>{n}</span> : null; })()}
               </div>
             );
           })}
@@ -424,6 +426,49 @@
     );
   }
 
+  // ---------- maintenance ----------
+  // The windows currently IN EFFECT (live) — read from the live model. A
+  // fleet-wide window (scope 'all') puts every host into maintenance.
+  function activeMaintenance() {
+    return ((window.SOLARI && window.SOLARI.maintenance) || []).filter((w) => w.live);
+  }
+  // Find the active window (if any) covering a given entity. `ref` may be a node
+  // object {nodeId,hostFqdn,ip,name} or an alert {nodeId,node}. We match a node
+  // client by nodeId and a probe-only host (e.g. benzene) by hostFqdn / ip /
+  // short-name — mirroring how the bridge suppresses both classes.
+  function maintenanceFor(ref) {
+    if (!ref) return null;
+    const wins = activeMaintenance();
+    if (!wins.length) return null;
+    const nodeId = ref.nodeId != null ? String(ref.nodeId) : null;
+    const fqdn = ref.hostFqdn || null;
+    const ip = ref.ip || ref.ipAddr || null;
+    const name = ref.name || (fqdn ? String(fqdn).split(".")[0] : (ref.node || null));
+    return wins.find((w) => {
+      if (w.scope === "all") return true;
+      if (nodeId != null && w.nodeId != null && String(w.nodeId) === nodeId) return true;
+      if (fqdn && w.hostFqdn && w.hostFqdn === fqdn) return true;
+      if (ip && w.ipAddr && w.ipAddr === ip) return true;
+      if (name && w.hostFqdn && String(w.hostFqdn).split(".")[0] === name) return true;
+      return false;
+    }) || null;
+  }
+  // Reusable "In Maintenance" pill. Pass either a window (`win`) or an entity
+  // (`entity`) to auto-resolve one; renders nothing if the entity isn't covered.
+  function MaintenanceBadge({ win, entity, compact, style }) {
+    const w = win || (entity ? maintenanceFor(entity) : null);
+    if (!w) return null;
+    const scopeAll = w.scope === "all";
+    const title = "In maintenance"
+      + (w.reason ? " — " + w.reason : "")
+      + (scopeAll ? " (fleet-wide)" : "");
+    return (
+      <span className="maint-badge" title={title} style={style}>
+        <Icon name="wrench" size={11} />{compact ? "Maint" : "Maintenance"}
+      </span>
+    );
+  }
+
   // ---------- toasts ----------
   function Toasts({ items }) {
     return (
@@ -439,5 +484,6 @@
     StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars,
     Sidebar, TopBar, CommandPalette, Toasts, NAV, STATE_LABEL, metricColor,
     ProfileChip, solariLogout, DangerModal,
+    MaintenanceBadge, maintenanceFor, activeMaintenance,
   });
 })();

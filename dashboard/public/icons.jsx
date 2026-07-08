@@ -52,6 +52,8 @@
     netswitch: <><rect x="2" y="8" width="20" height="8" rx="1.6"/><rect x="5" y="11" width="2" height="2.5" fill="#05080e"/><rect x="8.5" y="11" width="2" height="2.5" fill="#05080e"/><rect x="12" y="11" width="2" height="2.5" fill="#05080e"/><rect x="15.5" y="11" width="2" height="2.5" fill="#05080e"/></>,
     wifi: <><path d="M5 12.5a10 10 0 0 1 14 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M8 15.5a6 6 0 0 1 8 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><circle cx="12" cy="18.5" r="1.6"/></>,
     close2: <><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/></>,
+    // maintenance (wrench)
+    wrench: <><path d="M15.5 3.4a5 5 0 0 0-6 6.4L3 16.4 6.6 20l6.6-6.6a5 5 0 0 0 6.4-6l-3.1 3.1-3-.6-.5-3z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"/></>,
   };
 
   function Icon({ name, size = 18, className, style }) {

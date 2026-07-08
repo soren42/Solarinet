@@ -4,7 +4,7 @@
 (function () {
   const { useState, useMemo, useEffect } = React;
   const Icon = window.Icon;
-  const { StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars, metricColor, DangerModal } = window;
+  const { StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars, metricColor, DangerModal, MaintenanceBadge, maintenanceFor } = window;
   const S = window.SOLARI;
   const fmt = S.fmt;
 
@@ -306,12 +306,14 @@
   function Cell({ n, dense, onOpenNode }) {
     const load = n.state === "down" ? 0 : n.cpuPct;
     const stale = isStale(n);
+    const maint = maintenanceFor && maintenanceFor(n);
     return (
       <div className={"cell " + n.state + (dense ? "" : " cozy-cell")} onClick={() => onOpenNode(n)}
-        title={`${n.hostFqdn} — ${n.state}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`}>
+        title={`${n.hostFqdn} — ${maint ? "in maintenance" + (maint.reason ? " (" + maint.reason + ")" : "") : n.state}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`}>
         <div className="cell__top">
           <span className="cell__name">{n.name}</span>
-          <span className="cell__dot" style={{ background: STATE_COLOR[n.state], boxShadow: n.state !== "unknown" ? `0 0 6px ${STATE_COLOR[n.state]}` : "none" }} />
+          {maint ? <Icon name="wrench" size={11} style={{ color: "var(--violet)" }} />
+            : <span className="cell__dot" style={{ background: STATE_COLOR[n.state], boxShadow: n.state !== "unknown" ? `0 0 6px ${STATE_COLOR[n.state]}` : "none" }} />}
         </div>
         <div className="cell__meta">{n.role === "client" ? n.ip : n.role.toUpperCase()}{stale && <span className="stale-tag">stale</span>}</div>
         {n.alertsCount > 0 && <span className="cell__badge">{n.alertsCount}</span>}
@@ -394,7 +396,7 @@
             {sorted.map((n) => (
               <tr key={n.nodeId} onClick={() => onOpenNode(n)}>
                 <td><StatusDot state={n.state} /></td>
-                <td><div className="td-host"><Icon name={ROLE_ICON[n.role]} size={15} className="ico" />{n.name}<span className="td-mono" style={{ fontSize: 10, color: "var(--ink-faint)" }}>.akoria.net</span></div></td>
+                <td><div className="td-host"><Icon name={ROLE_ICON[n.role]} size={15} className="ico" />{n.name}<span className="td-mono" style={{ fontSize: 10, color: "var(--ink-faint)" }}>.akoria.net</span>{MaintenanceBadge && <MaintenanceBadge entity={n} compact style={{ marginLeft: 6 }} />}</div></td>
                 <td><span className="tag">{n.role}</span></td>
                 <td className="td-mono">{n.segName} <span style={{ color: "var(--ink-faint)" }}>{n.ip}</span></td>
                 <td style={{ textAlign: "right" }}><Bar pct={n.cpuPct} /></td>
@@ -995,6 +997,7 @@
                         <div className="t">{a.ruleName}</div>
                         <div className="d">{a.detail}</div>
                       </div>
+                      {MaintenanceBadge && <MaintenanceBadge entity={a} compact />}
                       <span className={"alert-stat " + st} title={st === "acked" && a.ackedBy ? "Acknowledged by " + a.ackedBy : ("Status: " + st)}>
                         {st === "acked" ? "Acked" : st === "cleared" ? "Cleared" : "Active"}
                       </span>

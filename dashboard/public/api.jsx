@@ -177,6 +177,10 @@
     logout:       "/api/auth/logout",
     whoami:       "/api/auth/whoami",
     authConfig:   "/api/auth/config",   // public: which sign-in options to show
+
+    // ---- maintenance windows (migration 014) ----
+    maintenance:  "/api/maintenance",        // GET ?status=active|scheduled|all ; POST {host|all,reason,hours|from+to}
+    maintCancel:  function (id) { return "/api/maintenance/" + encodeURIComponent(id) + "/cancel"; },
   };
 
   // =====================================================================
@@ -343,6 +347,36 @@
     };
   }
 
+  // maintenanceWindow (migration 014) — a planned outage for a node, a probe-only
+  // host, or the whole fleet. The wire carries ISO-8601 startsAt/endsAt (UTC) and
+  // may include a computed `live` flag; we derive it defensively if absent so the
+  // "In Maintenance" badge is correct even against an older API.
+  function mapWindow(w) {
+    var startsAt = w.startsAt || w.startAt || null;
+    var endsAt = w.endsAt || w.endAt || null;
+    var status = w.status || "scheduled";
+    var startMs = startsAt ? Date.parse(startsAt) : null;
+    var endMs = endsAt ? Date.parse(endsAt) : null;
+    var now = Date.now();
+    var live = w.live != null ? !!w.live
+      : (status === "scheduled" || status === "active")
+        && startMs != null && endMs != null && now >= startMs && now <= endMs;
+    return {
+      windowId: w.windowId != null ? w.windowId : w.id,
+      scope: w.scope || (w.nodeId == null && !w.hostFqdn ? "all" : "node"),
+      nodeId: w.nodeId != null ? w.nodeId : null,
+      hostFqdn: w.hostFqdn || null,
+      ipAddr: w.ipAddr || w.ip || null,
+      reason: w.reason || null,
+      startsAt: startsAt, endsAt: endsAt,
+      status: status,
+      live: live,
+      createdBy: w.createdBy || null,
+      startsMin: startMs != null ? Math.round((now - startMs) / 60000) : null,   // <0 => future
+      endsMin: endMs != null ? Math.round((now - endMs) / 60000) : null,         // <0 => future
+    };
+  }
+
   function mapDiscovered(w) {
     return {
       discId: w.discId,
@@ -452,6 +486,9 @@
       getJSON(EP.whoami).catch(function () { return null; }),
       // Opie / Analysis reports — never let a missing panel break the boot.
       getJSON(EP.opie + "?status=all").catch(function () { return []; }),
+      // Active maintenance windows — cross-referenced client-side so a host that's
+      // expected-down reads as "maintenance", not "down". Tolerate absence.
+      getJSON(EP.maintenance + "?status=active").catch(function () { return []; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -472,6 +509,7 @@
       var poolsW = A(res[11]);
       var assetsW = A(res[12]);
       var opieW = A(res[14]);
+      var maintW = A(res[15]);
       // whoami -> S.operator {name, role, displayName, source, directoryEnabled}
       var whoW = res[13];
       var operator = (whoW && whoW.operator) ? {
@@ -515,6 +553,7 @@
       var enrollments = enrW.map(mapEnrollment);
       var builds = buildsW.map(mapBuild);
       var netgear = gearW.map(mapGear);
+      var maintenance = maintW.map(mapWindow);
 
       var monitors = nodes.filter(function (n) { return n.role === "monitor"; });
 
@@ -565,6 +604,7 @@
         probes: probes, rules: rules, alerts: alerts, opie: opie, discovered: discovered,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
+        maintenance: maintenance,
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
@@ -738,6 +778,18 @@
     // ---- Opie / Analysis reports ----
     opieList: function (status) { return getJSON(EP.opie + "?status=" + encodeURIComponent(status || "all")); },
     opieReport: function (reportId) { return getJSON(EP.opieReport(reportId)); },
+
+    // ---- maintenance windows (migration 014) ----
+    // List → mapped windows (ISO times + a derived `live` flag). status filters
+    // server-side (active|scheduled|all); we also re-derive `live` for safety.
+    maintenanceList: function (status) {
+      return getJSON(EP.maintenance + "?status=" + encodeURIComponent(status || "active"))
+        .then(function (w) { return (Array.isArray(w) ? w : []).map(mapWindow); });
+    },
+    // Schedule a window. body = { host } OR { all:true }, plus reason and EITHER
+    // { hours } OR { from, to } (space-separated "YYYY-MM-DD HH:MM", local).
+    scheduleMaintenance: function (body) { return post(EP.maintenance, body || {}); },
+    cancelMaintenance: function (windowId) { return post(EP.maintCancel(windowId), {}); },
 
     // ---- authentication (§11.1) ----
     whoami: function () { return getJSON(EP.whoami); },
