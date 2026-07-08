@@ -52,6 +52,14 @@
     netswitch: <><rect x="2" y="8" width="20" height="8" rx="1.6"/><rect x="5" y="11" width="2" height="2.5" fill="#05080e"/><rect x="8.5" y="11" width="2" height="2.5" fill="#05080e"/><rect x="12" y="11" width="2" height="2.5" fill="#05080e"/><rect x="15.5" y="11" width="2" height="2.5" fill="#05080e"/></>,
     wifi: <><path d="M5 12.5a10 10 0 0 1 14 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M8 15.5a6 6 0 0 1 8 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><circle cx="12" cy="18.5" r="1.6"/></>,
     close2: <><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/></>,
+    // inventory
+    inventory: <><path d="M3 8l9-5 9 5v8l-9 5-9-5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M3 8l9 5 9-5M12 13v8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/></>,
+    box: <><path d="M3 8l9-5 9 5v8l-9 5-9-5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M3 8l9 5 9-5M12 13v8M7.5 5.5l9 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></>,
+    receipt: <><path d="M6 3h12v18l-2.5-1.6L13 21l-2.5-1.6L8 21l-2.5-1.6L6 21z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/><path d="M9 8h6M9 12h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></>,
+    location: <><path d="M12 22s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="12" cy="10" r="2.4"/></>,
+    project: <><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M3 9h18M8 4v5" stroke="currentColor" strokeWidth="1.6"/><rect x="6.5" y="12" width="4" height="4" rx="1" fill="currentColor"/></>,
+    cart: <><circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/><path d="M2 3h3l2.2 12h10.3l1.8-8H6.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
+    tag2: <><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="7.5" cy="7.5" r="1.6"/></>,
   };
 
   function Icon({ name, size = 18, className, style }) {

@@ -975,3 +975,39 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
 .md-table td { font-family: var(--mono); font-size: 12px; color: var(--ink); }
 .md a { color: var(--teal); text-decoration: none; }
 .md a:hover { text-decoration: underline; }
+
+/* ============================================================
+   Inventory (screens4) — components / locations / receipts / projects
+   ============================================================ */
+.inv-badge { display: inline-flex; align-items: center; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; border: 1px solid currentColor; background: color-mix(in srgb, currentColor 12%, transparent); white-space: nowrap; }
+.inv-link { display: inline-flex; align-items: center; background: none; border: none; padding: 0; cursor: pointer; color: var(--teal); font-family: var(--mono); font-size: 12px; }
+.inv-link:hover { text-decoration: underline; }
+.inv-code { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent); border: 1px solid var(--line-glow); border-radius: 5px; padding: 1px 7px; }
+
+/* locations tree */
+.inv-tree-row { display: flex; align-items: center; gap: 9px; min-height: 38px; padding: 4px 10px; border-radius: var(--r-md); font-size: 13px; }
+.inv-tree-row:hover { background: var(--panel-2); }
+
+/* receipts gallery */
+.inv-receipt { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); overflow: hidden; cursor: pointer; transition: border-color .12s, transform .12s; }
+.inv-receipt:hover { border-color: var(--line-glow); transform: translateY(-2px); }
+.inv-receipt__thumb { height: 150px; background: var(--panel-2); display: flex; align-items: center; justify-content: center; overflow: hidden; border-bottom: 1px solid var(--line); }
+.inv-receipt__thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.inv-receipt__pdf { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-faint); width: 100%; height: 100%; }
+.inv-receipt__pdf span { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+.inv-receipt__body { padding: 12px 14px; }
+
+/* projects board */
+.inv-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.inv-col { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); padding: 10px; min-height: 60px; }
+.inv-col__head { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 8px; }
+.inv-col__head .dot { width: 8px; height: 8px; border-radius: 50%; }
+.inv-alloc { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: 9px 11px; margin-bottom: 8px; }
+.inv-alloc:last-child { margin-bottom: 0; }
+.inv-mini { border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink-dim); font-family: var(--mono); font-size: 10.5px; padding: 3px 8px; cursor: pointer; }
+.inv-mini:hover { border-color: var(--line-glow); color: var(--ink); }
+.inv-shop { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 14px; }
+.inv-shop__row { display: flex; align-items: center; gap: 9px; padding: 7px 2px; border-bottom: 1px dashed var(--line); font-size: 13px; }
+.inv-shop__row:last-child { border-bottom: none; }
+
+@media (max-width: 760px) { .inv-cols { grid-template-columns: 1fr; } }

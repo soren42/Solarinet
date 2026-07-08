@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Inventory } = window;
 
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
@@ -200,6 +200,7 @@
         { id: "go-reach", group: "Navigate", label: "Reachability Matrix", icon: "reachability", action: () => go("reachability") },
         { id: "go-topo", group: "Navigate", label: "Topology Map", icon: "topology", action: () => go("topology") },
         { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${(S.assets || []).length} monitored` },
+        { id: "go-inventory", group: "Navigate", label: "Inventory", icon: "inventory", action: () => go("inventory"), sub: `${((S.inventory && S.inventory.units) || []).length} components` },
         { id: "go-disc", group: "Navigate", label: "Discovery", icon: "discovery", action: () => go("discovery"), sub: `${S.discovered.length} new` },
         { id: "go-prov", group: "Navigate", label: "Provisioning", icon: "provision", action: () => go("provision"), sub: `${S.enrollments.length} pending` },
         { id: "go-cfg", group: "Navigate", label: "Config & Rules", icon: "settings", action: () => go("settings") },
@@ -237,6 +238,7 @@
             {route.name === "fleet" && PoolCards && <PoolCards onOpen={() => go("assets")} />}
             {route.name === "fleet" && <FleetOverview onOpenNode={openNode} onNav={go} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
             {route.name === "assets" && Assets && <Assets onOpenNode={openNode} />}
+            {route.name === "inventory" && Inventory && <Inventory toast={toast} />}
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
             {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}
             {route.name === "service" && ServiceDetail && <ServiceDetail targetId={route.targetId} onBack={() => setRoute(route.backRoute)} />}
