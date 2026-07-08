@@ -184,7 +184,46 @@ def publish(ch, exchange, message):
 # --------------------------------------------------------------------------- #
 # (1) bridge: alertEvent -> notify.events                                      #
 # --------------------------------------------------------------------------- #
-def bridge_alerts(db, ch, exchange, source, state, batch, spath):
+def maintenance_targets(db):
+    """(set_of_nodeId_str, set_of_ip_str, fleet_bool) for hosts under an active
+    maintenance window right now. A host under maintenance is EXPECTED down, so the
+    bridge suppresses its notifications and the dead-man's-switch skips it.
+    Client-node alerts match by nodeId; probe-target alerts (e.g. benzene, which
+    has no client) match by the IP embedded in the alert's targetId. Windows are
+    compared in server-local time (NOW())."""
+    nodes, ips, fleet = set(), set(), False
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT scope, nodeId, ipAddr FROM maintenanceWindow "
+                "WHERE status IN ('scheduled','active') "
+                "AND NOW() BETWEEN startsAt AND endsAt")
+            for r in cur.fetchall():
+                if r["scope"] == "all":
+                    fleet = True
+                else:
+                    if r["nodeId"] is not None:
+                        nodes.add(str(r["nodeId"]))
+                    if r["ipAddr"]:
+                        ips.add(r["ipAddr"])
+    except Exception as e:  # noqa: BLE001 — never let maintenance lookup break the loop
+        log(f"maintenance lookup failed: {e!r} (treating as no windows)")
+    return nodes, ips, fleet
+
+
+def _suppressed(nid, target, maint):
+    nodes, ips, fleet = maint
+    if fleet:
+        return True
+    if nid is not None and str(nid) in nodes:
+        return True
+    if target and ips:
+        t = str(target)                       # targetId form: "<monNode>:<ip>:<port>"
+        return any((":" + ip + ":") in t or t.endswith(":" + ip) or t == ip for ip in ips)
+    return False
+
+
+def bridge_alerts(db, ch, exchange, source, state, batch, spath, maint):
     """Publish alertEvent rows past the checkpoint. For EACH row we (a) publish
     with publisher confirms + mandatory, (b) advance the checkpoint only after
     the broker CONFIRMS delivery, and (c) durably save_state() that new
@@ -204,7 +243,7 @@ def bridge_alerts(db, ch, exchange, source, state, batch, spath):
     persisted_cp = int(state["checkpoint"])
     with db.cursor() as cur:
         cur.execute(
-            "SELECT e.eventId, e.severity, e.detail, e.targetId, "
+            "SELECT e.eventId, e.nodeId, e.severity, e.detail, e.targetId, "
             "       UNIX_TIMESTAMP(e.firedAt) AS firedTs, "
             "       n.hostFqdn, n.role, "
             "       r.metric, r.op, r.threshold "
@@ -218,6 +257,18 @@ def bridge_alerts(db, ch, exchange, source, state, batch, spath):
     published = 0
     for r in rows:
         eid = int(r["eventId"])
+        if _suppressed(r.get("nodeId"), r.get("targetId"), maint):
+            # host under maintenance -> expected down; don't notify, but advance
+            # the checkpoint so we don't re-examine this event every cycle.
+            state["checkpoint"] = eid
+            if not save_state(spath, state):
+                state["checkpoint"] = persisted_cp
+                log(f"ERROR: could not persist suppressed checkpoint {eid}; "
+                    f"stopping batch, retry next cycle")
+                break
+            persisted_cp = eid
+            log(f"suppressed eventId={eid} ({r.get('hostFqdn')}) — maintenance window")
+            continue
         try:
             msg = event_to_message(r, source)
             publish(ch, exchange, msg)   # blocks for broker confirm; raises on failure
@@ -310,7 +361,7 @@ def node_ages(db):
     return ages
 
 
-def dead_mans_switch(db, ch, exchange, source, state, threshold, spath):
+def dead_mans_switch(db, ch, exchange, source, state, threshold, spath, maint):
     """Emit ONE crit per node that has gone silent past `threshold`; re-arm
     (and emit an info recovery) when it reports again.
 
@@ -327,6 +378,15 @@ def dead_mans_switch(db, ch, exchange, source, state, threshold, spath):
     silent = state["silent"]
 
     for nid, info in ages.items():
+        if _suppressed(nid, None, maint):
+            # under maintenance: expected down. Don't fire. If it was already
+            # armed before the window, drop the arm quietly — it'll re-fire after
+            # the window if it's still silent.
+            if nid in silent:
+                del silent[nid]
+                save_state(spath, state)
+                log(f"DEAD-MAN: {info['fqdn']} entered maintenance -> disarmed")
+            continue
         age = info["age"]
         fqdn = info["fqdn"]
         if age > threshold:
@@ -438,11 +498,14 @@ def run(conf_path):
                 f"tracked_silent={list(state['silent'])}")
 
             while _run:
+                # Hosts under an active maintenance window are expected down:
+                # suppress their notifications + skip the dead-man's-switch.
+                maint = maintenance_targets(db)
                 # Both helpers advance + durably persist state per confirmed
                 # publish, so a kill mid-cycle can't replay delivered events.
-                bridge_alerts(db, ch, exchange, source, state, batch, spath)
+                bridge_alerts(db, ch, exchange, source, state, batch, spath, maint)
                 if deadman_enabled:
-                    dead_mans_switch(db, ch, exchange, source, state, threshold, spath)
+                    dead_mans_switch(db, ch, exchange, source, state, threshold, spath, maint)
                 # keep AMQP heartbeats alive, then idle
                 mq.process_data_events(0)
                 time.sleep(poll)

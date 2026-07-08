@@ -271,7 +271,25 @@ def parse_output(out):
     return "", ""
 
 
+def node_in_maintenance(conn, nodeId):
+    """True if the event's host is under an active maintenance window (expected
+    down). Opie skips investigating it. Fleet-wide ('all') windows match any node."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM maintenanceWindow WHERE status IN ('scheduled','active') "
+                "AND NOW() BETWEEN startsAt AND endsAt "
+                "AND (scope='all' OR nodeId=%s) LIMIT 1", (nodeId,))
+            return cur.fetchone() is not None
+    except Exception as e:  # noqa: BLE001
+        log(f"maintenance lookup failed: {e!r} (treating as none)")
+        return False
+
+
 def handle(cfg, conn, ev):
+    if node_in_maintenance(conn, ev.get("nodeId")):
+        log(f"skipping {ev.get('hostFqdn')} — under maintenance window")
+        return
     kind = "crit" if ev.get("severity") == "crit" else None
     if kind is None:
         sc = cfg.getint("trigger", "storm_count", fallback=3)
