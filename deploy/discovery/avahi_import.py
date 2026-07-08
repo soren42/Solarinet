@@ -109,14 +109,21 @@ def load_export(path):
     return hosts
 
 
+def _nonroutable(ip):
+    """A host's own loopback / link-local / docker-bridge addresses leak into its
+    mDNS advertisements — they aren't real discovered hosts, so drop them."""
+    return (ip.startswith("127.") or ip.startswith("169.254.")
+            or ip.startswith("172.17.") or ip == "0.0.0.0")
+
+
 def ipv4_addresses(host):
-    """Distinct IPv4 literals from host['addresses'] (skips *.local. names
-    and IPv6 literals — mDNS hostnames and v6 addresses aren't the discovered
-    ip correlation key)."""
+    """Distinct routable IPv4 literals from host['addresses'] (skips *.local.
+    names, IPv6 literals, and loopback/link-local/docker addresses — mDNS
+    hostnames and non-routable IPs aren't the discovered ip correlation key)."""
     out = []
     for a in host.get("addresses") or []:
         a = (a or "").strip()
-        if a and IPV4_RE.match(a) and a not in out:
+        if a and IPV4_RE.match(a) and a not in out and not _nonroutable(a):
             out.append(a)
     return out
 
