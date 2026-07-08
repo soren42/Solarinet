@@ -43,6 +43,9 @@
     shield: <><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="#05080e" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
     pulse: <><path d="M2 12h5l2-5 4 12 2-7h7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
     clock: <><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M12 7v5l3.5 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
+    // wrench — Maintenance (scheduled downtime / suppressed alerting)
+    maintenance: <><path d="M20.6 6.1a4.3 4.3 0 0 1-5.6 5.4L6.6 19.9a2 2 0 0 1-2.8-2.8l8.4-8.4A4.3 4.3 0 0 1 17.6 3l-2.9 2.9.7 2.3 2.3.7z" fill="currentColor"/></>,
+    calendar: <><rect x="3" y="4.5" width="18" height="16.5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></>,
     arch: <><rect x="4" y="3" width="16" height="4" rx="1.4"/><rect x="4" y="10" width="16" height="4" rx="1.4" opacity="0.7"/><rect x="4" y="17" width="16" height="4" rx="1.4" opacity="0.45"/></>,
     chip: <><rect x="6" y="6" width="12" height="12" rx="2"/></>,
     link: <><path d="M9 15l6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M8 12l-2 2a3 3 0 0 0 4 4l2-2M16 12l2-2a3 3 0 0 0-4-4l-2 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></>,

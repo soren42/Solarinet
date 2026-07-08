@@ -177,6 +177,9 @@
     logout:       "/api/auth/logout",
     whoami:       "/api/auth/whoami",
     authConfig:   "/api/auth/config",   // public: which sign-in options to show
+    // maintenance windows (scheduled downtime; suppresses alerting)
+    maintenance:  "/api/maintenance",   // ?status=active|upcoming|past|all
+    maintCancel:  function (id) { return "/api/maintenance/" + encodeURIComponent(id) + "/cancel"; },
 
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
@@ -379,6 +382,25 @@
     };
   }
 
+  // maintenance window — the API stores/returns startsAt/endsAt as UTC DATETIME
+  // strings; we keep them RAW here so the screen can convert to the browser's
+  // local zone at render time (see screens5.jsx). 'live' is a server-derived bool.
+  function mapMaintenance(w) {
+    return {
+      windowId: w.windowId,
+      scope: w.scope || (w.nodeId == null && !w.hostFqdn ? "all" : "node"),
+      nodeId: w.nodeId != null ? w.nodeId : null,
+      hostFqdn: w.hostFqdn || null,
+      ipAddr: w.ipAddr || w.ip || null,
+      reason: w.reason || "",
+      startsAt: w.startsAt || null,
+      endsAt: w.endsAt || null,
+      status: w.status || "scheduled",
+      createdBy: w.createdBy || null,
+      live: w.live != null ? !!w.live : (w.status === "active"),
+    };
+  }
+
   function mapEnrollment(w) {
     return {
       enrId: w.enrId,
@@ -468,6 +490,10 @@
       // Inventory (SoR migration 014) — tolerate absence so it never forces the
       // whole dashboard offline; the Inventory screen also re-reads on mount.
       getJSON(EP.inventory).catch(function () { return null; }),
+      // Maintenance windows — the whole set (active/upcoming/past) so the screen
+      // AND the in-maintenance badges (which cross-reference active windows) have
+      // the data client-side. Tolerate absence so it never forces the fixture.
+      getJSON(EP.maintenance + "?status=all").catch(function () { return []; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -488,6 +514,7 @@
       var poolsW = A(res[11]);
       var assetsW = A(res[12]);
       var opieW = A(res[14]);
+      var maintW = A(res[16]);
       // inventory — combined read; normalise each list, tolerate a null/partial payload.
       var invW = res[15] && typeof res[15] === "object" ? res[15] : {};
       var inventory = {
@@ -532,6 +559,10 @@
 
       var opie = opieW.map(mapOpie).sort(function (a, b) {
         return (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0);   // newest first
+      });
+      var maintenance = maintW.map(mapMaintenance).sort(function (a, b) {
+        return (Date.parse((a.startsAt || "").replace(" ", "T") + "Z") || 0) -
+               (Date.parse((b.startsAt || "").replace(" ", "T") + "Z") || 0);
       });
       var rules = rulesW.map(function (r) { return Object.assign({}, r); });
       var discovered = discW.map(mapDiscovered);
@@ -586,6 +617,7 @@
       var live = {
         nodes: nodes, segments: segments, segRollups: segRollups, fleetRoll: fleetRoll, summary: summary,
         probes: probes, rules: rules, alerts: alerts, opie: opie, discovered: discovered,
+        maintenance: maintenance,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
         inventory: inventory,
@@ -791,6 +823,18 @@
     // ---- Opie / Analysis reports ----
     opieList: function (status) { return getJSON(EP.opie + "?status=" + encodeURIComponent(status || "all")); },
     opieReport: function (reportId) { return getJSON(EP.opieReport(reportId)); },
+
+    // ---- maintenance windows ----
+    // list windows by status ('active'|'upcoming'|'past'|'all'); rows carry
+    // startsAt/endsAt as UTC DATETIME strings + a derived 'live' bool.
+    maintenanceList: function (status) {
+      return getJSON(EP.maintenance + "?status=" + encodeURIComponent(status || "all"))
+        .then(function (w) { return (Array.isArray(w) ? w : []).map(mapMaintenance); });
+    },
+    // schedule a window. body: { host?|all:true, reason?, hours?:number
+    //                            | from?+to?:"YYYY-MM-DD HH:MM" }
+    scheduleMaintenance: function (body) { return post(EP.maintenance, body || {}); },
+    cancelMaintenance: function (windowId) { return post(EP.maintCancel(windowId), {}); },
 
     // ---- authentication (§11.1) ----
     whoami: function () { return getJSON(EP.whoami); },

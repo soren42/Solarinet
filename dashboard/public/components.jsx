@@ -179,6 +179,7 @@
     { id: "inventory", label: "Inventory", icon: "inventory" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
+    { id: "maintenance", label: "Maintenance", icon: "maintenance" },
     { id: "settings", label: "Config & Rules", icon: "settings" },
   ];
 
