@@ -153,6 +153,24 @@ static int scanSetNonBlock(int fd)
     return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+static void scanTriggerMdnsInspect(void)
+{
+    int rc;
+
+    rc = system("systemctl start --no-block solari-mdns-inspect.service");
+    if (rc == -1) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "scan: failed to trigger mDNS inspector: %s", strerror(errno));
+        return;
+    }
+    if (rc != 0) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "scan: mDNS inspector trigger exited with status %d", rc);
+        return;
+    }
+    solariLogf(SOLARI_LOG_INFO, "scan: triggered mDNS inspector");
+}
+
 /* ---- optional enrichment (host tools; OFF unless flag set) --------------- */
 #ifdef SOLARI_WITH_DISCOVERY_TOOLS
 static void scanSanitize(const char *in, char *out, size_t cap)
@@ -506,6 +524,7 @@ solariStatus serverScanRun(serverContext *ctx, const char *cidr,
 
     free(openMap);
     solariLogf(SOLARI_LOG_INFO, "scan: complete, %zu host(s) recorded", found);
+    scanTriggerMdnsInspect();
     if (foundOut) *foundOut = found;
     return SOLARI_OK;
 }
