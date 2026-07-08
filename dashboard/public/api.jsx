@@ -135,8 +135,11 @@
     node:         function (id) { return "/api/nodes/" + encodeURIComponent(id); },
     nodeHistory:  function (id, metric) { return "/api/nodes/" + encodeURIComponent(id) + "/history?metric=" + encodeURIComponent(metric); },
     nodeConfig:   function (id) { return "/api/nodes/" + encodeURIComponent(id) + "/config"; },
-    alerts:       "/api/alerts",            // ?status=active|all
-    alertAck:     function (eventId) { return "/api/alerts/" + encodeURIComponent(eventId) + "/ack"; },
+    alerts:       "/api/alerts",            // ?status=active|history|all
+    alertAck:     "/api/alerts/ack",         // POST {eventId}
+    alertAckAll:  "/api/alerts/ack-all",     // POST {} -> { count }
+    opie:         "/api/opie",               // ?status=all|done|investigating
+    opieReport:   function (id) { return "/api/opie/" + encodeURIComponent(id); },
     rules:        "/api/rules",
     rule:         function (id) { return "/api/rules/" + encodeURIComponent(id); },
     probes:       "/api/probes",
@@ -296,6 +299,11 @@
 
   function mapAlert(w, nodeIndex) {
     var n = w.nodeId != null ? nodeIndex[w.nodeId] : null;
+    var cleared = w.cleared != null ? w.cleared : !!w.clearedAt;
+    var clearedMinAgo = w.clearedMinAgo != null ? w.clearedMinAgo : minsSince(w.clearedAt);
+    // Derived lifecycle status (mirrors the server rule): acked wins, then
+    // cleared, else active. Tolerate a server-supplied status when present.
+    var status = w.status || (w.ackedAt ? "acked" : (cleared ? "cleared" : "active"));
     return {
       eventId: w.eventId, ruleId: w.ruleId, ruleName: w.ruleName,
       node: w.node || (n ? n.name : null),
@@ -303,7 +311,35 @@
       segName: w.segName || (n ? n.segName : null),
       severity: w.severity, detail: w.detail,
       firedMinAgo: w.firedMinAgo != null ? w.firedMinAgo : (minsSince(w.firedAt) || 0),
-      cleared: w.cleared != null ? w.cleared : !!w.clearedAt,
+      cleared: cleared,
+      clearedMinAgo: clearedMinAgo,
+      ackedAt: w.ackedAt || null,
+      ackedBy: w.ackedBy || null,
+      ackedMinAgo: w.ackedMinAgo != null ? w.ackedMinAgo : minsSince(w.ackedAt),
+      status: status,
+      opieReportId: w.opieReportId != null ? w.opieReportId : null,
+    };
+  }
+
+  // opieReport (§ analysis) — the LLM incident write-up attached to an alert.
+  function mapOpie(w) {
+    return {
+      reportId: w.reportId,
+      incidentKey: w.incidentKey || null,
+      triggerKind: w.triggerKind || null,       // 'crit' | 'warn-storm'
+      firstEventId: w.firstEventId != null ? w.firstEventId : null,
+      nodeId: w.nodeId != null ? w.nodeId : null,
+      hostFqdn: w.hostFqdn || null,
+      severity: w.severity || "warn",
+      status: w.status || "investigating",       // 'investigating' | 'done' | 'failed'
+      summary: w.summary || "",
+      analysis: w.analysis != null ? w.analysis : null,   // markdown; only on detail read
+      model: w.model || null,
+      durationSec: w.durationSec != null ? w.durationSec : null,
+      startedAt: w.startedAt || null,
+      finishedAt: w.finishedAt || null,
+      startedMinAgo: minsSince(w.startedAt),
+      finishedMinAgo: minsSince(w.finishedAt),
     };
   }
 
@@ -414,6 +450,8 @@
       // whoami — identity chip in the TopBar. Never let it break the boot:
       // an auth-gated deployment already 401s on the reads above.
       getJSON(EP.whoami).catch(function () { return null; }),
+      // Opie / Analysis reports — never let a missing panel break the boot.
+      getJSON(EP.opie + "?status=all").catch(function () { return []; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -433,6 +471,7 @@
       var gearW = A(res[10]);
       var poolsW = A(res[11]);
       var assetsW = A(res[12]);
+      var opieW = A(res[14]);
       // whoami -> S.operator {name, role, displayName, source, directoryEnabled}
       var whoW = res[13];
       var operator = (whoW && whoW.operator) ? {
@@ -468,6 +507,9 @@
         return a.firedMinAgo - b.firedMinAgo;
       });
 
+      var opie = opieW.map(mapOpie).sort(function (a, b) {
+        return (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0);   // newest first
+      });
       var rules = rulesW.map(function (r) { return Object.assign({}, r); });
       var discovered = discW.map(mapDiscovered);
       var enrollments = enrW.map(mapEnrollment);
@@ -520,15 +562,15 @@
 
       var live = {
         nodes: nodes, segments: segments, segRollups: segRollups, fleetRoll: fleetRoll, summary: summary,
-        probes: probes, rules: rules, alerts: alerts, discovered: discovered,
+        probes: probes, rules: rules, alerts: alerts, opie: opie, discovered: discovered,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
         operator: operator,
-        activeCrit: alerts.filter(function (a) { return !a.cleared && a.severity === "crit"; }).length,
-        activeWarn: alerts.filter(function (a) { return !a.cleared && a.severity === "warn"; }).length,
+        activeCrit: alerts.filter(function (a) { return !a.ackedAt && !a.cleared && a.severity === "crit"; }).length,
+        activeWarn: alerts.filter(function (a) { return !a.ackedAt && !a.cleared && a.severity === "warn"; }).length,
         fmt: fmt,
         source: "live",
         api: API,
@@ -689,7 +731,13 @@
     },
 
     // ---- alert lifecycle ----
-    ackAlert: function (eventId) { return post(EP.alertAck(eventId), {}); },
+    ackAlert: function (eventId) { return post(EP.alertAck, { eventId: eventId }); },
+    // Ack every currently-ACTIVE alert; resolves to { count }.
+    ackAllAlerts: function () { return post(EP.alertAckAll, {}); },
+
+    // ---- Opie / Analysis reports ----
+    opieList: function (status) { return getJSON(EP.opie + "?status=" + encodeURIComponent(status || "all")); },
+    opieReport: function (reportId) { return getJSON(EP.opieReport(reportId)); },
 
     // ---- authentication (§11.1) ----
     whoami: function () { return getJSON(EP.whoami); },

@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen } = window;
 
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
@@ -129,6 +129,14 @@
       setRoute({ name: "service", targetId, backRoute: backRoute || { name: "reachability" } });
       scrollTop();
     }, []);
+    // Open Opie's analysis for a report (from the Analysis nav, an alert row, or
+    // the command palette). Lands directly on the report's detail view.
+    const openOpie = useCallback((reportId) => {
+      // nonce forces a fresh mount so re-opening the same report always lands on
+      // its detail view (even after an in-panel "back to reports").
+      setRoute({ name: "opie", reportId: reportId != null ? reportId : null, nonce: Date.now() });
+      scrollTop();
+    }, []);
 
     // Universal entity click-through. Every cross-view reference (Topology glyph,
     // Alerts source, Reachability row, command palette) funnels through here so
@@ -188,6 +196,7 @@
       const cmds = [
         { id: "go-fleet", group: "Navigate", label: "Fleet Overview", icon: "overview", action: () => go("fleet") },
         { id: "go-alerts", group: "Navigate", label: "Alerts & Tolerances", icon: "alerts", action: () => go("alerts"), sub: `${S.activeCrit + S.activeWarn} active` },
+        { id: "go-opie", group: "Navigate", label: "Opie · Analysis", icon: "pulse", action: () => go("opie"), sub: `${(S.opie || []).length} report${(S.opie || []).length === 1 ? "" : "s"}` },
         { id: "go-reach", group: "Navigate", label: "Reachability Matrix", icon: "reachability", action: () => go("reachability") },
         { id: "go-topo", group: "Navigate", label: "Topology Map", icon: "topology", action: () => go("topology") },
         { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${(S.assets || []).length} monitored` },
@@ -231,7 +240,8 @@
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
             {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}
             {route.name === "service" && ServiceDetail && <ServiceDetail targetId={route.targetId} onBack={() => setRoute(route.backRoute)} />}
-            {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} onOpenEntity={openEntity} rules={rules} setRules={setRules} toast={toast} />}
+            {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} onOpenEntity={openEntity} onOpenOpie={openOpie} rules={rules} setRules={setRules} toast={toast} />}
+            {route.name === "opie" && OpieScreen && <OpieScreen key={route.nonce || 0} initialReportId={route.reportId} onOpenNode={openNode} />}
             {route.name === "reachability" && <Reachability onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "topology" && <Topology onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "discovery" && <Discovery onOpenNode={openNode} />}
