@@ -1,0 +1,40 @@
+# /etc/systemd/system/notify.service
+; SolariNet notification dispatcher (notifyd) as a systemd unit.
+;
+; Consumes notify.events (RabbitMQ, vhost 'solari') and fans alerts out to
+; the configured senders (log always, sms via Tachyon, push stub). See
+; README.md for the message contract and deploy steps.
+;
+; Install:
+;   cp deploy/notify/notify.conf.example deploy/notify/notify.conf
+;   $EDITOR deploy/notify/notify.conf   # fill in the AMQP password etc.
+;   chmod 600 deploy/notify/notify.conf
+;   python3 -m venv deploy/notify/.venv && deploy/notify/.venv/bin/pip install pika
+;   sudo cp deploy/notify/notify.service /etc/systemd/system/
+;   sudo systemctl daemon-reload && sudo systemctl enable --now notify
+;
+; Adjust User/WorkingDirectory/ExecStart paths to your host (this unit
+; assumes the repo lives at /home/jason/Code/Solarinet, matching the other
+; deploy/*.service units in this repo).
+
+[Unit]
+Description=SolariNet notification dispatcher (notifyd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/notify
+ExecStart=/home/jason/Code/Solarinet/deploy/notify/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/notify/notifyd.py --config /home/jason/Code/Solarinet/deploy/notify/notify.conf
+Restart=on-failure
+RestartSec=5
+
+; notifyd already retries the AMQP connection internally, but a crash loop
+; from a bug should still back off rather than hammer the broker.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

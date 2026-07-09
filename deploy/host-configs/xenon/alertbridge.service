@@ -1,0 +1,30 @@
+# /etc/systemd/system/alertbridge.service
+; SolariNet alert->MQ bridge + dead-man's-switch (HOST_HEALTH_CONTRACT §6).
+; Runs on xenon (the solarinet DB + server host). Install:
+;   see deploy/alertbridge/README.md. Assumes repo at /home/jason/Code/Solarinet.
+;
+; The DB password is NOT in alertbridge.conf: run/db.env (KEY=VALUE with an
+; `export`, mode 0600) provides SOLARI_DB_PASS, sourced here — same convention
+; as deploy/systemd/solarinet-snmp.service.
+[Unit]
+Description=SolariNet alert->MQ bridge + dead-man's-switch
+After=network-online.target mariadb.service
+Wants=network-online.target
+; Rate-limit restarts. These are [Unit] directives (systemd moved them here);
+; leaving them in [Service] makes systemd ignore the limit.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/alertbridge
+Environment=ALERTBRIDGE_CONF=/home/jason/Code/Solarinet/deploy/alertbridge/alertbridge.conf
+; Source run/db.env (exports SOLARI_DB_PASS) then exec the bridge.
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /home/jason/Code/Solarinet/deploy/alertbridge/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/alertbridge/alertbridge.py'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
