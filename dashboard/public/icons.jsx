@@ -63,6 +63,8 @@
     project: <><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M3 9h18M8 4v5" stroke="currentColor" strokeWidth="1.6"/><rect x="6.5" y="12" width="4" height="4" rx="1" fill="currentColor"/></>,
     cart: <><circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/><path d="M2 3h3l2.2 12h10.3l1.8-8H6.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
     tag2: <><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="7.5" cy="7.5" r="1.6"/></>,
+    // git — commit graph (branch + node), Git (Forgejo) nav
+    git: <><circle cx="6" cy="6" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="6" cy="18" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="18" cy="9" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><path d="M6 8.6v6.8M8.4 7.2A6 6 0 0 0 15.4 9M15.4 9a6 6 0 0 1-7 1.8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></>,
   };
 
   function Icon({ name, size = 18, className, style }) {

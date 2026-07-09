@@ -29,6 +29,8 @@ return static function (Router $router): void {
         __DIR__ . '/routes/topology.php',
         __DIR__ . '/routes/gear.php',
         __DIR__ . '/routes/discovery.php',
+        __DIR__ . '/routes/forgejo.php',
+        __DIR__ . '/routes/ca.php',
         __DIR__ . '/routes/provisioning.php',
         __DIR__ . '/routes/inventory.php',
     ];

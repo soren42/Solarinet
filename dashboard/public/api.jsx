@@ -181,6 +181,10 @@
     maintenance:  "/api/maintenance",   // ?status=active|upcoming|past|all
     maintCancel:  function (id) { return "/api/maintenance/" + encodeURIComponent(id) + "/cancel"; },
 
+    // read-only integrations
+    forgejo:      "/api/forgejo",        // Forgejo repos/commits/PRs summary
+    ca:           "/api/ca",             // CA/PKI health/roots/provisioners/node-certs
+
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
     invUnits:     "/api/inventory/units",    // GET list / POST create
@@ -414,6 +418,36 @@
     };
   }
 
+  // Forgejo (Git) summary — the server already shapes this; normalise the lists
+  // and the available/reason fail-soft envelope so the screen never sees null.
+  function mapForgejo(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      available: !!w.available,
+      reason: w.reason || null,
+      baseUrl: w.baseUrl || null,
+      version: w.version || "—",
+      counts: w.counts || { repos: A(w.repos).length, openIssues: 0, openPrs: A(w.prs).length },
+      repos: A(w.repos),
+      commits: A(w.commits),
+      prs: A(w.prs),
+    };
+  }
+
+  // CA / PKI summary — server-shaped; normalise the lists + step-ca descriptor.
+  function mapCa(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      stepCa: w.stepCa || { available: false, status: null, reason: "unavailable", url: null },
+      roots: A(w.roots),
+      provisioners: A(w.provisioners),
+      nodeCerts: A(w.nodeCerts),
+      warnDays: w.warnDays != null ? w.warnDays : 60,
+    };
+  }
+
   function mapEnrollment(w) {
     return {
       enrId: w.enrId,
@@ -507,6 +541,10 @@
       // AND the in-maintenance badges (which cross-reference active windows) have
       // the data client-side. Tolerate absence so it never forces the fixture.
       getJSON(EP.maintenance + "?status=all").catch(function () { return []; }),
+      // Git (Forgejo) + CA/PKI read-only integrations — tolerate absence so a
+      // missing token / unreachable CA never forces the whole dashboard offline.
+      getJSON(EP.forgejo).catch(function () { return null; }),
+      getJSON(EP.ca).catch(function () { return null; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -528,6 +566,9 @@
       var assetsW = A(res[12]);
       var opieW = A(res[14]);
       var maintW = A(res[16]);
+      // Git (Forgejo) + CA/PKI — mapped (null-tolerant) integration payloads.
+      var git = mapForgejo(res[17]);
+      var ca = mapCa(res[18]);
       // inventory — combined read; normalise each list, tolerate a null/partial payload.
       var invW = res[15] && typeof res[15] === "object" ? res[15] : {};
       var inventory = {
@@ -634,6 +675,7 @@
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
         inventory: inventory,
+        git: git, ca: ca,
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
@@ -834,6 +876,12 @@
         return window.SOLARI;
       });
     },
+
+    // ---- read-only integrations (Git / CA) ----
+    // Forgejo summary (repos/commits/PRs); server envelope carries available/reason.
+    forgejoInfo: function () { return getJSON(EP.forgejo).then(mapForgejo); },
+    // CA/PKI summary (step-ca health/roots/provisioners/node-certs).
+    caInfo: function () { return getJSON(EP.ca).then(mapCa); },
 
     // ---- alert lifecycle ----
     ackAlert: function (eventId) { return post(EP.alertAck, { eventId: eventId }); },
