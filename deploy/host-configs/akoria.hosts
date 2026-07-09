@@ -1,0 +1,96 @@
+# akoria.net static resolution — for use while office DNS is offline (teardown).
+# append to /etc/hosts on the review machine:  sudo tee -a /etc/hosts < this
+
+10.0.0.1	chemistry.akoria.net chemistry
+10.0.0.10	carbon.akoria.net carbon
+10.0.0.12	scandium.akoria.net scandium
+10.0.0.2	halogen.akoria.net halogen
+10.0.0.20	xenon.akoria.net xenon
+10.0.0.250	silicon.akoria.net silicon
+10.0.0.253	mercury.akoria.net mercury
+10.0.0.254	helium.akoria.net helium
+10.0.0.3	laboratory.akoria.net laboratory
+10.0.0.7	beaker.akoria.net beaker
+10.0.0.8	flask.akoria.net flask
+10.0.0.85	silver.akoria.net silver
+10.0.0.9	bunsen.akoria.net bunsen
+10.0.0.90	catalyst.akoria.net catalyst
+10.0.0.91	accelerant.akoria.net accelerant
+10.0.1.100	gallifrey.akoria.net gallifrey
+10.0.1.120	strangeness.akoria.net strangeness
+10.0.1.125	boson.akoria.net boson
+10.0.1.126	muon.akoria.net muon
+10.0.1.50	hydrogen.akoria.net hydrogen
+10.1.0.10	radium.akoria.net radium
+10.1.0.100	amino.akoria.net amino
+10.1.0.200	cesium.akoria.net cesium
+10.2.0.100	plutonium.akoria.net plutonium
+10.2.0.20	sodium.akoria.net sodium
+10.2.2.10	phosphorus.akoria.net phosphorus
+10.2.2.2	ytterbium.akoria.net ytterbium
+10.2.3.10	soren.akoria.net soren
+10.2.3.20	dihydroxide.akoria.net dihydroxide
+10.2.4.10	freon.akoria.net freon
+10.3.0.100	platinum.akoria.net platinum
+10.3.0.33	quartz.akoria.net quartz
+10.3.0.34	radio.akoria.net radio
+10.3.0.60	tin.akoria.net tin
+10.3.0.80	bromide.akoria.net bromide
+10.4.1.10	callisto.akoria.net callisto
+10.4.4.10	tardis.akoria.net tardis
+10.5.0.5	tungsten.akoria.net tungsten
+10.5.2.10	astatine.akoria.net astatine
+10.5.2.20	nitrogen.akoria.net nitrogen
+10.5.2.50	benzene.akoria.net benzene
+10.5.87.15	eleksmaker.akoria.net eleksmaker
+10.6.0.10	quanta.akoria.net quanta
+10.6.0.20	valence.akoria.net valence
+10.6.0.50	neutrino.akoria.net neutrino
+10.6.0.66	cassini.akoria.net cassini
+10.6.6.10	tachyon.akoria.net tachyon
+10.7.0.1	photon.akoria.net photon
+10.7.0.10	chlorine.akoria.net chlorine
+10.6.0.51	neutrino-wifi.akoria.net neutrino-wifi
+10.6.0.11	quanta-wifi.akoria.net quanta-wifi
+10.1.0.11	radium-wifi.akoria.net radium-wifi
+10.6.6.11	tachyon-wifi.akoria.net tachyon-wifi
+10.5.0.6	tungsten-alt.akoria.net tungsten-alt
+10.1.0.10	ad.akoria.net ad	# -> radium
+10.1.0.200	ad-backup.akoria.net ad-backup	# -> cesium
+10.0.1.125	arkkvm1.akoria.net arkkvm1	# -> boson
+10.0.1.126	arkkvm2.akoria.net arkkvm2	# -> muon
+10.0.0.10	c.akoria.net c	# -> carbon
+10.0.0.20	dashboard.akoria.net dashboard	# -> xenon
+10.5.2.50	db.akoria.net db	# -> benzene
+10.5.2.20	dev.akoria.net dev	# -> nitrogen
+10.0.0.20	dns.akoria.net dns	# -> xenon
+10.0.0.254	dns1.akoria.net dns1	# -> helium
+10.0.0.253	dns2.akoria.net dns2	# -> mercury
+10.1.0.200	git.akoria.net git	# -> cesium
+10.6.0.10	grafana.akoria.net grafana	# -> quanta
+10.0.0.1	gw.akoria.net gw	# -> chemistry
+10.2.0.20	hass.akoria.net hass	# -> sodium
+10.0.0.254	he.akoria.net he	# -> helium
+10.0.0.254	hole.akoria.net hole	# -> helium
+10.0.0.253	hole2.akoria.net hole2	# -> mercury
+10.1.0.10	kdc.akoria.net kdc	# -> radium
+10.5.2.10	laptop.akoria.net laptop	# -> astatine
+10.1.0.10	ldap.akoria.net ldap	# -> radium
+10.0.0.20	monitor.akoria.net monitor	# -> xenon
+10.1.0.100	n8n.akoria.net n8n	# -> amino
+10.0.0.10	nas.akoria.net nas	# -> carbon
+10.0.0.10	nas-x.akoria.net nas-x	# -> carbon
+10.0.0.1	ns0.akoria.net ns0	# -> chemistry
+10.0.0.20	ns1.akoria.net ns1	# -> xenon
+10.0.0.254	ns2.akoria.net ns2	# -> helium
+10.0.0.253	ns3.akoria.net ns3	# -> mercury
+10.6.6.10	ntp.akoria.net ntp	# -> tachyon
+10.0.0.85	printer.akoria.net printer	# -> silver
+10.0.0.1	router.akoria.net router	# -> chemistry
+10.3.0.80	scanner.akoria.net scanner	# -> bromide
+10.3.0.60	sn.akoria.net sn	# -> tin
+10.0.0.20	solari.akoria.net solari	# -> xenon
+10.0.0.20	solarianmedia.akoria.net solarianmedia	# -> xenon
+10.1.0.10	sso.akoria.net sso	# -> radium
+10.0.0.9	umr.akoria.net umr	# -> bunsen
+10.0.0.1	unifi.akoria.net unifi	# -> chemistry
