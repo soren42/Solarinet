@@ -118,6 +118,14 @@ def send(message, cfg):
         log.warning("webpush: could not load subscriptions: %r", exc)
         return False
 
+    if not subscriptions:
+        # No installed dashboards have enabled Web Push yet. That's not a
+        # failure — there is simply nothing to deliver — so return True so the
+        # dispatcher acks and doesn't log a phantom "webpush failed" on every
+        # alert. Real delivery failures below still return False as usual.
+        log.debug("webpush: no subscriptions; nothing to send")
+        return True
+
     payload = json.dumps({
         "title": message.get("title") or "SolariNet",
         "body": message.get("body") or "",
