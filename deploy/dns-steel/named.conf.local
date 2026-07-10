@@ -16,3 +16,5 @@ zone "4.2.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/va
 zone "4.4.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.4.4.10.in-addr.arpa"; };
 zone "6.6.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.6.6.10.in-addr.arpa"; };
 zone "87.5.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.87.5.10.in-addr.arpa"; };
+zone "akoria.org" { type forward; forward only; forwarders { 10.1.0.10; }; };
+zone "rpz.akoria" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.rpz.akoria"; };

@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh BIND RPZ ad-block zone (StevenBlack) and reload
+After=network-online.target named.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gen-rpz.sh /etc/bind/zones/db.rpz.akoria
+ExecStartPost=/usr/sbin/rndc reload rpz.akoria
