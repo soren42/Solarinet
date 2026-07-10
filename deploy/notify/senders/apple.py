@@ -45,10 +45,18 @@ def _format(message):
     return " ".join(text.split())  # collapse any newlines/runs of whitespace
 
 
-def _applescript(buddy, text):
+def _applescript(buddy, text, from_account=""):
+    # from_account: a specific Messages iMessage account *id* (UUID) to send from,
+    # so alerts arrive from a dedicated source (e.g. admin@solarian.net) instead of
+    # "1st account" (which tends to be the operator's own ID and gets suppressed by
+    # Apple's own-device dedup). Empty -> first iMessage account (original behaviour).
+    if from_account:
+        select = f'set svc to account id "{_esc(from_account)}"'
+    else:
+        select = 'set svc to 1st account whose service type = iMessage'
     return (
         'tell application "Messages"\n'
-        '  set svc to 1st account whose service type = iMessage\n'
+        f'  {select}\n'
         f'  send "{_esc(text)}" to participant "{_esc(buddy)}" of svc\n'
         'end tell\n'
     )
@@ -69,6 +77,7 @@ def send(message, cfg):
 
     ssh_opts = (cfg.get("ssh_opts", "") or
                 "-o ConnectTimeout=8 -o BatchMode=yes -o StrictHostKeyChecking=accept-new").split()
+    from_account = cfg.get("from_account", "")   # optional dedicated source account id
     text = _format(message)
     ok_any = False
     for r in recipients:
@@ -78,7 +87,7 @@ def send(message, cfg):
             # shell arg-quoting to get wrong.
             proc = subprocess.run(
                 ["ssh", *ssh_opts, ssh_host, "osascript", "-"],
-                input=_applescript(r, text),
+                input=_applescript(r, text, from_account),
                 capture_output=True, text=True, timeout=30)
             if proc.returncode == 0:
                 ok_any = True
