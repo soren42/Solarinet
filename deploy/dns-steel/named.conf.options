@@ -1,0 +1,10 @@
+options {
+    directory "/var/cache/bind";
+    recursion no;                       // authoritative-only for now (resolver role comes at cutover)
+    allow-query { any; };
+    allow-transfer { none; };
+    listen-on { any; };
+    listen-on-v6 { any; };
+    dnssec-validation no;               // authoritative secondary; no recursion to validate
+    notify no;                          // leaf secondary
+};
