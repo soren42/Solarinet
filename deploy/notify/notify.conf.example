@@ -70,6 +70,17 @@ at_baud = 115200
 # Stub — no working transport yet. Future SolariNet-dashboard/Tab5 push.
 endpoint =
 
+[sender.webpush]
+# Browser Web Push for installed SolariNet dashboards. Add webpush to [senders]
+# and routing only after this block has real DB credentials and a readable VAPID key.
+db_host = 127.0.0.1
+db_port = 3306
+db_name = solarinet
+db_user = solarinet
+db_pass = CHANGE_ME
+vapid_private_key = /home/jason/Code/Solarinet/run/vapid_private.pem
+vapid_subject = mailto:admin@solarian.net
+
 [sender.mqtt]
 # Republish notifications to an MQTT broker (Mosquitto on benzene) under
 # notify/<severity>. Consumed by the Tab5 firmware + a future dashboard surface.

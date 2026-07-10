@@ -125,6 +125,7 @@
   }
   // expose raw helpers for screens that want ad-hoc calls
   function post(path, body) { return getJSON(path, { method: "POST", body: body || {} }); }
+  function del(path, body) { return getJSON(path, { method: "DELETE", body: body || {} }); }
 
   // =====================================================================
   // ENDPOINT PATHS (the PHP agent must match these exactly)
@@ -138,6 +139,8 @@
     alerts:       "/api/alerts",            // ?status=active|history|all
     alertAck:     "/api/alerts/ack",         // POST {eventId}
     alertAckAll:  "/api/alerts/ack-all",     // POST {} -> { count }
+    pushSubscribe: "/api/push/subscribe",
+    pushVapid:     "/api/push/vapid",
     opie:         "/api/opie",               // ?status=all|done|investigating
     opieReport:   function (id) { return "/api/opie/" + encodeURIComponent(id); },
     rules:        "/api/rules",
@@ -803,6 +806,7 @@
     endpoints: EP,
     get: getJSON,
     post: post,
+    delete: del,
 
     // detail / history / topology reads
     node: loadNode,
@@ -963,6 +967,11 @@
     login:  function (username, password) { return post(EP.login, { username: username, password: password }); },
     logout: function () { return post(EP.logout, {}); },
 
+    // ---- browser Web Push ----
+    pushVapid: function () { return getJSON(EP.pushVapid); },
+    subscribePush: function (subscription) { return post(EP.pushSubscribe, subscription); },
+    unsubscribePush: function (endpoint) { return del(EP.pushSubscribe, { endpoint: endpoint }); },
+
     // live SSE stream (§8.4 / §11.1) — optional; screens may subscribe.
     stream: function (onEvent) {
       if (!window.EventSource) return null;
@@ -1049,7 +1058,7 @@
   // ---------------------------------------------------------------------
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", function () {
-      navigator.serviceWorker.register("sw.js").catch(function (e) {
+      navigator.serviceWorker.register("/sw.js").catch(function (e) {
         console.warn("[SolariNet] service worker registration failed:", e && e.message);
       });
     });

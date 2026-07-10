@@ -62,3 +62,7 @@ __pycache__/
 
 # Claude Code workflow worktrees / local agent state
 .claude/
+run/cursor.env
+run/unifi.env
+run/notify-apple.env
+run/vapid_private.pem

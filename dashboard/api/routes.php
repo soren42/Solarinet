@@ -32,6 +32,7 @@ return static function (Router $router): void {
         __DIR__ . '/routes/forgejo.php',
         __DIR__ . '/routes/ca.php',
         __DIR__ . '/routes/identity.php',
+        __DIR__ . '/routes/push.php',
         __DIR__ . '/routes/provisioning.php',
         __DIR__ . '/routes/inventory.php',
     ];
