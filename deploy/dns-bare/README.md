@@ -17,7 +17,10 @@ sudo python3 gen-bare.py /etc/bind/zones/db.akoria.net /tmp/bare && \
 ```
 `named.conf.local` on each resolver must `include "/etc/bind/named.conf.bare";`.
 
-## TODO
+## Sync (wired 2026-07-10)
+gen-bare.py runs inside sor-apply-dns after gen-zones; changed db.bare-*/named.conf.bare deploy to xenon and are pushed to steel (container SIGHUP). Manual re-run only for out-of-band fixes.
+
+## Former TODO
 Wire `gen-bare.py` into `sor-apply-dns` so bare zones regenerate + redeploy to
 **both** resolvers on every SoR change (currently a manual re-run; host IPs are
 stable so drift is slow). The applier runs on xenon — the steel half needs a
