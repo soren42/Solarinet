@@ -184,6 +184,7 @@
     // read-only integrations
     forgejo:      "/api/forgejo",        // Forgejo repos/commits/PRs summary
     ca:           "/api/ca",             // CA/PKI health/roots/provisioners/node-certs
+    identity:     "/api/identity",       // Keycloak realm users/factors/groups
 
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
@@ -460,6 +461,38 @@
     };
   }
 
+  // Identity (Keycloak users) summary — server-shaped; normalise the user list
+  // and the available/reason fail-soft envelope so the screen never sees null.
+  function mapIdentity(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      available: !!w.available,
+      reason: w.reason || null,
+      realmUrl: w.realmUrl || null,
+      users: A(w.users).map(function (u) {
+        u = u || {};
+        var f = u.factors || {};
+        return {
+          id: u.id,
+          username: u.username || "",
+          email: u.email || null,
+          enabled: !!u.enabled,
+          emailVerified: !!u.emailVerified,
+          createdAt: u.createdAt || null,
+          groups: A(u.groups),
+          factors: {
+            password: !!f.password,
+            otp: !!f.otp,
+            webauthn: !!f.webauthn,
+            webauthnPasswordless: !!f.webauthnPasswordless,
+            types: A(f.types),
+          },
+        };
+      }),
+    };
+  }
+
   function mapEnrollment(w) {
     return {
       enrId: w.enrId,
@@ -557,6 +590,9 @@
       // missing token / unreachable CA never forces the whole dashboard offline.
       getJSON(EP.forgejo).catch(function () { return null; }),
       getJSON(EP.ca).catch(function () { return null; }),
+      // Identity (Keycloak) — tolerate absence so a missing/unreachable
+      // directory never forces the whole dashboard offline.
+      getJSON(EP.identity).catch(function () { return null; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -581,6 +617,7 @@
       // Git (Forgejo) + CA/PKI — mapped (null-tolerant) integration payloads.
       var git = mapForgejo(res[17]);
       var ca = mapCa(res[18]);
+      var identity = mapIdentity(res[19]);
       // inventory — combined read; normalise each list, tolerate a null/partial payload.
       var invW = res[15] && typeof res[15] === "object" ? res[15] : {};
       var inventory = {
@@ -687,7 +724,7 @@
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
         inventory: inventory,
-        git: git, ca: ca,
+        git: git, ca: ca, identity: identity,
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
@@ -894,6 +931,8 @@
     forgejoInfo: function () { return getJSON(EP.forgejo).then(mapForgejo); },
     // CA/PKI summary (step-ca health/roots/provisioners/node-certs).
     caInfo: function () { return getJSON(EP.ca).then(mapCa); },
+    // Identity summary (Keycloak realm users/factors/groups).
+    identityInfo: function () { return getJSON(EP.identity).then(mapIdentity); },
 
     // ---- alert lifecycle ----
     ackAlert: function (eventId) { return post(EP.alertAck, { eventId: eventId }); },

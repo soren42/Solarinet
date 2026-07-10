@@ -182,6 +182,7 @@
     { id: "maintenance", label: "Maintenance", icon: "maintenance" },
     { id: "git", label: "Git", icon: "git" },
     { id: "certificates", label: "Certificates", icon: "shield" },
+    { id: "identity", label: "Identity", icon: "users" },
     { id: "settings", label: "Config & Rules", icon: "settings" },
   ];
 
