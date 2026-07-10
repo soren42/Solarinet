@@ -33,6 +33,7 @@ return static function (Router $router): void {
         __DIR__ . '/routes/ca.php',
         __DIR__ . '/routes/provisioning.php',
         __DIR__ . '/routes/inventory.php',
+        __DIR__ . '/routes/dns.php',
     ];
     foreach ($groups as $file) {
         $register = require $file;

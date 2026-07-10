@@ -621,6 +621,9 @@
     nodes, segments: SEGMENTS, segRollups, fleetRoll, summary,
     probes, rules, alerts, opie, discovered, builds, enrollments, config, netgear: NETGEAR,
     monitors, inventory,
+    // DNS screen fixture — the screen renders its own empty states; live data
+    // is always lazy (screen-mounted), never part of the loadLive() bundle.
+    dns: { health: null },
     server: {
       primary: primary.name, primaryId: primary.nodeId,
       failover: failover.name, failoverId: failover.nodeId,

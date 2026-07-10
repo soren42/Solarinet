@@ -185,6 +185,14 @@
     forgejo:      "/api/forgejo",        // Forgejo repos/commits/PRs summary
     ca:           "/api/ca",             // CA/PKI health/roots/provisioners/node-certs
 
+    // ---- DNS (routes/dns.php — all lazy, screen-mounted; NEVER in loadLive) ----
+    dnsQuery:       "/api/dns/query",    // ?name=&type=&servers= — per-server dig fan-out
+    dnsHealth:      "/api/dns/health",   // zone SOA parity + embedded rpz summary
+    dnsZones:       "/api/dns/zones",    // SoR zone list + record counts
+    dnsZoneRecords: "/api/dns/zones",    // + "/{id}/records?..." (read-only browser)
+    dnsHosts:       "/api/dns/hosts",    // next-render preview (hosts/ifaces/cnames)
+    dnsRpz:         "/api/dns/rpz",      // standalone RPZ status (future use)
+
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
     invUnits:     "/api/inventory/units",    // GET list / POST create
@@ -445,6 +453,51 @@
       provisioners: A(w.provisioners),
       nodeCerts: A(w.nodeCerts),
       warnDays: w.warnDays != null ? w.warnDays : 60,
+    };
+  }
+
+  // DNS query fan-out — normalise every per-server result so the screen never
+  // sees a null server/flags/answers; unknown statuses degrade to TIMEOUT.
+  function mapDnsQuery(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      name: w.name || "",
+      type: w.type || "A",
+      ts: w.ts || null,
+      results: A(w.results).map(function (r) {
+        r = r || {};
+        return {
+          server: r.server || { id: "?", label: "?", ip: "", kind: "internal" },
+          status: r.status || "TIMEOUT",
+          flags: r.flags || { aa: false, ra: false },
+          answers: A(r.answers),
+          authority: A(r.authority),
+          queryTimeMs: r.queryTimeMs != null ? r.queryTimeMs : null,
+          rpzBlocked: !!r.rpzBlocked,
+          error: r.error || null,
+        };
+      }),
+    };
+  }
+
+  // DNS health — zone parity table + embedded rpz tile payload.
+  function mapDnsHealth(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      sorAvailable: w.sorAvailable !== false,
+      servers: A(w.servers),
+      zones: A(w.zones).map(function (z) {
+        z = z || {};
+        return {
+          name: z.name || "", kind: z.kind || null, authority: z.authority || null,
+          expectedServers: A(z.expectedServers),
+          soa: z.soa || {},
+          parity: !!z.parity,
+        };
+      }),
+      rpz: w.rpz || null,
     };
   }
 
@@ -882,6 +935,19 @@
     forgejoInfo: function () { return getJSON(EP.forgejo).then(mapForgejo); },
     // CA/PKI summary (step-ca health/roots/provisioners/node-certs).
     caInfo: function () { return getJSON(EP.ca).then(mapCa); },
+
+    // ---- DNS (lazy, screen-mounted only — dnsHealth runs digs server-side,
+    // so none of these may ever join loadLive()'s poll bundle) ----
+    dnsQuery: function (name, type, servers) {
+      return getJSON(EP.dnsQuery + "?name=" + encodeURIComponent(name) +
+        "&type=" + encodeURIComponent(type) +
+        "&servers=" + (servers || []).join(",")).then(mapDnsQuery);
+    },
+    dnsHealth: function () { return getJSON(EP.dnsHealth).then(mapDnsHealth); },
+    dnsZones: function () { return getJSON(EP.dnsZones); },
+    dnsZoneRecords: function (id, qs) { return getJSON(EP.dnsZoneRecords + "/" + encodeURIComponent(id) + "/records" + (qs || "")); },
+    dnsHosts: function () { return getJSON(EP.dnsHosts); },
+    dnsRpz: function () { return getJSON(EP.dnsRpz); },
 
     // ---- alert lifecycle ----
     ackAlert: function (eventId) { return post(EP.alertAck, { eventId: eventId }); },

@@ -42,6 +42,8 @@
     filter: <><path d="M3 5h18l-7 8v6l-4 2v-8z"/></>,
     shield: <><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="#05080e" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
     pulse: <><path d="M2 12h5l2-5 4 12 2-7h7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
+    // globe — DNS (resolvers / zones / records)
+    dns: <><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2"/><ellipse cx="12" cy="12" rx="4" ry="9" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M3.5 12h17" stroke="currentColor" strokeWidth="2"/></>,
     clock: <><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M12 7v5l3.5 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
     // wrench — Maintenance (scheduled downtime / suppressed alerting)
     maintenance: <><path d="M20.6 6.1a4.3 4.3 0 0 1-5.6 5.4L6.6 19.9a2 2 0 0 1-2.8-2.8l8.4-8.4A4.3 4.3 0 0 1 17.6 3l-2.9 2.9.7 2.3 2.3.7z" fill="currentColor"/></>,
