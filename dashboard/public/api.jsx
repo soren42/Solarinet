@@ -371,6 +371,13 @@
       : (typeof w.mdnsServices === "string"
         ? w.mdnsServices.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
         : []);
+    // openPorts arrives as an array from /api/discovery (comma-joined "port/svc"
+    // tokens split server-side); tolerate a raw comma-joined string too.
+    var openPorts = Array.isArray(w.openPorts)
+      ? w.openPorts
+      : (typeof w.openPorts === "string"
+        ? w.openPorts.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
+        : []);
     return {
       discId: w.discId,
       host: w.host || w.ip,
@@ -394,6 +401,11 @@
       enrichedAt: w.enrichedAt || null,
       mdnsName: w.mdnsName || null,
       mdnsServices: mdnsSvcs,
+      // active-recon (nmap) enrichment — any may be null on a not-yet-scanned host
+      osGuess: w.osGuess || null,
+      openPorts: openPorts,
+      banners: w.banners || null,
+      nmapEnrichedAt: w.nmapEnrichedAt || null,
       // best-effort LLDP/topology neighbor {gearName,peerPort,localIf,linkType,speedMbps,rssi,viaLldp} or null
       neighbor: w.neighbor || null,
     };

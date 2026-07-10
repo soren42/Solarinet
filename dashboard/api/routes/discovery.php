@@ -38,6 +38,7 @@ return static function (Router $router): void {
             "SELECT discId, host, ip, kind, via, services, segId, arch,
                     mac, vendor, osName, deviceRole, sysDescr, enrichedAt,
                     mdnsName, mdnsServices,
+                    osGuess, openPorts, banners, nmapEnrichedAt,
                     seenCount, firstSeenAt, lastSeenAt, status
                FROM discovered
                $where
@@ -67,7 +68,13 @@ return static function (Router $router): void {
                 'enrichedAt'   => Coerce::iso($r['enrichedAt']),
                 'mdnsName'     => $r['mdnsName'],
                 // comma-joined service types → array of trimmed, unique tokens.
-                'mdnsServices' => DiscoveryReads::splitServices($r['mdnsServices']),
+                'mdnsServices' => DiscoveryReads::splitCsv($r['mdnsServices']),
+                // active-recon (nmap) enrichment — null on hosts never scanned.
+                'osGuess'        => $r['osGuess'],
+                // comma-joined "port/service" list → array of trimmed, unique tokens.
+                'openPorts'      => DiscoveryReads::splitCsv($r['openPorts']),
+                'banners'        => $r['banners'],
+                'nmapEnrichedAt' => Coerce::iso($r['nmapEnrichedAt']),
                 'seenCount'    => Coerce::int($r['seenCount']),
                 'firstSeenAt'  => Coerce::iso($r['firstSeenAt']),
                 'lastSeenAt'   => Coerce::iso($r['lastSeenAt']),
@@ -89,12 +96,13 @@ return static function (Router $router): void {
 final class DiscoveryReads
 {
     /**
-     * Split the comma-joined mDNS service-type list into trimmed, de-duplicated
-     * tokens (e.g. "_spotify-connect._tcp, _airplay._tcp"). Null/empty → [].
+     * Split a comma-joined list into trimmed, de-duplicated tokens. Used for both
+     * the mDNS service-type list (e.g. "_spotify-connect._tcp, _airplay._tcp")
+     * and the nmap open-port list (e.g. "22/ssh,443/https"). Null/empty → [].
      *
      * @return list<string>
      */
-    public static function splitServices(?string $raw): array
+    public static function splitCsv(?string $raw): array
     {
         if ($raw === null || trim($raw) === '') {
             return [];

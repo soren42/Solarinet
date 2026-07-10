@@ -53,6 +53,31 @@
     const h = Math.floor(m / 60);
     return h + "h " + String(m % 60).padStart(2, "0") + "m ago";
   }
+  // Parse the newline-joined "service:banner" nmap banner blob into a lookup
+  // keyed by the (lowercased) service token, e.g. "22/ssh" or "ssh". Tolerant
+  // of null/empty input; malformed lines (no colon) are skipped.
+  function parseBanners(raw) {
+    var map = {};
+    if (!raw) return map;
+    String(raw).split("\n").forEach(function (line) {
+      var i = line.indexOf(":");
+      if (i < 0) return;
+      var k = line.slice(0, i).trim();
+      var v = line.slice(i + 1).trim();
+      if (k && v) map[k.toLowerCase()] = v;
+    });
+    return map;
+  }
+  // Best-effort banner lookup for an open-port token ("22/ssh") — tries the
+  // full token first, then falls back to the service name after the slash.
+  function bannerFor(banMap, portToken) {
+    if (!portToken) return null;
+    var key = String(portToken).toLowerCase();
+    if (banMap[key]) return banMap[key];
+    var slash = key.indexOf("/");
+    var svc = slash >= 0 ? key.slice(slash + 1) : key;
+    return banMap[svc] || null;
+  }
   // A compact "sw-core-01 · Gi1/0/12" neighbor label, or null.
   function neighborLabel(n) {
     if (!n) return null;
@@ -186,6 +211,8 @@
         d.host, d.ip, d.mac, d.vendor, d.osName, d.deviceRole, d.sysDescr,
         d.mdnsName, (d.mdnsServices || []).join(" "), svcHay, d.seg, d.via,
         d.neighbor && d.neighbor.gearName, d.neighbor && d.neighbor.peerPort,
+        // nmap active-recon: OS guess + open-port tokens searchable alongside osName.
+        d.osGuess, (d.openPorts || []).join(" "),
       ].filter(Boolean).join(" ").toLowerCase();
       return hay.indexOf(ql) >= 0;
     });
@@ -264,7 +291,7 @@
           ))}
           <div className="search" style={{ marginLeft: "auto", maxWidth: 280, height: 36 }}>
             <Icon name="search" size={15} />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="vendor · service · role · segment" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="vendor · os · port · role · segment" />
           </div>
         </div>
 
@@ -288,6 +315,7 @@
                   const st = effStatus(d);
                   const nbr = neighborLabel(d.neighbor);
                   const mdns = isMdns(d);
+                  const banMap = parseBanners(d.banners);
                   return (
                     <tr key={d.discId != null ? "d" + d.discId : d.host} style={{ cursor: "default" }}>
                       {/* Host / IP + kind + mDNS origin */}
@@ -310,9 +338,16 @@
                       <td>
                         <div style={{ fontSize: 12.5 }}>{d.osName || <span className="muted">—</span>}</div>
                         {d.deviceRole && <span className="svc-chip" style={{ borderColor: ROLE_TONE[d.deviceRole] || "var(--teal)", color: ROLE_TONE[d.deviceRole] || "var(--teal)", marginTop: 3, display: "inline-block" }}>{d.deviceRole}</span>}
+                        {/* nmap active-recon OS guess (distinct from osName above) */}
+                        {d.osGuess && (
+                          <div className="td-mono muted" style={{ fontSize: 10.5, marginTop: 3 }}
+                            title={d.nmapEnrichedAt ? "nmap OS guess · enriched " + d.nmapEnrichedAt : "nmap OS guess"}>
+                            <span style={{ color: "var(--amber, var(--warn))" }}>nmap</span> {d.osGuess}
+                          </div>
+                        )}
                       </td>
 
-                      {/* mDNS name + mdns service chips + TCP service chips */}
+                      {/* mDNS name + mdns service chips + TCP service chips + nmap open ports */}
                       <td>
                         {d.mdnsName && <div className="td-mono muted" style={{ fontSize: 10.5, marginBottom: 3 }}>{d.mdnsName}</div>}
                         <div style={{ display: "flex", gap: 5, flexWrap: "wrap", maxWidth: 320 }}>
@@ -327,7 +362,16 @@
                               </span>
                             );
                           })}
-                          {(!d.mdnsServices || !d.mdnsServices.length) && (!d.services || !d.services.length) && <span className="muted">—</span>}
+                          {(d.openPorts || []).map((p, i) => {
+                            const banner = bannerFor(banMap, p);
+                            return (
+                              <span key={"p" + i} className="svc-chip" style={{ borderColor: "var(--amber, var(--warn))", color: "var(--amber, var(--warn))" }}
+                                title={banner ? "nmap · " + p + " · " + banner : "nmap open port · " + p}>
+                                {p}
+                              </span>
+                            );
+                          })}
+                          {(!d.mdnsServices || !d.mdnsServices.length) && (!d.services || !d.services.length) && (!d.openPorts || !d.openPorts.length) && <span className="muted">—</span>}
                         </div>
                       </td>
 
