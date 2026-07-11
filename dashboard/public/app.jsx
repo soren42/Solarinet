@@ -281,15 +281,23 @@
     // Which sign-in options the server offers. SSO is additive: the local form
     // is always shown; the button only appears when OIDC is enabled + configured.
     const [oidc, setOidc] = useState({ enabled: false, label: "Sign in with SSO", url: "/api/auth/oidc/login" });
+    // Directory (AD) users authenticate via SSO; the local username/password form
+    // is hidden unless the server explicitly enables it (localEnabled), so it isn't
+    // a dead-end for directory accounts. Default true until config loads.
+    const [local, setLocal] = useState(true);
     useEffect(() => {
       const api = window.SolariAPI;
       if (!api || !api.authConfig) return;
       api.authConfig()
-        .then((cfg) => cfg && cfg.oidcEnabled && setOidc({
-          enabled: true,
-          label: cfg.oidcLabel || "Sign in with SSO",
-          url: cfg.oidcLoginUrl || "/api/auth/oidc/login",
-        }))
+        .then((cfg) => {
+          if (!cfg) return;
+          setLocal(cfg.localEnabled !== false);
+          if (cfg.oidcEnabled) setOidc({
+            enabled: true,
+            label: cfg.oidcLabel || "Sign in with SSO",
+            url: cfg.oidcLoginUrl || "/api/auth/oidc/login",
+          });
+        })
         .catch(() => {});
     }, []);
     const submit = (e) => {
@@ -310,20 +318,28 @@
             <div style={{ fontWeight: 700, fontSize: 18, marginTop: 6 }}>SolariNet</div>
             <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>Monitoring · sign in</div>
           </div>
-          <input autoFocus value={u} onChange={(e) => setU(e.target.value)} placeholder="Username" autoComplete="username" style={field} />
-          <input type="password" value={p} onChange={(e) => setP(e.target.value)} placeholder="Password" autoComplete="current-password" style={field} />
+          {local ? (
+            <>
+              <input autoFocus value={u} onChange={(e) => setU(e.target.value)} placeholder="Username" autoComplete="username" style={field} />
+              <input type="password" value={p} onChange={(e) => setP(e.target.value)} placeholder="Password" autoComplete="current-password" style={field} />
+            </>
+          ) : null}
           {err ? <div style={{ color: "var(--red, #ff3d72)", fontSize: 12, margin: "2px 0 10px" }}>{err}</div> : null}
-          <button type="submit" disabled={busy || !u || !p}
-            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: busy ? "default" : "pointer", fontWeight: 600, fontSize: 14, background: "var(--teal, #35e0d0)", color: "#05080e", opacity: (busy || !u || !p) ? 0.6 : 1 }}>
-            {busy ? "Signing in…" : "Sign in"}
-          </button>
+          {local ? (
+            <button type="submit" disabled={busy || !u || !p}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: busy ? "default" : "pointer", fontWeight: 600, fontSize: 14, background: "var(--teal, #35e0d0)", color: "#05080e", opacity: (busy || !u || !p) ? 0.6 : 1 }}>
+              {busy ? "Signing in…" : "Sign in"}
+            </button>
+          ) : null}
           {oidc.enabled ? (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 12px", opacity: 0.5, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
-                or
-                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
-              </div>
+              {local ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 12px", opacity: 0.5, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
+                  or
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
+                </div>
+              ) : null}
               <button type="button" onClick={() => { window.location.href = oidc.url; }}
                 style={{ width: "100%", padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 14, background: "transparent", color: "inherit", border: "1px solid rgba(255,255,255,0.18)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 <Icon name="shield" size={16} style={{ color: "var(--teal, #35e0d0)" }} />
