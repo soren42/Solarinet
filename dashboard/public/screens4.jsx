@@ -51,12 +51,33 @@
   const LBL = { fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", opacity: 0.6, marginTop: 14, display: "block" };
 
   function nextId(list) { return list.reduce(function (m, x) { return Math.max(m, x.id || 0); }, 0) + 1; }
+  // The locations API returns camelCase (parentId/locType) and, on the list/combined
+  // reads, a nested tree. This screen renders flat by snake_case (parent_id/loc_type),
+  // so normalize on ingestion — flatten any tree and map field names. Idempotent for
+  // already-flat snake_case data (offline fixture, optimistic drafts).
+  function normLocations(list) {
+    const out = [];
+    (function walk(nodes) {
+      (nodes || []).forEach(function (n) {
+        if (!n) return;
+        out.push({
+          id: n.id,
+          parent_id: n.parentId != null ? n.parentId : (n.parent_id != null ? n.parent_id : null),
+          name: n.name,
+          code: n.code != null ? n.code : null,
+          loc_type: n.locType || n.loc_type || "bin",
+        });
+        if (n.children && n.children.length) walk(n.children);
+      });
+    })(list);
+    return out;
+  }
   function cloneInv(src) {
     src = src || {};
     return {
       models: (src.models || []).slice(),
       units: (src.units || []).slice(),
-      locations: (src.locations || []).slice(),
+      locations: normLocations(src.locations),
       receipts: (src.receipts || []).slice(),
       projects: (src.projects || []).slice(),
       allocations: (src.allocations || []).slice(),
@@ -99,7 +120,7 @@
       if (a && a.inventory && !isOffline()) {
         a.inventory().then(function (d) {
           setInv({
-            models: d.models || [], units: d.units || [], locations: d.locations || [],
+            models: d.models || [], units: d.units || [], locations: normLocations(d.locations),
             receipts: d.receipts || [], projects: d.projects || [], allocations: d.allocations || [],
             seq: (S.inventory && S.inventory.seq) || {},
           });
