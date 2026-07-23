@@ -205,6 +205,20 @@
     invAllocations: "/api/inventory/allocations",   // POST create (commit owned unit OR add needed model)
     invAllocation:  function (id) { return "/api/inventory/allocations/" + encodeURIComponent(id); },
     invShopping:  function (pid) { return "/api/inventory/projects/" + encodeURIComponent(pid) + "/shopping"; },
+
+    // ---- barcode tags (SoR migration 015; routes/inv_codes.php) ----
+    // "scan" is reserved for receipt photo uploads; this feature is "codes".
+    codes:        "/api/inventory/codes",                    // GET list / POST create-assign
+    code:         function (id) { return "/api/inventory/codes/" + encodeURIComponent(id); },
+    codeLookup:   "/api/inventory/codes/lookup",             // POST — resolve a scan (logs audit)
+    codeReceive:  "/api/inventory/codes/receive",            // POST — intake unknown code → new unit + AKO tag
+    codeMove:     "/api/inventory/codes/move",               // POST — {hardware_unit_id, location_id}
+    codeAssoc:    "/api/inventory/codes/associate",          // POST — {project_id, location_id|hardware_unit_id}
+    codeHistory:  "/api/inventory/codes/history",            // GET — scan audit
+    codeLabel:    function (id) { return "/api/inventory/codes/" + encodeURIComponent(id) + "/label"; },
+    codePrinted:  function (id) { return "/api/inventory/codes/" + encodeURIComponent(id) + "/printed"; },
+    locContents:  function (id) { return "/api/inventory/locations/" + encodeURIComponent(id) + "/contents"; },
+    projRollup:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id) + "/rollup"; },
   };
 
   // =====================================================================
@@ -918,6 +932,24 @@
     updateAllocation: function (id, body) { return post(EP.invAllocation(id), body || {}); },
     // per-project shopping list (v_project_shopping): needed items with no owned unit.
     shopping:         function (projectId) { return getJSON(EP.invShopping(projectId)); },
+
+    // ---- barcode tags (SoR migration 015) ----
+    // Lookup is a POST (it writes the scan-audit row); unknown codes resolve
+    // HTTP 200 {found:false,…} so the client can branch into the receive flow.
+    codes:          function (qs)   { return getJSON(EP.codes + (qs || "")); },
+    codeLookup:     function (code) { return post(EP.codeLookup, { code: code }); },
+    codeCreate:     function (body) { return post(EP.codes, body || {}); },
+    codeDelete:     function (id)   { return getJSON(EP.code(id), { method: "DELETE" }); },
+    codeReceive:    function (body) { return post(EP.codeReceive, body || {}); },
+    codeMove:       function (body) { return post(EP.codeMove, body || {}); },
+    codeAssociate:  function (body) { return post(EP.codeAssoc, body || {}); },
+    codeMarkPrinted:function (id)   { return post(EP.codePrinted(id), {}); },
+    codeHistory:    function (qs)   { return getJSON(EP.codeHistory + (qs || "")); },
+    // label endpoint streams raw PNG/PDF bytes — used as an <img>/<a> URL so
+    // the session cookie rides along; never fetched through the JSON envelope.
+    codeLabelUrl:   function (id, qs) { return EP.codeLabel(id) + (qs || ""); },
+    locationContents: function (id) { return getJSON(EP.locContents(id)); },
+    projectRollup:    function (id) { return getJSON(EP.projRollup(id)); },
 
     // refresh the whole model in place (re-runs loadLive, keeps fmt/api). Mutates
     // window.SOLARI in place so captured `const S = window.SOLARI` refs stay live.
