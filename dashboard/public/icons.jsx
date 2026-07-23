@@ -42,7 +42,12 @@
     filter: <><path d="M3 5h18l-7 8v6l-4 2v-8z"/></>,
     shield: <><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="#05080e" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
     pulse: <><path d="M2 12h5l2-5 4 12 2-7h7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
+    // globe — DNS (resolvers / zones / records)
+    dns: <><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2"/><ellipse cx="12" cy="12" rx="4" ry="9" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M3.5 12h17" stroke="currentColor" strokeWidth="2"/></>,
     clock: <><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M12 7v5l3.5 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
+    // wrench — Maintenance (scheduled downtime / suppressed alerting)
+    maintenance: <><path d="M20.6 6.1a4.3 4.3 0 0 1-5.6 5.4L6.6 19.9a2 2 0 0 1-2.8-2.8l8.4-8.4A4.3 4.3 0 0 1 17.6 3l-2.9 2.9.7 2.3 2.3.7z" fill="currentColor"/></>,
+    calendar: <><rect x="3" y="4.5" width="18" height="16.5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></>,
     arch: <><rect x="4" y="3" width="16" height="4" rx="1.4"/><rect x="4" y="10" width="16" height="4" rx="1.4" opacity="0.7"/><rect x="4" y="17" width="16" height="4" rx="1.4" opacity="0.45"/></>,
     chip: <><rect x="6" y="6" width="12" height="12" rx="2"/></>,
     link: <><path d="M9 15l6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M8 12l-2 2a3 3 0 0 0 4 4l2-2M16 12l2-2a3 3 0 0 0-4-4l-2 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></>,
@@ -52,6 +57,16 @@
     netswitch: <><rect x="2" y="8" width="20" height="8" rx="1.6"/><rect x="5" y="11" width="2" height="2.5" fill="#05080e"/><rect x="8.5" y="11" width="2" height="2.5" fill="#05080e"/><rect x="12" y="11" width="2" height="2.5" fill="#05080e"/><rect x="15.5" y="11" width="2" height="2.5" fill="#05080e"/></>,
     wifi: <><path d="M5 12.5a10 10 0 0 1 14 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M8 15.5a6 6 0 0 1 8 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><circle cx="12" cy="18.5" r="1.6"/></>,
     close2: <><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/></>,
+    // inventory
+    inventory: <><path d="M3 8l9-5 9 5v8l-9 5-9-5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M3 8l9 5 9-5M12 13v8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/></>,
+    box: <><path d="M3 8l9-5 9 5v8l-9 5-9-5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M3 8l9 5 9-5M12 13v8M7.5 5.5l9 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></>,
+    receipt: <><path d="M6 3h12v18l-2.5-1.6L13 21l-2.5-1.6L8 21l-2.5-1.6L6 21z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/><path d="M9 8h6M9 12h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></>,
+    location: <><path d="M12 22s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="12" cy="10" r="2.4"/></>,
+    project: <><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M3 9h18M8 4v5" stroke="currentColor" strokeWidth="1.6"/><rect x="6.5" y="12" width="4" height="4" rx="1" fill="currentColor"/></>,
+    cart: <><circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/><path d="M2 3h3l2.2 12h10.3l1.8-8H6.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
+    tag2: <><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="7.5" cy="7.5" r="1.6"/></>,
+    // git — commit graph (branch + node), Git (Forgejo) nav
+    git: <><circle cx="6" cy="6" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="6" cy="18" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="18" cy="9" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><path d="M6 8.6v6.8M8.4 7.2A6 6 0 0 0 15.4 9M15.4 9a6 6 0 0 1-7 1.8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></>,
   };
 
   function Icon({ name, size = 18, className, style }) {

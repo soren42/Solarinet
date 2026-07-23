@@ -135,8 +135,11 @@
     node:         function (id) { return "/api/nodes/" + encodeURIComponent(id); },
     nodeHistory:  function (id, metric) { return "/api/nodes/" + encodeURIComponent(id) + "/history?metric=" + encodeURIComponent(metric); },
     nodeConfig:   function (id) { return "/api/nodes/" + encodeURIComponent(id) + "/config"; },
-    alerts:       "/api/alerts",            // ?status=active|all
-    alertAck:     function (eventId) { return "/api/alerts/" + encodeURIComponent(eventId) + "/ack"; },
+    alerts:       "/api/alerts",            // ?status=active|history|all
+    alertAck:     "/api/alerts/ack",         // POST {eventId}
+    alertAckAll:  "/api/alerts/ack-all",     // POST {} -> { count }
+    opie:         "/api/opie",               // ?status=all|done|investigating
+    opieReport:   function (id) { return "/api/opie/" + encodeURIComponent(id); },
     rules:        "/api/rules",
     rule:         function (id) { return "/api/rules/" + encodeURIComponent(id); },
     probes:       "/api/probes",
@@ -174,6 +177,48 @@
     logout:       "/api/auth/logout",
     whoami:       "/api/auth/whoami",
     authConfig:   "/api/auth/config",   // public: which sign-in options to show
+    // maintenance windows (scheduled downtime; suppresses alerting)
+    maintenance:  "/api/maintenance",   // ?status=active|upcoming|past|all
+    maintCancel:  function (id) { return "/api/maintenance/" + encodeURIComponent(id) + "/cancel"; },
+
+    // read-only integrations
+    forgejo:      "/api/forgejo",        // Forgejo repos/commits/PRs summary
+    ca:           "/api/ca",             // CA/PKI health/roots/provisioners/node-certs
+
+    // ---- DNS (routes/dns.php — all lazy, screen-mounted; NEVER in loadLive) ----
+    dnsQuery:       "/api/dns/query",    // ?name=&type=&servers= — per-server dig fan-out
+    dnsHealth:      "/api/dns/health",   // zone SOA parity + embedded rpz summary
+    dnsZones:       "/api/dns/zones",    // SoR zone list + record counts
+    dnsZoneRecords: "/api/dns/zones",    // + "/{id}/records?..." (read-only browser)
+    dnsHosts:       "/api/dns/hosts",    // next-render preview (hosts/ifaces/cnames)
+    dnsRpz:         "/api/dns/rpz",      // standalone RPZ status (future use)
+
+    // ---- inventory (SoR migration 014) ----
+    inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
+    invUnits:     "/api/inventory/units",    // GET list / POST create
+    invUnit:      function (id) { return "/api/inventory/units/" + encodeURIComponent(id); },   // POST update
+    invModels:    "/api/inventory/models",   // GET list / POST create
+    invLocations: "/api/inventory/locations",// GET tree / POST create
+    invReceipts:  "/api/inventory/receipts", // GET list / POST create (multipart scan upload)
+    invProjects:  "/api/inventory/projects", // GET list / POST create
+    invProject:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id); },
+    invAllocations: "/api/inventory/allocations",   // POST create (commit owned unit OR add needed model)
+    invAllocation:  function (id) { return "/api/inventory/allocations/" + encodeURIComponent(id); },
+    invShopping:  function (pid) { return "/api/inventory/projects/" + encodeURIComponent(pid) + "/shopping"; },
+
+    // ---- barcode tags (SoR migration 015; routes/inv_codes.php) ----
+    // "scan" is reserved for receipt photo uploads; this feature is "codes".
+    codes:        "/api/inventory/codes",                    // GET list / POST create-assign
+    code:         function (id) { return "/api/inventory/codes/" + encodeURIComponent(id); },
+    codeLookup:   "/api/inventory/codes/lookup",             // POST — resolve a scan (logs audit)
+    codeReceive:  "/api/inventory/codes/receive",            // POST — intake unknown code → new unit + AKO tag
+    codeMove:     "/api/inventory/codes/move",               // POST — {hardware_unit_id, location_id}
+    codeAssoc:    "/api/inventory/codes/associate",          // POST — {project_id, location_id|hardware_unit_id}
+    codeHistory:  "/api/inventory/codes/history",            // GET — scan audit
+    codeLabel:    function (id) { return "/api/inventory/codes/" + encodeURIComponent(id) + "/label"; },
+    codePrinted:  function (id) { return "/api/inventory/codes/" + encodeURIComponent(id) + "/printed"; },
+    locContents:  function (id) { return "/api/inventory/locations/" + encodeURIComponent(id) + "/contents"; },
+    projRollup:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id) + "/rollup"; },
   };
 
   // =====================================================================
@@ -296,6 +341,11 @@
 
   function mapAlert(w, nodeIndex) {
     var n = w.nodeId != null ? nodeIndex[w.nodeId] : null;
+    var cleared = w.cleared != null ? w.cleared : !!w.clearedAt;
+    var clearedMinAgo = w.clearedMinAgo != null ? w.clearedMinAgo : minsSince(w.clearedAt);
+    // Derived lifecycle status (mirrors the server rule): acked wins, then
+    // cleared, else active. Tolerate a server-supplied status when present.
+    var status = w.status || (w.ackedAt ? "acked" : (cleared ? "cleared" : "active"));
     return {
       eventId: w.eventId, ruleId: w.ruleId, ruleName: w.ruleName,
       node: w.node || (n ? n.name : null),
@@ -303,11 +353,46 @@
       segName: w.segName || (n ? n.segName : null),
       severity: w.severity, detail: w.detail,
       firedMinAgo: w.firedMinAgo != null ? w.firedMinAgo : (minsSince(w.firedAt) || 0),
-      cleared: w.cleared != null ? w.cleared : !!w.clearedAt,
+      cleared: cleared,
+      clearedMinAgo: clearedMinAgo,
+      ackedAt: w.ackedAt || null,
+      ackedBy: w.ackedBy || null,
+      ackedMinAgo: w.ackedMinAgo != null ? w.ackedMinAgo : minsSince(w.ackedAt),
+      status: status,
+      opieReportId: w.opieReportId != null ? w.opieReportId : null,
+    };
+  }
+
+  // opieReport (§ analysis) — the LLM incident write-up attached to an alert.
+  function mapOpie(w) {
+    return {
+      reportId: w.reportId,
+      incidentKey: w.incidentKey || null,
+      triggerKind: w.triggerKind || null,       // 'crit' | 'warn-storm'
+      firstEventId: w.firstEventId != null ? w.firstEventId : null,
+      nodeId: w.nodeId != null ? w.nodeId : null,
+      hostFqdn: w.hostFqdn || null,
+      severity: w.severity || "warn",
+      status: w.status || "investigating",       // 'investigating' | 'done' | 'failed'
+      summary: w.summary || "",
+      analysis: w.analysis != null ? w.analysis : null,   // markdown; only on detail read
+      model: w.model || null,
+      durationSec: w.durationSec != null ? w.durationSec : null,
+      startedAt: w.startedAt || null,
+      finishedAt: w.finishedAt || null,
+      startedMinAgo: minsSince(w.startedAt),
+      finishedMinAgo: minsSince(w.finishedAt),
     };
   }
 
   function mapDiscovered(w) {
+    // mdnsServices arrives as an array from /api/discovery; tolerate the legacy
+    // comma-joined string (and null) so an old server never breaks the chips.
+    var mdnsSvcs = Array.isArray(w.mdnsServices)
+      ? w.mdnsServices
+      : (typeof w.mdnsServices === "string"
+        ? w.mdnsServices.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
+        : []);
     return {
       discId: w.discId,
       host: w.host || w.ip,
@@ -320,6 +405,8 @@
       seg: w.segId || w.seg,
       arch: w.arch,
       status: w.status,
+      lastSeenAt: w.lastSeenAt || null,
+      firstSeenAt: w.firstSeenAt || null,
       // enrichment (nmap/SNMP/mDNS/OUI) — any may be null on an un-enriched record
       mac: w.mac || null,
       vendor: w.vendor || null,
@@ -327,6 +414,104 @@
       deviceRole: w.deviceRole || null,
       sysDescr: w.sysDescr || null,
       enrichedAt: w.enrichedAt || null,
+      mdnsName: w.mdnsName || null,
+      mdnsServices: mdnsSvcs,
+      // best-effort LLDP/topology neighbor {gearName,peerPort,localIf,linkType,speedMbps,rssi,viaLldp} or null
+      neighbor: w.neighbor || null,
+    };
+  }
+
+  // maintenance window — the API stores/returns startsAt/endsAt as UTC DATETIME
+  // strings; we keep them RAW here so the screen can convert to the browser's
+  // local zone at render time (see screens5.jsx). 'live' is a server-derived bool.
+  function mapMaintenance(w) {
+    return {
+      windowId: w.windowId,
+      scope: w.scope || (w.nodeId == null && !w.hostFqdn ? "all" : "node"),
+      nodeId: w.nodeId != null ? w.nodeId : null,
+      hostFqdn: w.hostFqdn || null,
+      ipAddr: w.ipAddr || w.ip || null,
+      reason: w.reason || "",
+      startsAt: w.startsAt || null,
+      endsAt: w.endsAt || null,
+      status: w.status || "scheduled",
+      createdBy: w.createdBy || null,
+      live: w.live != null ? !!w.live : (w.status === "active"),
+    };
+  }
+
+  // Forgejo (Git) summary — the server already shapes this; normalise the lists
+  // and the available/reason fail-soft envelope so the screen never sees null.
+  function mapForgejo(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      available: !!w.available,
+      reason: w.reason || null,
+      baseUrl: w.baseUrl || null,
+      version: w.version || "—",
+      counts: w.counts || { repos: A(w.repos).length, openIssues: 0, openPrs: A(w.prs).length },
+      repos: A(w.repos),
+      commits: A(w.commits),
+      prs: A(w.prs),
+    };
+  }
+
+  // CA / PKI summary — server-shaped; normalise the lists + step-ca descriptor.
+  function mapCa(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      stepCa: w.stepCa || { available: false, status: null, reason: "unavailable", url: null },
+      roots: A(w.roots),
+      provisioners: A(w.provisioners),
+      nodeCerts: A(w.nodeCerts),
+      warnDays: w.warnDays != null ? w.warnDays : 60,
+    };
+  }
+
+  // DNS query fan-out — normalise every per-server result so the screen never
+  // sees a null server/flags/answers; unknown statuses degrade to TIMEOUT.
+  function mapDnsQuery(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      name: w.name || "",
+      type: w.type || "A",
+      ts: w.ts || null,
+      results: A(w.results).map(function (r) {
+        r = r || {};
+        return {
+          server: r.server || { id: "?", label: "?", ip: "", kind: "internal" },
+          status: r.status || "TIMEOUT",
+          flags: r.flags || { aa: false, ra: false },
+          answers: A(r.answers),
+          authority: A(r.authority),
+          queryTimeMs: r.queryTimeMs != null ? r.queryTimeMs : null,
+          rpzBlocked: !!r.rpzBlocked,
+          error: r.error || null,
+        };
+      }),
+    };
+  }
+
+  // DNS health — zone parity table + embedded rpz tile payload.
+  function mapDnsHealth(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      sorAvailable: w.sorAvailable !== false,
+      servers: A(w.servers),
+      zones: A(w.zones).map(function (z) {
+        z = z || {};
+        return {
+          name: z.name || "", kind: z.kind || null, authority: z.authority || null,
+          expectedServers: A(z.expectedServers),
+          soa: z.soa || {},
+          parity: !!z.parity,
+        };
+      }),
+      rpz: w.rpz || null,
     };
   }
 
@@ -414,6 +599,19 @@
       // whoami — identity chip in the TopBar. Never let it break the boot:
       // an auth-gated deployment already 401s on the reads above.
       getJSON(EP.whoami).catch(function () { return null; }),
+      // Opie / Analysis reports — never let a missing panel break the boot.
+      getJSON(EP.opie + "?status=all").catch(function () { return []; }),
+      // Inventory (SoR migration 014) — tolerate absence so it never forces the
+      // whole dashboard offline; the Inventory screen also re-reads on mount.
+      getJSON(EP.inventory).catch(function () { return null; }),
+      // Maintenance windows — the whole set (active/upcoming/past) so the screen
+      // AND the in-maintenance badges (which cross-reference active windows) have
+      // the data client-side. Tolerate absence so it never forces the fixture.
+      getJSON(EP.maintenance + "?status=all").catch(function () { return []; }),
+      // Git (Forgejo) + CA/PKI read-only integrations — tolerate absence so a
+      // missing token / unreachable CA never forces the whole dashboard offline.
+      getJSON(EP.forgejo).catch(function () { return null; }),
+      getJSON(EP.ca).catch(function () { return null; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -433,6 +631,18 @@
       var gearW = A(res[10]);
       var poolsW = A(res[11]);
       var assetsW = A(res[12]);
+      var opieW = A(res[14]);
+      var maintW = A(res[16]);
+      // Git (Forgejo) + CA/PKI — mapped (null-tolerant) integration payloads.
+      var git = mapForgejo(res[17]);
+      var ca = mapCa(res[18]);
+      // inventory — combined read; normalise each list, tolerate a null/partial payload.
+      var invW = res[15] && typeof res[15] === "object" ? res[15] : {};
+      var inventory = {
+        models: A(invW.models), units: A(invW.units), locations: A(invW.locations),
+        receipts: A(invW.receipts), projects: A(invW.projects), allocations: A(invW.allocations),
+        seq: (FIXTURE.inventory && FIXTURE.inventory.seq) || { unit: 100, location: 100, receipt: 100, project: 100, allocation: 100, model: 100 },
+      };
       // whoami -> S.operator {name, role, displayName, source, directoryEnabled}
       var whoW = res[13];
       var operator = (whoW && whoW.operator) ? {
@@ -468,6 +678,13 @@
         return a.firedMinAgo - b.firedMinAgo;
       });
 
+      var opie = opieW.map(mapOpie).sort(function (a, b) {
+        return (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0);   // newest first
+      });
+      var maintenance = maintW.map(mapMaintenance).sort(function (a, b) {
+        return (Date.parse((a.startsAt || "").replace(" ", "T") + "Z") || 0) -
+               (Date.parse((b.startsAt || "").replace(" ", "T") + "Z") || 0);
+      });
       var rules = rulesW.map(function (r) { return Object.assign({}, r); });
       var discovered = discW.map(mapDiscovered);
       var enrollments = enrW.map(mapEnrollment);
@@ -520,15 +737,18 @@
 
       var live = {
         nodes: nodes, segments: segments, segRollups: segRollups, fleetRoll: fleetRoll, summary: summary,
-        probes: probes, rules: rules, alerts: alerts, discovered: discovered,
+        probes: probes, rules: rules, alerts: alerts, opie: opie, discovered: discovered,
+        maintenance: maintenance,
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
+        inventory: inventory,
+        git: git, ca: ca,
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
         operator: operator,
-        activeCrit: alerts.filter(function (a) { return !a.cleared && a.severity === "crit"; }).length,
-        activeWarn: alerts.filter(function (a) { return !a.cleared && a.severity === "warn"; }).length,
+        activeCrit: alerts.filter(function (a) { return !a.ackedAt && !a.cleared && a.severity === "crit"; }).length,
+        activeWarn: alerts.filter(function (a) { return !a.ackedAt && !a.cleared && a.severity === "warn"; }).length,
         fmt: fmt,
         source: "live",
         api: API,
@@ -626,6 +846,13 @@
     },
 
     // discovery
+    // Full candidate list for the Discovery screen (status: new|ignored|adopting|
+    // adopted|all). Returns mapped rows so the screen renders identical shapes to
+    // the boot fixture; defaults to every status so the screen can filter locally.
+    listDiscovered: function (status) {
+      return getJSON(EP.discovery + "?status=" + encodeURIComponent(status || "all"))
+        .then(function (w) { return (Array.isArray(w) ? w : []).map(mapDiscovered); });
+    },
     discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
     ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },
@@ -677,6 +904,53 @@
     // survey (already in base §11.2)
     survey: function (scope) { return post(EP.survey, { scope: scope || "all" }); },
 
+    // ---- inventory (SoR migration 014) ----
+    // Combined read → {models,units,locations,receipts,projects,allocations}.
+    inventory:        function () { return getJSON(EP.inventory); },
+    // components (hardware_units)
+    createUnit:       function (body) { return post(EP.invUnits, body || {}); },
+    updateUnit:       function (id, body) { return post(EP.invUnit(id), body || {}); },
+    // models catalog (hardware_models)
+    createModel:      function (body) { return post(EP.invModels, body || {}); },
+    // locations (drawer/tray/bin hierarchy)
+    createLocation:   function (body) { return post(EP.invLocations, body || {}); },
+    // receipts — scan upload is multipart (FormData); pass a FormData for the file.
+    createReceipt:    function (body) { return post(EP.invReceipts, body || {}); },
+    uploadReceipt:    function (form) {
+      // form is a FormData (vendor, purchased_on, subtotal_cents, order_ref, scan file).
+      var url = EP.invReceipts.charAt(0) === "/" ? EP.invReceipts : (BASE + EP.invReceipts);
+      return fetch(url, { method: "POST", credentials: "same-origin", body: form })
+        .then(function (r) { return r.json().then(unwrap); });
+    },
+    // projects + allocations
+    createProject:    function (body) { return post(EP.invProjects, body || {}); },
+    updateProject:    function (id, body) { return post(EP.invProject(id), body || {}); },
+    // Commit an owned unit (allocation:'committed'|'installed') OR add a needed
+    // model (allocation:'needed', hardware_model_id). The DB double-commit guard
+    // SIGNALs SQLSTATE 45000 → the server maps it to HTTP 409; callers catch it.
+    createAllocation: function (body) { return post(EP.invAllocations, body || {}); },
+    updateAllocation: function (id, body) { return post(EP.invAllocation(id), body || {}); },
+    // per-project shopping list (v_project_shopping): needed items with no owned unit.
+    shopping:         function (projectId) { return getJSON(EP.invShopping(projectId)); },
+
+    // ---- barcode tags (SoR migration 015) ----
+    // Lookup is a POST (it writes the scan-audit row); unknown codes resolve
+    // HTTP 200 {found:false,…} so the client can branch into the receive flow.
+    codes:          function (qs)   { return getJSON(EP.codes + (qs || "")); },
+    codeLookup:     function (code) { return post(EP.codeLookup, { code: code }); },
+    codeCreate:     function (body) { return post(EP.codes, body || {}); },
+    codeDelete:     function (id)   { return getJSON(EP.code(id), { method: "DELETE" }); },
+    codeReceive:    function (body) { return post(EP.codeReceive, body || {}); },
+    codeMove:       function (body) { return post(EP.codeMove, body || {}); },
+    codeAssociate:  function (body) { return post(EP.codeAssoc, body || {}); },
+    codeMarkPrinted:function (id)   { return post(EP.codePrinted(id), {}); },
+    codeHistory:    function (qs)   { return getJSON(EP.codeHistory + (qs || "")); },
+    // label endpoint streams raw PNG/PDF bytes — used as an <img>/<a> URL so
+    // the session cookie rides along; never fetched through the JSON envelope.
+    codeLabelUrl:   function (id, qs) { return EP.codeLabel(id) + (qs || ""); },
+    locationContents: function (id) { return getJSON(EP.locContents(id)); },
+    projectRollup:    function (id) { return getJSON(EP.projRollup(id)); },
+
     // refresh the whole model in place (re-runs loadLive, keeps fmt/api). Mutates
     // window.SOLARI in place so captured `const S = window.SOLARI` refs stay live.
     refresh: function () {
@@ -688,8 +962,45 @@
       });
     },
 
+    // ---- read-only integrations (Git / CA) ----
+    // Forgejo summary (repos/commits/PRs); server envelope carries available/reason.
+    forgejoInfo: function () { return getJSON(EP.forgejo).then(mapForgejo); },
+    // CA/PKI summary (step-ca health/roots/provisioners/node-certs).
+    caInfo: function () { return getJSON(EP.ca).then(mapCa); },
+
+    // ---- DNS (lazy, screen-mounted only — dnsHealth runs digs server-side,
+    // so none of these may ever join loadLive()'s poll bundle) ----
+    dnsQuery: function (name, type, servers) {
+      return getJSON(EP.dnsQuery + "?name=" + encodeURIComponent(name) +
+        "&type=" + encodeURIComponent(type) +
+        "&servers=" + (servers || []).join(",")).then(mapDnsQuery);
+    },
+    dnsHealth: function () { return getJSON(EP.dnsHealth).then(mapDnsHealth); },
+    dnsZones: function () { return getJSON(EP.dnsZones); },
+    dnsZoneRecords: function (id, qs) { return getJSON(EP.dnsZoneRecords + "/" + encodeURIComponent(id) + "/records" + (qs || "")); },
+    dnsHosts: function () { return getJSON(EP.dnsHosts); },
+    dnsRpz: function () { return getJSON(EP.dnsRpz); },
+
     // ---- alert lifecycle ----
-    ackAlert: function (eventId) { return post(EP.alertAck(eventId), {}); },
+    ackAlert: function (eventId) { return post(EP.alertAck, { eventId: eventId }); },
+    // Ack every currently-ACTIVE alert; resolves to { count }.
+    ackAllAlerts: function () { return post(EP.alertAckAll, {}); },
+
+    // ---- Opie / Analysis reports ----
+    opieList: function (status) { return getJSON(EP.opie + "?status=" + encodeURIComponent(status || "all")); },
+    opieReport: function (reportId) { return getJSON(EP.opieReport(reportId)); },
+
+    // ---- maintenance windows ----
+    // list windows by status ('active'|'upcoming'|'past'|'all'); rows carry
+    // startsAt/endsAt as UTC DATETIME strings + a derived 'live' bool.
+    maintenanceList: function (status) {
+      return getJSON(EP.maintenance + "?status=" + encodeURIComponent(status || "all"))
+        .then(function (w) { return (Array.isArray(w) ? w : []).map(mapMaintenance); });
+    },
+    // schedule a window. body: { host?|all:true, reason?, hours?:number
+    //                            | from?+to?:"YYYY-MM-DD HH:MM" }
+    scheduleMaintenance: function (body) { return post(EP.maintenance, body || {}); },
+    cancelMaintenance: function (windowId) { return post(EP.maintCancel(windowId), {}); },
 
     // ---- authentication (§11.1) ----
     whoami: function () { return getJSON(EP.whoami); },

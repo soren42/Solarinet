@@ -1,0 +1,10 @@
+# Real config may hold the DB password. Exports/state are local, not source.
+avahi_import.conf
+mdns_inspect.conf
+oui_enrich.conf
+*.venv/
+.venv/
+__pycache__/
+*.pyc
+flame-export.json
+*.log

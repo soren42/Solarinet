@@ -95,6 +95,18 @@ typedef struct {                 /* TLV_LINK_STAT */
 /* ===================== CLIENT_REPORT (§6.4) ===================== */
 
 typedef struct {
+    uint8_t  fsReadonlyCount;
+    uint8_t  blockDevMissing;
+    uint8_t  smartFailCount;
+    uint16_t failedUnitCount;
+    uint16_t dmesgCritCount;
+    char     fsReadonlyList[256];
+    char     smartFailList[256];
+    char     failedUnitList[256];
+    char     dmesgCritSample[256];
+} solariHostHealth;
+
+typedef struct {
     char     hostFqdn[SOLARI_FQDN_MAX];
     char     osName[SOLARI_OSNAME_MAX];
     char     arch[SOLARI_ARCH_MAX];
@@ -106,6 +118,7 @@ typedef struct {
     solariUsbEntry   usb[SOLARI_MAX_USB];       uint8_t usbCount;
     solariProcEntry  procs[SOLARI_MAX_PROCS];   uint8_t procCount;
     solariLogEntry   logs[SOLARI_MAX_LOGS];     uint8_t logCount;
+    solariHostHealth health;
 } solariClientReport;
 
 /* Serialize report into payload (TLV). *outLen = bytes written, *tlvCount =

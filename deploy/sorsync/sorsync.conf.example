@@ -23,6 +23,12 @@ zone_src_dir = /home/jason/Code/Solarinet/netdb/zones
 zone_dst_dir = /etc/bind/zones
 named_conf_akoria = /etc/bind/named.conf.akoria
 reload_cmd = sudo rndc reload
+gen_bare = /home/jason/Code/Solarinet/deploy/dns-bare/gen-bare.py
+named_conf_bare = /etc/bind/named.conf.bare
+# bare-name single-label zones are master copies on steel too — push + SIGHUP:
+steel_host = jason@10.0.0.11
+steel_config_dir = /mnt/data/bind/config
+steel_reload_cmd = sudo docker kill -s HUP bind9
 debounce_sec = 4
 # SoR password for the render step (source_sor.py reads SOR_DB_PASSWORD)
 sor_db_password = CHANGME-sor-app-pw

@@ -1,0 +1,14 @@
+; Sends a fail-soft notification when a SolariNet backup unit fails.
+[Unit]
+Description=Notify SolariNet backup failure (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+; Run as root to avoid assuming a dedicated notify user exists on backup hosts.
+User=root
+Group=root
+UMask=0077
+TimeoutStartSec=15s
+ExecStart=/opt/solari-backups/solari-notify-failure.py --unit solari-backup@%i.service

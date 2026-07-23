@@ -29,6 +29,42 @@ final class Sor
         return $u !== false && $u !== '';
     }
 
+    /**
+     * Public PDO handle onto the SoR `sor` DB, for callers (the inventory
+     * routes) for whom the SoR is the AUTHORITATIVE store, not a best-effort
+     * mirror — unlike upsertHost/removeHost below, inventory has no local
+     * fallback table, so a missing/unreachable SoR is a real 503, not a
+     * swallowed no-op. Emits the error envelope itself and exits (matching the
+     * Response::error contract used throughout the route layer).
+     */
+    public static function db(): PDO
+    {
+        if (!self::enabled()) {
+            Response::error('service_unavailable', 'Inventory storage (SoR) is not configured.', 503);
+        }
+        try {
+            $pdo = self::pdo();
+        } catch (\Throwable $e) {
+            error_log('Sor::db connect failed: ' . $e->getMessage());
+            Response::error('service_unavailable', 'Inventory storage (SoR) is unreachable.', 503);
+        }
+        if ($pdo === null) {
+            Response::error('service_unavailable', 'Inventory storage (SoR) is not configured.', 503);
+        }
+        return $pdo;
+    }
+
+    /**
+     * The fixed 'dashboard' source id (provenance for rows the operator writes
+     * through this UI) — id 2 per the seeded `sources` table, resolved by slug
+     * with a hardcoded fallback so a reseeded/renumbered `sources` table can't
+     * silently break every insert.
+     */
+    public static function dashboardSourceId(): int
+    {
+        return self::sourceId(self::db());
+    }
+
     private static function pdo(): ?PDO
     {
         if (self::$pdo instanceof PDO) {

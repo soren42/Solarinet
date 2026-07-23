@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Inventory, CodesScreen, MaintenanceScreen, GitScreen, CaScreen, DnsScreen } = window;
 
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
@@ -129,6 +129,14 @@
       setRoute({ name: "service", targetId, backRoute: backRoute || { name: "reachability" } });
       scrollTop();
     }, []);
+    // Open Opie's analysis for a report (from the Analysis nav, an alert row, or
+    // the command palette). Lands directly on the report's detail view.
+    const openOpie = useCallback((reportId) => {
+      // nonce forces a fresh mount so re-opening the same report always lands on
+      // its detail view (even after an in-panel "back to reports").
+      setRoute({ name: "opie", reportId: reportId != null ? reportId : null, nonce: Date.now() });
+      scrollTop();
+    }, []);
 
     // Universal entity click-through. Every cross-view reference (Topology glyph,
     // Alerts source, Reachability row, command palette) funnels through here so
@@ -188,11 +196,18 @@
       const cmds = [
         { id: "go-fleet", group: "Navigate", label: "Fleet Overview", icon: "overview", action: () => go("fleet") },
         { id: "go-alerts", group: "Navigate", label: "Alerts & Tolerances", icon: "alerts", action: () => go("alerts"), sub: `${S.activeCrit + S.activeWarn} active` },
+        { id: "go-opie", group: "Navigate", label: "Opie · Analysis", icon: "pulse", action: () => go("opie"), sub: `${(S.opie || []).length} report${(S.opie || []).length === 1 ? "" : "s"}` },
         { id: "go-reach", group: "Navigate", label: "Reachability Matrix", icon: "reachability", action: () => go("reachability") },
         { id: "go-topo", group: "Navigate", label: "Topology Map", icon: "topology", action: () => go("topology") },
         { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${(S.assets || []).length} monitored` },
+        { id: "go-inventory", group: "Navigate", label: "Inventory", icon: "inventory", action: () => go("inventory"), sub: `${((S.inventory && S.inventory.units) || []).length} components` },
+        { id: "go-codes", group: "Navigate", label: "Tags & Scan", icon: "tag2", action: () => go("codes") },
         { id: "go-disc", group: "Navigate", label: "Discovery", icon: "discovery", action: () => go("discovery"), sub: `${S.discovered.length} new` },
         { id: "go-prov", group: "Navigate", label: "Provisioning", icon: "provision", action: () => go("provision"), sub: `${S.enrollments.length} pending` },
+        { id: "go-maint", group: "Navigate", label: "Maintenance", icon: "maintenance", action: () => go("maintenance"), sub: `${((S.maintenance || []).filter((w) => w.live || w.status === "active")).length} live` },
+        { id: "go-git", group: "Navigate", label: "Git", icon: "git", action: () => go("git"), sub: `${((S.git && S.git.repos) || []).length} repos` },
+        { id: "go-ca", group: "Navigate", label: "Certificates", icon: "shield", action: () => go("certificates"), sub: `${((S.ca && S.ca.nodeCerts) || []).length} node certs` },
+        { id: "go-dns", group: "Navigate", label: "DNS", icon: "dns", action: () => go("dns"), sub: "query · zones · parity" },
         { id: "go-cfg", group: "Navigate", label: "Config & Rules", icon: "settings", action: () => go("settings") },
         { id: "view-heat", group: "Actions", label: "Fleet: Heatmap view", icon: "grid", action: () => { setFleetView("heat"); go("fleet"); } },
         { id: "view-table", group: "Actions", label: "Fleet: Table view", icon: "table", action: () => { setFleetView("table"); go("fleet"); } },
@@ -228,14 +243,21 @@
             {route.name === "fleet" && PoolCards && <PoolCards onOpen={() => go("assets")} />}
             {route.name === "fleet" && <FleetOverview onOpenNode={openNode} onNav={go} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
             {route.name === "assets" && Assets && <Assets onOpenNode={openNode} />}
+            {route.name === "inventory" && Inventory && <Inventory toast={toast} />}
+            {route.name === "codes" && CodesScreen && <CodesScreen toast={toast} />}
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
             {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}
             {route.name === "service" && ServiceDetail && <ServiceDetail targetId={route.targetId} onBack={() => setRoute(route.backRoute)} />}
-            {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} onOpenEntity={openEntity} rules={rules} setRules={setRules} toast={toast} />}
+            {route.name === "alerts" && <AlertsScreen onOpenNode={openNode} onOpenEntity={openEntity} onOpenOpie={openOpie} rules={rules} setRules={setRules} toast={toast} />}
+            {route.name === "opie" && OpieScreen && <OpieScreen key={route.nonce || 0} initialReportId={route.reportId} onOpenNode={openNode} />}
             {route.name === "reachability" && <Reachability onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "topology" && <Topology onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "discovery" && <Discovery onOpenNode={openNode} />}
             {route.name === "provision" && <Provisioning onOpenNode={openNode} />}
+            {route.name === "maintenance" && MaintenanceScreen && <MaintenanceScreen onOpenNode={openNode} toast={toast} />}
+            {route.name === "git" && GitScreen && <GitScreen />}
+            {route.name === "certificates" && CaScreen && <CaScreen />}
+            {route.name === "dns" && DnsScreen && <DnsScreen />}
             {route.name === "settings" && <ConfigScreen onNav={go} />}
           </div>
         </div>
@@ -261,15 +283,23 @@
     // Which sign-in options the server offers. SSO is additive: the local form
     // is always shown; the button only appears when OIDC is enabled + configured.
     const [oidc, setOidc] = useState({ enabled: false, label: "Sign in with SSO", url: "/api/auth/oidc/login" });
+    // Directory (AD) users authenticate via SSO; the local username/password form
+    // is hidden unless the server explicitly enables it (localEnabled), so it isn't
+    // a dead-end for directory accounts. Default true until config loads.
+    const [local, setLocal] = useState(true);
     useEffect(() => {
       const api = window.SolariAPI;
       if (!api || !api.authConfig) return;
       api.authConfig()
-        .then((cfg) => cfg && cfg.oidcEnabled && setOidc({
-          enabled: true,
-          label: cfg.oidcLabel || "Sign in with SSO",
-          url: cfg.oidcLoginUrl || "/api/auth/oidc/login",
-        }))
+        .then((cfg) => {
+          if (!cfg) return;
+          setLocal(cfg.localEnabled !== false);
+          if (cfg.oidcEnabled) setOidc({
+            enabled: true,
+            label: cfg.oidcLabel || "Sign in with SSO",
+            url: cfg.oidcLoginUrl || "/api/auth/oidc/login",
+          });
+        })
         .catch(() => {});
     }, []);
     const submit = (e) => {
@@ -290,20 +320,28 @@
             <div style={{ fontWeight: 700, fontSize: 18, marginTop: 6 }}>SolariNet</div>
             <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>Monitoring · sign in</div>
           </div>
-          <input autoFocus value={u} onChange={(e) => setU(e.target.value)} placeholder="Username" autoComplete="username" style={field} />
-          <input type="password" value={p} onChange={(e) => setP(e.target.value)} placeholder="Password" autoComplete="current-password" style={field} />
+          {local ? (
+            <>
+              <input autoFocus value={u} onChange={(e) => setU(e.target.value)} placeholder="Username" autoComplete="username" style={field} />
+              <input type="password" value={p} onChange={(e) => setP(e.target.value)} placeholder="Password" autoComplete="current-password" style={field} />
+            </>
+          ) : null}
           {err ? <div style={{ color: "var(--red, #ff3d72)", fontSize: 12, margin: "2px 0 10px" }}>{err}</div> : null}
-          <button type="submit" disabled={busy || !u || !p}
-            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: busy ? "default" : "pointer", fontWeight: 600, fontSize: 14, background: "var(--teal, #35e0d0)", color: "#05080e", opacity: (busy || !u || !p) ? 0.6 : 1 }}>
-            {busy ? "Signing in…" : "Sign in"}
-          </button>
+          {local ? (
+            <button type="submit" disabled={busy || !u || !p}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: busy ? "default" : "pointer", fontWeight: 600, fontSize: 14, background: "var(--teal, #35e0d0)", color: "#05080e", opacity: (busy || !u || !p) ? 0.6 : 1 }}>
+              {busy ? "Signing in…" : "Sign in"}
+            </button>
+          ) : null}
           {oidc.enabled ? (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 12px", opacity: 0.5, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
-                or
-                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
-              </div>
+              {local ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 12px", opacity: 0.5, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
+                  or
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
+                </div>
+              ) : null}
               <button type="button" onClick={() => { window.location.href = oidc.url; }}
                 style={{ width: "100%", padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 14, background: "transparent", color: "inherit", border: "1px solid rgba(255,255,255,0.18)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 <Icon name="shield" size={16} style={{ color: "var(--teal, #35e0d0)" }} />

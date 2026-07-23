@@ -22,6 +22,13 @@ static void copyBounded(char *dst, size_t dstCap, const uint8_t *src, uint16_t s
     dst[n] = '\0';
 }
 
+static size_t boundedStrLen(const char *s, size_t cap)
+{
+    size_t n = 0;
+    while (n < cap && s[n] != '\0') n++;
+    return n;
+}
+
 /* ============================ CLIENT_REPORT ============================ */
 
 solariStatus solariMsgBuildClientReport(const solariClientReport *rep,
@@ -114,6 +121,52 @@ solariStatus solariMsgBuildClientReport(const solariClientReport *rep,
         if ((st = solariTlvAppend(&w, TLV_LOGFILE_STAT, tmp, (uint16_t)(20 + pl))) != SOLARI_OK) return st;
     }
 
+    if (rep->health.fsReadonlyCount || rep->health.blockDevMissing ||
+        rep->health.smartFailCount || rep->health.failedUnitCount ||
+        rep->health.dmesgCritCount) {
+        uint8_t health[7];
+        health[0] = rep->health.fsReadonlyCount;
+        health[1] = rep->health.blockDevMissing;
+        health[2] = rep->health.smartFailCount;
+        solariPutU16(health + 3, rep->health.failedUnitCount);
+        solariPutU16(health + 5, rep->health.dmesgCritCount);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_SCALARS,
+                                  health, sizeof health)) != SOLARI_OK)
+            return st;
+    }
+    if (rep->health.fsReadonlyList[0]) {
+        size_t len = boundedStrLen(rep->health.fsReadonlyList,
+                                   sizeof rep->health.fsReadonlyList);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_FS_LIST,
+                                  rep->health.fsReadonlyList,
+                                  (uint16_t)len)) != SOLARI_OK)
+            return st;
+    }
+    if (rep->health.smartFailList[0]) {
+        size_t len = boundedStrLen(rep->health.smartFailList,
+                                   sizeof rep->health.smartFailList);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_SMART_LIST,
+                                  rep->health.smartFailList,
+                                  (uint16_t)len)) != SOLARI_OK)
+            return st;
+    }
+    if (rep->health.failedUnitList[0]) {
+        size_t len = boundedStrLen(rep->health.failedUnitList,
+                                   sizeof rep->health.failedUnitList);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_UNIT_LIST,
+                                  rep->health.failedUnitList,
+                                  (uint16_t)len)) != SOLARI_OK)
+            return st;
+    }
+    if (rep->health.dmesgCritSample[0]) {
+        size_t len = boundedStrLen(rep->health.dmesgCritSample,
+                                   sizeof rep->health.dmesgCritSample);
+        if ((st = solariTlvAppend(&w, TLV_CR_HEALTH_DMESG_SAMPLE,
+                                  rep->health.dmesgCritSample,
+                                  (uint16_t)len)) != SOLARI_OK)
+            return st;
+    }
+
     if (outLen)   *outLen = w.len;
     if (tlvCount) *tlvCount = w.count;
     return SOLARI_OK;
@@ -194,6 +247,31 @@ solariStatus solariMsgParseClientReport(const uint8_t *payload, size_t len,
                 l->lastOffset = solariGetU64(val + 12);
                 copyBounded(l->path, sizeof l->path, val + 20, (uint16_t)(vlen - 20));
             }
+            break;
+        case TLV_CR_HEALTH_SCALARS:
+            if (vlen == 7) {
+                rep->health.fsReadonlyCount = val[0];
+                rep->health.blockDevMissing = val[1];
+                rep->health.smartFailCount  = val[2];
+                rep->health.failedUnitCount = solariGetU16(val + 3);
+                rep->health.dmesgCritCount  = solariGetU16(val + 5);
+            }
+            break;
+        case TLV_CR_HEALTH_FS_LIST:
+            copyBounded(rep->health.fsReadonlyList,
+                        sizeof rep->health.fsReadonlyList, val, vlen);
+            break;
+        case TLV_CR_HEALTH_SMART_LIST:
+            copyBounded(rep->health.smartFailList,
+                        sizeof rep->health.smartFailList, val, vlen);
+            break;
+        case TLV_CR_HEALTH_UNIT_LIST:
+            copyBounded(rep->health.failedUnitList,
+                        sizeof rep->health.failedUnitList, val, vlen);
+            break;
+        case TLV_CR_HEALTH_DMESG_SAMPLE:
+            copyBounded(rep->health.dmesgCritSample,
+                        sizeof rep->health.dmesgCritSample, val, vlen);
             break;
         default:
             /* unknown TLV: skip silently (forward-compat) */

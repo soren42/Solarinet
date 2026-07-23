@@ -173,10 +173,17 @@
     { id: "reachability", label: "Reachability", icon: "reachability" },
     { id: "topology", label: "Topology Map", icon: "topology" },
     { id: "alerts", label: "Alerts", icon: "alerts", badge: "alerts" },
+    { id: "opie", label: "Analysis", icon: "pulse", badge: "opie" },
     { group: "Manage" },
     { id: "assets", label: "Systems", icon: "host" },
+    { id: "inventory", label: "Inventory", icon: "inventory" },
+    { id: "codes", label: "Tags & Scan", icon: "tag2" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
+    { id: "maintenance", label: "Maintenance", icon: "maintenance" },
+    { id: "git", label: "Git", icon: "git" },
+    { id: "certificates", label: "Certificates", icon: "shield" },
+    { id: "dns", label: "DNS", icon: "dns" },
     { id: "settings", label: "Config & Rules", icon: "settings" },
   ];
 
@@ -264,6 +271,7 @@
                   </span>
                 )}
                 {item.badge === "discovery" && window.SOLARI.discovered.length > 0 && <span className="nav-item__count" style={{ background: "var(--ok-bg)", color: "var(--ok)" }}>{window.SOLARI.discovered.length}</span>}
+                {item.badge === "opie" && (() => { const n = (window.SOLARI.opie || []).filter((r) => r.status === "investigating").length; return n > 0 ? <span className="nav-item__count" style={{ background: "rgba(53,224,208,.13)", color: "var(--teal)" }}>{n}</span> : null; })()}
               </div>
             );
           })}

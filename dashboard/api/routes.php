@@ -24,9 +24,20 @@ return static function (Router $router): void {
         __DIR__ . '/routes/nodes.php',
         __DIR__ . '/routes/probes.php',
         __DIR__ . '/routes/alerts.php',
+        __DIR__ . '/routes/maintenance.php',
+        __DIR__ . '/routes/opie.php',
         __DIR__ . '/routes/topology.php',
         __DIR__ . '/routes/gear.php',
+        __DIR__ . '/routes/discovery.php',
+        __DIR__ . '/routes/forgejo.php',
+        __DIR__ . '/routes/ca.php',
         __DIR__ . '/routes/provisioning.php',
+        __DIR__ . '/routes/inventory.php',
+        // inv_codes.php MUST load immediately after inventory.php: it reuses
+        // inventory.php's `Inv` class + inv_* helpers and must never re-require
+        // it (that would fatally redeclare `Inv`). See routes/inv_codes.php.
+        __DIR__ . '/routes/inv_codes.php',
+        __DIR__ . '/routes/dns.php',
     ];
     foreach ($groups as $file) {
         $register = require $file;

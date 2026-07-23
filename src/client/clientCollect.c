@@ -161,5 +161,9 @@ solariStatus clientCollectReport(const clientConfig *cfg, clientState *st,
         e->lastOffset = st->logOffset[i];
         out->logCount++;
     }
+
+    /* ---- host-health signals (fs-readonly / block-dev / SMART / units / dmesg) ---- */
+    platHostHealth(&out->health);
+
     return SOLARI_OK;
 }

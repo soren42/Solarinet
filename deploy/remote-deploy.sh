@@ -126,6 +126,8 @@ elif command -v crontab >/dev/null 2>&1; then echo init=cron
 else echo init=none; fi
 if ls /lib/ld-musl-* >/dev/null 2>&1; then echo libc=musl; else echo libc=glibc; fi
 if command -v apt-get >/dev/null 2>&1; then echo pkg=apt
+elif command -v zypper >/dev/null 2>&1; then echo pkg=zypper
+elif command -v dnf >/dev/null 2>&1; then echo pkg=dnf
 elif command -v opkg >/dev/null 2>&1; then echo pkg=opkg
 else echo pkg=none; fi
 for d in /usr/local/bin /opt/bin /usr/sbin /data/bin /overlay/bin; do
@@ -358,11 +360,24 @@ do_push "${TMP}/client.conf" "${CONF_DIR}/client.conf" 0644
 do_remote "mkdir -p '${STATE_DIR}'"
 
 # Runtime shared libs for a dynamically-linked client (best-effort; a static
-# build needs none). soname package names vary across releases.
+# build needs none). soname package names vary across releases, so install each
+# INDEPENDENTLY: one unavailable name must not abort the rest. (A single combined
+# apt-get once dropped libnng on Debian trixie's t64 rename because libmbedtls14
+# no longer existed, leaving the client unable to load libnng.so.1.)
 case "${T_PKG}" in
-  apt)  do_remote "sh -c 'apt-get update -y >/dev/null 2>&1; apt-get install -y libnng1 libsqlite3-0 libcjson1 libmbedtls14 2>/dev/null || apt-get install -y libnng1 libsqlite3-0 libcjson1 libmbedtls12 2>/dev/null || true'" ;;
-  opkg) do_remote "sh -c 'opkg update >/dev/null 2>&1; opkg install libnng libmbedtls libsqlite3 libcjson 2>/dev/null || true'" ;;
+  apt)    do_remote "sh -c 'apt-get update -y >/dev/null 2>&1; for p in libnng1 libnng1t64 libsqlite3-0 libcjson1 libmbedtls14 libmbedtls21 libmbedtls12; do apt-get install -y \$p >/dev/null 2>&1; done; true'" ;;
+  zypper) do_remote "sh -c 'zypper -n in libnng1 >/dev/null 2>&1 || zypper -n in libnng >/dev/null 2>&1; for p in libsqlite3-0 libcjson1 libmbedtls14 libmbedx509-1 libmbedcrypto7; do zypper -n in \$p >/dev/null 2>&1; done; true'" ;;
+  dnf)    do_remote "sh -c 'for p in nng sqlite-libs libcjson mbedtls; do dnf install -y \$p >/dev/null 2>&1; done; true'" ;;
+  opkg)   do_remote "sh -c 'opkg update >/dev/null 2>&1; for p in libnng libmbedtls libsqlite3 libcjson; do opkg install \$p >/dev/null 2>&1; done; true'" ;;
 esac
+# Verify the client's shared-lib deps actually resolve; a missing soname here is
+# why a deploy "succeeds" but the service crash-loops on start. Surface it now.
+if [ "${DRY}" != "1" ]; then
+  MISS="$(do_remote "sh -c 'command -v ldd >/dev/null 2>&1 && ldd ${REMOTE_BIN} 2>/dev/null | grep \"not found\" || true'" 2>/dev/null || true)"
+  [ -n "${MISS}" ] && warn "target still missing shared libs (client may crash-loop):
+${MISS}
+  install them on the target or deploy a static build (deploy/cross-build-client.sh)."
+fi
 
 install_autostart
 

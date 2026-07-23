@@ -59,3 +59,6 @@ __pycache__/
 /build-arm64/
 /build-arm32/
 /build-amd64/
+
+# Claude Code workflow worktrees / local agent state
+.claude/

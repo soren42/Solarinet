@@ -1,0 +1,20 @@
+// akoria.net + reverse zones — secondary from xenon (10.0.0.20). Generated for steel.
+zone "akoria.net" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.akoria.net"; };
+zone "0.0.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.0.10.in-addr.arpa"; };
+zone "0.1.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.1.10.in-addr.arpa"; };
+zone "0.2.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.2.10.in-addr.arpa"; };
+zone "0.3.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.3.10.in-addr.arpa"; };
+zone "0.5.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.5.10.in-addr.arpa"; };
+zone "0.6.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.6.10.in-addr.arpa"; };
+zone "0.7.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.7.10.in-addr.arpa"; };
+zone "1.0.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.1.0.10.in-addr.arpa"; };
+zone "1.4.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.1.4.10.in-addr.arpa"; };
+zone "2.2.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.2.2.10.in-addr.arpa"; };
+zone "2.5.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.2.5.10.in-addr.arpa"; };
+zone "3.2.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.3.2.10.in-addr.arpa"; };
+zone "4.2.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.4.2.10.in-addr.arpa"; };
+zone "4.4.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.4.4.10.in-addr.arpa"; };
+zone "6.6.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.6.6.10.in-addr.arpa"; };
+zone "87.5.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.87.5.10.in-addr.arpa"; };
+zone "akoria.org" { type forward; forward only; forwarders { 10.1.0.10; }; };
+zone "rpz.akoria" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.rpz.akoria"; };

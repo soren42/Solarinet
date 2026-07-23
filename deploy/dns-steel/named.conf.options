@@ -1,0 +1,14 @@
+options {
+    directory "/var/cache/bind";
+    recursion yes;                       // client-facing resolver (replaces the Pi-holes)
+    allow-query { any; };
+    allow-recursion { 127.0.0.1; 10.0.0.0/8; };
+    allow-transfer { none; };
+    forwarders { 1.1.1.1; 1.0.0.1; 8.8.8.8; 8.8.4.4; };   // egress-safe external
+    listen-on { any; };
+    listen-on-v6 { any; };
+    dnssec-validation no;
+    minimal-responses yes;
+    notify no;
+    response-policy { zone "rpz.akoria"; };   // ad-block, AXFR'd from xenon
+};

@@ -1,0 +1,30 @@
+# SolariNet backup config. Copy to /etc/solari-backup-cesium.conf or
+# /etc/solari-backup-xenon.conf, fill real local paths/credentials, chmod 600.
+
+# Space-separated MariaDB database names.
+# cesium: DB_NAMES="sor"
+# xenon:  DB_NAMES="solarinet"
+DB_NAMES="sor"
+
+# Backup target directory. Must already exist and be writable by the service user.
+# cesium: /data/backups on sdb1, separate from the live datadir on sda2.
+TARGET_DIR="/data/backups"
+
+# Keep this many daily dumps. Older matching backup files are pruned.
+RETENTION_DAYS=14
+
+# MariaDB connection. Prefer a root-readable password file or env file.
+MYSQL_HOST="localhost"
+MYSQL_PORT=3306
+MYSQL_USER="solari_backup"
+MYSQL_PASSWORD_FILE="/root/.mysql-backup-pw"
+# MYSQL_ENV_FILE="/opt/solari/run/db.env"       # may define MYSQL_USER/MYSQL_PWD
+# MYSQL_DEFAULTS_EXTRA_FILE="/root/.my.cnf"     # passed as mysqldump's first option
+# MYSQLDUMP_BIN="/usr/bin/mysqldump"
+
+# Optional Forgejo dump. Leave FORGEJO_CONFIG empty until Forgejo is present here.
+# The dump runs only when FORGEJO_BIN resolves and FORGEJO_CONFIG exists.
+FORGEJO_BIN="forgejo"
+FORGEJO_CONFIG=""
+# FORGEJO_WORK_PATH="/var/lib/forgejo"
+# FORGEJO_RUN_AS="git"

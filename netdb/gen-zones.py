@@ -9,7 +9,7 @@ downstream renderer is unchanged. Emits into netdb/zones/:
   - named.conf.akoria       zone{} declarations for BIND
 Serial is date-based (YYYYMMDDnn); bump nn for multiple renders in a day.
 """
-import os, sys, datetime, yaml
+import os, re, sys, datetime, yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC  = os.path.join(HERE, "akoria-hosts.yml")
@@ -19,7 +19,7 @@ ZONEDIR    = "/etc/bind/zones"          # where the files land on the BIND host
 # Authoritative nameservers for akoria.net (must be real A-record hosts, never
 # CNAMEs). xenon = primary/master, radium = secondary (plain-BIND AXFR works).
 NS_HOSTS   = ["xenon", "radium"]
-SECONDARIES = ["10.1.0.10"]             # radium = akoria.net secondary
+SECONDARIES = ["10.1.0.10", "10.0.0.11"]  # radium + steel (ZimaBlade) = akoria.net secondaries
 
 
 def load_source(path=SRC):
@@ -41,15 +41,34 @@ def load_source(path=SRC):
     return d["domain"], d["hosts"], d.get("ifaces", {}), d["cnames"]
 
 
-def serial(nn="01"):
-    return datetime.date.today().strftime("%Y%m%d") + nn
+def _prev_serial(origin):
+    """Read the serial from the previously-rendered zone file (OUT persists
+    between runs), so we can bump monotonically within the same day."""
+    try:
+        with open(os.path.join(OUT, f"db.{origin}")) as f:
+            for line in f:
+                m = re.search(r"(\d{10,})\s*;\s*serial", line)
+                if m:
+                    return int(m.group(1))
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def serial(origin):
+    """Monotonic YYYYMMDDnn: date-based, but strictly increasing so multiple
+    same-day changes each bump the serial (secondaries only AXFR on a higher
+    serial — a static nn silently breaks replication for same-day edits)."""
+    base = int(datetime.date.today().strftime("%Y%m%d")) * 100
+    prev = _prev_serial(origin)
+    return prev + 1 if (prev is not None and prev >= base) else base + 1
 
 
 def _soa(origin):
     primary = f"{NS_HOSTS[0]}.akoria.net."
     return [f"$ORIGIN {origin}.", "$TTL 300", "",
             f"@   IN SOA {primary} {HOSTMASTER} (",
-            f"            {serial()} ; serial",
+            f"            {serial(origin)} ; serial",
             "            3600       ; refresh",
             "            600        ; retry",
             "            604800     ; expire",
@@ -94,9 +113,10 @@ def reverses(domain, hosts, ifaces):
 def named_conf(domain, revs):
     xfer = "; ".join(f"{ip}" for ip in SECONDARIES)
     L = [f'zone "{domain}" {{ type primary; file "{ZONEDIR}/db.{domain}"; '
-         f'allow-transfer {{ {xfer}; }}; notify yes; }};']
+         f'allow-transfer {{ {xfer}; }}; also-notify {{ {xfer}; }}; notify yes; }};']
     for rev in sorted(revs):
-        L.append(f'zone "{rev}" {{ type primary; file "{ZONEDIR}/db.{rev}"; }};')
+        L.append(f'zone "{rev}" {{ type primary; file "{ZONEDIR}/db.{rev}"; '
+                 f'allow-transfer {{ {xfer}; }}; also-notify {{ {xfer}; }}; notify yes; }};')
     return "\n".join(L) + "\n"
 
 
@@ -108,7 +128,11 @@ def main():
             os.environ["NETDB_SOURCE"] = sys.argv[i + 1]
     domain, hosts, ifaces, cnames = load_source()
     os.makedirs(OUT, exist_ok=True)
-    open(os.path.join(OUT, f"db.{domain}"), "w").write(forward(domain, hosts, ifaces, cnames))
+    # Render BEFORE truncating the file: forward()/reverses() read the prior
+    # serial out of the existing OUT files, and open(...,"w") would truncate
+    # the forward zone before forward() could read its old serial.
+    fwd = forward(domain, hosts, ifaces, cnames)
+    open(os.path.join(OUT, f"db.{domain}"), "w").write(fwd)
     revs = reverses(domain, hosts, ifaces)
     for rev, txt in revs.items():
         open(os.path.join(OUT, f"db.{rev}"), "w").write(txt)

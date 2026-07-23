@@ -75,6 +75,10 @@ hosts:
   strangeness: { ip: 10.0.1.120, hw: "?",                   role: "?" }
   tin:        { ip: 10.3.0.60,  hw: "?",                    role: "?" }
   eleksmaker: { ip: 10.5.87.15, hw: "EleksMaker",           role: "?" }
+  # ---- provisioned 2026-07-08 ----
+  chlorine:   { ip: 10.7.0.10,  hw: "Khadas VIM4",          role: "internal CA / key server (step-ca)" }
+  silicon:    { ip: 10.0.0.250, hw: "Raspberry Pi 4",       role: "edge proxy (Caddy auto-ACME)" }
+  valence:    { ip: 10.6.0.20,  hw: "NanoPi-R1",            role: "monitoring outpost (armhf)" }
 
 # extra A records (a host's additional interfaces)
 ifaces:

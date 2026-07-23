@@ -258,14 +258,26 @@
   // ---- alert events derived from fleet ----
   const alerts = [];
   let eid = 9000;
-  function fire(node, rule, detail, mins, cleared) {
-    alerts.push({
+  // extra: { clearedMinAgo, ackedMinAgo, ackedBy, opieReportId }
+  function fire(node, rule, detail, mins, cleared, extra) {
+    extra = extra || {};
+    const clearedMinAgo = cleared ? (extra.clearedMinAgo != null ? extra.clearedMinAgo : Math.min(mins, rint(2, 55))) : null;
+    const acked = extra.ackedMinAgo != null;
+    const a = {
       eventId: eid++, ruleId: rule.ruleId, ruleName: rule.name,
       node: node ? node.name : null, nodeId: node ? node.nodeId : null,
       segName: node ? node.segName : null,
       severity: rule.severity, detail, firedMinAgo: mins,
       cleared: !!cleared,
-    });
+      clearedMinAgo,
+      ackedAt: acked ? true : null,
+      ackedBy: acked ? (extra.ackedBy || "operator") : null,
+      ackedMinAgo: acked ? extra.ackedMinAgo : null,
+      status: acked ? "acked" : (cleared ? "cleared" : "active"),
+      opieReportId: extra.opieReportId != null ? extra.opieReportId : null,
+    };
+    alerts.push(a);
+    return a;
   }
   nodes.forEach((n) => {
     if (n.state === "down") {
@@ -286,10 +298,20 @@
       fire({ name: p.host.split(".")[0], nodeId: p.hostNode, segName: "—" }, rules[5], `${p.targetId}: ${v.outcome} from monitor '${v.monitorName}' (split vantage)`, rint(1, 25), false);
     }
   });
-  // a few cleared (historical) ones
-  for (let i = 0; i < 8; i++) {
+  // a few cleared (historical, retired >60m ago — land in History)
+  for (let i = 0; i < 6; i++) {
     const n = pick(nodes.filter((x) => x.state === "up"));
-    fire(n, pick([rules[0], rules[1], rules[5]]), `Auto-cleared after recovery`, rint(60, 1200), true);
+    fire(n, pick([rules[0], rules[1], rules[5]]), `Auto-cleared after recovery`, rint(120, 1200), true, { clearedMinAgo: rint(70, 900) });
+  }
+  // a recently-cleared one (resolved <60m ago) — stays on the live board, styled resolved
+  {
+    const n = pick(nodes.filter((x) => x.state === "up"));
+    fire(n, rules[1], `RAM pressure eased — back under tolerance`, rint(30, 55), true, { clearedMinAgo: rint(4, 40) });
+  }
+  // an already-acknowledged one — shows the Acked badge + owner in History
+  {
+    const n = pick(nodes.filter((x) => x.state === "up"));
+    fire(n, rules[0], `CPU spike during nightly backup — acknowledged, expected`, rint(80, 400), false, { ackedMinAgo: rint(10, 120), ackedBy: "jason" });
   }
   alerts.sort((a, b) => {
     const sev = { crit: 0, warn: 1, info: 2 };
@@ -298,16 +320,134 @@
     return a.firedMinAgo - b.firedMinAgo;
   });
 
+  // ---- Opie / Analysis reports (LLM incident write-ups) ----
+  // Attach a finished report to the two most severe active crit alerts, plus a
+  // couple of standalone reports (one still investigating, one failed) so the
+  // panel demonstrates every status. firstEventId links back to the alert.
+  const opie = [];
+  let orid = 4200;
+  function opieFor(alert, o) {
+    const reportId = orid++;
+    if (alert) alert.opieReportId = reportId;
+    opie.push(Object.assign({
+      reportId,
+      incidentKey: (alert ? (alert.node || "fleet") : "fleet") + "/" + reportId,
+      triggerKind: o.triggerKind || (alert && alert.severity === "crit" ? "crit" : "warn-storm"),
+      firstEventId: alert ? alert.eventId : null,
+      nodeId: alert ? alert.nodeId : null,
+      hostFqdn: (alert && alert.node ? alert.node + ".akoria.net" : null),
+      severity: alert ? alert.severity : "warn",
+      status: "done",
+      summary: "",
+      analysis: "",
+      model: "fable-5",
+      durationSec: rint(9, 48),
+      startedMinAgo: rint(1, 40),
+      finishedMinAgo: rint(0, 3),
+    }, o));
+  }
+  const critActive = alerts.filter((a) => a.severity === "crit" && !a.cleared && !a.ackedAt);
+  if (critActive[0]) {
+    const a = critActive[0];
+    opieFor(a, {
+      status: "done", triggerKind: "crit", durationSec: 31,
+      summary: `${a.node || "host"} stopped reporting — Opie correlated the silence to a kernel OOM-kill of the agent`,
+      analysis: [
+        `## Incident summary`,
+        ``,
+        `**${a.node || "host"}** went silent at the last report window. Opie cross-checked the`,
+        `final telemetry burst, the segment's reachability matrix, and peer nodes on the same`,
+        `switch before the agent dropped off.`,
+        ``,
+        `### What happened`,
+        ``,
+        `1. RAM crossed **96%** for ~4 minutes while a nightly \`rsync\` fanned out.`,
+        `2. The kernel OOM-killer reaped the largest RSS process — which was \`solariAgent\`.`,
+        `3. With no agent, reporting stopped; ICMP from two vantages still succeeds, so the`,
+        `   **host is up, the agent is down** (not a hardware fault).`,
+        ``,
+        `### Evidence`,
+        ``,
+        `| Signal | Last value | Threshold |`,
+        `| --- | --- | --- |`,
+        `| RAM used | 96.4% | 90% |`,
+        `| Swap used | 71% | 60% |`,
+        `| Agent heartbeat | none for ${a.firedMinAgo}m | 2× interval |`,
+        ``,
+        `> ICMP to the host still answers from \`neon\` and \`argon\` — this is an **agent** outage,`,
+        `> not a node outage.`,
+        ``,
+        `### Recommended action`,
+        ``,
+        `- \`systemctl restart solariAgent\` on the host to restore reporting.`,
+        `- Add a \`MemoryHigh=\` cgroup guard to the agent unit so it is never the OOM victim.`,
+        `- Consider staggering the nightly \`rsync\` fan-out to flatten the memory spike.`,
+        ``,
+        `_No data loss expected; historical samples resume on agent restart._`,
+      ].join("\n"),
+    });
+  }
+  if (critActive[1]) {
+    const a = critActive[1];
+    opieFor(a, {
+      status: "done", triggerKind: "crit", durationSec: 22,
+      summary: `Watched process crashed on ${a.node || "host"} — restart loop detected, root cause is a config typo`,
+      analysis: [
+        `## Root cause: crash-loop on a bad config key`,
+        ``,
+        `The watched process on **${a.node || "host"}** is in a restart loop. Opie pulled the last`,
+        `three exit records and the process would come up, fail readiness, and exit within seconds.`,
+        ``,
+        `### Timeline`,
+        ``,
+        `- \`T-6m\` process exits \`code=78\` (\`EX_CONFIG\`)`,
+        `- \`T-6m\` supervisor restarts it`,
+        `- \`T-5m … now\` the loop repeats every ~40s`,
+        ``,
+        `\`\`\``,
+        `fatal: unknown directive "lisen_addr" at /etc/svc/site.conf:14`,
+        `\`\`\``,
+        ``,
+        `The directive **\`lisen_addr\`** is a typo for \`listen_addr\`. The parser rejects the file`,
+        `and the service never binds.`,
+        ``,
+        `### Fix`,
+        ``,
+        `1. Correct \`lisen_addr\` → \`listen_addr\` in \`/etc/svc/site.conf\`.`,
+        `2. Validate with \`svc --check-config\` before reload.`,
+        `3. The alert auto-clears once the readiness probe passes.`,
+      ].join("\n"),
+    });
+  }
+  // one still investigating (no analysis yet) — a warn storm across a segment
+  opie.push({
+    reportId: orid++, incidentKey: "iot/warn-storm", triggerKind: "warn-storm",
+    firstEventId: null, nodeId: null, hostFqdn: "seg-iot.akoria.net",
+    severity: "warn", status: "investigating",
+    summary: "Warn storm on the IoT segment — 11 probes flapping; Opie is correlating vantages",
+    analysis: null, model: "fable-5", durationSec: null,
+    startedMinAgo: 1, finishedMinAgo: null,
+  });
+  // one failed (model/tooling error) — surfaced so the operator knows to retry
+  opie.push({
+    reportId: orid++, incidentKey: "cesium/disk", triggerKind: "crit",
+    firstEventId: null, nodeId: null, hostFqdn: "cesium.akoria.net",
+    severity: "crit", status: "failed",
+    summary: "Analysis failed — model call timed out after 60s; retry from the report",
+    analysis: null, model: "fable-5", durationSec: 60,
+    startedMinAgo: 18, finishedMinAgo: 17,
+  });
+
   // ---- discovered (not-yet-monitored) ----
   const discovered = [
-    { host: "tungsten.akoria.net", ip: "10.42.11.84", via: "mDNS", kind: "host", services: ["ssh:22", "http:80"], seen: 4, seg: "compute", arch: "x86_64" },
-    { host: "10.42.50.119", ip: "10.42.50.119", via: "ARP sweep", kind: "host", services: ["mqtt:1883"], seen: 11, seg: "iot", arch: "armv7" },
-    { host: "osmium.akoria.net", ip: "10.42.21.40", via: "SCP advert", kind: "service", services: ["minio:9000", "minio:9001"], seen: 2, seg: "storage", arch: "arm64" },
-    { host: "10.42.30.66", ip: "10.42.30.66", via: "port scan", kind: "service", services: ["https:443"], seen: 19, seg: "dmz", arch: "x86_64" },
-    { host: "rhenium.akoria.net", ip: "10.42.12.7", via: "mDNS", kind: "host", services: ["ssh:22", "postgres:5432", "node-exp:9100"], seen: 1, seg: "compute", arch: "arm64" },
-    { host: "10.42.40.158", ip: "10.42.40.158", via: "ARP sweep", kind: "host", services: ["ssh:22"], seen: 33, seg: "lab", arch: "armv7" },
-    { host: "iridium.akoria.net", ip: "10.42.20.91", via: "SCP advert", kind: "service", services: ["nfs:2049", "smb:445"], seen: 6, seg: "storage", arch: "x86_64" },
-    { host: "10.42.50.204", ip: "10.42.50.204", via: "port scan", kind: "host", services: ["coap:5683"], seen: 47, seg: "iot", arch: "armv7" },
+    { host: "tungsten.akoria.net", ip: "10.42.11.84", via: "mDNS", kind: "host", services: ["ssh:22", "http:80"], seen: 4, seg: "compute", arch: "x86_64", status: "new", mac: "b8:27:eb:41:9a:c2", vendor: "Dell Inc.", osName: "Debian 12", deviceRole: "server", mdnsName: "tungsten._workstation._tcp", mdnsServices: ["_ssh._tcp", "_workstation._tcp", "_http._tcp"], neighbor: { gearName: "sw-core-01", peerPort: "Gi1/0/12", localIf: "eth0", linkType: "wired", speedMbps: 1000, viaLldp: true } },
+    { host: "10.42.50.119", ip: "10.42.50.119", via: "ARP sweep", kind: "host", services: ["mqtt:1883"], seen: 11, seg: "iot", arch: "armv7", status: "new", mac: "d8:3a:dd:0f:2b:71", vendor: "Espressif Inc.", deviceRole: "iot", mdnsName: "sensor-hub", mdnsServices: ["_mqtt._tcp", "_arduino._tcp"] },
+    { host: "osmium.akoria.net", ip: "10.42.21.40", via: "SCP advert", kind: "service", services: ["minio:9000", "minio:9001"], seen: 2, seg: "storage", arch: "arm64", status: "new", mac: "dc:a6:32:8e:44:10", vendor: "Raspberry Pi Trading Ltd", osName: "Raspberry Pi OS", deviceRole: "nas", sysDescr: "MinIO object storage, RELEASE.2024-01-16" },
+    { host: "10.42.30.66", ip: "10.42.30.66", via: "port scan", kind: "service", services: ["https:443"], seen: 19, seg: "dmz", arch: "x86_64", status: "new", deviceRole: "server" },
+    { host: "rhenium.akoria.net", ip: "10.42.12.7", via: "mDNS", kind: "host", services: ["ssh:22", "postgres:5432", "node-exp:9100"], seen: 1, seg: "compute", arch: "arm64", status: "new", mac: "dc:a6:32:11:aa:5f", vendor: "Raspberry Pi Trading Ltd", osName: "Ubuntu 24.04", deviceRole: "server", mdnsName: "rhenium", mdnsServices: ["_ssh._tcp", "_postgresql._tcp"], neighbor: { gearName: "sw-edge-02", peerPort: "Gi0/5", localIf: "eth0", linkType: "wired", speedMbps: 1000, viaLldp: true } },
+    { host: "10.42.40.158", ip: "10.42.40.158", via: "ARP sweep", kind: "host", services: ["ssh:22"], seen: 33, seg: "lab", arch: "armv7", status: "new" },
+    { host: "iridium.akoria.net", ip: "10.42.20.91", via: "SCP advert", kind: "service", services: ["nfs:2049", "smb:445"], seen: 6, seg: "storage", arch: "x86_64", status: "new", mac: "00:11:32:5c:9d:e8", vendor: "Synology Incorporated", osName: "DSM 7.2", deviceRole: "nas", sysDescr: "Synology DS1520+ NAS", mdnsName: "iridium", mdnsServices: ["_smb._tcp", "_nfs._tcp", "_afpovertcp._tcp", "_device-info._tcp"] },
+    { host: "10.42.50.204", ip: "10.42.50.204", via: "port scan", kind: "host", services: ["coap:5683"], seen: 47, seg: "iot", arch: "armv7", status: "new", mac: "b0:4e:26:77:31:a2", vendor: "TP-Link Technologies", deviceRole: "iot", mdnsName: "livingroom-bulb", mdnsServices: ["_spotify-connect._tcp", "_airplay._tcp", "_hap._tcp"] },
   ];
 
   // ---- binary builds / deploy convergence ----
@@ -386,23 +526,118 @@
     uptimeStr: "134d 06h",                 // controller (active server) uptime
   };
 
+  // ---- inventory (SoR migration 014: models / units / locations / receipts /
+  //      projects / allocations). Offline fixture so the Inventory screen renders
+  //      and is interactive with no live API. Shapes mirror the DB columns. ----
+  // A receipt "scan" rendered as a self-contained SVG data-URI so the gallery
+  // viewer shows a real image offline (image receipts); PDF receipts carry no
+  // thumbnail and fall back to a document placeholder in the UI.
+  function receiptScan(vendor, total, date) {
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='300' height='400' viewBox='0 0 300 400'>
+      <rect width='300' height='400' fill='#f4f2ec'/>
+      <rect x='0' y='0' width='300' height='58' fill='#e7e3d8'/>
+      <text x='24' y='38' font-family='monospace' font-size='22' fill='#1a1a1a'>${vendor}</text>
+      <text x='24' y='92' font-family='monospace' font-size='12' fill='#555'>ORDER RECEIPT</text>
+      <text x='24' y='112' font-family='monospace' font-size='12' fill='#555'>${date}</text>
+      <line x1='24' y1='130' x2='276' y2='130' stroke='#bbb' stroke-dasharray='4 4'/>
+      <text x='24' y='168' font-family='monospace' font-size='12' fill='#333'>1x line item ......... </text>
+      <text x='24' y='196' font-family='monospace' font-size='12' fill='#333'>1x line item ......... </text>
+      <text x='24' y='224' font-family='monospace' font-size='12' fill='#333'>shipping ............. </text>
+      <line x1='24' y1='250' x2='276' y2='250' stroke='#bbb'/>
+      <text x='24' y='286' font-family='monospace' font-size='18' fill='#1a1a1a'>TOTAL</text>
+      <text x='276' y='286' text-anchor='end' font-family='monospace' font-size='18' fill='#1a1a1a'>$${(total / 100).toFixed(2)}</text>
+      <rect x='24' y='320' width='252' height='40' fill='#1a1a1a'/>
+      <text x='150' y='346' text-anchor='middle' font-family='monospace' font-size='13' fill='#f4f2ec'>||| ||  ||| |  || |||  ||</text>
+    </svg>`;
+    return "data:image/svg+xml;utf8," + encodeURIComponent(svg);
+  }
+
+  const invModels = [
+    { id: 1, make: "Raspberry Pi", model: "Compute Module 5", hw_type: "sbc", notes: "8GB / 32GB eMMC; carrier board needed" },
+    { id: 2, make: "Dell", model: "PowerEdge R410", hw_type: "server", notes: "1U, dual Xeon, iDRAC6" },
+    { id: 3, make: "Ubiquiti", model: "USW-Pro-24-PoE", hw_type: "switch", notes: "24-port L3 PoE++" },
+    { id: 4, make: "Ubiquiti", model: "U7 Pro", hw_type: "ap", notes: "WiFi 7 access point" },
+    { id: 5, make: "Samsung", model: "990 Pro 2TB NVMe", hw_type: "other", notes: "PCIe 4.0 M.2 SSD" },
+    { id: 6, make: "WD", model: "Red Plus 8TB", hw_type: "other", notes: "CMR NAS drive" },
+    { id: 7, make: "APC", model: "Back-UPS 1500", hw_type: "ups", notes: "900W / 1500VA line-interactive" },
+  ];
+
+  const invLocations = [
+    { id: 1, parent_id: null, name: "Lab", code: null, loc_type: "room" },
+    { id: 2, parent_id: 1, name: "Rack A", code: null, loc_type: "rack" },
+    { id: 3, parent_id: 2, name: "Shelf 1", code: "1", loc_type: "shelf" },
+    { id: 4, parent_id: 1, name: "Parts Cabinet", code: null, loc_type: "cabinet" },
+    { id: 5, parent_id: 4, name: "Drawer 1", code: "1", loc_type: "drawer" },
+    { id: 6, parent_id: 5, name: "Tray 1", code: "1", loc_type: "tray" },
+    { id: 7, parent_id: 5, name: "Tray 2", code: "2", loc_type: "tray" },
+    { id: 8, parent_id: 4, name: "Drawer 2", code: "2", loc_type: "drawer" },
+    { id: 9, parent_id: 8, name: "Bin A", code: "A", loc_type: "bin" },
+    { id: 10, parent_id: 4, name: "Project Tray · DNS HA", code: "P1", loc_type: "tray" },
+    { id: 11, parent_id: 4, name: "Project Tray · Lab Expansion", code: "P2", loc_type: "tray" },
+  ];
+
+  const invReceipts = [
+    { id: 1, vendor: "PiShop.us", purchased_on: "2026-05-12", subtotal_cents: 24000, currency: "USD", order_ref: "PS-88213", file_path: "/srv/solari/receipts/pishop-2026-05-12.png", file_mime: "image/png", notes: "2× CM5 8GB", scan: receiptScan("PiShop.us", 24000, "2026-05-12") },
+    { id: 2, vendor: "Newegg", purchased_on: "2026-06-01", subtotal_cents: 36000, currency: "USD", order_ref: "NE-55910", file_path: "/srv/solari/receipts/newegg-990pro.pdf", file_mime: "application/pdf", notes: "2× 990 Pro NVMe", scan: null },
+    { id: 3, vendor: "B&H Photo", purchased_on: "2026-06-20", subtotal_cents: 33900, currency: "USD", order_ref: "BH-42117", file_path: "/srv/solari/receipts/bh-invoice.png", file_mime: "image/png", notes: "U7 Pro + WD Red", scan: receiptScan("B&H Photo", 33900, "2026-06-20") },
+  ];
+
+  // stock_status ENUM(in_stock,allocated,deployed,consumed,retired)
+  const invUnits = [
+    { id: 1, model_id: 1, serial: "CM5-0001", asset_tag: "SN-A17", location_id: 10, acquired_on: "2026-05-12", quantity: 1, unit_cost_cents: 12000, stock_status: "allocated", receipt_id: 1, notes: "" },
+    { id: 2, model_id: 1, serial: "CM5-0002", asset_tag: "SN-A18", location_id: 6, acquired_on: "2026-05-12", quantity: 1, unit_cost_cents: 12000, stock_status: "in_stock", receipt_id: 1, notes: "" },
+    { id: 3, model_id: 2, serial: "R410-9F2", asset_tag: "SN-SRV3", location_id: 3, acquired_on: "2024-02-01", quantity: 1, unit_cost_cents: 0, stock_status: "deployed", receipt_id: null, notes: "runs cesium" },
+    { id: 4, model_id: 3, serial: "USW-77A", asset_tag: "SN-SW1", location_id: 2, acquired_on: "2025-01-14", quantity: 1, unit_cost_cents: 0, stock_status: "deployed", receipt_id: null, notes: "core switch" },
+    { id: 5, model_id: 5, serial: "NV-2201", asset_tag: "SN-NV1", location_id: 7, acquired_on: "2026-06-01", quantity: 1, unit_cost_cents: 18000, stock_status: "in_stock", receipt_id: 2, notes: "" },
+    { id: 6, model_id: 5, serial: "NV-2202", asset_tag: "SN-NV2", location_id: 10, acquired_on: "2026-06-01", quantity: 1, unit_cost_cents: 18000, stock_status: "deployed", receipt_id: 2, notes: "" },
+    { id: 7, model_id: 6, serial: "WD-8801", asset_tag: null, location_id: 9, acquired_on: "2026-06-20", quantity: 1, unit_cost_cents: 15000, stock_status: "in_stock", receipt_id: 3, notes: "" },
+    { id: 8, model_id: 4, serial: "U7-3301", asset_tag: "SN-AP1", location_id: 11, acquired_on: "2026-06-20", quantity: 1, unit_cost_cents: 18900, stock_status: "allocated", receipt_id: 3, notes: "" },
+    { id: 9, model_id: 7, serial: "APC-1500X", asset_tag: "SN-UPS1", location_id: 2, acquired_on: "2024-09-03", quantity: 1, unit_cost_cents: 0, stock_status: "deployed", receipt_id: null, notes: "rack UPS" },
+  ];
+
+  const invProjects = [
+    { id: 1, name: "DNS HA cluster", code: "DNS-HA", status: "active", tray_location_id: 10, owner: "jason", description: "Two CM5 nodes + mirrored NVMe for the authoritative DNS pair.", started_on: "2026-06-05", target_on: "2026-07-20", completed_on: null },
+    { id: 2, name: "Lab Expansion", code: "LAB-X", status: "planning", tray_location_id: 11, owner: "jason", description: "New PoE switch, WiFi 7 AP, and bulk storage for the lab segment.", started_on: null, target_on: "2026-08-15", completed_on: null },
+  ];
+
+  // project_allocations: EITHER hardware_unit_id (owned) OR hardware_model_id (to buy).
+  // allocation ENUM(needed,committed,installed,returned).
+  const invAllocations = [
+    { id: 1, project_id: 1, hardware_unit_id: 1, hardware_model_id: null, allocation: "committed", quantity: 1, notes: "primary DNS node" },
+    { id: 2, project_id: 1, hardware_unit_id: 6, hardware_model_id: null, allocation: "installed", quantity: 1, notes: "system NVMe" },
+    { id: 3, project_id: 1, hardware_unit_id: null, hardware_model_id: 1, allocation: "needed", quantity: 1, notes: "second DNS node — to buy" },
+    { id: 4, project_id: 2, hardware_unit_id: 8, hardware_model_id: null, allocation: "committed", quantity: 1, notes: "lab AP" },
+    { id: 5, project_id: 2, hardware_unit_id: null, hardware_model_id: 3, allocation: "needed", quantity: 1, notes: "PoE switch — to buy" },
+    { id: 6, project_id: 2, hardware_unit_id: null, hardware_model_id: 6, allocation: "needed", quantity: 2, notes: "bulk storage — to buy" },
+  ];
+
+  const inventory = {
+    models: invModels, locations: invLocations, units: invUnits,
+    receipts: invReceipts, projects: invProjects, allocations: invAllocations,
+    seq: { unit: 100, location: 100, receipt: 100, project: 100, allocation: 100, model: 100 },
+  };
+
   window.SOLARI = {
     nodes, segments: SEGMENTS, segRollups, fleetRoll, summary,
-    probes, rules, alerts, discovered, builds, enrollments, config, netgear: NETGEAR,
-    monitors,
+    probes, rules, alerts, opie, discovered, builds, enrollments, config, netgear: NETGEAR,
+    monitors, inventory,
+    // DNS screen fixture — the screen renders its own empty states; live data
+    // is always lazy (screen-mounted), never part of the loadLive() bundle.
+    dns: { health: null },
     server: {
       primary: primary.name, primaryId: primary.nodeId,
       failover: failover.name, failoverId: failover.nodeId,
       leaseEpoch: 4471, leaseHealthy: true, leaseTtlSec: 15, leaseAgeSec: 2,
       dbHost: "127.0.0.1", historyDays: 90,
     },
-    activeCrit: alerts.filter((a) => !a.cleared && a.severity === "crit").length,
-    activeWarn: alerts.filter((a) => !a.cleared && a.severity === "warn").length,
+    activeCrit: alerts.filter((a) => !a.ackedAt && !a.cleared && a.severity === "crit").length,
+    activeWarn: alerts.filter((a) => !a.ackedAt && !a.cleared && a.severity === "warn").length,
     fmt: {
       kb(kb) { if (kb >= 1048576) return (kb / 1048576).toFixed(1) + " GB"; if (kb >= 1024) return (kb / 1024).toFixed(0) + " MB"; return kb + " KB"; },
       mbps(m) { if (m >= 1000) return (m / 1000).toFixed(1) + " Gb/s"; return m + " Mb/s"; },
       ago(min) { if (min < 1) return "just now"; if (min < 60) return min + "m ago"; if (min < 1440) return Math.floor(min / 60) + "h ago"; return Math.floor(min / 1440) + "d ago"; },
       rtt(us) { if (!us) return "—"; if (us >= 1000) return (us / 1000).toFixed(1) + " ms"; return us + " µs"; },
+      usd(cents) { if (cents == null) return "—"; return "$" + (cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
     },
   };
 })();

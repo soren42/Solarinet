@@ -34,14 +34,58 @@
     if (!s || typeof s !== "object") return "";
     return [s.product, s.version].filter(Boolean).join(" ");
   }
-  // A host learned over mDNS/zeroconf (or with a *.local name) gets an origin chip.
+  // A host learned over mDNS/zeroconf (or with a *.local name, an mDNS record, or
+  // advertised service types) gets an origin chip. Matches "mdns"/"mDNS" via.
   function isMdns(d) {
-    return d.via === "mdns" || (typeof d.host === "string" && /\.local$/i.test(d.host));
+    return /mdns/i.test(String(d.via || ""))
+      || !!d.mdnsName
+      || (Array.isArray(d.mdnsServices) && d.mdnsServices.length > 0)
+      || (typeof d.host === "string" && /\.local$/i.test(d.host));
   }
+
+  // Normalise seenCount + mac + mdns into small render helpers used by the table.
+  const numOr0 = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+  // "3m ago" / "2h 04m ago" / "—" from a minutes-ago integer.
+  function seenAgo(mins) {
+    const m = numOr0(mins);
+    if (!m) return "just now";
+    if (m < 60) return m + "m ago";
+    const h = Math.floor(m / 60);
+    return h + "h " + String(m % 60).padStart(2, "0") + "m ago";
+  }
+  // A compact "sw-core-01 · Gi1/0/12" neighbor label, or null.
+  function neighborLabel(n) {
+    if (!n) return null;
+    const parts = [];
+    if (n.gearName) parts.push(n.gearName);
+    if (n.peerPort) parts.push(n.peerPort);
+    else if (n.localIf) parts.push(n.localIf);
+    return parts.length ? parts.join(" · ") : null;
+  }
+  const ROLE_TONE = {
+    server: "var(--teal)", nas: "var(--violet)", printer: "var(--warn)",
+    camera: "var(--warn)", iot: "var(--warn)", network: "var(--violet)",
+    ap: "var(--violet)", gateway: "var(--violet)", workstation: "var(--teal)",
+    host: "var(--teal)",
+  };
 
   function Discovery({ onOpenNode }) {
     const [staged, setStaged] = useState({});      // host -> "staged" | "ignored"
     const [auto, setAuto] = useState(!!S.config.autoDiscover);
+
+    // Full candidate list. Boot with the fixture/boot slice (S.discovered), then
+    // pull the complete set (every status) from /api/discovery so the screen can
+    // filter across new/adopted/ignored without a reload. Offline → keep S.
+    const [rows, setRows] = useState(S.discovered || []);
+    useEffect(function () {
+      const a = api();
+      if (!a || !a.listDiscovered) return;
+      let live = true;
+      a.listDiscovered("all").then(function (list) {
+        if (live && Array.isArray(list) && list.length) setRows(list);
+      }).catch(function () { /* keep the boot slice */ });
+      return function () { live = false; };
+    }, []);
 
     // Persist the toggle: POST /api/config with the full effective global config
     // (same body shape ConfigScreen saves) so it survives reloads. On load the
@@ -65,10 +109,28 @@
     const [cidr, setCidr] = useState("");
     const [scanning, setScanning] = useState(false);
     const [adoptDisc, setAdoptDisc] = useState(null);   // discovered entity in the adopt dialog
-    const items = S.discovered;
-    const active = items.filter((d) => staged[d.host] !== "ignored");
+
+    // ---- filter / search / sort state ----
+    const [q, setQ] = useState("");
+    const [statusFilter, setStatusFilter] = useState("new");  // new | adopted | ignored | all
+    const [viaFilter, setViaFilter] = useState("all");
+    const [sort, setSort] = useState({ key: "seen", dir: 1 });
+
+    // Effective status after the local optimistic overlay (ignore/stage).
+    function effStatus(d) {
+      const ov = staged[d.host];
+      if (ov === "ignored") return "ignored";
+      if (ov === "staged") return "adopted";
+      return d.status || "new";
+    }
+
+    // via-method breakdown (raw via string is consistent within one data source).
     const byVia = {};
-    items.forEach((d) => { byVia[d.via] = (byVia[d.via] || 0) + 1; });
+    rows.forEach((d) => { if (d.via) byVia[d.via] = (byVia[d.via] || 0) + 1; });
+    const viaKeys = Object.keys(byVia).sort();
+
+    const statusCounts = { new: 0, adopted: 0, ignored: 0, all: rows.length };
+    rows.forEach((d) => { const s = effStatus(d); if (statusCounts[s] != null) statusCounts[s]++; });
 
     // "+ Monitor" opens the adopt dialog (pick services, heartbeat, name, pool).
     function stage(d) { setAdoptDisc(d); }
@@ -112,10 +174,59 @@
       }).finally(function () { setScanning(false); });
     }
 
+    // ---- filter → search → sort pipeline ----
+    const ql = q.trim().toLowerCase();
+    let view = rows.filter(function (d) {
+      if (statusFilter !== "all" && effStatus(d) !== statusFilter) return false;
+      if (viaFilter !== "all" && d.via !== viaFilter) return false;
+      if (!ql) return true;
+      // Search covers vendor / service / role / segment plus identity + SNMP.
+      const svcHay = (d.services || []).map(function (s) { return svcName(s); }).join(" ");
+      const hay = [
+        d.host, d.ip, d.mac, d.vendor, d.osName, d.deviceRole, d.sysDescr,
+        d.mdnsName, (d.mdnsServices || []).join(" "), svcHay, d.seg, d.via,
+        d.neighbor && d.neighbor.gearName, d.neighbor && d.neighbor.peerPort,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return hay.indexOf(ql) >= 0;
+    });
+    function keyOf(d) {
+      switch (sort.key) {
+        case "host": return (d.host || d.ip || "").toLowerCase();
+        case "vendor": return (d.vendor || "").toLowerCase();
+        case "os": return (d.osName || "").toLowerCase();
+        case "role": return (d.deviceRole || "").toLowerCase();
+        case "seg": return (d.seg || "").toLowerCase();
+        case "via": return (d.via || "").toLowerCase();
+        case "neighbor": return ((d.neighbor && d.neighbor.gearName) || "").toLowerCase();
+        case "seen": return numOr0(d.seen);
+        default: return 0;
+      }
+    }
+    view = view.slice().sort(function (a, b) {
+      const ka = keyOf(a), kb = keyOf(b);
+      if (ka < kb) return -sort.dir;
+      if (ka > kb) return sort.dir;
+      return 0;
+    });
+    function th(key, label, right) {
+      const on = sort.key === key;
+      return <th style={{ cursor: "pointer", textAlign: right ? "right" : undefined, whiteSpace: "nowrap" }}
+        onClick={function () { setSort(function (s) { return { key: key, dir: s.key === key ? -s.dir : 1 }; }); }}>
+        {label}{on ? <span style={{ color: "var(--teal)", marginLeft: 4 }}>{sort.dir > 0 ? "▲" : "▼"}</span> : null}
+      </th>;
+    }
+
+    const STATUS_CHIPS = [
+      { k: "new", label: "New" },
+      { k: "adopted", label: "Adopted" },
+      { k: "ignored", label: "Ignored" },
+      { k: "all", label: "All" },
+    ];
+
     return (
       <div className="page">
         <div className="page-head">
-          <div><h1 className="page-title">Discovery</h1><div className="page-sub">{items.length} candidates found · not yet monitored</div></div>
+          <div><h1 className="page-title">Discovery</h1><div className="page-sub">{statusCounts.new} candidates · {rows.length} assets seen</div></div>
           <div className="page-head__right">
             <input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="192.168.1.0/24"
               onKeyDown={(e) => { if (e.key === "Enter") scanNow(); }}
@@ -130,63 +241,142 @@
         </div>
 
         <div className="kpis">
-          <div className="kpi teal"><div className="kpi__k">Candidates</div><div className="kpi__v">{active.filter((d) => staged[d.host] !== "staged").length}</div><div className="kpi__sub">awaiting decision</div><div className="kpi__bar" /></div>
-          <div className="kpi ok"><div className="kpi__k">Staged</div><div className="kpi__v">{Object.values(staged).filter((v) => v === "staged").length}</div><div className="kpi__sub">enrollment issued</div><div className="kpi__bar" /></div>
-          {Object.entries(byVia).slice(0, 3).map(([via, n]) => (
-            <div className="kpi" key={via}><div className="kpi__k">{via}</div><div className="kpi__v" style={{ color: "var(--violet)" }}>{n}</div><div className="kpi__sub">via this method</div><div className="kpi__bar" style={{ background: "var(--violet)" }} /></div>
+          <div className="kpi teal"><div className="kpi__k">Candidates</div><div className="kpi__v">{statusCounts.new}</div><div className="kpi__sub">awaiting decision</div><div className="kpi__bar" /></div>
+          <div className="kpi ok"><div className="kpi__k">Adopted</div><div className="kpi__v">{statusCounts.adopted}</div><div className="kpi__sub">now monitored</div><div className="kpi__bar" /></div>
+          {viaKeys.slice(0, 3).map((via) => (
+            <div className="kpi" key={via}><div className="kpi__k">{via}</div><div className="kpi__v" style={{ color: "var(--violet)" }}>{byVia[via]}</div><div className="kpi__sub">via this method</div><div className="kpi__bar" style={{ background: "var(--violet)" }} /></div>
           ))}
         </div>
 
-        <div className="page-sub" style={{ margin: "4px 0 12px" }}>Discovered hosts & services</div>
-        {active.map((d) => {
-          const isStaged = staged[d.host] === "staged";
-          return (
-            <div key={d.host} className="disc-row">
-              <Icon name={d.kind === "service" ? "link" : "host"} size={20} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
-              <div className="disc-main">
-                <div className="disc-host">{d.host}<span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>{d.ip}</span>
-                  {isMdns(d) && <span className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)", marginLeft: 8 }}><Icon name="link" size={10} style={{ verticalAlign: "-1px", marginRight: 3 }} />mDNS</span>}
-                  {d.deviceRole && <span className="svc-chip" style={{ borderColor: "var(--teal)", color: "var(--teal)", marginLeft: 8 }}>{d.deviceRole}</span>}
-                </div>
-                <div className="disc-svcs">
-                  {d.services.map((s, i) => {
-                    const det = svcDetail(s);
-                    return (
-                      <span key={i} className="svc-chip" title={det ? svcName(s) + " · " + det : undefined}>
-                        {svcName(s)}{svcPort(s) ? ":" + svcPort(s) : ""}
-                        {det ? <span className="muted" style={{ marginLeft: 4, fontSize: 10 }}>{det}</span> : null}
-                      </span>
-                    );
-                  })}
-                </div>
-                {(d.osName || d.vendor) && (
-                  <div className="td-mono muted" style={{ fontSize: 11, marginTop: 3 }}>
-                    {[d.vendor, d.osName].filter(Boolean).join(" · ")}
-                    {d.mac ? <span style={{ opacity: 0.6 }}>{"  " + d.mac}</span> : null}
-                  </div>
-                )}
-                {d.sysDescr && (
-                  <div className="td-mono muted" style={{ fontSize: 11, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 520 }} title={d.sysDescr}>
-                    {d.sysDescr}
-                  </div>
-                )}
-              </div>
-              <div className="disc-meta">
-                <span className="tag">{d.via}</span>
-                <span className="td-mono muted">{d.seg} · {d.arch}</span>
-                <span className="td-mono muted">{d.seen}m ago</span>
-              </div>
-              {isStaged ? (
-                <span className="alert-sev info" style={{ flex: "0 0 auto" }}><Icon name="check" size={12} style={{ verticalAlign: "-2px" }} /> staged</span>
-              ) : (
-                <div className="disc-actions">
-                  <button className="btn-ghost" onClick={() => ignore(d)}>Ignore</button>
-                  <button className="btn-primary" onClick={() => stage(d)}><Icon name="plus" size={14} />Monitor</button>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {/* status + via filters, then search */}
+        <div className="filters">
+          {STATUS_CHIPS.map((c) => (
+            <button key={c.k} className={"chip" + (statusFilter === c.k ? " on" : "")} onClick={() => setStatusFilter(c.k)}>
+              {c.label}<span className="chip__n">{statusCounts[c.k]}</span>
+            </button>
+          ))}
+          <span style={{ width: 1, height: 20, background: "var(--line)", margin: "0 2px" }} />
+          <button className={"chip" + (viaFilter === "all" ? " on" : "")} onClick={() => setViaFilter("all")}>All vias</button>
+          {viaKeys.map((via) => (
+            <button key={via} className={"chip" + (viaFilter === via ? " on" : "")} onClick={() => setViaFilter(via)}>
+              {via}<span className="chip__n">{byVia[via]}</span>
+            </button>
+          ))}
+          <div className="search" style={{ marginLeft: "auto", maxWidth: 280, height: 36 }}>
+            <Icon name="search" size={15} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="vendor · service · role · segment" />
+          </div>
+        </div>
+
+        {view.length === 0 && <div className="empty">No assets match these filters.</div>}
+        {view.length > 0 && (
+          <div className="tablewrap" style={{ overflowX: "auto" }}>
+            <table className="grid">
+              <thead><tr>
+                {th("host", "Host / IP")}
+                {th("vendor", "Vendor · MAC")}
+                {th("os", "OS · Role")}
+                <th style={{ whiteSpace: "nowrap" }}>mDNS &amp; services</th>
+                <th style={{ whiteSpace: "nowrap" }}>SNMP sysDescr</th>
+                {th("neighbor", "Neighbor")}
+                {th("via", "Via · Seg")}
+                {th("seen", "Seen", false)}
+                <th aria-label="actions" />
+              </tr></thead>
+              <tbody>
+                {view.map((d) => {
+                  const st = effStatus(d);
+                  const nbr = neighborLabel(d.neighbor);
+                  const mdns = isMdns(d);
+                  return (
+                    <tr key={d.discId != null ? "d" + d.discId : d.host} style={{ cursor: "default" }}>
+                      {/* Host / IP + kind + mDNS origin */}
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                          <Icon name={d.kind === "service" ? "link" : "host"} size={15} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
+                          <span className="td-mono" style={{ fontWeight: 600 }}>{d.host}</span>
+                          {mdns && <span className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)" }}>mDNS</span>}
+                        </div>
+                        <div className="td-mono muted" style={{ fontSize: 11, marginTop: 2, marginLeft: 22 }}>{d.ip}{d.kind ? " · " + d.kind : ""}</div>
+                      </td>
+
+                      {/* Vendor · MAC */}
+                      <td>
+                        <div style={{ fontSize: 12.5 }}>{d.vendor || <span className="muted">—</span>}</div>
+                        {d.mac && <div className="td-mono muted" style={{ fontSize: 10.5, marginTop: 2 }}>{d.mac}</div>}
+                      </td>
+
+                      {/* OS · Role */}
+                      <td>
+                        <div style={{ fontSize: 12.5 }}>{d.osName || <span className="muted">—</span>}</div>
+                        {d.deviceRole && <span className="svc-chip" style={{ borderColor: ROLE_TONE[d.deviceRole] || "var(--teal)", color: ROLE_TONE[d.deviceRole] || "var(--teal)", marginTop: 3, display: "inline-block" }}>{d.deviceRole}</span>}
+                      </td>
+
+                      {/* mDNS name + mdns service chips + TCP service chips */}
+                      <td>
+                        {d.mdnsName && <div className="td-mono muted" style={{ fontSize: 10.5, marginBottom: 3 }}>{d.mdnsName}</div>}
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", maxWidth: 320 }}>
+                          {(d.mdnsServices || []).map((s, i) => (
+                            <span key={"m" + i} className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)" }} title={"mDNS service · " + s}>{s}</span>
+                          ))}
+                          {(d.services || []).map((s, i) => {
+                            const det = svcDetail(s);
+                            return (
+                              <span key={"s" + i} className="svc-chip" title={det ? svcName(s) + " · " + det : undefined}>
+                                {svcName(s)}{svcPort(s) ? ":" + svcPort(s) : ""}
+                              </span>
+                            );
+                          })}
+                          {(!d.mdnsServices || !d.mdnsServices.length) && (!d.services || !d.services.length) && <span className="muted">—</span>}
+                        </div>
+                      </td>
+
+                      {/* SNMP sysDescr (truncated, full on hover) */}
+                      <td style={{ maxWidth: 260, whiteSpace: "normal" }}>
+                        {d.sysDescr
+                          ? <div className="td-mono muted" style={{ fontSize: 10.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }} title={d.sysDescr}>{d.sysDescr}</div>
+                          : <span className="muted">—</span>}
+                      </td>
+
+                      {/* LLDP / topology neighbor */}
+                      <td>
+                        {nbr
+                          ? <span title={d.neighbor && d.neighbor.viaLldp ? "via LLDP" : "via uplink"}>
+                              <span className="td-mono" style={{ fontSize: 11.5 }}>{nbr}</span>
+                              {d.neighbor && d.neighbor.viaLldp && <span className="svc-chip" style={{ borderColor: "var(--teal)", color: "var(--teal)", marginLeft: 6 }}>LLDP</span>}
+                            </span>
+                          : <span className="muted">—</span>}
+                      </td>
+
+                      {/* Via · Seg */}
+                      <td>
+                        <span className="tag">{d.via}</span>
+                        {d.seg && <div className="td-mono muted" style={{ fontSize: 10.5, marginTop: 3 }}>{d.seg}{d.arch ? " · " + d.arch : ""}</div>}
+                      </td>
+
+                      {/* Seen */}
+                      <td className="td-mono muted" style={{ fontSize: 11.5 }}>{seenAgo(d.seen)}</td>
+
+                      {/* actions / status */}
+                      <td style={{ textAlign: "right" }}>
+                        {st === "new" ? (
+                          <div className="disc-actions" style={{ justifyContent: "flex-end" }}>
+                            <button className="btn-ghost" onClick={() => ignore(d)}>Ignore</button>
+                            <button className="btn-primary" onClick={() => stage(d)}><Icon name="plus" size={14} />Monitor</button>
+                          </div>
+                        ) : st === "ignored" ? (
+                          <span className="alert-sev" style={{ opacity: 0.7 }}>ignored</span>
+                        ) : (
+                          <span className="alert-sev info"><Icon name="check" size={12} style={{ verticalAlign: "-2px" }} /> adopted</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {adoptDisc && <AdoptModal disc={adoptDisc} onClose={() => setAdoptDisc(null)}
                                   onAdopted={onAdopted} />}
@@ -1361,5 +1551,274 @@
     );
   }
 
-  Object.assign(window, { Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail });
+  /* ===================== MARKDOWN (self-contained, CSP-safe) ===================== */
+  // A small, dependency-free Markdown → React renderer. Text is placed as React
+  // children (auto-escaped), and links are scheme-filtered, so no raw HTML is ever
+  // injected. Supports: headings, bold/italic/inline-code, code fences, ordered &
+  // unordered lists, blockquotes, tables, horizontal rules, links, and paragraphs.
+  function mdSplitRow(line) {
+    let s = line.trim();
+    if (s.charAt(0) === "|") s = s.slice(1);
+    if (s.charAt(s.length - 1) === "|") s = s.slice(0, -1);
+    return s.split("|").map((c) => c.trim());
+  }
+  function mdInline(text, kp) {
+    const nodes = [];
+    let rest = String(text == null ? "" : text);
+    let i = 0;
+    const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\([^)]+\))|(\*[^*]+\*)|(_[^_]+_)/;
+    while (rest) {
+      const m = re.exec(rest);
+      if (!m) { nodes.push(rest); break; }
+      if (m.index > 0) nodes.push(rest.slice(0, m.index));
+      const tok = m[0];
+      const k = kp + "-i" + (i++);
+      if (tok.charAt(0) === "`") nodes.push(<code key={k} className="md-code">{tok.slice(1, -1)}</code>);
+      else if (tok.slice(0, 2) === "**") nodes.push(<strong key={k}>{tok.slice(2, -2)}</strong>);
+      else if (tok.charAt(0) === "[") {
+        const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok);
+        const href = mm[2];
+        const safe = /^(https?:|\/|#|mailto:)/i.test(href) ? href : "#";
+        nodes.push(<a key={k} href={safe} target="_blank" rel="noopener noreferrer">{mm[1]}</a>);
+      } else nodes.push(<em key={k}>{tok.slice(1, -1)}</em>);
+      rest = rest.slice(m.index + tok.length);
+    }
+    return nodes;
+  }
+  function Markdown({ source }) {
+    if (!source) return null;
+    const lines = String(source).replace(/\r\n/g, "\n").split("\n");
+    const blocks = [];
+    let i = 0, key = 0;
+    const K = () => "md" + (key++);
+    const isBlockStart = (l) => /^```|^\s*[-*+]\s+|^\s*\d+[.)]\s+|^#{1,6}\s+|^\s*>\s?/.test(l) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(l);
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^```/.test(line.trim())) {
+        const buf = [];
+        i++;
+        while (i < lines.length && !/^```/.test(lines[i].trim())) { buf.push(lines[i]); i++; }
+        i++;
+        blocks.push(<pre key={K()} className="md-pre"><code>{buf.join("\n")}</code></pre>);
+        continue;
+      }
+      if (line.trim() === "") { i++; continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { blocks.push(<hr key={K()} className="md-hr" />); i++; continue; }
+      const h = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (h) {
+        const lvl = Math.min(h[1].length, 4);
+        const Tag = "h" + (lvl + 1);
+        blocks.push(<Tag key={K()} className={"md-h md-h" + lvl}>{mdInline(h[2], K())}</Tag>);
+        i++; continue;
+      }
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length && lines[i + 1].indexOf("-") >= 0 && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+        const header = mdSplitRow(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim() !== "") { rows.push(mdSplitRow(lines[i])); i++; }
+        blocks.push(
+          <div key={K()} className="md-tablewrap"><table className="md-table">
+            <thead><tr>{header.map((c, ci) => <th key={ci}>{mdInline(c, K() + "h" + ci)}</th>)}</tr></thead>
+            <tbody>{rows.map((r, ri) => <tr key={ri}>{r.map((c, ci) => <td key={ci}>{mdInline(c, K() + "r" + ri + "c" + ci)}</td>)}</tr>)}</tbody>
+          </table></div>
+        );
+        continue;
+      }
+      if (/^\s*>\s?/.test(line)) {
+        const buf = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+        blocks.push(<blockquote key={K()} className="md-quote">{mdInline(buf.join(" "), K())}</blockquote>);
+        continue;
+      }
+      if (/^\s*[-*+]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s+/, "")); i++; }
+        blocks.push(<ul key={K()} className="md-ul">{items.map((it, ii) => <li key={ii}>{mdInline(it, K() + "l" + ii)}</li>)}</ul>);
+        continue;
+      }
+      if (/^\s*\d+[.)]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+[.)]\s+/, "")); i++; }
+        blocks.push(<ol key={K()} className="md-ol">{items.map((it, ii) => <li key={ii}>{mdInline(it, K() + "o" + ii)}</li>)}</ol>);
+        continue;
+      }
+      const buf = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "" && !isBlockStart(lines[i])) { buf.push(lines[i]); i++; }
+      blocks.push(<p key={K()} className="md-p">{mdInline(buf.join(" "), K())}</p>);
+    }
+    return <div className="md">{blocks}</div>;
+  }
+
+  /* ===================== OPIE / ANALYSIS ===================== */
+  const OPIE_STATUS = {
+    investigating: { label: "Investigating", tone: "warn", icon: "pulse" },
+    done:          { label: "Done", tone: "ok", icon: "check" },
+    failed:        { label: "Failed", tone: "crit", icon: "close" },
+  };
+  const TRIGGER_LABEL = { crit: "Critical", "warn-storm": "Warn storm" };
+  function opieAgo(r) {
+    const m = r.startedMinAgo != null ? r.startedMinAgo : (r.startedAt ? Math.max(0, Math.round((Date.now() - Date.parse(r.startedAt)) / 60000)) : null);
+    if (m == null || isNaN(m)) return "—";
+    return (fmt && fmt.ago) ? fmt.ago(m) : (m + "m ago");
+  }
+  function opieDuration(sec) {
+    if (sec == null) return "—";
+    return sec >= 90 ? (sec / 60).toFixed(1) + "m" : sec + "s";
+  }
+  function OpieStatusPill({ status }) {
+    const s = OPIE_STATUS[status] || OPIE_STATUS.investigating;
+    return (
+      <span className={"opie-stat " + s.tone}>
+        <Icon name={s.icon} size={12} />{s.label}
+      </span>
+    );
+  }
+
+  function OpieScreen({ initialReportId, onOpenNode }) {
+    const [list, setList] = useState(() => (S.opie || []).slice());
+    const [selId, setSelId] = useState(initialReportId != null ? initialReportId : null);
+    const [detail, setDetail] = useState(null);
+    const [detErr, setDetErr] = useState(null);
+    const [filter, setFilter] = useState("all");   // all | investigating | done
+
+    // jump straight to a report when opened from an alert row
+    useEffect(() => { if (initialReportId != null) setSelId(initialReportId); }, [initialReportId]);
+
+    // (re)load the list from the API when live; fall back to the fixture.
+    useEffect(() => {
+      const a = api();
+      if (a && a.opieList) {
+        a.opieList("all").then((rows) => { if (Array.isArray(rows)) setList(rows); }).catch(() => {});
+      }
+    }, []);
+
+    // load the selected report's full analysis (detail read carries the markdown)
+    useEffect(() => {
+      if (selId == null) { setDetail(null); setDetErr(null); return; }
+      setDetail(null); setDetErr(null);
+      const a = api();
+      const local = (list.concat(S.opie || [])).find((r) => String(r.reportId) === String(selId));
+      if (a && a.opieReport) {
+        a.opieReport(selId)
+          .then((r) => setDetail(r || local || null))
+          .catch(() => { if (local) setDetail(local); else setDetErr("Couldn't load this report."); });
+      } else {
+        setDetail(local || null);
+        if (!local) setDetErr("Report not found.");
+      }
+    }, [selId]);
+
+    // ---------- detail view ----------
+    if (selId != null) {
+      const r = detail;
+      const goBack = () => setSelId(null);
+      if (detErr) return (<div className="page"><button className="btn-ghost" onClick={goBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back to reports</button><div className="muted" style={{ marginTop: 16 }}>{detErr}</div></div>);
+      if (!r) return (<div className="page"><button className="btn-ghost" onClick={goBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back to reports</button><div className="muted" style={{ marginTop: 16 }}>Loading analysis…</div></div>);
+      const host = r.hostFqdn || (r.nodeId != null ? "node " + r.nodeId : "Fleet");
+      return (
+        <div className="page">
+          <button className="btn-ghost" onClick={goBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back to reports</button>
+          <div className="page-head">
+            <div>
+              <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <Icon name="pulse" size={20} style={{ color: "var(--teal)" }} />
+                Opie analysis
+                <OpieStatusPill status={r.status} />
+              </h1>
+              <div className="page-sub">
+                {(r.hostFqdn && r.nodeId != null)
+                  ? <span className="opie-hostlink" onClick={() => onOpenNode && onOpenNode(r.nodeId)}>{host}</span>
+                  : host}
+                {" · "}{TRIGGER_LABEL[r.triggerKind] || r.triggerKind || "incident"} trigger
+                {r.model ? " · " + r.model : ""}
+              </div>
+            </div>
+            <div className="page-head__right">
+              <span className={"alert-sev " + r.severity}>{r.severity}</span>
+            </div>
+          </div>
+
+          <div className="kpis" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", marginBottom: 16 }}>
+            <div className="kpi"><div className="kpi__k">Status</div><div className="kpi__v" style={{ fontSize: 16, color: "var(--" + (OPIE_STATUS[r.status] || OPIE_STATUS.investigating).tone + ")" }}>{(OPIE_STATUS[r.status] || OPIE_STATUS.investigating).label}</div></div>
+            <div className="kpi"><div className="kpi__k">Analysis time</div><div className="kpi__v" style={{ fontSize: 16 }}>{opieDuration(r.durationSec)}</div></div>
+            <div className="kpi"><div className="kpi__k">Started</div><div className="kpi__v" style={{ fontSize: 16 }}>{opieAgo(r)}</div></div>
+            <div className="kpi"><div className="kpi__k">Model</div><div className="kpi__v" style={{ fontSize: 16 }}>{r.model || "—"}</div></div>
+          </div>
+
+          {r.summary && (
+            <div className="opie-summary">
+              <Icon name="pulse" size={16} style={{ color: "var(--teal)", flex: "0 0 auto", marginTop: 1 }} />
+              <div>{r.summary}</div>
+            </div>
+          )}
+
+          <div className="panel" style={{ marginTop: 16 }}>
+            <div className="panel__head"><Icon name="activity" size={16} /><h3>Analysis</h3></div>
+            <div className="panel__body">
+              {r.status === "investigating" && !r.analysis && (
+                <div className="opie-note"><Icon name="pulse" size={15} style={{ color: "var(--warn)" }} />Opie is still investigating this incident — the write-up will appear here when it finishes.</div>
+              )}
+              {r.status === "failed" && !r.analysis && (
+                <div className="opie-note"><Icon name="close" size={15} style={{ color: "var(--crit)" }} />Analysis failed to complete. {r.summary || "Re-run it from the incident when the model is reachable."}</div>
+              )}
+              {r.analysis
+                ? <Markdown source={r.analysis} />
+                : (r.status === "done" ? <div className="muted">No analysis text was recorded for this report.</div> : null)}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- list view ----------
+    const shown = list.filter((r) => filter === "all" ? true : r.status === filter);
+    const inv = list.filter((r) => r.status === "investigating").length;
+    const done = list.filter((r) => r.status === "done").length;
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <h1 className="page-title" style={{ display: "flex", alignItems: "center", gap: 10 }}><Icon name="pulse" size={22} style={{ color: "var(--teal)" }} />Opie · Analysis</h1>
+            <div className="page-sub">{list.length} report{list.length === 1 ? "" : "s"} · {inv} investigating · {done} done</div>
+          </div>
+          <div className="page-head__right">
+            <div className="seg">
+              <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>All</button>
+              <button className={filter === "investigating" ? "on" : ""} onClick={() => setFilter("investigating")}>Investigating</button>
+              <button className={filter === "done" ? "on" : ""} onClick={() => setFilter("done")}>Done</button>
+            </div>
+          </div>
+        </div>
+
+        {shown.length === 0 && <div className="empty">No analysis reports{filter !== "all" ? " in this state" : " yet — Opie writes one up when a critical alert fires or a warn storm forms."}.</div>}
+
+        <div className="opie-list">
+          {shown.map((r) => {
+            const host = r.hostFqdn || (r.nodeId != null ? "node " + r.nodeId : "Fleet");
+            return (
+              <div key={r.reportId} className={"opie-row " + r.severity} onClick={() => setSelId(r.reportId)} role="button" tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelId(r.reportId); } }}>
+                <span className={"alert-sev " + r.severity}>{r.severity}</span>
+                <div className="opie-row__main">
+                  <div className="opie-row__top">
+                    <span className="opie-row__host">{host}</span>
+                    <span className="opie-row__trig">{TRIGGER_LABEL[r.triggerKind] || r.triggerKind || "incident"}</span>
+                  </div>
+                  <div className="opie-row__summary">{r.summary || "—"}</div>
+                </div>
+                <OpieStatusPill status={r.status} />
+                <div className="opie-row__meta">
+                  <div>{opieAgo(r)}</div>
+                  <div className="muted">{opieDuration(r.durationSec)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  Object.assign(window, { Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Markdown });
 })();

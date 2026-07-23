@@ -1,0 +1,30 @@
+; SolariNet LIVE mDNS/zeroconf/Bonjour inspector (mdns_inspect.py --once).
+; Runs a single bounded active browse (default 8s) and upserts results into
+; the `discovered` table, then exits — Type=oneshot. Meant to be invoked BY a
+; discovery probe (see README.md "Wiring into a discovery probe"), not run on
+; a timer of its own; `systemctl start solari-mdns-inspect.service` from a
+; scan hook is the intended trigger. Install:
+;   see deploy/discovery/README.md. Assumes repo at /home/jason/Code/Solarinet.
+;
+; The DB password is NOT in mdns_inspect.conf: run/db.env (KEY=VALUE with an
+; `export`, mode 0600) provides SOLARI_DB_PASS, sourced here — same convention
+; as deploy/alertbridge/alertbridge.service / deploy/discovery/avahi_import.py.
+[Unit]
+Description=SolariNet live mDNS/zeroconf inspector (one browse-and-upsert pass)
+After=network-online.target mariadb.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/discovery
+Environment=MDNS_INSPECT_CONF=/home/jason/Code/Solarinet/deploy/discovery/mdns_inspect.conf
+; Source run/db.env (exports SOLARI_DB_PASS) then run one pass and exit.
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /home/jason/Code/Solarinet/deploy/discovery/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/discovery/mdns_inspect.py --once'
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
