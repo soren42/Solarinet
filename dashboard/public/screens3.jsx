@@ -1256,11 +1256,13 @@
         {pools.map(function (p) {
           const h = p.health || {};
           const total = p.assetCount || 0;
-          const accent = p.color ||
-            (h.down > 0 ? "var(--red)" : h.degraded > 0 ? "var(--amber)" : h.up > 0 ? "var(--ok)" : "var(--muted)");
+          // Quiet-healthy (Rev2 §06): colour only when the pool carries a fault;
+          // a healthy or empty pool is hairline structure.
+          const fault = h.down > 0 ? "var(--crit)" : h.degraded > 0 ? "var(--warn)" : null;
+          const accent = p.color || fault;
           return (
             <div className="kpi" key={p.poolId}
-                 style={{ cursor: onOpen ? "pointer" : "default", borderLeft: "3px solid " + accent }}
+                 style={{ cursor: onOpen ? "pointer" : "default", borderLeft: accent ? "3px solid " + accent : "1px solid var(--line)" }}
                  onClick={() => onOpen && onOpen(p)}>
               <div className="kpi__k">{p.name}</div>
               {deletable(p) && (
@@ -1269,15 +1271,17 @@
                   <Icon name="close" size={13} />
                 </button>
               )}
-              <div className="kpi__v">{total}</div>
+              {/* Rev2 §15: an empty pool is an invitation, not a zero */}
+              {total > 0 ? <div className="kpi__v">{total}</div>
+                : <div className="kpi__v" style={{ fontSize: 15, fontFamily: "var(--sans)", color: "var(--ink-dim)" }}>Empty pool</div>}
               <div className="kpi__sub">
                 {h.up > 0 && <span style={{ color: "var(--ok)" }}>{h.up} up </span>}
-                {h.degraded > 0 && <span style={{ color: "var(--amber)" }}>{h.degraded} deg </span>}
-                {h.down > 0 && <span style={{ color: "var(--red)" }}>{h.down} down </span>}
+                {h.degraded > 0 && <span style={{ color: "var(--warn)" }}>{h.degraded} deg </span>}
+                {h.down > 0 && <span style={{ color: "var(--crit)" }}>{h.down} down </span>}
                 {h.unknown > 0 && <span className="muted">{h.unknown} unknown</span>}
-                {total === 0 && <span className="muted">no systems yet</span>}
+                {total === 0 && <span className="muted">add systems from the Systems page</span>}
               </div>
-              <div className="kpi__bar" style={{ background: accent }} />
+              {accent && <div className="kpi__bar" style={{ background: accent }} />}
             </div>
           );
         })}
@@ -1295,11 +1299,27 @@
   }
 
   /* ===================== ASSETS (monitored systems) ===================== */
+  // Heartbeat indicator (Rev2 §16-8): observed status renders as a read-only
+  // sparkbar + last-report age — never a switch. The enable/disable CONTROL
+  // lives on the system's detail page, where it is a real operator setting.
+  const HB_TICKS = [40, 75, 55, 90, 60, 80, 50, 70];
+  function HeartbeatCell({ asset }) {
+    if (!asset.monitorHost) return <span className="hb--off">not enabled</span>;
+    const seen = asset.lastSeenMin != null ? asset.lastSeenMin
+      : (asset.lastSeenAt ? Math.max(0, Math.round((Date.now() - Date.parse(asset.lastSeenAt)) / 60000)) : null);
+    const st = asset.state || "unknown";
+    return (
+      <span className="hb" title={"Host heartbeat (ICMP) — " + st + (seen != null ? " · last report " + fmt.ago(seen) : "")}>
+        <span className={"hb__bars " + st}>{HB_TICKS.map((h, i) => <i key={i} style={{ height: Math.round((h / 100) * 14) }} />)}</span>
+        <span className="hb__age">{seen != null ? fmt.ago(seen) : "awaiting report"}</span>
+      </span>
+    );
+  }
+
   function Assets({ onOpenNode }) {
     const [assets, setAssets] = useState(S.assets || []);
     const [, force] = useState(0);
     const pools = S.pools || [];
-    const dot = { up: "var(--ok)", degraded: "var(--amber)", down: "var(--red)", unknown: "var(--muted)" };
 
     function newPool() {
       const name = window.prompt("New pool name (e.g. DNS, Core infra):", "");
@@ -1334,7 +1354,7 @@
     return (
       <div className="page">
         <div className="page-head">
-          <div><h1 className="page-title">Systems</h1><div className="page-sub">{assets.length} monitored · {pools.length} pool(s)</div></div>
+          <div><h1 className="page-title">Systems</h1><div className="page-sub">{S.summary.systems} systems · {assets.length} adopted · {pools.length} pool(s)</div></div>
           <div className="page-head__right">
             <button className="btn-primary" onClick={newPool}><Icon name="plus" size={14} />New pool</button>
           </div>
@@ -1355,7 +1375,8 @@
                     <td><span style={{ cursor: "pointer" }} onClick={() => rename(as)} title="Rename">{as.displayName} <Icon name="settings" size={11} style={{ opacity: 0.4, verticalAlign: "-1px" }} /></span></td>
                     <td className="td-mono muted">{as.ip}</td>
                     <td>{as.class}</td>
-                    <td><span className="dot" style={{ background: dot[as.state] || "var(--muted)", width: 9, height: 9, display: "inline-block", borderRadius: "50%" }} /> {as.state}</td>
+                    {/* Rev2 §05: dot + word in every state cell */}
+                    <td><span style={dotStyle(as.state)} /> {as.state}</td>
                     <td className="td-mono">{as.targetCount}</td>
                     <td>
                       <select value={String(as.poolId || "")} onChange={(e) => reassign(as, e.target.value)}
@@ -1364,7 +1385,7 @@
                       </select>
                     </td>
                     <td>
-                      <button className={"switch" + (as.monitorHost ? " on" : "")} onClick={() => patch(as, { monitorHost: !as.monitorHost }, (as.monitorHost ? "Heartbeat off" : "Heartbeat on") + " — " + as.displayName)}><i /></button>
+                      <HeartbeatCell asset={as} />
                     </td>
                   </tr>
                 );
