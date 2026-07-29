@@ -280,8 +280,9 @@
           <div className="sysstat__grid">
             <div className="sysstat__cell"><div className="sysstat__v">{summary.systems}</div><div className="sysstat__k">Systems</div></div>
             <div className="sysstat__cell"><div className="sysstat__v">{summary.applications}</div><div className="sysstat__k">Applications</div></div>
-            <div className="sysstat__cell"><div className="sysstat__v">{summary.uptimeStr}</div><div className="sysstat__k">Uptime</div></div>
-            <div className="sysstat__cell"><div className="sysstat__v">v{summary.version}</div><div className="sysstat__k">Version</div></div>
+            {/* Rev2 §15: absence is a state with copy, never a bare dash ("V—") */}
+            <div className="sysstat__cell"><div className="sysstat__v">{summary.uptimeStr && summary.uptimeStr !== "—" ? summary.uptimeStr : <span style={{ fontSize: 11, color: "var(--ink-dim)", fontFamily: "var(--sans)" }}>not reporting</span>}</div><div className="sysstat__k">Uptime</div></div>
+            <div className="sysstat__cell"><div className="sysstat__v">{summary.version && summary.version !== "—" ? "v" + summary.version : <span style={{ fontSize: 11, color: "var(--ink-dim)", fontFamily: "var(--sans)" }}>unavailable</span>}</div><div className="sysstat__k">Version</div></div>
           </div>
         </div>
         <button className="collapse-btn" onClick={onToggle} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title="Collapse / expand">
@@ -303,12 +304,16 @@
           <span className="kbd">⌘K</span>
         </div>
         <div className="topbar__spacer" />
-        <div className="statuschip" title="Active control server holding the failover lease">
+        <div className="statuschip" title={"Active control server holding the failover lease" + (server.primaryId != null ? " · node " + server.primaryId : "")}>
           <span className="dot up glow" style={{ width: 8, height: 8 }} />
-          <span style={{ fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--ink-faint)" }}>Active&nbsp;C2</span>
+          <span style={{ fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--ink-faint)" }}>Active</span>
           <b>{server.primary}</b>
-          <span style={{ color: "var(--ink-faint)" }}>·</span>
-          <span style={{ color: "var(--ink-faint)" }}>failover&nbsp;{server.failover}</span>
+          {server.failover ? (
+            <React.Fragment>
+              <span style={{ color: "var(--ink-faint)" }}>·</span>
+              <span style={{ color: "var(--ink-faint)" }}>failover&nbsp;{server.failover}</span>
+            </React.Fragment>
+          ) : null}
         </div>
         <button className="iconbtn" onClick={onSurvey} aria-label="Survey now" title="Survey fleet now"><Icon name="survey" size={20} /></button>
         <button className="iconbtn" onClick={onToggleTheme} aria-label="Toggle theme">

@@ -559,7 +559,7 @@
     return {
       nodeId: "asset-" + a.assetId, assetId: a.assetId, isAsset: true,
       sym: "", name: a.displayName || a.ip, hostFqdn: a.host || a.ip, ip: a.ip,
-      role: "system", segId: a.poolId, segName: a.poolName || "—", cidr: "",
+      role: "system", segId: a.poolId, segName: a.poolName || "Unassigned", cidr: "",
       osName: a.class, arch: "", state: a.state || "unknown",
       // Reachability-only rows: staleness comes from the probe payload when the
       // API provides it; otherwise null (the UI renders "—", never "just now").
@@ -706,8 +706,13 @@
 
       // summary — the cheap /api/summary call returns counts.* (§6); fall back
       // to fixture-style derivation from the node list if a count is absent.
+      // ONE systems count (Rev2 §15/§16-12): every view — sidebar, fleet header,
+      // KPI tile, palette — reads summary.systems, derived once from the full
+      // monitored fleet (agents + adopted systems), retired excluded. The wire
+      // counts.nodes (agents only) is deliberately NOT used for this figure.
+      var systemsCount = allFleet.filter(function (n) { return n.state !== "retired"; }).length;
       var summary = {
-        systems: countsW.nodes != null ? countsW.nodes : nodes.length,
+        systems: systemsCount,
         hosts: countsW.clients != null ? countsW.clients : nodes.filter(function (n) { return n.role === "client"; }).length,
         servers: countsW.servers != null ? countsW.servers : nodes.filter(function (n) { return n.role === "server"; }).length,
         monitors: countsW.monitors != null ? countsW.monitors : monitors.length,
@@ -718,12 +723,25 @@
       };
 
       // server lease banner — derived from summary.lease {leaseHolder, leaseEpoch, expiresAt}.
-      var primary = nodeIndex[leaseW.leaseHolder];
+      // The top bar shows the HUMAN hostname (Rev2 §16-10), never the raw node
+      // id: resolve the lease holder against the node list (string-compare so
+      // numeric vs string ids still match), else fall back to the server-role
+      // node; the id itself stays available as server.primaryId.
+      var primary = nodeIndex[leaseW.leaseHolder] ||
+        nodes.find(function (n) { return String(n.nodeId) === String(leaseW.leaseHolder); }) ||
+        null;
+      var primaryName;
+      if (primary) primaryName = primary.name;
+      else if (leaseW.leaseHolder != null && !/^\d+$/.test(String(leaseW.leaseHolder))) primaryName = String(leaseW.leaseHolder).split(".")[0];
+      else {
+        var srv = nodes.find(function (n) { return n.role === "server"; });
+        primaryName = srv ? srv.name : "controller";
+      }
       var ttlSec = configW.lease ? configW.lease.ttlSec : 15;
       var msToExpiry = leaseW.expiresAt ? (Date.parse(leaseW.expiresAt) - Date.now()) : null;
       var ageSec = msToExpiry != null ? Math.max(0, ttlSec - (msToExpiry / 1000)) : 0;
       var server = {
-        primary: primary ? primary.name : (leaseW.leaseHolder || "—"),
+        primary: primaryName,
         primaryId: leaseW.leaseHolder,
         failover: null,
         failoverId: null,

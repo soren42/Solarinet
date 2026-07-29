@@ -516,7 +516,9 @@
   // ---- monitoring-wide summary (controller status) ----
   const appInstances = nodes.reduce((a, n) => a + n.procs.length, 0);
   const summary = {
-    systems: nodes.length,                 // enrolled hosts (clients + monitors + servers)
+    // ONE systems count (Rev2 §16-12): sidebar, fleet header and KPI all read
+    // this figure — the monitored fleet, retired excluded.
+    systems: nodes.filter((n) => n.state !== "retired").length,
     hosts: nodes.filter((n) => n.role === "client").length,
     servers: nodes.filter((n) => n.role === "server").length,
     monitors: nodes.filter((n) => n.role === "monitor").length,

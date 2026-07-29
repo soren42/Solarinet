@@ -243,7 +243,7 @@
         <div className="page-head">
           <div>
             <h1 className="page-title">Fleet Overview</h1>
-            <div className="page-sub">{roll.total} systems · {S.summary.applications} applications · {S.segments.length} segments · live</div>
+            <div className="page-sub">{S.summary.systems} systems · {S.summary.applications} applications · {S.segments.length} segments · live</div>
           </div>
           <div className="page-head__right">
             <div className="seg">
@@ -259,12 +259,15 @@
 
         {/* KPIs — the state tiles double as filters */}
         <div className="kpis">
-          <div className={"kpi teal clickable" + (stateFilter === "all" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("all")}><div className="kpi__k">Systems</div><div className="kpi__v">{roll.total - (roll.retired || 0)}</div><div className="kpi__sub">monitored hosts</div><div className="kpi__bar" /></div>
+          <div className={"kpi teal clickable" + (stateFilter === "all" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("all")}><div className="kpi__k">Systems</div><div className="kpi__v">{S.summary.systems}</div><div className="kpi__sub">monitored hosts</div><div className="kpi__bar" /></div>
           <div className={"kpi ok clickable" + (stateFilter === "up" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("up")}><div className="kpi__k">Operational</div><div className="kpi__v">{roll.up}</div><div className="kpi__sub">{Math.round(roll.up / active * 100)}% healthy</div><div className="kpi__bar" /></div>
           <div className={"kpi warn clickable" + (stateFilter === "degraded" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("degraded")}><div className="kpi__k">Degraded</div><div className="kpi__v">{roll.degraded}</div><div className="kpi__sub">over tolerance</div><div className="kpi__bar" /></div>
           <div className={"kpi crit clickable" + (stateFilter === "down" ? " on" : "")} role="button" tabIndex={0} onClick={() => setStateFilter("down")}><div className="kpi__k">Down</div><div className="kpi__v">{roll.down}</div><div className="kpi__sub">{S.activeCrit} critical alerts</div><div className="kpi__bar" /></div>
           <div className="kpi"><div className="kpi__k">Avg CPU</div><div className="kpi__v" style={{ color: metricColor(avgCpu) }}>{avgCpu}%</div><div className="kpi__sub">across live hosts</div><div className="kpi__bar" style={{ background: metricColor(avgCpu) }} /></div>
-          <div className="kpi violet"><div className="kpi__k">Monitors</div><div className="kpi__v">{monsUp}<span style={{ fontSize: 16, color: "var(--ink-faint)" }}>/{monsTotal}</span></div><div className="kpi__sub">vantages online</div><div className="kpi__bar" /></div>
+          {/* Rev2 §15: 0/0 is a division, not a status */}
+          {monsTotal > 0
+            ? <div className="kpi violet"><div className="kpi__k">Monitors</div><div className="kpi__v">{monsUp}<span style={{ fontSize: 16, color: "var(--ink-faint)" }}>/{monsTotal}</span></div><div className="kpi__sub">vantages online</div><div className="kpi__bar" /></div>
+            : <div className="kpi"><div className="kpi__k">Monitors</div><div className="kpi__v" style={{ fontSize: 15, fontFamily: "var(--sans)", color: "var(--ink-dim)" }}>No monitors enrolled</div><div className="kpi__sub">enrol one from Provisioning</div></div>}
         </div>
 
         {/* filters */}
@@ -309,14 +312,15 @@
     return (
       <div className={"cell " + n.state + (dense ? "" : " cozy-cell")} onClick={() => onOpenNode(n)}
         title={`${n.hostFqdn} — ${n.state}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`}>
+        {/* Rev2 §13: ONE tile design — name + dot, mono meta, sparkline. */}
         <div className="cell__top">
           <span className="cell__name">{n.name}</span>
-          <span className="cell__dot" style={{ background: STATE_COLOR[n.state], boxShadow: n.state !== "unknown" ? `0 0 6px ${STATE_COLOR[n.state]}` : "none" }} />
+          <span className="cell__dot" style={{ background: STATE_COLOR[n.state] }} />
         </div>
-        <div className="cell__meta">{n.role === "client" ? n.ip : n.role.toUpperCase()}{stale && <span className="stale-tag">stale</span>}</div>
+        <div className="cell__meta">{n.ip || n.role}{stale && <span className="stale-tag">stale</span>}</div>
         {n.alertsCount > 0 && <span className="cell__badge">{n.alertsCount}</span>}
-        <div className="cell__spark"><Sparkline data={n.hist.cpu} color={STATE_COLOR[n.state]} h={dense ? 20 : 26} fill={true} strokeW={1.5} /></div>
-        <div className="cell__load"><i style={{ width: load + "%", background: metricColor(load), boxShadow: `0 0 5px ${metricColor(load)}` }} /></div>
+        <div className="cell__spark">{n.hist && n.hist.cpu && n.hist.cpu.length > 1 && <Sparkline data={n.hist.cpu} color={n.state === "up" ? "var(--ink-faint)" : STATE_COLOR[n.state]} h={dense ? 20 : 26} fill={true} strokeW={1.5} />}</div>
+        <div className="cell__load"><i style={{ width: load + "%", background: metricColor(load) }} /></div>
       </div>
     );
   }
@@ -386,14 +390,15 @@
       <div className="tablewrap">
         <table className="grid">
           <thead><tr>
-            <Th k="state">St</Th><Th k="name">Host</Th><Th k="role">Role</Th><Th k="seg">Segment</Th>
+            <Th k="state">State</Th><Th k="name">Host</Th><Th k="role">Role</Th><Th k="seg">Segment</Th>
             <Th k="cpuPct" num>CPU</Th><Th k="ramPct" num>RAM</Th><Th k="diskMaxPct" num>Disk</Th>
             <Th k="netTotalMbps" num>Net</Th><Th k="lastSeenMin" num>Seen</Th><Th k="alertsCount" num>Alerts</Th>
           </tr></thead>
           <tbody>
             {sorted.map((n) => (
               <tr key={n.nodeId} onClick={() => onOpenNode(n)}>
-                <td><StatusDot state={n.state} /></td>
+                {/* Rev2 §05: the state cell always carries dot PLUS word */}
+                <td><StatusDot state={n.state} /> <span className={"statetext " + n.state} style={{ fontSize: 12, fontWeight: 600 }}>{n.state}</span></td>
                 <td><div className="td-host"><Icon name={ROLE_ICON[n.role]} size={15} className="ico" />{n.name}<span className="td-mono" style={{ fontSize: 10, color: "var(--ink-faint)" }}>.akoria.net</span></div></td>
                 <td><span className="tag">{n.role}</span></td>
                 <td className="td-mono">{n.segName} <span style={{ color: "var(--ink-faint)" }}>{n.ip}</span></td>
@@ -959,7 +964,7 @@
           </div>
         </div>
 
-        <div className="kpis" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))" }}>
+        <div className="kpis">
           <div className="kpi crit"><div className="kpi__k">Critical</div><div className="kpi__v">{crit}</div><div className="kpi__sub">need attention</div><div className="kpi__bar" /></div>
           <div className="kpi warn"><div className="kpi__k">Warning</div><div className="kpi__v">{warn}</div><div className="kpi__sub">over tolerance</div><div className="kpi__bar" /></div>
           <div className="kpi teal"><div className="kpi__k">Info</div><div className="kpi__v">{info}</div><div className="kpi__sub">advisory</div><div className="kpi__bar" /></div>

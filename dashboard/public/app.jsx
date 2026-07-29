@@ -199,7 +199,7 @@
         { id: "go-opie", group: "Navigate", label: "Opie · Analysis", icon: "pulse", action: () => go("opie"), sub: `${(S.opie || []).length} report${(S.opie || []).length === 1 ? "" : "s"}` },
         { id: "go-reach", group: "Navigate", label: "Reachability Matrix", icon: "reachability", action: () => go("reachability") },
         { id: "go-topo", group: "Navigate", label: "Topology Map", icon: "topology", action: () => go("topology") },
-        { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${(S.assets || []).length} monitored` },
+        { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${S.summary.systems} systems` },
         { id: "go-inventory", group: "Navigate", label: "Inventory", icon: "inventory", action: () => go("inventory"), sub: `${((S.inventory && S.inventory.units) || []).length} components` },
         { id: "go-codes", group: "Navigate", label: "Tags & Scan", icon: "tag2", action: () => go("codes") },
         { id: "go-disc", group: "Navigate", label: "Discovery", icon: "discovery", action: () => go("discovery"), sub: `${S.discovered.length} new` },
