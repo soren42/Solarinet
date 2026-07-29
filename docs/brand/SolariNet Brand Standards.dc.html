@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="./assets/ds/styles.css">
+<script src="./assets/ds/_ds_bundle.js"></script>
+<script src="./assets/image-slot.js"></script>
+<style>
+body { margin: 0; }
+a { color: var(--color-accent); }
+a:hover { color: var(--color-accent-700); }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --color-accent: #35E0D0;
+  --color-accent-2: #2fd2c3;
+  --color-accent-100: #272d2c;
+  --color-accent-2-100: #272d2c;
+  --color-accent-200: #364644;
+  --color-accent-2-200: #364644;
+  --color-accent-300: #426661;
+  --color-accent-2-300: #426661;
+  --color-accent-400: #3c8980;
+  --color-accent-2-400: #3c8980;
+  --color-accent-500: #11afa2;
+  --color-accent-2-500: #11afa2;
+  --color-accent-600: #2fd2c3;
+  --color-accent-2-600: #2fd2c3;
+  --color-accent-700: #74ecde;
+  --color-accent-2-700: #74ecde;
+  --color-accent-800: #a6fbef;
+  --color-accent-2-800: #a6fbef;
+  --color-accent-900: #d7fff9;
+  --color-accent-2-900: #d7fff9;
+  --color-text: #D8E6F4;
+  --color-divider: color-mix(in srgb, #D8E6F4 40%, transparent);
+  --color-neutral-100: #2b2c2c;
+  --color-neutral-200: #404244;
+  --color-neutral-300: #5b5e62;
+  --color-neutral-400: #747b82;
+  --color-neutral-500: #8e9aa6;
+  --color-neutral-600: #acb9c6;
+  --color-neutral-700: #cad6e1;
+  --color-neutral-800: #e0e9f2;
+  --color-neutral-900: #f1f6fb;
+  --color-bg: #05080E;
+  --color-surface: #0A121C;
+  --color-on-field: #05080E;
+  --color-paper: #13171e;
+  --font-heading: "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+}
+</style>
+</helmet>
+<x-import component-from-global-scope="deck-stage" from="./assets/deck-stage.js" width="1920" height="1080" hint-size="100%,100%">
+
+<section data-label="01 Cover" data-template-id="01" data-screen-label="01" data-speaker-notes="TEMPLATE 01 — COVER. Required slots: BRAND_NAME (1–3 words), DOC_TITLE (fixed: Brand Standards), SUBTITLE (max 8 words), VERSION (semver + ISO date stamp), LOGO_MARK. If no mark exists yet, call a logo-generation step first; fall back to the wordmark set in the brand's display face at 200px. This is the only full-bleed accent page besides the closing statement." style="width:1920px;height:1080px;background:var(--color-accent);color:var(--color-on-field,#fff);padding:96px;display:flex;flex-direction:column;">
+  <div style="display:flex;align-items:center;gap:28px;">
+    <div style="width:88px;height:88px;border:6px solid var(--color-on-field,#fff);border-radius:50%;display:flex;align-items:center;justify-content:center;"><div style="width:26px;height:26px;background:var(--color-paper,#fff);border-radius:50%;"></div></div>
+    <span style="font-size:26px;font-weight:800;letter-spacing:0.22em;text-transform:uppercase;">SolariNet</span>
+  </div>
+  <div style="margin-top:auto;display:flex;flex-direction:column;gap:12px;">
+    <span style="font-size:28px;font-weight:800;letter-spacing:0.22em;text-transform:uppercase;">SolariNet</span>
+    <h1 style="font-size:200px;line-height:0.88;letter-spacing:-0.035em;margin:0;color:var(--color-on-field,#fff);">Brand<br>Standards</h1>
+    <p style="font-size:38px;margin:24px 0 0;max-width:1100px;">Graphic charter, style guide &amp; media kit — One console for the whole fleet.</p>
+  </div>
+  <div style="margin-top:64px;border-top:4px solid var(--color-on-field,#fff);padding-top:22px;display:flex;justify-content:space-between;font-size:26px;font-weight:600;">
+    <span>v1.0 · 2026-07-29</span>
+    <span>CC BY 4.0</span>
+  </div>
+</section>
+
+<section data-label="03 Contents" data-template-id="03" data-screen-label="02" data-speaker-notes="TEMPLATE 03 — CONTENTS. Auto-generated from the pages kept in the final guide. Group in four parts: Foundation, Identity, System, Practice. Keep entries to 3 words. Delete rows for pages the brand does not need — an empty row is worse than a shorter guide." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:36px;">
+  <div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 00</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Contents</h1></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;flex:1;">
+    <div style="padding-right:40px;border-right:2px solid var(--color-divider);display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-accent-700);">Foundation</div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Background</span><span style="color:var(--color-neutral-600);">04</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Values</span><span style="color:var(--color-neutral-600);">05</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Voice &amp; tone</span><span style="color:var(--color-neutral-600);">16</span></div>
+    </div>
+    <div style="padding:0 40px;border-right:2px solid var(--color-divider);display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-accent-700);">Identity</div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Logo suite</span><span style="color:var(--color-neutral-600);">06</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Construction</span><span style="color:var(--color-neutral-600);">07</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Misuse</span><span style="color:var(--color-neutral-600);">08</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Placement</span><span style="color:var(--color-neutral-600);">13</span></div>
+    </div>
+    <div style="padding:0 40px;border-right:2px solid var(--color-divider);display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-accent-700);">System</div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Colour</span><span style="color:var(--color-neutral-600);">09</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Contrast</span><span style="color:var(--color-neutral-600);">10</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Typefaces</span><span style="color:var(--color-neutral-600);">11</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Type scale</span><span style="color:var(--color-neutral-600);">12</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Icons</span><span style="color:var(--color-neutral-600);">14</span></div>
+    </div>
+    <div style="padding-left:40px;display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-accent-700);">Practice</div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Imagery</span><span style="color:var(--color-neutral-600);">15</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Copy rules</span><span style="color:var(--color-neutral-600);">17</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Components</span><span style="color:var(--color-neutral-600);">18</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Motion</span><span style="color:var(--color-neutral-600);">19</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Applications</span><span style="color:var(--color-neutral-600);">20</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:28px;"><span>Assets</span><span style="color:var(--color-neutral-600);">21</span></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>02</span></div>
+</section>
+
+<section data-label="04 Background" data-template-id="04" data-screen-label="03" data-speaker-notes="TEMPLATE 04 — BACKGROUND & PRINCIPLES. Slots: ORIGIN (60–90 words, who made it and why), PRINCIPLE ×3 (one noun + 20–30 words each). Principles must be falsifiable — 'clarity over cleverness' is usable, 'excellence' is not. Pull from the project README, mission statement, or an interview transcript if one was supplied." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:36px;">
+  <div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 01 · Foundation</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Background &amp; principles</h1></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:72px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:22px;">
+      <p style="font-size:30px;line-height:1.5;margin:0;text-wrap:pretty;">SolariNet is an open-source scheduling tool maintained by four people and used by roughly two hundred community projects. It exists because volunteer coordination was happening in spreadsheets that nobody owned.</p>
+      <p style="font-size:30px;line-height:1.5;margin:0;text-wrap:pretty;">This document sets the rules for how SolariNet looks and sounds, so that a contributor who has never spoken to the maintainers can produce work that fits.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;">
+      <div style="border-top:2px solid var(--color-divider);padding:22px 0;display:flex;gap:28px;"><span style="font-size:30px;font-weight:800;color:var(--color-accent-700);min-width:44px;">01</span><div><h4 style="font-size:32px;margin:0 0 6px;">Legible before beautiful</h4><p style="font-size:26px;margin:0;color:var(--color-neutral-800);">If a choice makes something prettier and harder to read, it loses.</p></div></div>
+      <div style="border-top:2px solid var(--color-divider);padding:22px 0;display:flex;gap:28px;"><span style="font-size:30px;font-weight:800;color:var(--color-accent-700);min-width:44px;">02</span><div><h4 style="font-size:32px;margin:0 0 6px;">One accent, held back</h4><p style="font-size:26px;margin:0;color:var(--color-neutral-800);">Colour marks the single most important thing on a surface, never the fifth.</p></div></div>
+      <div style="border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);padding:22px 0;display:flex;gap:28px;"><span style="font-size:30px;font-weight:800;color:var(--color-accent-700);min-width:44px;">03</span><div><h4 style="font-size:32px;margin:0 0 6px;">Made to be forked</h4><p style="font-size:26px;margin:0;color:var(--color-neutral-800);">Every asset ships in an editable format with a licence attached.</p></div></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>03</span></div>
+</section>
+
+<section data-label="05 Values" data-template-id="05" data-screen-label="04" data-speaker-notes="TEMPLATE 05 — STATEMENT OF VALUES. A poster page: one sentence, 12–20 words, present tense, first person plural. This is the page people screenshot. Slots: VALUE_STATEMENT, three SUPPORTING_CLAUSE fragments (max 6 words each). Accent field — do not use a second full-accent page within three pages of this one." style="width:1920px;height:1080px;background:var(--color-text);color:var(--color-on-field,#fff);padding:88px 96px;display:flex;flex-direction:column;">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;"><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-400);">Section 01 · Values</div></div>
+  <div style="margin-top:auto;">
+    <h1 style="font-size:112px;line-height:1.02;letter-spacing:-0.03em;margin:0;color:var(--color-on-field,#fff);max-width:1500px;text-wrap:pretty;">See the whole fleet on one screen — and own every byte of it.</h1>
+  </div>
+  <div style="margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:48px;border-top:4px solid var(--color-accent);padding-top:32px;">
+    <div style="font-size:30px;font-weight:800;">Plain language, always</div>
+    <div style="font-size:30px;font-weight:800;">No dark patterns, ever</div>
+    <div style="font-size:30px;font-weight:800;">Credit the contributors</div>
+  </div>
+</section>
+
+<section data-label="06 Logo suite" data-template-id="06" data-screen-label="05" data-allow="hex" data-speaker-notes="TEMPLATE 06 — LOGO SUITE. Slots: LOGO_PRIMARY, LOGO_STACKED, LOGO_MARK, LOGO_MONO, plus a one-line USE_WHEN caption per lockup (max 12 words). Every lockup must exist in SVG. If the brand supplies only one file, generate the reversed and mono versions from it rather than omitting the row." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 02 · Identity</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Logo suite</h1></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:32px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:14px;"><div style="flex:1;background:var(--color-surface);border:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;gap:18px;"><svg width="88" height="88" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SolariNet mark"><g stroke="#35E0D0" stroke-width="2.6" stroke-linecap="round"><line x1="50" y1="50" x2="50" y2="16"/><line x1="50" y1="50" x2="50" y2="84"/><line x1="50" y1="50" x2="79.4" y2="33"/><line x1="50" y1="50" x2="20.6" y2="33"/><line x1="50" y1="50" x2="20.6" y2="67"/><line x1="50" y1="50" x2="79.4" y2="67"/></g><circle cx="50" cy="16" r="6.5" fill="#FF3D72"/><circle cx="50" cy="84" r="6.5" fill="#FF3D72"/><circle cx="79.4" cy="33" r="6.5" fill="#35E0D0"/><circle cx="20.6" cy="33" r="6.5" fill="#35E0D0"/><circle cx="20.6" cy="67" r="6.5" fill="#35E0D0"/><circle cx="79.4" cy="67" r="6.5" fill="#35E0D0"/><circle cx="50" cy="50" r="12" fill="none" stroke="#35E0D0" stroke-width="6.5"/></svg><span style="font-size:44px;font-weight:800;letter-spacing:0.06em;">SOLARINET</span></div><div><div style="font-size:26px;font-weight:800;">Primary horizontal</div><div style="font-size:24px;color:var(--color-neutral-700);">Default for anything wider than 400px.</div></div></div>
+    <div style="display:flex;flex-direction:column;gap:14px;"><div style="flex:1;background:var(--color-surface);border:2px solid var(--color-divider);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;"><svg width="88" height="88" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SolariNet mark"><g stroke="#35E0D0" stroke-width="2.6" stroke-linecap="round"><line x1="50" y1="50" x2="50" y2="16"/><line x1="50" y1="50" x2="50" y2="84"/><line x1="50" y1="50" x2="79.4" y2="33"/><line x1="50" y1="50" x2="20.6" y2="33"/><line x1="50" y1="50" x2="20.6" y2="67"/><line x1="50" y1="50" x2="79.4" y2="67"/></g><circle cx="50" cy="16" r="6.5" fill="#FF3D72"/><circle cx="50" cy="84" r="6.5" fill="#FF3D72"/><circle cx="79.4" cy="33" r="6.5" fill="#35E0D0"/><circle cx="20.6" cy="33" r="6.5" fill="#35E0D0"/><circle cx="20.6" cy="67" r="6.5" fill="#35E0D0"/><circle cx="79.4" cy="67" r="6.5" fill="#35E0D0"/><circle cx="50" cy="50" r="12" fill="none" stroke="#35E0D0" stroke-width="6.5"/></svg><span style="font-size:40px;font-weight:800;letter-spacing:0.06em;">SOLARINET</span></div><div><div style="font-size:26px;font-weight:800;">Stacked</div><div style="font-size:24px;color:var(--color-neutral-700);">Square crops, merch, sponsor walls.</div></div></div>
+    <div style="display:flex;flex-direction:column;gap:14px;"><div style="flex:1;background:var(--color-accent);display:flex;align-items:center;justify-content:center;"><div style="width:120px;height:120px;border:12px solid var(--color-on-field,#fff);border-radius:50%;display:flex;align-items:center;justify-content:center;"><div style="width:34px;height:34px;background:var(--color-paper,#fff);border-radius:50%;"></div></div></div><div><div style="font-size:26px;font-weight:800;">Mark, reversed</div><div style="font-size:24px;color:var(--color-neutral-700);">Avatars, favicons, below 64px.</div></div></div>
+    <div style="display:flex;flex-direction:column;gap:14px;"><div style="flex:1;background:var(--color-paper,#fff);border:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;gap:18px;"><div style="width:76px;height:76px;border:8px solid var(--color-text);border-radius:50%;display:flex;align-items:center;justify-content:center;"><div style="width:22px;height:22px;background:var(--color-text);border-radius:50%;"></div></div><span style="font-size:44px;font-weight:800;letter-spacing:0.06em;">SOLARINET</span></div><div><div style="font-size:26px;font-weight:800;">Single colour</div><div style="font-size:24px;color:var(--color-neutral-700);">Print, embroidery, laser, fax.</div></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span> &nbsp;All lockups ship as SVG + PNG at 1×/2×/4×.</span><span>05</span></div>
+</section>
+
+<section data-label="07 Construction" data-template-id="07" data-screen-label="06" data-speaker-notes="TEMPLATE 07 — CONSTRUCTION & CLEAR SPACE. Slots: UNIT_DEFINITION (what 1 unit equals in the mark), CLEAR_SPACE (multiple of the unit), MIN_SIZE (px for screen, mm for print). Measurements must be derived from the actual artwork, never guessed. If the mark is generated in this session, define the unit as the mark's stroke width." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 02 · Identity</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Construction &amp; clear space</h1></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 0.8fr;gap:56px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="flex:1;border:2px dashed var(--color-accent);position:relative;display:flex;align-items:center;justify-content:center;background:var(--color-surface);">
+        <div style="width:200px;height:200px;border:22px solid var(--color-text);border-radius:50%;display:flex;align-items:center;justify-content:center;"><div style="width:58px;height:58px;background:var(--color-accent);border-radius:50%;"></div></div>
+        <span style="position:absolute;top:12px;left:16px;font-size:24px;font-weight:800;color:var(--color-accent-700);">clear space = 1×</span>
+      </div>
+      <div style="font-size:26px;font-weight:800;">Clear space</div><div style="font-size:24px;color:var(--color-neutral-700);margin-top:-8px;">No element enters within one ring-diameter of the mark.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="flex:1;border:2px solid var(--color-divider);background:repeating-linear-gradient(0deg,transparent,transparent 39px,color-mix(in srgb,var(--color-text) 12%,transparent) 39px,color-mix(in srgb,var(--color-text) 12%,transparent) 40px),repeating-linear-gradient(90deg,transparent,transparent 39px,color-mix(in srgb,var(--color-text) 12%,transparent) 39px,color-mix(in srgb,var(--color-text) 12%,transparent) 40px);display:flex;align-items:center;justify-content:center;position:relative;">
+        <div style="width:200px;height:200px;border:22px solid var(--color-text);border-radius:50%;display:flex;align-items:center;justify-content:center;"><div style="width:58px;height:58px;background:var(--color-accent);border-radius:50%;"></div></div>
+        <span style="position:absolute;bottom:12px;right:16px;font-size:24px;font-weight:800;color:var(--color-accent-700);">1 unit = 40px grid</span>
+      </div>
+      <div style="font-size:26px;font-weight:800;">Grid construction</div><div style="font-size:24px;color:var(--color-neutral-700);margin-top:-8px;">Ring outer Ø 5u · stroke 0.55u · dot Ø 1.45u.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:26px;">
+      <span style="font-size:24px;font-weight:800;letter-spacing:0.08em;color:var(--color-on-field,#fff);background:var(--color-accent);padding:6px 10px;align-self:flex-start;">24px glyph on screen; 16px favicon glyph without the grid ground.</span>
+      <div style="border-top:2px solid var(--color-divider);padding-top:18px;"><div style="font-size:28px;font-weight:800;">Minimum, screen</div><div style="font-size:26px;color:var(--color-neutral-700);">Mark 24px · horizontal lockup 120px</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:18px;"><div style="font-size:28px;font-weight:800;">Minimum, print</div><div style="font-size:26px;color:var(--color-neutral-700);">Mark 8mm · horizontal lockup 32mm</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:18px;"><div style="font-size:28px;font-weight:800;">Below minimum</div><div style="font-size:26px;color:var(--color-neutral-700);">Use the mark alone. Never shrink the wordmark past legibility.</div></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>06</span></div>
+</section>
+
+<section data-label="08 Logo misuse" data-template-id="08" data-allow="hex" data-screen-label="07" data-speaker-notes="TEMPLATE 08 — MISUSE. Six panels, each a real failure the brand has actually seen or can plausibly expect. Caption format: verb-first, max 8 words. Never illustrate a misuse the guide has not already prohibited elsewhere. The accent denotes prohibition; do not use a green tick for the correct case — this page is prohibitions only." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 02 · Identity</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Do not do this</h1></div></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:1fr 1fr;gap:32px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;border:2px solid var(--color-divider);background:var(--color-surface);display:flex;align-items:center;justify-content:center;gap:16px;"><div style="width:64px;height:64px;border:8px solid #2f7bd6;border-radius:50%;"></div><span style="font-size:40px;font-weight:800;color:#2f7bd6;">SOLARINET</span></div><div style="font-size:26px;font-weight:800;color:var(--color-accent-700);">Do not recolour the lockup.</div></div>
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;border:2px solid var(--color-divider);background:var(--color-surface);display:flex;align-items:center;justify-content:center;gap:16px;"><div style="width:64px;height:96px;border:8px solid var(--color-text);border-radius:50%;"></div><span style="font-size:40px;font-weight:800;transform:scaleX(1.5);">SOLARINET</span></div><div style="font-size:26px;font-weight:800;color:var(--color-accent-700);">Do not stretch or condense.</div></div>
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;border:2px solid var(--color-divider);background:var(--color-surface);display:flex;align-items:center;justify-content:center;gap:16px;transform:rotate(-8deg);"><div style="width:64px;height:64px;border:8px solid var(--color-text);border-radius:50%;"></div><span style="font-size:40px;font-weight:800;">SOLARINET</span></div><div style="font-size:26px;font-weight:800;color:var(--color-accent-700);">Do not rotate or tilt.</div></div>
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;border:2px solid var(--color-divider);background:linear-gradient(120deg,#8a8a8a,#e0e0e0);display:flex;align-items:center;justify-content:center;gap:16px;"><div style="width:64px;height:64px;border:8px solid var(--color-text);border-radius:50%;"></div><span style="font-size:40px;font-weight:800;">SOLARINET</span></div><div style="font-size:26px;font-weight:800;color:var(--color-accent-700);">Do not place on busy ground.</div></div>
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;border:2px solid var(--color-divider);background:var(--color-surface);display:flex;align-items:center;justify-content:center;gap:16px;"><div style="width:64px;height:64px;border:8px solid var(--color-text);border-radius:50%;box-shadow:6px 8px 0 color-mix(in srgb,var(--color-text) 35%,transparent);"></div><span style="font-size:40px;font-weight:800;text-shadow:6px 8px 0 color-mix(in srgb,var(--color-text) 35%,transparent);">SOLARINET</span></div><div style="font-size:26px;font-weight:800;color:var(--color-accent-700);">Do not add shadow or outline.</div></div>
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;border:2px solid var(--color-divider);background:var(--color-surface);display:flex;align-items:center;justify-content:center;gap:4px;"><div style="width:64px;height:64px;border:8px solid var(--color-text);border-radius:50%;"></div><span style="font-size:40px;font-weight:800;font-family:Georgia,serif;">SolariNet</span></div><div style="font-size:26px;font-weight:800;color:var(--color-accent-700);">Do not reset the wordmark.</div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>07</span></div>
+</section>
+
+<section data-label="09 Colour" data-template-id="09" data-allow="hex" data-screen-label="08" data-speaker-notes="TEMPLATE 09 — COLOUR PALETTE. Slots per swatch: NAME, ROLE, HEX, RGB, CMYK, and PANTONE if the brand prints. Primary row = brand colours; secondary row = neutrals. Cap the primary row at three. If the brand has no palette, derive one from the logo and present two candidate sets before filling this page." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 03 · System</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Colour palette</h1></div><span style="font-size:24px;font-weight:800;letter-spacing:0.08em;color:var(--color-on-field,#fff);background:var(--color-accent);padding:6px 10px;">SolariNet Teal, Deep Teal, Ink, Ink Dim, Ground, Panel, Signal Up, Signal Warn, Signal Down, Signal Unknown</span></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:40px;">
+    <div><div style="height:230px;background:var(--color-accent);"></div><div style="border-top:2px solid var(--color-text);padding-top:14px;display:flex;justify-content:space-between;"><div><div style="font-size:30px;font-weight:800;">Signal Red</div><div style="font-size:24px;color:var(--color-neutral-700);">Primary · accent only</div></div><div style="font-size:24px;text-align:right;color:var(--color-neutral-800);">#EC3013<br>236 48 19<br>0 90 95 0</div></div></div>
+    <div><div style="height:230px;background:var(--color-text);"></div><div style="border-top:2px solid var(--color-text);padding-top:14px;display:flex;justify-content:space-between;"><div><div style="font-size:30px;font-weight:800;">Ink</div><div style="font-size:24px;color:var(--color-neutral-700);">Type, rules, fields</div></div><div style="font-size:24px;text-align:right;color:var(--color-neutral-800);">#201E1D<br>32 30 29<br>0 0 0 95</div></div></div>
+    <div><div style="height:230px;background:var(--color-bg);border:2px solid var(--color-divider);"></div><div style="border-top:2px solid var(--color-text);padding-top:14px;display:flex;justify-content:space-between;"><div><div style="font-size:30px;font-weight:800;">Ground</div><div style="font-size:24px;color:var(--color-neutral-700);">Page and surface</div></div><div style="font-size:24px;text-align:right;color:var(--color-neutral-800);">#F3F2F2<br>243 242 242<br>0 0 0 5</div></div></div>
+  </div>
+  <div>
+    <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);margin-bottom:12px;">Neutral ramp — tints, hovers, disabled states</div>
+    <div style="display:grid;grid-template-columns:repeat(9,1fr);gap:0;border:2px solid var(--color-divider);">
+      <div style="height:110px;background:var(--color-neutral-100);display:flex;align-items:flex-end;padding:8px;font-size:24px;">100</div>
+      <div style="height:110px;background:var(--color-neutral-200);display:flex;align-items:flex-end;padding:8px;font-size:24px;">200</div>
+      <div style="height:110px;background:var(--color-neutral-300);display:flex;align-items:flex-end;padding:8px;font-size:24px;">300</div>
+      <div style="height:110px;background:var(--color-neutral-400);display:flex;align-items:flex-end;padding:8px;font-size:24px;">400</div>
+      <div style="height:110px;background:var(--color-neutral-500);display:flex;align-items:flex-end;padding:8px;font-size:24px;">500</div>
+      <div style="height:110px;background:var(--color-neutral-600);display:flex;align-items:flex-end;padding:8px;font-size:24px;color:var(--color-on-field,#fff);">600</div>
+      <div style="height:110px;background:var(--color-neutral-700);display:flex;align-items:flex-end;padding:8px;font-size:24px;color:var(--color-on-field,#fff);">700</div>
+      <div style="height:110px;background:var(--color-neutral-800);display:flex;align-items:flex-end;padding:8px;font-size:24px;color:var(--color-on-field,#fff);">800</div>
+      <div style="height:110px;background:var(--color-neutral-900);display:flex;align-items:flex-end;padding:8px;font-size:24px;color:var(--color-on-field,#fff);">900</div>
+    </div>
+  </div>
+  <div style="margin-top:auto;display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>08</span></div>
+</section>
+
+<section data-label="10 Contrast" data-template-id="10" data-screen-label="09" data-speaker-notes="TEMPLATE 10 — COLOUR USAGE & ACCESSIBILITY. Every approved pairing gets a measured ratio, not an estimate. Rule: 4.5:1 for body text, 3:1 for large text and UI chrome. Any pairing below 3:1 goes in the prohibited column with the reason. Also state the accent's maximum coverage — a percentage keeps agents from flooding pages with brand colour." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 03 · System</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Colour usage &amp; contrast</h1></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:64px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Approved pairings</div>
+      <div style="display:flex;align-items:center;gap:24px;background:var(--color-bg);border:2px solid var(--color-divider);padding:14px 26px;"><span style="font-size:34px;font-weight:800;flex:1;">Ink on Ground</span><span style="font-size:32px;font-weight:800;color:var(--color-accent-700);">14.8:1</span><span style="font-size:24px;color:var(--color-neutral-700);width:130px;text-align:right;">Body, all sizes</span></div>
+      <div style="display:flex;align-items:center;gap:24px;background:var(--color-text);color:var(--color-on-field,#fff);padding:14px 26px;"><span style="font-size:34px;font-weight:800;flex:1;">Ground on Ink</span><span style="font-size:32px;font-weight:800;color:var(--color-accent-400);">14.8:1</span><span style="font-size:24px;color:var(--color-neutral-400);width:130px;text-align:right;">Body, all sizes</span></div>
+      <div style="display:flex;align-items:center;gap:24px;background:var(--color-accent);color:var(--color-on-field,#fff);padding:14px 26px;"><span style="font-size:34px;font-weight:800;flex:1;">White on Red</span><span style="font-size:32px;font-weight:800;">4.1:1</span><span style="font-size:24px;width:130px;text-align:right;">24px and above</span></div>
+      <div style="display:flex;align-items:center;gap:24px;background:var(--color-bg);border:2px solid var(--color-divider);padding:14px 26px;"><span style="font-size:34px;font-weight:800;flex:1;color:var(--color-accent-700);">Red 700 on Ground</span><span style="font-size:32px;font-weight:800;color:var(--color-accent-700);">7.2:1</span><span style="font-size:24px;color:var(--color-neutral-700);width:130px;text-align:right;">Body accent</span></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-accent-700);">Prohibited</div>
+      <div style="display:flex;align-items:center;gap:24px;background:var(--color-accent);color:var(--color-text);padding:14px 26px;"><span style="font-size:34px;font-weight:800;flex:1;">Ink on Red</span><span style="font-size:32px;font-weight:800;">3.5:1</span><span style="font-size:24px;width:150px;text-align:right;">Fails body text</span></div>
+      <div style="display:flex;align-items:center;gap:24px;background:var(--color-neutral-400);color:var(--color-on-field,#fff);padding:14px 26px;"><span style="font-size:34px;font-weight:800;flex:1;">White on Slate 400</span><span style="font-size:32px;font-weight:800;">2.1:1</span><span style="font-size:24px;width:150px;text-align:right;">Fails everything</span></div>
+      <div style="background:var(--color-surface);border-left:8px solid var(--color-accent);padding:18px 30px;margin-top:4px;">
+        <div style="font-size:28px;font-weight:800;margin-bottom:8px;">Accent budget</div>
+        <p style="font-size:26px;margin:0;">The accent covers no more than <strong>10%</strong> of any surface, except the two poster pages in this document. One accent element per view.</p>
+      </div>
+      <div style="background:var(--color-surface);border-left:8px solid var(--color-text);padding:18px 30px;">
+        <div style="font-size:28px;font-weight:800;margin-bottom:8px;">Never colour-only</div>
+        <p style="font-size:26px;margin:0;">Status, error, and success states carry a label or icon as well as a colour.</p>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span> &nbsp;Measure every ratio; do not estimate.</span><span>09</span></div>
+</section>
+
+<section data-label="11 Typefaces" data-template-id="11" data-screen-label="10" data-speaker-notes="TEMPLATE 11 — TYPE SPECIMENS. Two faces maximum: display and text. Slots: FACE_NAME, CLASSIFICATION, DESIGNER, FOUNDRY, YEAR, LICENCE, WEIGHTS_USED, FALLBACK_STACK. Licence is mandatory for open-source brands — if the face is not free to redistribute, choose one that is." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 03 · System</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Typefaces</h1></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:64px;flex:1;">
+    <div style="display:flex;flex-direction:column;">
+      <div style="background:var(--color-text);color:var(--color-on-field,#fff);padding:36px 40px;">
+        <div style="font-size:112px;font-weight:800;line-height:1;letter-spacing:-0.03em;">Archivo</div>
+        <div style="font-size:44px;font-weight:400;margin-top:14px;">Aa Bb Gg Rr 0123456789</div>
+      </div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 32px;font-size:26px;padding-top:22px;">
+        <span style="font-weight:800;">Role</span><span>Display &amp; headings</span>
+        <span style="font-weight:800;">Class</span><span>Grotesque, high-contrast weights</span>
+        <span style="font-weight:800;">Weights</span><span>800 only, tracked −0.02em</span>
+        <span style="font-weight:800;">Licence</span><span>SIL Open Font License 1.1</span>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;">
+      <div style="background:var(--color-surface);border:2px solid var(--color-divider);padding:36px 40px;">
+        <div style="font-size:112px;font-weight:400;line-height:1;letter-spacing:-0.02em;">Archivo</div>
+        <div style="font-size:44px;font-weight:400;margin-top:14px;">Aa Bb Gg Rr 0123456789</div>
+      </div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 32px;font-size:26px;padding-top:22px;">
+        <span style="font-weight:800;">Role</span><span>Body, captions, UI</span>
+        <span style="font-weight:800;">Class</span><span>Grotesque, neutral text weights</span>
+        <span style="font-weight:800;">Weights</span><span>400 body · 600 emphasis</span>
+        <span style="font-weight:800;">Fallback</span><span>system-ui, Helvetica, sans-serif</span>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span><span style="font-size:24px;font-weight:800;letter-spacing:0.08em;color:var(--color-on-field,#fff);background:var(--color-accent);padding:6px 10px;">IBM Plex Sans + IBM Plex Mono</span> &nbsp;Two faces maximum. State the licence for both.</span><span>10</span></div>
+</section>
+
+<section data-label="12 Type scale" data-template-id="12" data-allow="small-type" data-screen-label="11" data-speaker-notes="TEMPLATE 12 — TYPE SCALE & HIERARCHY. Give every step a name, a size, a line-height, a weight, and one sentence saying when to use it. Sizes shown here are the screen scale; add a print column if the brand prints. Minimum body size is a rule, not a suggestion — state it explicitly." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:28px;">
+  <div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 03 · System</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Type scale</h1></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:64px;flex:1;">
+    <div style="display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:baseline;gap:28px;border-bottom:2px solid var(--color-divider);padding:14px 0;"><span style="font-size:24px;color:var(--color-neutral-600);width:150px;">Display / 64</span><span style="font-size:64px;font-weight:800;letter-spacing:-0.03em;">Headline</span></div>
+      <div style="display:flex;align-items:baseline;gap:28px;border-bottom:2px solid var(--color-divider);padding:14px 0;"><span style="font-size:24px;color:var(--color-neutral-600);width:150px;">Title / 42</span><span style="font-size:42px;font-weight:800;letter-spacing:-0.02em;">Section title</span></div>
+      <div style="display:flex;align-items:baseline;gap:28px;border-bottom:2px solid var(--color-divider);padding:14px 0;"><span style="font-size:24px;color:var(--color-neutral-600);width:150px;">Subhead / 28</span><span style="font-size:28px;font-weight:800;">Subheading in context</span></div>
+      <div style="display:flex;align-items:baseline;gap:28px;border-bottom:2px solid var(--color-divider);padding:14px 0;"><span style="font-size:24px;color:var(--color-neutral-600);width:150px;">Body / 18</span><span style="font-size:18px;">Body copy sets at 18/28 and never below 16.</span></div>
+      <div style="display:flex;align-items:baseline;gap:28px;border-bottom:2px solid var(--color-divider);padding:14px 0;"><span style="font-size:24px;color:var(--color-neutral-600);width:150px;">Caption / 14</span><span style="font-size:14px;">Captions, table meta, legal.</span></div>
+      <div style="display:flex;align-items:baseline;gap:28px;border-bottom:2px solid var(--color-divider);padding:14px 0;"><span style="font-size:24px;color:var(--color-neutral-600);width:150px;">Label / 12</span><span style="font-size:12px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;">Eyebrow label</span></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:22px;">
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Ratio</div><div style="font-size:26px;color:var(--color-neutral-800);">1.5 major-fifth, rounded to even pixels.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Line height</div><div style="font-size:26px;color:var(--color-neutral-800);">1.12 for display, 1.55 for body.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Measure</div><div style="font-size:26px;color:var(--color-neutral-800);">60–75 characters. Never full-bleed paragraphs.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Alignment</div><div style="font-size:26px;color:var(--color-neutral-800);">Flush left, ragged right. No justification, no centred paragraphs.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Minimum</div><div style="font-size:26px;color:var(--color-neutral-800);">16px screen · 9pt print. Below that, cut words instead.</div></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>11</span></div>
+</section>
+
+<section data-label="13 Spacing &amp; placement" data-template-id="13" data-allow="small-type" data-screen-label="12" data-speaker-notes="TEMPLATE 13 — SPACING, GRID & PLACEMENT. This is the page the reference guide was missing. Three parts: the spacing scale (a base unit and its multiples), the layout grid (columns, gutter, margin), and brand placement (where the logo sits on each surface and how much room it gets). Placement diagrams beat prose — keep captions under 10 words." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:28px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 03 · System</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Spacing, grid &amp; placement</h1></div><span style="font-size:24px;font-weight:800;letter-spacing:0.08em;color:var(--color-on-field,#fff);background:var(--color-accent);padding:6px 10px;">8</span></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1.1fr;gap:56px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:16px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Scale · base 8</div>
+      <div style="display:flex;align-items:center;gap:20px;"><div style="width:8px;height:34px;background:var(--color-accent);"></div><span style="font-size:26px;">8 — inside a control</span></div>
+      <div style="display:flex;align-items:center;gap:20px;"><div style="width:16px;height:34px;background:var(--color-accent);"></div><span style="font-size:26px;">16 — between controls</span></div>
+      <div style="display:flex;align-items:center;gap:20px;"><div style="width:24px;height:34px;background:var(--color-accent);"></div><span style="font-size:26px;">24 — inside a block</span></div>
+      <div style="display:flex;align-items:center;gap:20px;"><div style="width:48px;height:34px;background:var(--color-accent);"></div><span style="font-size:26px;">48 — between blocks</span></div>
+      <div style="display:flex;align-items:center;gap:20px;"><div style="width:96px;height:34px;background:var(--color-accent);"></div><span style="font-size:26px;">96 — page margin</span></div>
+      <p style="font-size:26px;color:var(--color-neutral-800);margin:8px 0 0;">Every gap is a multiple of 8. No 10s, no 30s, no eyeballing.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Grid · 12 columns</div>
+      <div style="flex:1;border:2px solid var(--color-text);padding:16px;display:grid;grid-template-columns:repeat(12,1fr);gap:8px;">
+        <div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div><div style="background:color-mix(in srgb,var(--color-accent) 22%,transparent);"></div>
+      </div>
+      <div style="font-size:26px;color:var(--color-neutral-800);">96 margin · 24 gutter · 12 columns. Collapses to 6 at 900px, 4 at 600px.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Placement</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;flex:1;">
+        <div style="border:2px solid var(--color-divider);background:var(--color-surface);padding:14px;display:flex;flex-direction:column;"><div style="display:flex;align-items:center;gap:8px;"><div style="width:26px;height:26px;border:5px solid var(--color-text);border-radius:50%;"></div><span style="font-size:20px;font-weight:800;">SOLARINET</span></div><span style="margin-top:auto;font-size:24px;color:var(--color-neutral-700);">App header — top left, 24 inset</span></div>
+        <div style="border:2px solid var(--color-divider);background:var(--color-surface);padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;"><div style="width:36px;height:36px;border:6px solid var(--color-text);border-radius:50%;"></div><span style="font-size:24px;color:var(--color-neutral-700);text-align:center;">Social avatar — mark, centred</span></div>
+        <div style="border:2px solid var(--color-divider);background:var(--color-text);padding:14px;display:flex;flex-direction:column;"><div style="margin-top:auto;display:flex;align-items:center;gap:8px;"><div style="width:26px;height:26px;border:5px solid var(--color-on-field,#fff);border-radius:50%;"></div><span style="font-size:20px;font-weight:800;color:var(--color-on-field,#fff);">SOLARINET</span></div><span style="font-size:24px;color:var(--color-neutral-400);margin-top:8px;">Slide — bottom left, reversed</span></div>
+        <div style="border:2px solid var(--color-divider);background:var(--color-surface);padding:14px;display:flex;flex-direction:column;align-items:flex-end;"><div style="width:30px;height:30px;border:5px solid var(--color-text);border-radius:50%;"></div><span style="margin-top:auto;font-size:24px;color:var(--color-neutral-700);text-align:right;">Document — top right, mark only</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>12</span></div>
+</section>
+
+<section data-label="14 Iconography" data-template-id="14" data-screen-label="13" data-speaker-notes="TEMPLATE 14 — ICONOGRAPHY. Name the icon library and its licence rather than drawing a bespoke set — bespoke icons are the first thing a small project fails to maintain. Slots: LIBRARY, LICENCE, STROKE, GRID, SIZES. Show the grid, the stroke, and the three approved sizes." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 03 · System</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Iconography</h1></div><span style="font-size:24px;font-weight:800;letter-spacing:0.08em;color:var(--color-on-field,#fff);background:var(--color-accent);padding:6px 10px;">Custom line set — network-node motif</span></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:64px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:24px;">
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0;border:2px solid var(--color-divider);">
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16"></rect><path d="M3 10h18M8 3v4M16 3v4"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="4"></circle><path d="M2 21c0-4 3-6 7-6s7 2 7 6"></path><path d="M17 11h5M19.5 8.5v5"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v14M6 11l6 6 6-6"></path><path d="M4 21h16"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M16 16l5 5"></path></svg></div>
+        <div style="aspect-ratio:1;border-bottom:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v16M4 12h16"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 13l4 4 10-10"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16h.01"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v12H7l-3 4z"></path></svg></div>
+        <div style="aspect-ratio:1;border-right:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3l2.6 5.6L21 9.5l-4.5 4.3 1.1 6.2L12 17l-5.6 3 1.1-6.2L3 9.5l6.4-.9z"></path></svg></div>
+        <div style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></div>
+      </div>
+      <div style="font-size:26px;color:var(--color-neutral-800);">Lucide, ISC licence. Outline only — no filled, duotone, or brand-coloured icons.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:22px;">
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Grid &amp; stroke</div><div style="font-size:26px;color:var(--color-neutral-800);">24×24 box · 2px stroke · round caps · 1px optical padding.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;display:flex;align-items:center;gap:28px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        <span style="font-size:26px;color:var(--color-neutral-800);">20 · 28 · 40 only</span>
+      </div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Colour</div><div style="font-size:26px;color:var(--color-neutral-800);">Body colour by default. The accent only when the icon is the primary action.</div></div>
+      <div style="border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);padding:16px 0;"><div style="font-size:28px;font-weight:800;">Adding an icon</div><div style="font-size:26px;color:var(--color-neutral-800);">Take it from the library. If it is missing, draw it on the same grid and open a PR.</div></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>13</span></div>
+</section>
+
+<section data-label="15 Imagery" data-template-id="15" data-screen-label="14" data-speaker-notes="TEMPLATE 15 — IMAGERY. Drop real photographs into the slots; do not ship the guide with empty frames. Slots: IMAGE ×3 with a treatment rule, plus SOURCE_POLICY (where images come from and under what licence — critical for open-source projects). State the treatment as a reproducible recipe: grayscale, contrast, crop ratio." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 04 · Practice</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Imagery</h1></div></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr) 0.9fr;gap:40px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;position:relative;" class="grayscale"><image-slot id="bg-img-1" shape="rect" placeholder="Drop a working photograph"></image-slot></div><div style="font-size:26px;font-weight:800;">People at work</div><div style="font-size:24px;color:var(--color-neutral-700);margin-top:-8px;">Candid, mid-action, never posed.</div></div>
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;position:relative;" class="grayscale"><image-slot id="bg-img-2" shape="rect" placeholder="Drop a detail shot"></image-slot></div><div style="font-size:26px;font-weight:800;">Detail</div><div style="font-size:24px;color:var(--color-neutral-700);margin-top:-8px;">Hands, screens, objects. Tight crop.</div></div>
+    <div style="display:flex;flex-direction:column;gap:12px;"><div style="flex:1;position:relative;" class="grayscale"><image-slot id="bg-img-3" shape="rect" placeholder="Drop a place or context shot"></image-slot></div><div style="font-size:26px;font-weight:800;">Context</div><div style="font-size:24px;color:var(--color-neutral-700);margin-top:-8px;">Wide, structural, low saturation subject.</div></div>
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Treatment</div><div style="font-size:26px;color:var(--color-neutral-800);">Grayscale, contrast +8%. No tints, no duotones, no filters.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Crop</div><div style="font-size:26px;color:var(--color-neutral-800);">3:2 or 1:1. Full-bleed only when the image is the page.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;"><div style="font-size:28px;font-weight:800;">Sourcing</div><div style="font-size:26px;color:var(--color-neutral-800);">CC0 or contributor-supplied with written permission. Record the licence next to the file.</div></div>
+      <div style="border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);padding:16px 0;"><div style="font-size:28px;font-weight:800;">Never</div><div style="font-size:26px;color:var(--color-neutral-800);">Stock handshakes, generated faces, screenshots as decoration.</div></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>14</span></div>
+</section>
+
+<section data-label="16 Voice &amp; tone" data-template-id="16" data-screen-label="15" data-speaker-notes="TEMPLATE 16 — VOICE & TONE. The other page the reference guide was missing. Voice is constant; tone shifts by situation. Slots: VOICE_ATTRIBUTE ×3 (each as 'we are X, not Y'), and TONE_BY_SITUATION rows. Attributes must have a real opposite — 'friendly, not chummy' works; 'professional' does not." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 04 · Practice</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Voice &amp; tone</h1></div></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:48px;">
+    <div style="border-top:4px solid var(--color-accent);padding-top:18px;"><h3 style="font-size:38px;margin:0 0 8px;">Direct, not blunt</h3><p style="font-size:26px;margin:0;color:var(--color-neutral-800);">Say the thing in the first sentence. Then soften the edges, not the meaning.</p></div>
+    <div style="border-top:4px solid var(--color-accent);padding-top:18px;"><h3 style="font-size:38px;margin:0 0 8px;">Plain, not simple</h3><p style="font-size:26px;margin:0;color:var(--color-neutral-800);">Short words for hard ideas. We never write down to the reader.</p></div>
+    <div style="border-top:4px solid var(--color-accent);padding-top:18px;"><h3 style="font-size:38px;margin:0 0 8px;">Warm, not chummy</h3><p style="font-size:26px;margin:0;color:var(--color-neutral-800);">We thank people by name. We do not perform enthusiasm.</p></div>
+  </div>
+  <div style="flex:1;display:grid;grid-template-columns:0.7fr 1fr 1fr;gap:0;font-size:26px;align-content:start;">
+    <div style="border-bottom:4px solid var(--color-text);padding:0 24px 12px 0;font-weight:800;">Situation</div>
+    <div style="border-bottom:4px solid var(--color-text);padding:0 24px 12px;font-weight:800;">Tone</div>
+    <div style="border-bottom:4px solid var(--color-text);padding:0 0 12px 24px;font-weight:800;">Sounds like</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px 18px 0;font-weight:800;">Onboarding</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px;">Encouraging, brief</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 0 18px 24px;color:var(--color-neutral-800);">“Three steps and you're scheduling. Start here.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px 18px 0;font-weight:800;">Errors</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px;">Plain, accountable</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 0 18px 24px;color:var(--color-neutral-800);">“We couldn't save that. Your draft is still here.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px 18px 0;font-weight:800;">Release notes</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px;">Factual, credited</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 0 18px 24px;color:var(--color-neutral-800);">“Recurring shifts now copy forward. Thanks, @rjc.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px 18px 0;font-weight:800;">Bad news</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 24px;">Early, specific</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:18px 0 18px 24px;color:var(--color-neutral-800);">“The import tool is being retired in March. Here's the migration path.”</div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>15</span></div>
+</section>
+
+<section data-label="17 Copy rules" data-template-id="17" data-screen-label="16" data-speaker-notes="TEMPLATE 17 — COPY DO / DON'T. Pairs only: every 'don't' has a rewritten 'do' beside it, drawn from the brand's own product surfaces. Six pairs is the ceiling. Add the house-style block for the mechanical rules an agent can apply without judgement." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:28px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 04 · Practice</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Writing rules</h1></div></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 56px;flex:1;align-content:start;">
+    <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-accent-700);padding-bottom:12px;border-bottom:4px solid var(--color-text);">Don't</div>
+    <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);padding-bottom:12px;border-bottom:4px solid var(--color-text);">Do</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;color:var(--color-neutral-600);text-decoration:line-through;">“Oops! Something went wrong 😅”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;">“That shift didn't save — the server timed out.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;color:var(--color-neutral-600);text-decoration:line-through;">“Leverage SolariNet to optimise your scheduling workflow.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;">“SolariNet builds the rota so you don't have to.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;color:var(--color-neutral-600);text-decoration:line-through;">“Users may optionally configure notifications.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;">“You can turn notifications off.”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;color:var(--color-neutral-600);text-decoration:line-through;">“Click HERE to learn more!!!”</div>
+    <div style="border-bottom:2px solid var(--color-divider);padding:20px 0;font-size:28px;">“Read how recurring shifts work.”</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:40px;background:var(--color-surface);padding:28px 32px;">
+    <div><div style="font-size:26px;font-weight:800;">Case</div><div style="font-size:24px;color:var(--color-neutral-800);">Sentence case everywhere, including buttons.</div></div>
+    <div><div style="font-size:26px;font-weight:800;">Numbers</div><div style="font-size:24px;color:var(--color-neutral-800);">Numerals from 10 up; spell zero to nine.</div></div>
+    <div><div style="font-size:26px;font-weight:800;">Punctuation</div><div style="font-size:24px;color:var(--color-neutral-800);">Oxford comma. One exclamation mark per release.</div></div>
+    <div><div style="font-size:26px;font-weight:800;">The name</div><div style="font-size:24px;color:var(--color-neutral-800);">“SolariNet”, never “SOLARINET” or “solarinet” in prose.</div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>16</span></div>
+</section>
+
+<section data-label="18 Components" data-template-id="18" data-screen-label="17" data-speaker-notes="TEMPLATE 18 — UI COMPONENTS. Show the smallest set that proves the system: one button in three states, one field, one card, one alert. Anything more belongs in a component library, not a brand guide. Link to the library from page 21 instead of expanding this page." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 04 · Practice</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Core components</h1></div></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:48px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Button</div>
+      <div style="background:var(--color-accent);color:var(--color-on-field,#fff);padding:16px 22px;font-size:26px;font-weight:800;text-align:left;">Create a shift</div>
+      <div style="background:var(--color-accent-600);color:var(--color-on-field,#fff);padding:16px 22px;font-size:26px;font-weight:800;text-align:left;">Hover / pressed</div>
+      <div style="border:2px solid var(--color-text);padding:16px 22px;font-size:26px;font-weight:800;text-align:left;">Secondary</div>
+      <div style="border:2px solid var(--color-divider);color:var(--color-neutral-500);padding:16px 22px;font-size:26px;font-weight:800;text-align:left;">Disabled</div>
+      <div style="font-size:24px;color:var(--color-neutral-800);">Labels flush left. Square corners. Never centred.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Field</div>
+      <div><div style="font-size:24px;font-weight:800;margin-bottom:8px;">Shift name</div><div style="border:2px solid var(--color-text);background:var(--color-paper,#fff);padding:16px 18px;font-size:26px;color:var(--color-neutral-600);">Saturday market</div></div>
+      <div><div style="font-size:24px;font-weight:800;margin-bottom:8px;">Focused</div><div style="border:2px solid var(--color-accent);outline:2px solid var(--color-accent);outline-offset:2px;background:var(--color-paper,#fff);padding:16px 18px;font-size:26px;">Saturday market|</div></div>
+      <div><div style="font-size:24px;font-weight:800;margin-bottom:8px;color:var(--color-accent-700);">Error</div><div style="border:2px solid var(--color-accent-700);background:var(--color-accent-100);padding:16px 18px;font-size:26px;">Pick an end time</div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Card</div>
+      <div style="background:var(--color-surface);border:2px solid var(--color-divider);padding:26px;display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-accent-700);">Sat 14 Mar</div>
+        <div style="font-size:34px;font-weight:800;">Market stall</div>
+        <div style="font-size:26px;color:var(--color-neutral-800);">09:00–13:00 · 3 of 4 filled</div>
+        <div style="border-top:2px solid var(--color-divider);margin-top:8px;padding-top:12px;font-size:24px;color:var(--color-neutral-700);">Led by R. Chen</div>
+      </div>
+      <div style="font-size:24px;color:var(--color-neutral-800);">One kicker, one title, one meta line. No shadows below elevation md.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Alert</div>
+      <div style="border-left:8px solid var(--color-accent);background:var(--color-accent-100);padding:22px 24px;display:flex;gap:14px;align-items:flex-start;"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex:none;margin-top:2px;"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16h.01"></path></svg><div style="font-size:26px;">Two volunteers dropped out of Saturday's shift.</div></div>
+      <div style="border-left:8px solid var(--color-text);background:var(--color-neutral-200);padding:22px 24px;display:flex;gap:14px;align-items:flex-start;"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex:none;margin-top:2px;"><path d="M5 13l4 4 10-10"></path></svg><div style="font-size:26px;">Rota published to 42 people.</div></div>
+      <div style="font-size:24px;color:var(--color-neutral-800);">Always an icon plus a label — colour alone never carries the state.</div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>17</span></div>
+</section>
+
+<section data-label="19 Motion" data-template-id="19" data-screen-label="18" data-speaker-notes="TEMPLATE 19 — MOTION. Keep it to durations, easing, and a prohibition list; a brand guide is not an animation spec. Slots: DURATION ×3, EASING, REDUCED_MOTION policy. Reduced-motion is mandatory — state it even when the brand has no motion yet." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 04 · Practice</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Motion</h1></div></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:64px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:26px;">
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;display:flex;justify-content:space-between;align-items:baseline;"><div><div style="font-size:30px;font-weight:800;">Instant</div><div style="font-size:26px;color:var(--color-neutral-800);">Hover, focus, toggle</div></div><span style="font-size:38px;font-weight:800;color:var(--color-accent-700);">100ms</span></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;display:flex;justify-content:space-between;align-items:baseline;"><div><div style="font-size:30px;font-weight:800;">Standard</div><div style="font-size:26px;color:var(--color-neutral-800);">Panels, menus, expansion</div></div><span style="font-size:38px;font-weight:800;color:var(--color-accent-700);">200ms</span></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:16px;display:flex;justify-content:space-between;align-items:baseline;"><div><div style="font-size:30px;font-weight:800;">Deliberate</div><div style="font-size:26px;color:var(--color-neutral-800);">Page and route changes</div></div><span style="font-size:38px;font-weight:800;color:var(--color-accent-700);">320ms</span></div>
+      <div style="border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider);padding:16px 0;display:flex;justify-content:space-between;align-items:baseline;"><div><div style="font-size:30px;font-weight:800;">Easing</div><div style="font-size:26px;color:var(--color-neutral-800);">One curve for everything</div></div><span style="font-size:30px;font-weight:800;color:var(--color-accent-700);">cubic-bezier(.2,0,0,1)</span></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:24px;">
+      <div style="background:var(--color-surface);border-left:8px solid var(--color-accent);padding:18px 30px;"><div style="font-size:30px;font-weight:800;margin-bottom:8px;">Reduced motion</div><p style="font-size:26px;margin:0;">Honour <strong>prefers-reduced-motion</strong>. Transitions drop to an opacity fade at 100ms; nothing moves, nothing parallaxes.</p></div>
+      <div style="background:var(--color-surface);border-left:8px solid var(--color-text);padding:18px 30px;"><div style="font-size:30px;font-weight:800;margin-bottom:8px;">Motion has a job</div><p style="font-size:26px;margin:0;">Animate only to show where something came from or where it went. Decoration is not a job.</p></div>
+      <div style="border:2px solid var(--color-divider);padding:18px 30px;"><div style="font-size:30px;font-weight:800;margin-bottom:10px;color:var(--color-accent-700);">Never</div><div style="font-size:26px;display:flex;flex-direction:column;gap:8px;"><span>Bounce, elastic, or overshoot easing</span><span>Looping ambient animation</span><span>Scroll-jacking or parallax</span><span>Anything longer than 400ms</span></div></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>18</span></div>
+</section>
+
+<section data-label="20 Applications" data-template-id="20" data-allow="small-type" data-screen-label="19" data-speaker-notes="TEMPLATE 20 — APPLICATIONS. Pick the four surfaces the brand actually ships: for an open-source project that is usually the repo header, the docs site, a social card, and a sticker or shirt. Render each at true proportions. Replace any surface the project does not have — never show a mockup of something that will not exist." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 04 · Practice</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Applications</h1></div></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:40px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div style="flex:1;border:2px solid var(--color-text);background:var(--color-paper,#fff);display:flex;flex-direction:column;">
+        <div style="background:var(--color-text);color:var(--color-on-field,#fff);padding:14px 20px;display:flex;align-items:center;gap:12px;"><div style="width:26px;height:26px;border:5px solid var(--color-on-field,#fff);border-radius:50%;"></div><span style="font-size:22px;font-weight:800;letter-spacing:0.08em;">SOLARINET</span><span style="margin-left:auto;font-size:22px;color:var(--color-neutral-400);">Docs · Guides · API</span></div>
+        <div style="padding:26px 20px;display:flex;flex-direction:column;gap:12px;"><div style="font-size:40px;font-weight:800;letter-spacing:-0.02em;">Scheduling that volunteers can run</div><div style="font-size:24px;color:var(--color-neutral-700);max-width:560px;">Open source, self-hosted, and free for community projects.</div><div style="background:var(--color-accent);color:var(--color-on-field,#fff);padding:12px 18px;font-size:24px;font-weight:800;align-self:flex-start;">Read the guide</div></div>
+      </div>
+      <div style="font-size:26px;font-weight:800;">Docs site header</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div style="flex:1;background:var(--color-accent);color:var(--color-on-field,#fff);padding:28px;display:flex;flex-direction:column;"><div style="width:44px;height:44px;border:8px solid var(--color-on-field,#fff);border-radius:50%;"></div><div style="margin-top:auto;font-size:44px;font-weight:800;line-height:1.05;letter-spacing:-0.02em;">v2.4 — recurring shifts</div><div style="font-size:24px;margin-top:10px;">https://akoria.net / releases</div></div>
+      <div style="font-size:26px;font-weight:800;">Social card, 2:1</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div style="flex:1;display:grid;grid-template-rows:1fr 1fr;gap:20px;">
+        <div style="background:var(--color-text);display:flex;align-items:center;justify-content:center;gap:14px;"><div style="width:40px;height:40px;border:7px solid var(--color-on-field,#fff);border-radius:50%;"></div><span style="font-size:30px;font-weight:800;color:var(--color-on-field,#fff);letter-spacing:0.08em;">SOLARINET</span></div>
+        <div style="background:var(--color-surface);border:2px solid var(--color-divider);display:flex;align-items:center;justify-content:center;"><div style="width:70px;height:70px;border:11px solid var(--color-text);border-radius:50%;display:flex;align-items:center;justify-content:center;"><div style="width:20px;height:20px;background:var(--color-accent);border-radius:50%;"></div></div></div>
+      </div>
+      <div style="font-size:26px;font-weight:800;">Shirt &amp; sticker</div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>19</span></div>
+</section>
+
+<section data-label="21 Assets" data-template-id="21" data-screen-label="20" data-speaker-notes="TEMPLATE 21 — ASSETS, LICENCE & CONTACT. Slots: REPO_URL, ASSET_PATH, FONT_SOURCE, LICENCE, CONTACT, REVIEW_CADENCE. Every link must resolve — verify before issuing. For open-source brands, state trademark terms separately from the asset licence: the code licence rarely covers the logo." style="width:1920px;height:1080px;background:var(--color-bg);color:var(--color-text);padding:88px 96px;display:flex;flex-direction:column;gap:32px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;"><div><div style="font-size:24px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:var(--color-accent-700);margin-bottom:12px;">Section 05 · Governance</div><h1 style="font-size:76px;letter-spacing:-0.02em;margin:0;">Assets, licence &amp; contact</h1></div><span style="font-size:24px;font-weight:800;letter-spacing:0.08em;color:var(--color-on-field,#fff);background:var(--color-accent);padding:6px 10px;">https://github.com/soren42/Solarinet</span></div>
+  <div style="height:4px;background:var(--color-text);"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:64px;flex:1;">
+    <div style="display:flex;flex-direction:column;gap:24px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Where the files live</div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">Logo suite</div><div style="font-size:26px;color:var(--color-neutral-800);">https://github.com/soren42/Solarinet · /logo</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">Typefaces</div><div style="font-size:26px;color:var(--color-neutral-800);">Archivo, Google Fonts · OFL 1.1</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">Colour tokens</div><div style="font-size:26px;color:var(--color-neutral-800);">/tokens/colour.json · CSS, Figma, Tailwind</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">This document</div><div style="font-size:26px;color:var(--color-neutral-800);">/brand/standards.pdf · source in /brand/src</div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:24px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Permissions</div>
+      <div style="background:var(--color-surface);border-left:8px solid var(--color-text);padding:24px 26px;"><div style="font-size:28px;font-weight:800;margin-bottom:6px;">You may</div><div style="font-size:26px;">Use the marks unmodified to refer to SolariNet, link to us, and describe integrations.</div></div>
+      <div style="background:var(--color-surface);border-left:8px solid var(--color-accent);padding:24px 26px;"><div style="font-size:28px;font-weight:800;margin-bottom:6px;">You may not</div><div style="font-size:26px;">Alter the marks, use them in your own product name, or imply endorsement.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;font-size:26px;color:var(--color-neutral-800);">Documentation: CC BY 4.0. Marks: trademark of the SolariNet maintainers, not covered by the code licence.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:24px;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:var(--color-neutral-700);">Keeping it true</div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">Owner</div><div style="font-size:26px;color:var(--color-neutral-800);">Design working group · github.com/soren42/Solarinet/issues</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">Review</div><div style="font-size:26px;color:var(--color-neutral-800);">Every six months, or on any release that changes the UI.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">Exceptions</div><div style="font-size:26px;color:var(--color-neutral-800);">Open an issue tagged <strong>brand</strong>. Two maintainers approve. The decision is written back into this document.</div></div>
+      <div style="border-top:2px solid var(--color-divider);padding-top:14px;"><div style="font-size:28px;font-weight:800;">Version</div><div style="font-size:26px;color:var(--color-neutral-800);">1.0 · issued 2026-07-29</div></div>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;border-top:2px solid var(--color-divider);padding-top:18px;font-size:24px;color:var(--color-neutral-700);"><span>SolariNet — Brand Standards</span><span>20</span></div>
+</section>
+
+<section data-label="22 Close" data-template-id="22" data-screen-label="21" data-speaker-notes="TEMPLATE 22 — CLOSING STATEMENT. The reference guide simply stopped; a guide should end with a sentence that tells the reader what to do when the guide does not cover their case. Slots: CLOSING_RULE (one sentence), CONTACT. Second and final full-accent field in the document." style="width:1920px;height:1080px;background:var(--color-accent);color:var(--color-on-field,#fff);padding:96px;display:flex;flex-direction:column;">
+  <div style="display:flex;align-items:center;gap:24px;"><div style="width:70px;height:70px;border:6px solid var(--color-on-field,#fff);border-radius:50%;display:flex;align-items:center;justify-content:center;"><div style="width:20px;height:20px;background:var(--color-paper,#fff);border-radius:50%;"></div></div><span style="font-size:26px;font-weight:800;letter-spacing:0.22em;text-transform:uppercase;">SolariNet</span></div>
+  <div style="margin-top:auto;">
+    <h1 style="font-size:104px;line-height:1.04;letter-spacing:-0.03em;margin:0;color:var(--color-on-field,#fff);max-width:1560px;text-wrap:pretty;">When this document doesn't answer your question, choose the plainer option and tell us what you did.</h1>
+  </div>
+  <div style="margin-top:auto;border-top:4px solid var(--color-on-field,#fff);padding-top:26px;display:flex;justify-content:space-between;align-items:baseline;font-size:28px;font-weight:600;">
+    <span>github.com/soren42/Solarinet/issues · https://github.com/soren42/Solarinet</span>
+    <span>End of document · v1.0</span>
+  </div>
+</section>
+</x-import>
+</x-dc>
+</body>
+</html>

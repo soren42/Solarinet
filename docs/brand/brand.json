@@ -1,0 +1,112 @@
+{
+  "name": "SolariNet",
+  "shortName": "SOLARINET",
+  "tagline": "One console for the whole fleet.",
+  "positioning": "SolariNet is a self-hosted monitoring and control plane that gives a homelab operator one live view of every system, service, and network link across the fleet.",
+  "origin": "SolariNet grew out of one operator's need to see an entire self-hosted fleet at a glance — dozens of servers, single-board computers, switches, and services scattered across a home network, each with its own dashboard or none at all. Built as a lean standard-C control plane behind a browser dashboard, it treats the homelab the way an NOC treats a datacenter: one console, live telemetry, honest status, and no cloud dependency. Every host is named for an element; the network is the periodic table.",
+  "values": {
+    "statement": "Own your infrastructure, and see it clearly.",
+    "clauses": [
+      "Self-hosted by default — no telemetry leaves the fleet, no cloud account gates the view.",
+      "Honest status over reassuring green — a degraded link reads as degraded.",
+      "Lean and portable — standard C, no runtime to feed, runs where the fleet runs."
+    ]
+  },
+  "principles": [
+    { "title": "One console, not a dozen tabs", "body": "The fleet is shown as a single live surface — hosts, services, links, and alerts — so an operator answers 'what's wrong?' in one glance, not by hunting across a dozen device UIs." },
+    { "title": "The database is the source of record", "body": "Topology, identity, and config are read from a system of record, not scraped or hand-kept. The dashboard and the DNS zones are rendered views of the same truth." },
+    { "title": "Status is earned, never assumed", "body": "A node is 'up' because it answered, not because nothing said otherwise. Unknown is its own state, distinct from healthy." },
+    { "title": "Portable over convenient", "body": "Standard C and plain Makefiles over frameworks; a browser and no build step over a toolchain. It should still compile and run in five years." }
+  ],
+  "marks": [
+    { "role": "primary", "file": "icon-512.png", "useWhen": "The default mark — the network-node glyph on the near-black ground. App icon, favicon, cover, and anywhere the brand signs off." },
+    { "role": "glyph", "file": "icon-512.png", "useWhen": "The node glyph alone, no ground, for small sizes and monochrome uses (terminal splash, favicon at 16px)." }
+  ],
+  "logo": {
+    "unit": "The mark is a hub-and-spoke network graph: a ringed teal core radiating six spokes to satellite nodes — four teal, two signal-red for alert states — built on the 8px grid.",
+    "clearSpace": "Keep clear space equal to the core-ring diameter on all sides.",
+    "minSize": "24px glyph on screen; 16px favicon glyph without the grid ground.",
+    "misuse": [
+      "Don't recolor the core off SolariNet teal.",
+      "Don't drop the mark on a light ground without the dark plate.",
+      "Don't add a glow beyond the built-in node bloom.",
+      "Don't rotate, skew, or redistribute the spokes.",
+      "Don't outline or emboss the nodes.",
+      "Don't stretch the mark to non-uniform proportions."
+    ]
+  },
+  "palette": [
+    { "name": "SolariNet Teal", "hex": "#35E0D0", "role": "Accent — core, links, active state, emphasis", "primary": true },
+    { "name": "Deep Teal", "hex": "#1AA9A0", "role": "Pressed and secondary accent" },
+    { "name": "Ink", "hex": "#D8E6F4", "role": "Body type on the dark ground" },
+    { "name": "Ink Dim", "hex": "#8198B3", "role": "Secondary type, captions, meta" },
+    { "name": "Ground", "hex": "#05080E", "role": "Page — near-black blue" },
+    { "name": "Panel", "hex": "#0A121C", "role": "Cards, surfaces, fields" },
+    { "name": "Signal Up", "hex": "#2FE6A0", "role": "Status — healthy / up" },
+    { "name": "Signal Warn", "hex": "#FFB23D", "role": "Status — degraded / warning" },
+    { "name": "Signal Down", "hex": "#FF3D72", "role": "Status — critical / down / alert" },
+    { "name": "Signal Unknown", "hex": "#7D77C4", "role": "Status — unknown / unreachable" }
+  ],
+  "typefaces": [
+    { "family": "IBM Plex Sans", "role": "both", "classification": "Neo-grotesque", "weights": [400, 500, 600, 700], "licence": "SIL OFL 1.1", "source": "fonts.google.com/specimen/IBM+Plex+Sans", "fallback": "system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" },
+    { "family": "IBM Plex Mono", "role": "mono", "classification": "Monospace", "weights": [400, 500, 600, 700], "licence": "SIL OFL 1.1", "source": "fonts.google.com/specimen/IBM+Plex+Mono", "fallback": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }
+  ],
+  "spacing": { "baseUnit": 8, "columns": 12, "gutter": 16, "margin": 24 },
+  "icons": {
+    "library": "Custom line set — network-node motif",
+    "licence": "MIT (with the project)",
+    "stroke": "1.8px, round caps and joins, on the 24px grid",
+    "sizes": [16, 20, 24]
+  },
+  "imagery": {
+    "treatment": "Dark-UI captures of the live dashboard and topology graphs; grayscale for supporting photography, full color only for the product surface itself.",
+    "sourcePolicy": "Product screenshots and rendered topology only — no stock photography.",
+    "files": []
+  },
+  "voice": {
+    "attributes": ["Precise, not terse", "Operator-to-operator, not vendor-to-user", "Honest about failure, not reassuring"],
+    "soundsLike": [
+      "radium didn't answer — DNS is failing over to xenon.",
+      "3 of 9 hosts degraded. cesium is the loudest.",
+      "Cutover complete. All nine devices re-adopted.",
+      "Unknown isn't down. It means we haven't heard back."
+    ],
+    "neverSoundsLike": [
+      "Oops! Something went wrong 😅",
+      "Your network is feeling great today!",
+      "Leverage synergies across your infrastructure estate.",
+      "Everything is awesome — all systems go!"
+    ],
+    "banned": ["seamless", "effortless", "magic", "revolutionary", "next-gen", "robust", "leverage"]
+  },
+  "motion": {
+    "durations": { "instant": 90, "standard": 160, "deliberate": 260, "ceiling": 400 },
+    "easing": "cubic-bezier(0.2, 0, 0, 1)"
+  },
+  "links": {
+    "site": "https://akoria.net",
+    "repo": "https://github.com/soren42/Solarinet",
+    "assets": "https://akoria.net",
+    "contact": "github.com/soren42/Solarinet/issues"
+  },
+  "licence": {
+    "documentation": "CC BY 4.0",
+    "marks": "All rights reserved — the SolariNet mark identifies the project; don't imply endorsement.",
+    "code": "MIT"
+  },
+  "governance": {
+    "owner": "SolariNet maintainer (soren42)",
+    "reviewCadence": "Reviewed at each minor release",
+    "exceptionProcess": "Open an issue on the repo; deviations need maintainer sign-off."
+  },
+  "version": { "number": "1.0", "date": "2026-07-29" },
+  "theme": {
+    "accent": "#35E0D0",
+    "ink": "#D8E6F4",
+    "ground": "#05080E",
+    "surface": "#0A121C",
+    "fontHeading": "\"IBM Plex Sans\", system-ui, sans-serif",
+    "fontBody": "\"IBM Plex Sans\", system-ui, sans-serif",
+    "fontLink": "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap"
+  }
+}
