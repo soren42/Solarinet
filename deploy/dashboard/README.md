@@ -64,7 +64,8 @@ sudo cp deploy/dashboard/apache-solarinet.conf /etc/apache2/sites-available/sola
 sudo a2ensite solarinet && sudo apache2ctl configtest && sudo systemctl reload apache2
 ```
 
-Browse to `https://<host>:9443/` and sign in. Re-run step 6's `cp` after any SPA
+Browse to `https://dashboard.akoria.net/` (alias `https://solarinet.akoria.net/`)
+and sign in. Re-run step 6's `cp` after any SPA
 change (Apache serves a copy). API (PHP) edits are live from the repo.
 
 ## 7. Client agents (host metrics)
