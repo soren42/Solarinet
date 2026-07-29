@@ -65,8 +65,7 @@ sudo a2ensite solarinet && sudo apache2ctl configtest && sudo systemctl reload a
 ```
 
 Browse to `https://dashboard.akoria.net/` (alias `https://solarinet.akoria.net/`)
-and sign in. The legacy `https://<host>:9443/` URL remains as a transitional
-fallback. Re-run step 6's `cp` after any SPA
+and sign in. Re-run step 6's `cp` after any SPA
 change (Apache serves a copy). API (PHP) edits are live from the repo.
 
 ## 7. Client agents (host metrics)
