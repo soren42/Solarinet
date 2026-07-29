@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="omelette-owns-print" content="letter">
+<title>SolariNet — Interface &amp; Identity Standards, Rev 2</title>
+<style>
+:root{
+  --unit:8px;
+  --font-display:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+html[data-mode="dark"]{
+  --color-bg:#070A0F; --color-surface:#0E151D; --color-raised:#16202C; --color-paper:#0E151D;
+  --color-text:#DFE8F2; --color-dim:#9DB0C4; --color-faint:#6E8399;
+  --color-divider:#22303F; --color-divider-strong:#31465C;
+  --color-accent:#22B8F0; --color-accent-700:#5FCCFA; --color-accent-deep:#0E86B8;
+  --color-ok:#3DD68C; --color-quiet:#4E6B7E; --color-warn:#F5A623; --color-crit:#FF4D5E;
+  --color-maint:#9B87FF; --color-unknown:#7C8AA0;
+  --color-on-field:#06090D; --color-neutral-700:#8299AF;
+  --desk:#03050A;
+}
+html[data-mode="light"]{
+  --color-bg:#FFFFFF; --color-surface:#F4F7FA; --color-raised:#EAEFF5; --color-paper:#FFFFFF;
+  --color-text:#0F1720; --color-dim:#47596C; --color-faint:#5C6E80;
+  --color-divider:#D3DCE6; --color-divider-strong:#B3C1D0;
+  --color-accent:#0A7FB0; --color-accent-700:#065C81; --color-accent-deep:#054B6B;
+  --color-ok:#0B7F53; --color-quiet:#5A6E80; --color-warn:#94590A; --color-crit:#C4172C;
+  --color-maint:#5B41C8; --color-unknown:#5A6B7D;
+  --color-on-field:#FFFFFF; --color-neutral-700:#54687C;
+  --desk:#B9C3CE;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--desk);color:var(--color-text);font-family:var(--font-body);-webkit-font-smoothing:antialiased}
+.chrome{position:fixed;top:12px;right:12px;z-index:99;display:flex;gap:6px;background:var(--color-surface);border:1px solid var(--color-divider);border-radius:8px;padding:6px}
+.chrome button{font:600 11px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-dim);background:var(--color-raised);border:1px solid var(--color-divider);border-radius:5px;padding:7px 10px;cursor:pointer}
+.chrome button:hover{color:var(--color-accent);border-color:var(--color-accent)}
+.stack{display:flex;flex-direction:column;align-items:center;gap:22px;padding:26px 12px 60px}
+.page{width:816px;height:1056px;padding:44px 60px 36px;background:var(--color-bg);color:var(--color-text);display:flex;flex-direction:column;gap:12px;position:relative;overflow:hidden;box-shadow:0 6px 26px rgba(0,0,0,.42)}
+.ph{display:flex;gap:14px;align-items:flex-start}
+.bar{width:4px;align-self:stretch;background:var(--color-accent);flex:0 0 4px;border-radius:2px}
+.eyebrow{font:700 12px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--color-accent-700)}
+h1.t{font:600 29px/1.12 var(--font-display);letter-spacing:-.015em;margin:5px 0 0}
+h1.t.cont{font-size:27px}
+.sub{font:400 13px/1.45 var(--font-body);color:var(--color-dim);margin-top:5px;max-width:60ch}
+.rule{height:2px;background:var(--color-text);opacity:.9}
+.body{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0}
+h2{font:600 17px/1.2 var(--font-display);margin:0;letter-spacing:-.01em}
+h3{font:700 12px/1.1 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--color-faint);margin:0}
+p{font:400 13px/1.45 var(--font-body);margin:0;color:var(--color-text)}
+p.d{color:var(--color-dim)}
+.foot{margin-top:auto;border-top:1px solid var(--color-divider);padding-top:8px;display:flex;justify-content:space-between;font:400 12px/1 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--color-faint)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.card{border:1px solid var(--color-divider);border-radius:8px;background:var(--color-surface);padding:12px 13px}
+.card h4{font:600 13px/1.25 var(--font-display);margin:0 0 5px}
+.card p{font-size:12px;line-height:1.4;color:var(--color-dim)}
+.tbl{display:grid;width:100%;font-size:12px}
+.tbl .hd{font:700 12px/1.1 var(--font-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--color-faint);padding:7px 9px;border-bottom:2px solid var(--color-divider-strong)}
+.tbl.tight .cl{padding:4px 9px}
+.tbl.tight .hd{padding:5px 9px}
+.tbl .cl{padding:7px 9px;border-bottom:1px solid var(--color-divider);font:400 12px/1.35 var(--font-body);display:flex;align-items:center;gap:7px}
+.tbl .cl.m{font-family:var(--font-mono);font-size:12px;color:var(--color-dim)}
+.dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px;display:inline-block}
+.sw{height:52px;border-radius:6px 6px 0 0;border:1px solid var(--color-divider);border-bottom:none}
+.swm{font:400 12px/1.4 var(--font-mono);color:var(--color-faint);padding:6px 8px;border:1px solid var(--color-divider);border-top:none;border-radius:0 0 6px 6px;background:var(--color-surface)}
+.swm b{display:block;font:600 12px/1.35 var(--font-mono);color:var(--color-text);letter-spacing:.02em}
+.mono{font-family:var(--font-mono)}
+.bad{color:var(--color-crit)}.good{color:var(--color-ok)}.wn{color:var(--color-warn)}
+.pill{font:700 9.5px/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;padding:4px 7px;border-radius:4px;display:inline-block}
+.find{display:grid;grid-template-columns:20px 1fr;gap:9px;align-items:start}
+.find .n{font:700 12px/1.3 var(--font-mono);color:var(--color-crit)}
+.find b{font:600 12.5px/1.35 var(--font-display);display:block}
+.find span{font:400 12px/1.38 var(--font-body);color:var(--color-dim)}
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--color-divider);border-radius:8px;overflow:hidden}
+.ba>div{padding:11px 12px}
+.ba>div:first-child{border-right:1px solid var(--color-divider);background:var(--color-surface)}
+.balab{font:700 12px/1.1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+.demo{background:var(--color-bg);border:1px solid var(--color-divider);border-radius:6px;padding:10px}
+.tile{border:1px solid var(--color-divider);border-radius:6px;background:var(--color-surface);padding:8px;min-width:0}
+.tile .nm{font:600 11.5px/1.2 var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .mt{font:400 9.5px/1.3 var(--font-mono);color:var(--color-faint);margin-top:2px}
+.spark{height:16px;margin-top:6px}
+.kpi{border:1px solid var(--color-divider);border-radius:8px;background:var(--color-surface);padding:10px 11px}
+.kpi .k{font:700 9.5px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--color-faint)}
+.kpi .v{font:600 24px/1.05 var(--font-mono);margin-top:5px;letter-spacing:-.02em}
+.kpi .s{font:400 10.5px/1.3 var(--font-body);color:var(--color-dim);margin-top:2px}
+.alert{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--color-divider);border-left-width:3px;border-radius:6px;background:var(--color-surface)}
+.alert .t{font:600 12px/1.25 var(--font-display)}
+.alert .m{font:400 10.5px/1.3 var(--font-mono);color:var(--color-dim);margin-top:2px}
+.spec{display:flex;flex-direction:column}
+.spec .r{display:flex;justify-content:space-between;gap:10px;border-top:1px solid var(--color-divider);padding:5px 0;font:400 12px/1.3 var(--font-body)}
+.spec .r span:first-child{color:var(--color-faint);font-family:var(--font-mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase}
+.spec .r span:last-child{font-family:var(--font-mono);text-align:right;color:var(--color-text)}
+.cons{position:relative;background:
+  linear-gradient(var(--color-divider) 1px,transparent 1px) 0 0/100% 24px,
+  linear-gradient(90deg,var(--color-divider) 1px,transparent 1px) 0 0/24px 100%,
+  var(--color-surface);border:1px solid var(--color-divider);border-radius:8px;display:grid;place-items:center;padding:18px}
+.cs{position:absolute;inset:26px;border:1px dashed var(--color-accent);opacity:.5}
+.no{border:1px solid var(--color-divider);border-radius:6px;background:var(--color-surface);padding:9px;display:flex;flex-direction:column;gap:7px;align-items:center;text-align:center}
+.no .cap{font:600 12px/1.25 var(--font-body);color:var(--color-crit)}
+.no .fig{height:44px;display:grid;place-items:center;width:100%}
+ul.cl2{margin:0;padding-left:16px}
+ul.cl2 li{font:400 12px/1.5 var(--font-body);color:var(--color-dim);margin-bottom:3px}
+ul.cl2 li b{color:var(--color-text);font-weight:600}
+.tt{font:400 12px/1.35 var(--font-mono);color:var(--color-dim)}
+.hl{background:var(--color-raised);border-left:3px solid var(--color-accent);border-radius:0 6px 6px 0;padding:10px 12px}
+.hl p{font-size:12px;line-height:1.45}
+.co{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.co .box{border:1px solid var(--color-divider);border-radius:6px;padding:9px 10px;background:var(--color-surface)}
+.co .box .lab{font:700 12px/1.1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}
+.co .box p{font-size:12px;line-height:1.38}
+@media print{
+  @page{size:letter;margin:0}
+  body{background:#fff}
+  .chrome{display:none}
+  .stack{padding:0;gap:0}
+  .page{box-shadow:none;break-after:page}
+}
+</style>
+</head>
+<body data-type-floor="12">
+
+<div class="chrome">
+  <button data-theme-toggle>Light</button>
+  <button onclick="window.print()">Print</button>
+</div>
+
+<div class="stack">
+
+<!-- ============ E01 COVER ============ -->
+<section class="page" data-label="E01 Cover" style="padding:0;gap:0">
+  <div style="height:376px;background:var(--color-surface);border-bottom:2px solid var(--color-accent);padding:44px 60px;display:flex;flex-direction:column">
+    <div class="eyebrow">Interface &amp; identity standards</div>
+    <div style="margin-top:auto;display:flex;align-items:flex-end;gap:20px">
+      <svg width="112" height="112" viewBox="0 0 24 24" aria-label="SolariNet mark">
+        <g fill="none" stroke="var(--color-accent)" stroke-width="1.1" opacity=".55">
+          <path d="M12 12V4M12 12l6.9 4M12 12L5.1 16"/>
+        </g>
+        <rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-accent)"/>
+        <g fill="var(--color-text)">
+          <rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/>
+          <rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/>
+          <rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/>
+        </g>
+      </svg>
+      <div>
+        <div style="font:300 56px/1 var(--font-display);letter-spacing:-.03em">Solari<span style="font-weight:600">Net</span></div>
+        <div style="font:400 14px/1.4 var(--font-mono);color:var(--color-dim);margin-top:10px;letter-spacing:.02em">Unified systems, network &amp; asset monitoring</div>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1;padding:40px 60px 36px;display:flex;flex-direction:column">
+    <div style="font:600 20px/1.35 var(--font-display);max-width:46ch">A corrective pass over the generated identity — colour, type, mark, iconography and the dashboard that carries them.</div>
+    <p class="d" style="margin-top:16px;max-width:62ch">Revision 2 replaces the generated first pass — a 1920×1080 deck built on the Modernist template. It keeps the restrained cyberpunk character of the product and corrects both layers of fault: a guide that specified a font it never loaded and omitted status colour entirely, and an interface that consequently used colour, glow and monospace without assigning any of them a job.</p>
+    <div style="margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      <div class="spec"><div class="r"><span>Version</span><span>2.0.0</span></div><div class="r"><span>Date</span><span>2026-07-29</span></div></div>
+      <div class="spec"><div class="r"><span>Supersedes</span><span>1.x generated</span></div><div class="r"><span>Owner</span><span>SolariNet</span></div></div>
+      <div class="spec"><div class="r"><span>Format</span><span>Letter · 816×1056</span></div><div class="r"><span>Themes</span><span>Dark · Light</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ E02 CONTENTS ============ -->
+<section class="page" data-label="E02 Contents">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 00</div><h1 class="t">Contents</h1><div class="sub">Sixteen pages. Each settles one question and states the rule a developer applies without asking.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl" style="grid-template-columns:44px 1fr 1.5fr">
+      <div class="hd">§</div><div class="hd">Section</div><div class="hd">What it settles</div>
+      <div class="cl m">01</div><div class="cl">Audit of Rev 1</div><div class="cl" style="color:var(--color-dim)">Fourteen findings, ranked by damage to legibility</div>
+      <div class="cl m">02</div><div class="cl">Colour architecture</div><div class="cl" style="color:var(--color-dim)">Why brand must leave the status hues</div>
+      <div class="cl m">03</div><div class="cl">Palette</div><div class="cl" style="color:var(--color-dim)">Three tiers, capped, with print values</div>
+      <div class="cl m">04</div><div class="cl">Contrast</div><div class="cl" style="color:var(--color-dim)">Every approved pairing, measured at render</div>
+      <div class="cl m">05</div><div class="cl">Status system</div><div class="cl" style="color:var(--color-dim)">Six states and the one encoding each may use</div>
+      <div class="cl m">06</div><div class="cl">Quiet-healthy principle</div><div class="cl" style="color:var(--color-dim)">How 100+ nodes stay readable at a glance</div>
+      <div class="cl m">07</div><div class="cl">Logo</div><div class="cl" style="color:var(--color-dim)">Three candidates, one recommendation</div>
+      <div class="cl m">08</div><div class="cl">Logo construction</div><div class="cl" style="color:var(--color-dim)">Unit, clear space, minimum size</div>
+      <div class="cl m">09</div><div class="cl">Logo misuse</div><div class="cl" style="color:var(--color-dim)">Six failures already present in Rev 1</div>
+      <div class="cl m">10</div><div class="cl">Typography</div><div class="cl" style="color:var(--color-dim)">Two faces and the mono/sans division of labour</div>
+      <div class="cl m">11</div><div class="cl">Type scale</div><div class="cl" style="color:var(--color-dim)">Nine steps with a stated body floor</div>
+      <div class="cl m">12</div><div class="cl">Iconography</div><div class="cl" style="color:var(--color-dim)">One library, one grid, one stroke</div>
+      <div class="cl m">13</div><div class="cl">Components</div><div class="cl" style="color:var(--color-dim)">Before and after for the six that carry the UI</div>
+      <div class="cl m">14</div><div class="cl">Layout &amp; density</div><div class="cl" style="color:var(--color-dim)">Grid, wrap behaviour, tile minimums</div>
+      <div class="cl m">15</div><div class="cl">Empty states &amp; copy</div><div class="cl" style="color:var(--color-dim)">Vocabulary, and what to render when data is absent</div>
+      <div class="cl m">16</div><div class="cl">Handoff</div><div class="cl" style="color:var(--color-dim)">Ordered change list for implementation</div>
+    </div>
+    <div class="hl" style="margin-top:4px"><p><b>Reading order.</b> Sections 02 and 05–06 are the substance of the revision; everything else follows from them. If only one change ships, ship the colour architecture.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>02</span></div>
+</section>
+
+<!-- ============ E03 AUDIT ============ -->
+<section class="page" data-label="E03 Audit">
+  <div class="ph"><div class="bar" style="background:var(--color-crit)"></div><div><div class="eyebrow" style="color:var(--color-crit)">Section 01</div><h1 class="t">Audit of Rev 1</h1><div class="sub">Read from the v1 guide source and the three dashboard captures. The guide-level faults come first because they caused most of the interface-level ones.</div></div></div>
+  <div class="rule"></div>
+  <div class="body" style="gap:8px">
+    <h3 style="color:var(--color-crit)">Guide-level — the specification itself</h3>
+    <div class="g2" style="gap:8px 18px">
+      <div class="find"><div class="n">G1</div><div><b>The specified font never loads</b><span><span class="mono">ds/styles.css</span> imports Archivo over the network; <span class="mono">index.html</span> then overrides both tokens to <span class="mono">IBM&nbsp;Plex&nbsp;Sans</span>, which is never imported. The guide renders in <span class="mono">system-ui</span>.</span></div></div>
+      <div class="find"><div class="n">G2</div><div><b>No monospace token exists</b><span>The product is predominantly monospace. The guide defines <span class="mono">--font-heading</span> and <span class="mono">--font-body</span> only, so the dominant face in the UI is ungoverned.</span></div></div>
+      <div class="find"><div class="n">G3</div><div><b>No functional colour tier</b><span>The palette page ships three swatches — accent, ink, ground. No green, amber or red. A monitoring tool's entire vocabulary is undefined.</span></div></div>
+      <div class="find"><div class="n">G4</div><div><b>One face presented as two</b><span>Heading and body resolve to the same family at different weights. The "two faces maximum" rule is satisfied by having effectively one.</span></div></div>
+      <div class="find"><div class="n">G5</div><div><b>Template palette left in place</b><span>The underlying system still carries Modernist's vermilion ramp <span class="mono">#EC3013</span> and Archivo. Overrides sit on top rather than replacing it.</span></div></div>
+      <div class="find"><div class="n">G6</div><div><b>Deck format for a developer document</b><span>1920×1080 at a 24px floor suits presenting. Implementation specs — tokens, scales, component contracts — belong in the Letter document format.</span></div></div>
+    </div>
+    <h3 style="color:var(--color-crit);margin-top:2px">Interface-level — what reached the screen</h3>
+    <div class="g2" style="gap:8px 18px">
+      <div class="find"><div class="n">01</div><div><b>Brand colour sits on the status hue</b><span>Chrome teal <span class="mono">#35E0D0</span> and healthy mint <span class="mono">#2FE6A0</span> are neighbours. Logo, active nav, focus and "up" read as one signal.</span></div></div>
+      <div class="find"><div class="n">02</div><div><b>Monospace on human language</b><span>Nav, buttons, chips, KPI captions and group headings are all mono — the direct consequence of G2.</span></div></div>
+      <div class="find"><div class="n">03</div><div><b>Glow on nominal states</b><span>Every KPI card carries a glowing underline and halo. Six competing glows leave no focal point for the one that matters.</span></div></div>
+      <div class="find"><div class="n">04</div><div><b>Colour without meaning</b><span>Pool cards glow teal while holding zero systems. <span class="mono">MONITORS 0/0</span> is violet, a hue with no assigned role.</span></div></div>
+      <div class="find"><div class="n">05</div><div><b>A card contradicts itself</b><span><span class="mono">DOWN 1</span> in red above the caption <span class="mono">0 critical alerts</span>. One card, opposite conclusions.</span></div></div>
+      <div class="find"><div class="n">06</div><div><b>Hostnames truncate</b><span><span class="mono">chlori… nitrog… tungst…</span> Identity is the one field that must never clip; tiles are too narrow.</span></div></div>
+      <div class="find"><div class="n">07</div><div><b>Two tile designs in one grid</b><span>Some tiles carry a sparkline, others the literal word <span class="mono">SYSTEM</span> over an empty bar.</span></div></div>
+      <div class="find"><div class="n">08</div><div><b>Machine identifiers in chrome</b><span><span class="mono">ACTIVE C2 7211776717853820412</span> spends the most valuable strip in the app on a value no human reads.</span></div></div>
+      <div class="find"><div class="n">09</div><div><b>Placeholders shipped as content</b><span>A group heading rendered as <span class="mono">—</span>, a version as <span class="mono">V—</span>. These read as defects, not absence.</span></div></div>
+      <div class="find"><div class="n">10</div><div><b>Counts disagree across views</b><span>Header says 18 systems; sidebar and Systems page say 9. The operator cannot tell which is right.</span></div></div>
+      <div class="find"><div class="n">11</div><div><b>Status drawn as a control</b><span>Heartbeat uses an on/off switch — it invites a tap that does nothing and reads as operator state.</span></div></div>
+      <div class="find"><div class="n">12</div><div><b>Severity encoded thrice, then zero</b><span>Alert rows carry bar, dot and icon; the Systems table then drops the dot for <span class="mono">down</span>.</span></div></div>
+      <div class="find"><div class="n">13</div><div><b>Icon set is not a set</b><span>Solid and outline mixed, stroke weights inconsistent, several glyphs off any shared grid.</span></div></div>
+      <div class="find"><div class="n">14</div><div><b>Muted text below threshold</b><span>Captions such as <span class="mono">no systems yet</span> fall under 3:1 and vanish at arm's length on a tablet.</span></div></div>
+    </div>
+    <div class="hl"><p><b>The single root cause.</b> The guide never assigned jobs — it named an accent and a face, omitted status colour and monospace, and left the template's palette underneath. With nothing specified, the interface used teal, glow and monospace as decoration. Rev 2 gives each one exactly one job and forbids the rest.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>03</span></div>
+</section>
+
+<!-- ============ E04 COLOUR ARCHITECTURE ============ -->
+<section class="page" data-label="E04 Colour architecture">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 02</div><h1 class="t">Colour architecture</h1><div class="sub">One rule governs the whole palette: a hue that reports condition may not also decorate the interface.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="ba">
+      <div>
+        <div class="balab" style="color:var(--color-crit)">Rev 1 — collision</div>
+        <div class="demo" data-allow="small-type" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <span class="dot" style="background:#35E0D0" data-allow="hex"></span><span class="tt">brand / nav / focus</span>
+        </div>
+        <div class="demo" data-allow="small-type" style="display:flex;gap:8px;align-items:center">
+          <span class="dot" style="background:#2FE6A0" data-allow="hex"></span><span class="tt">status · healthy</span>
+        </div>
+        <p style="font-size:12px;margin-top:9px;color:var(--color-dim)">Two hues, 18° apart. On a wall of tiles the operator cannot separate "this is chrome" from "this is fine".</p>
+      </div>
+      <div>
+        <div class="balab" style="color:var(--color-ok)">Rev 2 — separated</div>
+        <div class="demo" data-allow="small-type" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <span class="dot" style="background:var(--color-accent)"></span><span class="tt">brand / nav / focus · azure</span>
+        </div>
+        <div class="demo" data-allow="small-type" style="display:flex;gap:8px;align-items:center">
+          <span class="dot" style="background:var(--color-ok)"></span><span class="tt">status · healthy · green</span>
+        </div>
+        <p style="font-size:12px;margin-top:9px;color:var(--color-dim)">Azure is reserved for interface. Green, amber and red belong to condition and appear nowhere else.</p>
+      </div>
+    </div>
+
+    <h2>Hue assignment</h2>
+    <div class="tbl" style="grid-template-columns:26px 1.05fr 1fr 1.5fr">
+      <div class="hd"></div><div class="hd">Hue</div><div class="hd">Owns</div><div class="hd">Never used for</div>
+      <div class="cl"><span class="dot" style="background:var(--color-accent)"></span></div><div class="cl">Azure</div><div class="cl" style="color:var(--color-dim)">Chrome, links, focus, selection, info</div><div class="cl" style="color:var(--color-dim)">Any condition or severity</div>
+      <div class="cl"><span class="dot" style="background:var(--color-ok)"></span></div><div class="cl">Green</div><div class="cl" style="color:var(--color-dim)">Healthy / operational only</div><div class="cl" style="color:var(--color-dim)">Buttons, brand, emphasis</div>
+      <div class="cl"><span class="dot" style="background:var(--color-warn)"></span></div><div class="cl">Amber</div><div class="cl" style="color:var(--color-dim)">Degraded, over tolerance, stale</div><div class="cl" style="color:var(--color-dim)">Decoration, highlights</div>
+      <div class="cl"><span class="dot" style="background:var(--color-crit)"></span></div><div class="cl">Red</div><div class="cl" style="color:var(--color-dim)">Down, critical, destructive action</div><div class="cl" style="color:var(--color-dim)">Counts that are not faults</div>
+      <div class="cl"><span class="dot" style="background:var(--color-maint)"></span></div><div class="cl">Violet</div><div class="cl" style="color:var(--color-dim)">Maintenance — operator-declared</div><div class="cl" style="color:var(--color-dim)">Unknown or missing data</div>
+      <div class="cl"><span class="dot" style="background:var(--color-unknown)"></span></div><div class="cl">Slate</div><div class="cl" style="color:var(--color-dim)">Unknown, unreported, disabled</div><div class="cl" style="color:var(--color-dim)">Anything actionable</div>
+    </div>
+
+    <h2>Coverage ceilings</h2>
+    <div class="g3">
+      <div class="card"><h4>Accent ≤ 10%</h4><p>Azure covers no more than a tenth of any surface: active nav item, focused control, one primary button, links.</p></div>
+      <div class="card"><h4>Fault ≤ 5%</h4><p>Amber and red together stay under a twentieth. If a screen exceeds it the screen is a triage list, not a dashboard.</p></div>
+      <div class="card"><h4>Glow ≤ 1 element</h4><p>Outer glow marks the single most severe item in view. Two glows in one region is a defect.</p></div>
+    </div>
+    <div class="hl"><p><b>Why the brand moved rather than the status hue.</b> Status green, amber and red are conventions an operator brings from every other tool; they are not ours to reassign. The brand is ours. Moving the accent to azure costs one logo revision and settles the ambiguity permanently.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>04</span></div>
+</section>
+
+<!-- ============ E05 PALETTE ============ -->
+<section class="page" data-label="E05 Palette">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 03</div><h1 class="t">Palette</h1><div class="sub">Three tiers. Primary capped at three. Values are dark-theme; the light column carries the paired token.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>Tier 1 · Primary</h3>
+    <div class="g3">
+      <div><div class="sw" style="background:#22B8F0" data-allow="hex"></div><div class="swm"><b>Signal Azure</b>Accent · interactive<br>#22B8F0 · 34 184 240<br>C72 M13 Y0 K6</div></div>
+      <div><div class="sw" style="background:#070A0F" data-allow="hex"></div><div class="swm"><b>Void</b>Ground<br>#070A0F · 7 10 15<br>C53 M33 Y0 K94</div></div>
+      <div><div class="sw" style="background:#DFE8F2" data-allow="hex"></div><div class="swm"><b>Halide</b>Ink<br>#DFE8F2 · 223 232 242<br>C8 M4 Y0 K5</div></div>
+    </div>
+    <h3>Tier 2 · Neutrals &amp; surfaces</h3>
+    <div class="g4">
+      <div><div class="sw" style="background:#0E151D;height:40px" data-allow="hex"></div><div class="swm"><b>Surface</b>#0E151D</div></div>
+      <div><div class="sw" style="background:#16202C;height:40px" data-allow="hex"></div><div class="swm"><b>Raised</b>#16202C</div></div>
+      <div><div class="sw" style="background:#22303F;height:40px" data-allow="hex"></div><div class="swm"><b>Divider</b>#22303F</div></div>
+      <div><div class="sw" style="background:#31465C;height:40px" data-allow="hex"></div><div class="swm"><b>Divider hi</b>#31465C</div></div>
+      <div><div class="sw" style="background:#9DB0C4;height:40px" data-allow="hex"></div><div class="swm"><b>Ink dim</b>#9DB0C4</div></div>
+      <div><div class="sw" style="background:#6E8399;height:40px" data-allow="hex"></div><div class="swm"><b>Ink faint</b>#6E8399</div></div>
+      <div><div class="sw" style="background:#4E6B7E;height:40px" data-allow="hex"></div><div class="swm"><b>Quiet</b>#4E6B7E</div></div>
+      <div><div class="sw" style="background:#7C8AA0;height:40px" data-allow="hex"></div><div class="swm"><b>Unknown</b>#7C8AA0</div></div>
+    </div>
+    <h3>Tier 3 · Functional — condition only</h3>
+    <div class="g4">
+      <div><div class="sw" style="background:#3DD68C;height:40px" data-allow="hex"></div><div class="swm"><b>Operational</b>#3DD68C · up</div></div>
+      <div><div class="sw" style="background:#F5A623;height:40px" data-allow="hex"></div><div class="swm"><b>Degraded</b>#F5A623 · warn</div></div>
+      <div><div class="sw" style="background:#FF4D5E;height:40px" data-allow="hex"></div><div class="swm"><b>Down</b>#FF4D5E · crit</div></div>
+      <div><div class="sw" style="background:#9B87FF;height:40px" data-allow="hex"></div><div class="swm"><b>Maintenance</b>#9B87FF</div></div>
+    </div>
+    <div class="hl"><p><b>Changed from Rev 1.</b> v1 defined three swatches — accent, ink, ground — and no functional tier at all; tier 3 below is entirely new, and its absence is why the dashboard's status colours drifted. Accent teal <span class="mono">#35E0D0</span> is retired to clear the status hues. Healthy mint darkens to <span class="mono">#3DD68C</span> so it recedes against ink. Ink-faint rises from <span class="mono">#54687F</span> to clear 3:1. Violet is reassigned from decoration to maintenance. The Modernist vermilion ramp is removed rather than overridden.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>05</span></div>
+</section>
+
+<!-- ============ E06 CONTRAST ============ -->
+<section class="page" data-label="E06 Contrast">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 04</div><h1 class="t">Contrast</h1><div class="sub">Ratios below are computed in the browser at render time from the hex values on the previous page. None are authored.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>Approved pairings · dark theme</h3>
+    <table data-contrast-matrix style="width:100%;border-collapse:collapse"
+      data-palette='[{"name":"Ink","hex":"#DFE8F2"},{"name":"Ink dim","hex":"#9DB0C4"},{"name":"Ink faint","hex":"#6E8399"},{"name":"Azure","hex":"#22B8F0"},{"name":"Operational","hex":"#3DD68C"},{"name":"Degraded","hex":"#F5A623"},{"name":"Down","hex":"#FF4D5E"},{"name":"Maintenance","hex":"#9B87FF"}]'
+      data-grounds='[{"name":"Void #070A0F","hex":"#070A0F"},{"name":"Surface #0E151D","hex":"#0E151D"},{"name":"Raised #16202C","hex":"#16202C"}]'></table>
+    <div class="g2" style="margin-top:2px">
+      <div class="card"><h4>Thresholds applied</h4><p><b>≥ 7:1</b> body text at any size.<br><b>≥ 4.5:1</b> body text 14px and above.<br><b>≥ 3:1</b> icons, chrome, 19px+ or bold 14px+.<br><b>&lt; 3:1</b> prohibited — struck through above.</p></div>
+      <div class="card"><h4>Rules that follow</h4><p>Ink-faint is licensed for uppercase mono labels at 10px and above only, never for prose. Status hues are legible as text on all three grounds but are used as fills and dots first, text second.</p></div>
+    </div>
+    <div class="hl"><p><b>Non-colour redundancy.</b> No state is signalled by hue alone. Every one pairs its colour with a distinct glyph and a text label, so the system survives monochrome print, deuteranopia and a sunlit tablet.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>06</span></div>
+</section>
+
+<!-- ============ E07 STATUS SYSTEM ============ -->
+<section class="page" data-label="E07 Status system">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 05</div><h1 class="t">Status system</h1><div class="sub">Six states. Each has one colour, one glyph, one label and a defined chrome treatment. Nothing else may indicate condition.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl" style="grid-template-columns:24px .8fr .62fr 1fr 1.05fr">
+      <div class="hd"></div><div class="hd">State</div><div class="hd">Glyph</div><div class="hd">Chrome</div><div class="hd">Meaning</div>
+      <div class="cl"><span class="dot" style="background:var(--color-ok)"></span></div><div class="cl">Operational</div><div class="cl m">● filled</div><div class="cl" style="color:var(--color-dim)">Hairline divider only</div><div class="cl" style="color:var(--color-dim)">Reporting, all metrics in tolerance</div>
+      <div class="cl"><span class="dot" style="background:var(--color-warn)"></span></div><div class="cl">Degraded</div><div class="cl m">▲ triangle</div><div class="cl" style="color:var(--color-dim)">Amber 1px border</div><div class="cl" style="color:var(--color-dim)">Reporting, one or more over tolerance</div>
+      <div class="cl"><span class="dot" style="background:var(--color-crit)"></span></div><div class="cl">Down</div><div class="cl m">■ square</div><div class="cl" style="color:var(--color-dim)">Red border + sole glow</div><div class="cl" style="color:var(--color-dim)">Reachability lost from every vantage</div>
+      <div class="cl"><span class="dot" style="background:var(--color-maint)"></span></div><div class="cl">Maintenance</div><div class="cl m">◆ diamond</div><div class="cl" style="color:var(--color-dim)">Violet dashed border</div><div class="cl" style="color:var(--color-dim)">Alerting suppressed by an operator</div>
+      <div class="cl"><span class="dot" style="background:var(--color-unknown)"></span></div><div class="cl">Unknown</div><div class="cl m">○ hollow</div><div class="cl" style="color:var(--color-dim)">Slate border, 60% opacity</div><div class="cl" style="color:var(--color-dim)">Enrolled, never reported</div>
+      <div class="cl"><span class="dot" style="background:var(--color-unknown);opacity:.55"></span></div><div class="cl">Stale</div><div class="cl m">◐ half</div><div class="cl" style="color:var(--color-dim)">Slate border + age badge</div><div class="cl" style="color:var(--color-dim)">Last report older than 3 intervals</div>
+    </div>
+
+    <h2>One encoding per row</h2>
+    <div class="ba">
+      <div>
+        <div class="balab" style="color:var(--color-crit)">Rev 1 — triple encoded, then none</div>
+        <div class="alert" data-allow="small-type" style="border-left-color:var(--color-crit);margin-bottom:7px">
+          <span class="dot" style="background:var(--color-crit)"></span>
+          <span style="color:var(--color-crit);font:700 11px/1 var(--font-mono)">▲</span>
+          <div><div class="t">PiHole 1 is down</div><div class="m">reachability lost</div></div>
+        </div>
+        <div class="demo" data-allow="small-type" style="display:flex;gap:14px;align-items:center"><span class="tt">PiHole 1</span><span class="tt" style="color:var(--color-text)">down</span></div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">Bar, dot and icon all say "critical" in the alert; the table then says it in plain ink with no marker at all.</p>
+      </div>
+      <div>
+        <div class="balab" style="color:var(--color-ok)">Rev 2 — consistent</div>
+        <div class="alert" data-allow="small-type" style="border-left-color:var(--color-crit);margin-bottom:7px">
+          <span class="pill" data-allow="small-type" style="background:rgba(255,77,94,.14);color:var(--color-crit)">crit</span>
+          <div><div class="t">PiHole 1 is down</div><div class="m">core-infra · reachability lost · 4m</div></div>
+        </div>
+        <div class="demo" data-allow="small-type" style="display:flex;gap:14px;align-items:center"><span class="tt">PiHole 1</span><span style="display:flex;align-items:center;gap:6px"><span class="dot" style="background:var(--color-crit)"></span><span class="tt" style="color:var(--color-crit)">down</span></span></div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">Severity once, as a labelled pill. The state cell always carries dot plus word, in every table.</p>
+      </div>
+    </div>
+    <div class="hl"><p><b>Status is observed, never operable.</b> Toggles, switches and sliders are reserved for controls the operator can actually change. Heartbeat, reachability and health render as indicators — a dot, a sparkbar, a timestamp — and are never drawn as a switch.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>07</span></div>
+</section>
+
+<!-- ============ E08 QUIET HEALTHY ============ -->
+<section class="page" data-label="E08 Quiet-healthy">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 06</div><h1 class="t">The quiet-healthy principle</h1><div class="sub">At 300 systems, roughly nine in ten are fine. Painting the majority bright is what hides the minority that is not.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="ba">
+      <div>
+        <div class="balab" style="color:var(--color-crit)">Rev 1 — every tile lit</div>
+        <div class="demo" data-allow="small-type">
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:5px">
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #FF3D72;background:rgba(255,61,114,.16);box-shadow:0 0 7px rgba(255,61,114,.45)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #FFB23D;background:rgba(255,178,61,.14);box-shadow:0 0 7px rgba(255,178,61,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid #2FE6A0;background:rgba(47,230,160,.14);box-shadow:0 0 7px rgba(47,230,160,.4)" data-allow="hex"></div>
+          </div>
+        </div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">Ten healthy tiles glow as hard as the two faults. Finding the fault is a reading task, not a glance.</p>
+      </div>
+      <div>
+        <div class="balab" style="color:var(--color-ok)">Rev 2 — exceptions only</div>
+        <div class="demo" data-allow="small-type">
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:5px">
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-crit);background:rgba(255,77,94,.16);box-shadow:0 0 9px rgba(255,77,94,.5)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-warn);background:rgba(245,166,35,.12)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+            <div style="aspect-ratio:1;border-radius:4px;border:1px solid var(--color-divider);background:var(--color-surface)"></div>
+          </div>
+        </div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">Healthy is structural — hairline border, no fill, no glow. The eye lands on the two exceptions immediately.</p>
+      </div>
+    </div>
+
+    <h2>Emphasis budget by state</h2>
+    <div class="tbl" style="grid-template-columns:1fr .7fr .7fr .7fr .7fr">
+      <div class="hd">State</div><div class="hd">Border</div><div class="hd">Fill</div><div class="hd">Glow</div><div class="hd">Dot</div>
+      <div class="cl">Operational</div><div class="cl m">divider</div><div class="cl m">none</div><div class="cl m">none</div><div class="cl m">green 8px</div>
+      <div class="cl">Degraded</div><div class="cl m">amber</div><div class="cl m">12%</div><div class="cl m">none</div><div class="cl m">amber 8px</div>
+      <div class="cl">Down</div><div class="cl m">red</div><div class="cl m">16%</div><div class="cl m" style="color:var(--color-crit)">yes</div><div class="cl m">red 8px</div>
+      <div class="cl">Maintenance</div><div class="cl m">violet dash</div><div class="cl m">none</div><div class="cl m">none</div><div class="cl m">violet 8px</div>
+      <div class="cl">Unknown / stale</div><div class="cl m">slate</div><div class="cl m">none</div><div class="cl m">none</div><div class="cl m">hollow 8px</div>
+    </div>
+    <div class="hl"><p><b>Consequence for the grid.</b> A healthy fleet renders as a calm lattice of hairlines. Any colour on screen is information. This is what lets the same view work at three systems and at three hundred.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>08</span></div>
+</section>
+
+<!-- ============ E09 LOGO ============ -->
+<section class="page" data-label="E09 Logo">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 07</div><h1 class="t">Logo</h1><div class="sub">The v1 mark places the product's critical red on two of six satellites, so the app icon permanently reports two faults. Three replacement candidates follow.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="ba" style="margin-bottom:2px">
+      <div>
+        <div class="balab" style="color:var(--color-crit)">Rev 1 mark — as shipped</div>
+        <div style="display:flex;align-items:center;gap:14px">
+          <svg width="58" height="58" viewBox="0 0 100 100">
+            <g stroke="#35E0D0" stroke-width="2.6" stroke-linecap="round" data-allow="hex"><line x1="50" y1="50" x2="50" y2="16"/><line x1="50" y1="50" x2="50" y2="84"/><line x1="50" y1="50" x2="79.4" y2="33"/><line x1="50" y1="50" x2="20.6" y2="33"/><line x1="50" y1="50" x2="20.6" y2="67"/><line x1="50" y1="50" x2="79.4" y2="67"/></g>
+            <circle cx="50" cy="16" r="6.5" fill="#FF3D72" data-allow="hex"/><circle cx="50" cy="84" r="6.5" fill="#FF3D72" data-allow="hex"/>
+            <circle cx="79.4" cy="33" r="6.5" fill="#35E0D0" data-allow="hex"/><circle cx="20.6" cy="33" r="6.5" fill="#35E0D0" data-allow="hex"/><circle cx="20.6" cy="67" r="6.5" fill="#35E0D0" data-allow="hex"/><circle cx="79.4" cy="67" r="6.5" fill="#35E0D0" data-allow="hex"/>
+            <circle cx="50" cy="50" r="12" fill="none" stroke="#35E0D0" stroke-width="6.5" data-allow="hex"/>
+          </svg>
+          <p style="font-size:12px;color:var(--color-dim);margin:0">Two satellites are <span class="mono">#FF3D72</span> — the crit red from the dashboard. Four are accent teal. The mark asserts a fleet state, and the exported PNG bakes in an outer glow and a grid plate.</p>
+        </div>
+      </div>
+      <div>
+        <div class="balab" style="color:var(--color-ok)">Correction</div>
+        <p style="font-size:12px;color:var(--color-dim);margin:0">One accent hue only, in the app and in every export. Six satellites reduce to three — at 16px the six read as an indistinct ring. Status colour is permitted on the satellites in one place only: the live favicon, where reporting fleet state is the intent.</p>
+      </div>
+    </div>
+    <div class="g3">
+      <div class="card" style="display:flex;flex-direction:column;gap:8px">
+        <div style="height:96px;display:grid;place-items:center;background:var(--color-bg);border-radius:6px;border:1px solid var(--color-divider)">
+          <svg width="64" height="64" viewBox="0 0 24 24">
+            <g fill="none" stroke="var(--color-accent)" stroke-width="1.1" opacity=".55"><path d="M12 12V4M12 12l6.9 4M12 12L5.1 16"/></g>
+            <rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-accent)"/>
+            <g fill="var(--color-text)">
+              <rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/>
+              <rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/>
+              <rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/>
+            </g>
+          </svg>
+        </div>
+        <h4>A · Vantage triad <span class="pill" data-allow="small-type" style="background:rgba(34,184,240,.15);color:var(--color-accent);margin-left:4px">recommended</span></h4>
+        <p>A server hub with three monitor vantages — the product's actual architecture. Distinct at 16px, survives one colour, and the three satellites can carry state in the favicon.</p>
+      </div>
+      <div class="card" style="display:flex;flex-direction:column;gap:8px">
+        <div style="height:96px;display:grid;place-items:center;background:var(--color-bg);border-radius:6px;border:1px solid var(--color-divider)">
+          <svg width="64" height="64" viewBox="0 0 24 24">
+            <g fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round">
+              <path d="M12 3.2a8.8 8.8 0 0 1 7.6 4.4"/><path d="M19.6 16.4A8.8 8.8 0 0 1 12 20.8"/><path d="M4.4 16.4A8.8 8.8 0 0 1 4.4 7.6"/>
+            </g>
+            <circle cx="12" cy="12" r="3.4" fill="var(--color-text)"/>
+          </svg>
+        </div>
+        <h4>B · Aperture</h4>
+        <p>Three arcs around a solid core — reads "solar" and "sweep". Elegant but generic; several monitoring tools already use an iris, and it says nothing about topology.</p>
+      </div>
+      <div class="card" style="display:flex;flex-direction:column;gap:8px">
+        <div style="height:96px;display:grid;place-items:center;background:var(--color-bg);border-radius:6px;border:1px solid var(--color-divider)">
+          <svg width="64" height="64" viewBox="0 0 24 24">
+            <rect x="3" y="3" width="8.4" height="8.4" rx="1.4" fill="var(--color-accent)"/>
+            <rect x="12.6" y="3" width="8.4" height="8.4" rx="1.4" fill="var(--color-text)" opacity=".28"/>
+            <rect x="3" y="12.6" width="8.4" height="8.4" rx="1.4" fill="var(--color-text)" opacity=".28"/>
+            <rect x="12.6" y="12.6" width="8.4" height="8.4" rx="1.4" fill="var(--color-accent)"/>
+          </svg>
+        </div>
+        <h4>C · Quadrant</h4>
+        <p>A four-cell grid echoing the fleet heatmap. Strong as a favicon and trivially scalable, but indistinguishable from a dozen dashboard products.</p>
+      </div>
+    </div>
+
+    <h2>Wordmark</h2>
+    <div class="ba">
+      <div>
+        <div class="balab" style="color:var(--color-crit)">Rev 1</div>
+        <div style="font:600 30px/1 var(--font-mono);letter-spacing:.01em;padding:10px 0">solari<span style="color:#35E0D0" data-allow="hex">Net</span></div>
+        <p style="font-size:12px;color:var(--color-dim)">Monospace flattens the letterforms and widens the mark unnecessarily. The colour split on "Net" adds a second brand hue with no rationale and fails in one-colour print.</p>
+      </div>
+      <div>
+        <div class="balab" style="color:var(--color-ok)">Rev 2</div>
+        <div style="font:300 30px/1 var(--font-display);letter-spacing:-.025em;padding:10px 0">Solari<span style="font-weight:600">Net</span></div>
+        <p style="font-size:12px;color:var(--color-dim)">Plex Sans, weight contrast instead of colour contrast — 300 against 600. Holds the compound name, prints in one ink, and keeps the capital the product name actually carries.</p>
+      </div>
+    </div>
+    <div class="hl"><p><b>Lockups to produce.</b> Horizontal (mark + wordmark, default), stacked, mark alone (favicon, PWA icon, collapsed rail) and one-colour reversed — all four as SVG from one source path, none carrying a baked-in glow or background plate.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>09</span></div>
+</section>
+
+<!-- ============ E10 CONSTRUCTION ============ -->
+<section class="page" data-label="E10 Construction">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 08</div><h1 class="t">Construction &amp; clear space</h1><div class="sub">Candidate A on a 24-unit grid. Every dimension is a multiple of the unit; nothing is optically nudged.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:14px;flex:1;min-height:0">
+      <div class="cons">
+        <div class="cs"></div>
+        <svg width="240" height="240" viewBox="0 0 24 24">
+          <g fill="none" stroke="var(--color-accent)" stroke-width="1.1" opacity=".5"><path d="M12 12V4M12 12l6.9 4M12 12L5.1 16"/></g>
+          <circle cx="12" cy="12" r="8" fill="none" stroke="var(--color-accent)" stroke-width=".22" stroke-dasharray=".7 .7" opacity=".7"/>
+          <rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-accent)"/>
+          <g fill="var(--color-text)">
+            <rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/>
+            <rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/>
+            <rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/>
+          </g>
+        </svg>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="spec">
+          <div class="r"><span>Unit (u)</span><span>hub width ÷ 6</span></div>
+          <div class="r"><span>Canvas</span><span>24u × 24u</span></div>
+          <div class="r"><span>Hub</span><span>6u, radius 1.6u</span></div>
+          <div class="r"><span>Orbit radius</span><span>8u from centre</span></div>
+          <div class="r"><span>Satellites</span><span>3.2u square, 45°</span></div>
+          <div class="r"><span>Satellite angles</span><span>−90° · 30° · 150°</span></div>
+          <div class="r"><span>Spoke stroke</span><span>1.1u, 55% opacity</span></div>
+          <div class="r"><span>Clear space</span><span>2u on all sides</span></div>
+          <div class="r"><span>Min size · screen</span><span>16px canvas</span></div>
+          <div class="r"><span>Min size · print</span><span>6mm canvas</span></div>
+        </div>
+        <div class="card"><h4>Clear space</h4><p>The dashed frame sits 2u — one third of the hub — outside the canvas on every side. No type, rule or edge enters it. In the collapsed nav rail the rail padding satisfies this; no extra inset is needed.</p></div>
+        <div class="card"><h4>Below minimum</h4><p>Under 16px the spokes disappear before the satellites do, leaving four ambiguous squares. Below that threshold use the hub alone as a solid rounded square.</p></div>
+      </div>
+    </div>
+    <div class="hl"><p><b>Favicon behaviour.</b> The three satellites may each take a status colour to give the browser tab and installed PWA icon an at-a-glance fleet summary: all green nominal, one amber degraded, one red fault. This is the only sanctioned recolouring of the mark.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>10</span></div>
+</section>
+
+<!-- ============ E11 MISUSE ============ -->
+<section class="page" data-label="E11 Misuse">
+  <div class="ph"><div class="bar" style="background:var(--color-crit)"></div><div><div class="eyebrow" style="color:var(--color-crit)">Section 09</div><h1 class="t">Logo misuse</h1><div class="sub">Six failures, five of them present in Rev 1. Prohibitions only.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="g3" style="gap:10px">
+      <div class="no"><div class="fig"><svg width="40" height="40" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#35E0D0" data-allow="hex"/><rect x="9" y="9" width="6" height="6" rx="1.6" fill="#06090D" data-allow="hex"/></svg></div><div class="cap">Never box the mark in a filled tile</div><p style="font:400 12px/1.35 var(--font-body);color:var(--color-dim)">The container competes with the mark and doubles its visual weight in the nav.</p></div>
+      <div class="no"><div class="fig"><div style="font:600 17px/1 var(--font-mono)">solari<span style="color:#35E0D0" data-allow="hex">Net</span></div></div><div class="cap">Never split the wordmark by colour</div><p style="font:400 12px/1.35 var(--font-body);color:var(--color-dim)">Fails in one ink and introduces a second brand hue with no defined role.</p></div>
+      <div class="no"><div class="fig"><div style="font:600 15px/1 var(--font-mono);letter-spacing:.02em">SolariNet</div></div><div class="cap">Never set the wordmark in monospace</div><p style="font:400 12px/1.35 var(--font-body);color:var(--color-dim)">Mono is the data face. Using it for identity removes the distinction that makes it useful.</p></div>
+      <div class="no"><div class="fig"><svg width="40" height="40" viewBox="0 0 24 24" style="filter:drop-shadow(0 0 6px var(--color-ok))"><rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-ok)"/><g fill="var(--color-ok)"><rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/><rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/><rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/></g></svg></div><div class="cap">Never render the mark in a status hue</div><p style="font:400 12px/1.35 var(--font-body);color:var(--color-dim)">A green logo asserts fleet health. Only the favicon satellites may take state colour.</p></div>
+      <div class="no"><div class="fig"><svg width="40" height="40" viewBox="0 0 24 24" style="transform:rotate(18deg)"><g fill="none" stroke="var(--color-accent)" stroke-width="1.1" opacity=".55"><path d="M12 12V4M12 12l6.9 4M12 12L5.1 16"/></g><rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-accent)"/><g fill="var(--color-text)"><rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/><rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/><rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/></g></svg></div><div class="cap">Never rotate off the vertical axis</div><p style="font:400 12px/1.35 var(--font-body);color:var(--color-dim)">The top satellite is the orientation cue; rotating it makes the mark read as a random cluster.</p></div>
+      <div class="no"><div class="fig"><svg width="40" height="40" viewBox="0 0 24 24" style="transform:scaleX(1.55)"><g fill="none" stroke="var(--color-accent)" stroke-width="1.1" opacity=".55"><path d="M12 12V4M12 12l6.9 4M12 12L5.1 16"/></g><rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-accent)"/><g fill="var(--color-text)"><rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/><rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/><rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/></g></svg></div><div class="cap">Never stretch to fill a container</div><p style="font:400 12px/1.35 var(--font-body);color:var(--color-dim)">Scale proportionally. The canvas is square; letterbox the space around it instead.</p></div>
+    </div>
+    <div class="hl"><p><b>Also prohibited:</b> adding an outer glow or drop shadow to the mark, placing it on a photographic background without a solid plate, reproducing it below the stated minimum, and redrawing the satellites as circles.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>11</span></div>
+</section>
+
+<!-- ============ E12 TYPOGRAPHY ============ -->
+<section class="page" data-label="E12 Typography">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 10</div><h1 class="t">Typography</h1><div class="sub">The faces were not the problem in Rev 1; their assignment was. Two faces, and a hard rule about which words get which.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="g2">
+      <div class="card">
+        <div style="font:600 34px/1 var(--font-display);letter-spacing:-.02em">Aa Ee Rr</div>
+        <div style="font:400 15px/1.4 var(--font-display);margin-top:8px">Fleet overview · Reachability</div>
+        <div style="background:var(--color-raised);border-radius:5px;padding:7px 9px;margin-top:9px;font:400 12px/1.5 var(--font-display);color:var(--color-dim)">abcdefghijklmnopqrstuvwxyz 0123456789</div>
+        <div class="spec" style="margin-top:9px">
+          <div class="r"><span>Face</span><span>IBM Plex Sans</span></div>
+          <div class="r"><span>Classification</span><span>Neo-grotesque</span></div>
+          <div class="r"><span>Foundry</span><span>IBM · Bold Monday</span></div>
+          <div class="r"><span>Licence</span><span>SIL OFL 1.1</span></div>
+          <div class="r"><span>Weights</span><span>300 · 400 · 600</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="font:600 34px/1 var(--font-mono);letter-spacing:-.01em">Aa Ee Rr</div>
+        <div style="font:400 15px/1.4 var(--font-mono);margin-top:8px">10.42.11.84 · 4.2ms</div>
+        <div style="background:var(--color-raised);border-radius:5px;padding:7px 9px;margin-top:9px;font:400 12px/1.5 var(--font-mono);color:var(--color-dim)">abcdefghijklmnopqrstuvwxyz 0123456789</div>
+        <div class="spec" style="margin-top:9px">
+          <div class="r"><span>Face</span><span>IBM Plex Mono</span></div>
+          <div class="r"><span>Classification</span><span>Monospace</span></div>
+          <div class="r"><span>Foundry</span><span>IBM · Bold Monday</span></div>
+          <div class="r"><span>Licence</span><span>SIL OFL 1.1</span></div>
+          <div class="r"><span>Weights</span><span>400 · 600</span></div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Division of labour</h2>
+    <div class="co">
+      <div class="box"><div class="lab" style="color:var(--color-accent)">Sans — human language</div><p>Navigation, buttons, headings, prose, captions, empty-state copy, alert titles, form labels, tab names, filter chips.</p></div>
+      <div class="box"><div class="lab" style="color:var(--color-ok)">Mono — machine values</div><p>Hostnames, IP and MAC, ports, node IDs, metric numerals, byte and bit rates, durations, timestamps, config keys, log excerpts, certificate fingerprints.</p></div>
+    </div>
+    <div class="ba">
+      <div>
+        <div class="balab" style="color:var(--color-crit)">Rev 1 — mono everywhere</div>
+        <div class="demo" data-allow="small-type">
+          <div style="font:400 12px/1.9 var(--font-mono);letter-spacing:.04em">
+            <div style="color:var(--color-dim)">MONITOR</div>
+            <div>Fleet Overview</div><div style="color:var(--color-dim)">Reachability</div><div style="color:var(--color-dim)">Topology Map</div>
+          </div>
+        </div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">Section label and items share one face and near one weight. Nothing leads; the eye has no entry point.</p>
+      </div>
+      <div>
+        <div class="balab" style="color:var(--color-ok)">Rev 2 — assigned</div>
+        <div class="demo" data-allow="small-type">
+          <div style="line-height:1.9">
+            <div style="font:700 10px/1.9 var(--font-mono);letter-spacing:.15em;color:var(--color-faint)">MONITOR</div>
+            <div style="font:600 13px/1.7 var(--font-display)">Fleet Overview</div>
+            <div style="font:400 13px/1.7 var(--font-display);color:var(--color-dim)">Reachability</div>
+            <div style="font:400 13px/1.7 var(--font-display);color:var(--color-dim)">Topology Map</div>
+          </div>
+        </div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">Mono survives only on the section label, where its tracking is the point. Items gain a real weight step.</p>
+      </div>
+    </div>
+    <div class="hl"><p><b>Both faces must actually load.</b> v1 imported Archivo over the network, then overrode both tokens to IBM Plex Sans and imported nothing — so the guide and the app rendered in <span class="mono">system-ui</span>. Self-host both families as WOFF2 subsets with <span class="mono">@font-face</span> and <span class="mono">font-display:swap</span>. No network dependency, and PDF export keeps its measurements.</p></div>
+    <div class="hl" style="border-left-color:var(--color-ok)"><p><b>Tabular figures are mandatory</b> wherever numbers stack — tables, KPI rows, metric columns. Set <span class="mono">font-variant-numeric: tabular-nums</span> so digits do not shimmy as values tick.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>12</span></div>
+</section>
+
+<!-- ============ E13 TYPE SCALE ============ -->
+<section class="page" data-label="E13 Type scale">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 11</div><h1 class="t">Type scale</h1><div class="sub">Nine steps. Rev 1 ran on effectively three, which is why headings and captions read as one texture.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl" style="grid-template-columns:1.5fr .8fr .55fr .5fr .55fr 1.15fr">
+      <div class="hd">Specimen</div><div class="hd">Role</div><div class="hd">Size</div><div class="hd">LH</div><div class="hd">Wt</div><div class="hd">Use</div>
+      <div class="cl" style="font:300 26px/1 var(--font-display);letter-spacing:-.025em">Display</div><div class="cl m">display</div><div class="cl m">28px</div><div class="cl m">1.15</div><div class="cl m">300</div><div class="cl" style="color:var(--color-dim)">Login, install splash only</div>
+      <div class="cl" style="font:600 21px/1 var(--font-display);letter-spacing:-.015em">Page title</div><div class="cl m">h1</div><div class="cl m">22px</div><div class="cl m">1.2</div><div class="cl m">600</div><div class="cl" style="color:var(--color-dim)">One per screen</div>
+      <div class="cl" style="font:600 16px/1 var(--font-display)">Panel heading</div><div class="cl m">h2</div><div class="cl m">16px</div><div class="cl m">1.25</div><div class="cl m">600</div><div class="cl" style="color:var(--color-dim)">Card and panel headers</div>
+      <div class="cl" style="font:600 13px/1 var(--font-display)">Row title</div><div class="cl m">h3</div><div class="cl m">13.5px</div><div class="cl m">1.3</div><div class="cl m">600</div><div class="cl" style="color:var(--color-dim)">Alert titles, nav active</div>
+      <div class="cl" style="font:400 13px/1 var(--font-display)">Body copy</div><div class="cl m">body</div><div class="cl m">13.5px</div><div class="cl m">1.45</div><div class="cl m">400</div><div class="cl" style="color:var(--color-dim)">Prose — the floor for sentences</div>
+      <div class="cl" style="font:400 12px/1 var(--font-display);color:var(--color-dim)">Caption</div><div class="cl m">caption</div><div class="cl m">12px</div><div class="cl m">1.4</div><div class="cl m">400</div><div class="cl" style="color:var(--color-dim)">Sub-values under a metric</div>
+      <div class="cl" style="font:600 22px/1 var(--font-mono);letter-spacing:-.02em">248</div><div class="cl m">metric</div><div class="cl m">24px</div><div class="cl m">1.05</div><div class="cl m">600</div><div class="cl" style="color:var(--color-dim)">KPI numerals, tabular</div>
+      <div class="cl" style="font:400 12px/1 var(--font-mono)">10.42.11.84</div><div class="cl m">data</div><div class="cl m">12px</div><div class="cl m">1.35</div><div class="cl m">400</div><div class="cl" style="color:var(--color-dim)">Identifiers, table values</div>
+      <div class="cl" data-allow="small-type" style="font:700 10px/1 var(--font-mono);letter-spacing:.15em;color:var(--color-faint)">MICRO LABEL</div><div class="cl m">label</div><div class="cl m">10px</div><div class="cl m">1</div><div class="cl m">700</div><div class="cl" style="color:var(--color-dim)">Uppercase only · +0.15em</div>
+    </div>
+    <div class="g2">
+      <div class="card"><h4>Floors</h4><p><b>13.5px</b> for any sentence. <b>12px</b> for values and captions. <b>10px</b> for uppercase mono labels — the only step permitted below 12, and never for prose. Nothing renders under 10px.</p></div>
+      <div class="card"><h4>Touch on tablet</h4><p>The primary client is Safari on iPad. Every interactive row, chip, toggle and nav item keeps a <b>44px</b> minimum hit box regardless of the type step inside it.</p></div>
+    </div>
+    <div class="hl"><p><b>What changed.</b> Rev 1 used 23px sans for the page title and mono uppercase for everything else. The mid-range — panel heading, row title, caption — was missing, so cards had no internal hierarchy. Steps 3 through 6 above are the addition.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>13</span></div>
+</section>
+
+<!-- ============ E14 ICONOGRAPHY ============ -->
+<section class="page" data-label="E14 Iconography">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 12</div><h1 class="t">Iconography</h1><div class="sub">Rev 1 mixed solid and outline glyphs at inconsistent weights. Adopt one library and stop drawing bespoke marks.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="g2">
+      <div class="card">
+        <h4>Library</h4>
+        <div class="spec">
+          <div class="r"><span>Library</span><span>Lucide</span></div>
+          <div class="r"><span>Licence</span><span>ISC</span></div>
+          <div class="r"><span>Grid</span><span>24 × 24</span></div>
+          <div class="r"><span>Stroke</span><span>1.75px, round cap</span></div>
+          <div class="r"><span>Sizes</span><span>16 · 18 · 20 · 24</span></div>
+          <div class="r"><span>Fill</span><span>none — outline only</span></div>
+        </div>
+        <p style="margin-top:9px">One exception: status indicators are <b>solid</b> geometric primitives (dot, triangle, square, diamond, ring) drawn in-house on the same 24-grid. They are not icons and must not be swapped for library glyphs.</p>
+      </div>
+      <div class="card">
+        <h4>Nav mapping</h4>
+        <div class="tbl" style="grid-template-columns:1fr 1fr;font-size:12px">
+          <div class="cl m">Fleet</div><div class="cl m" style="color:var(--color-dim)">layout-grid</div>
+          <div class="cl m">Reachability</div><div class="cl m" style="color:var(--color-dim)">radio</div>
+          <div class="cl m">Topology</div><div class="cl m" style="color:var(--color-dim)">network</div>
+          <div class="cl m">Alerts</div><div class="cl m" style="color:var(--color-dim)">triangle-alert</div>
+          <div class="cl m">Analysis</div><div class="cl m" style="color:var(--color-dim)">activity</div>
+          <div class="cl m">Systems</div><div class="cl m" style="color:var(--color-dim)">server</div>
+          <div class="cl m">Inventory</div><div class="cl m" style="color:var(--color-dim)">package</div>
+          <div class="cl m">Discovery</div><div class="cl m" style="color:var(--color-dim)">scan-search</div>
+          <div class="cl m">Provisioning</div><div class="cl m" style="color:var(--color-dim)">plus-square</div>
+          <div class="cl m">Certificates</div><div class="cl m" style="color:var(--color-dim)">shield-check</div>
+        </div>
+      </div>
+    </div>
+    <h2>Rules</h2>
+    <div class="g3">
+      <div class="card"><h4>Never mix fills</h4><p>An outline nav beside a solid nav glyph reads as two states. All chrome icons are outline; only status primitives are solid.</p></div>
+      <div class="card"><h4>Icons do not carry state</h4><p>A glyph names a thing. Its colour may follow selection, never condition — condition belongs to the adjacent status primitive.</p></div>
+      <div class="card"><h4>Never icon-only</h4><p>Every icon in the collapsed rail keeps an accessible name and a tooltip on focus. Badges beside them use one shape and one colour rule.</p></div>
+    </div>
+    <div class="hl"><p><b>Badge correction.</b> Rev 1's collapsed rail carried three badges in three colours and two shapes — <span class="mono">88</span> amber, <span class="mono">1</span> green, <span class="mono">166</span> green. Badges are a single pill; red only for unacknowledged criticals, slate for everything else that is merely a count.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>14</span></div>
+</section>
+
+<!-- ============ E15 COMPONENTS ============ -->
+<section class="page" data-label="E15 Components">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 13</div><h1 class="t">Components</h1><div class="sub">The six that carry the dashboard, corrected. Specifications beneath each are the implementation contract.</div></div></div>
+  <div class="rule"></div>
+  <div class="body" style="gap:10px">
+    <h3>Metric card — glow removed, accent rule earns its place</h3>
+    <div class="g4">
+      <div class="kpi" data-allow="small-type"><div class="k">Systems</div><div class="v">248</div><div class="s">monitored hosts</div></div>
+      <div class="kpi" data-allow="small-type"><div class="k">Operational</div><div class="v">231</div><div class="s">93% in tolerance</div></div>
+      <div class="kpi" data-allow="small-type" style="border-color:var(--color-warn)"><div class="k">Degraded</div><div class="v" style="color:var(--color-warn)">14</div><div class="s">over tolerance</div></div>
+      <div class="kpi" data-allow="small-type" style="border-color:var(--color-crit);box-shadow:0 0 10px rgba(255,77,94,.28)"><div class="k">Down</div><div class="v" style="color:var(--color-crit)">3</div><div class="s">3 critical alerts</div></div>
+    </div>
+    <p class="d" style="font-size:12px">Nominal cards are neutral — no coloured underline, no halo. Colour appears only when the value is a fault, and the caption must agree with the number above it.</p>
+
+    <h3>Node tile — one design, identity never truncated</h3>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+      <div class="tile" data-allow="small-type"><div style="display:flex;justify-content:space-between;align-items:center;gap:6px"><span class="nm">chlorine</span><span class="dot" style="background:var(--color-ok)"></span></div><div class="mt">10.42.11.9</div><div class="spark"><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><path d="M0 12 L10 11 L18 6 L26 12 L34 10 L42 13 L50 8 L60 11" fill="none" stroke="var(--color-quiet)" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg></div></div>
+      <div class="tile" data-allow="small-type"><div style="display:flex;justify-content:space-between;align-items:center;gap:6px"><span class="nm">tungsten</span><span class="dot" style="background:var(--color-ok)"></span></div><div class="mt">10.42.11.14</div><div class="spark"><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><path d="M0 10 L10 12 L18 9 L26 11 L34 7 L42 12 L50 10 L60 9" fill="none" stroke="var(--color-quiet)" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg></div></div>
+      <div class="tile" data-allow="small-type" style="border-color:var(--color-warn);background:rgba(245,166,35,.1)"><div style="display:flex;justify-content:space-between;align-items:center;gap:6px"><span class="nm">molybdenum</span><span class="dot" style="background:var(--color-warn)"></span></div><div class="mt">10.42.11.31 · cpu 94%</div><div class="spark"><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><path d="M0 9 L10 7 L18 5 L26 4 L34 3 L42 3 L50 2 L60 2" fill="none" stroke="var(--color-warn)" stroke-width="1.3" vector-effect="non-scaling-stroke"/></svg></div></div>
+      <div class="tile" data-allow="small-type" style="border-color:var(--color-crit);background:rgba(255,77,94,.14);box-shadow:0 0 9px rgba(255,77,94,.4)"><div style="display:flex;justify-content:space-between;align-items:center;gap:6px"><span class="nm">praseodymium</span><span class="dot" style="background:var(--color-crit)"></span></div><div class="mt">10.42.11.44 · 4m ago</div><div class="spark"><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><path d="M0 8 L10 9 L18 7 L26 14 L34 14 L42 14 L50 14 L60 14" fill="none" stroke="var(--color-crit)" stroke-width="1.3" vector-effect="non-scaling-stroke"/></svg></div></div>
+      <div class="tile" data-allow="small-type" style="border-style:dashed;border-color:var(--color-unknown);opacity:.72"><div style="display:flex;justify-content:space-between;align-items:center;gap:6px"><span class="nm">neodymium</span><span class="dot" style="background:transparent;border:1.5px solid var(--color-unknown)"></span></div><div class="mt">maintenance · 2h</div><div class="spark"></div></div>
+    </div>
+    <p class="d" style="font-size:12px">Minimum tile width <b>132px</b> so element hostnames fit whole. Every tile carries the same three rows — name + dot, mono meta, sparkline — with no second variant.</p>
+
+    <h3>Alert row · table state cell · heartbeat</h3>
+    <div class="g2">
+      <div style="display:flex;flex-direction:column;gap:7px">
+        <div class="alert" data-allow="small-type" style="border-left-color:var(--color-crit)"><span class="pill" data-allow="small-type" style="background:rgba(255,77,94,.14);color:var(--color-crit)">crit</span><div><div class="t">PiHole 1 unreachable</div><div class="m">core-infra · all 2 vantages · 4m</div></div></div>
+        <div class="alert" data-allow="small-type" style="border-left-color:var(--color-warn)"><span class="pill" data-allow="small-type" style="background:rgba(245,166,35,.14);color:var(--color-warn)">warn</span><div><div class="t">Split vantage on tcp/443</div><div class="m">10.0.0.254 · failing from 1 of 2 · 11m</div></div></div>
+      </div>
+      <div class="demo" data-allow="small-type" style="padding:0">
+        <div class="tbl" style="grid-template-columns:1fr .7fr .9fr">
+          <div class="hd">System</div><div class="hd">State</div><div class="hd">Heartbeat</div>
+          <div class="cl m">chemistry</div><div class="cl"><span class="dot" style="background:var(--color-ok)"></span><span style="font:400 11.5px var(--font-mono);color:var(--color-ok)">up</span></div><div class="cl m" style="gap:6px"><svg width="34" height="12" viewBox="0 0 34 12"><g fill="var(--color-quiet)"><rect x="0" y="4" width="2" height="8" rx="1"/><rect x="4" y="2" width="2" height="10" rx="1"/><rect x="8" y="5" width="2" height="7" rx="1"/><rect x="12" y="3" width="2" height="9" rx="1"/><rect x="16" y="4" width="2" height="8" rx="1"/><rect x="20" y="2" width="2" height="10" rx="1"/><rect x="24" y="5" width="2" height="7" rx="1"/><rect x="28" y="3" width="2" height="9" rx="1"/></g></svg>12s</div>
+          <div class="cl m">PiHole 1</div><div class="cl"><span class="dot" style="background:var(--color-crit)"></span><span style="font:400 11.5px var(--font-mono);color:var(--color-crit)">down</span></div><div class="cl m" style="gap:6px;color:var(--color-crit)"><svg width="34" height="12" viewBox="0 0 34 12"><g fill="var(--color-quiet)" opacity=".45"><rect x="0" y="4" width="2" height="8" rx="1"/><rect x="4" y="2" width="2" height="10" rx="1"/></g><g fill="var(--color-crit)"><rect x="8" y="10" width="2" height="2" rx="1"/><rect x="12" y="10" width="2" height="2" rx="1"/><rect x="16" y="10" width="2" height="2" rx="1"/><rect x="20" y="10" width="2" height="2" rx="1"/><rect x="24" y="10" width="2" height="2" rx="1"/><rect x="28" y="10" width="2" height="2" rx="1"/></g></svg>4m</div>
+        </div>
+      </div>
+    </div>
+    <p class="d" style="font-size:12px">Severity is stated once, as a labelled pill. Heartbeat becomes a sparkbar plus age — an indicator, not the switch Rev 1 drew. Switches are reserved for controls such as enabling a rule.</p>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>15</span></div>
+</section>
+
+<!-- ============ E16 LAYOUT ============ -->
+<section class="page" data-label="E16 Layout">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 14</div><h1 class="t">Layout &amp; density</h1><div class="sub">Fixed column counts instead of auto-fit, so a metric row never orphans its last card.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="ba">
+      <div>
+        <div class="balab" style="color:var(--color-crit)">Rev 1 — six auto-fit cards</div>
+        <div class="demo" data-allow="small-type">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:5px">
+            <div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div><div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div><div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div><div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div><div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:5px">
+            <div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-crit)"></div>
+          </div>
+        </div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">The sixth card orphans onto its own row at four-fifths of the width unused.</p>
+      </div>
+      <div>
+        <div class="balab" style="color:var(--color-ok)">Rev 2 — four primary, two secondary</div>
+        <div class="demo" data-allow="small-type">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:5px">
+            <div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div><div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div><div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div><div style="height:26px;border-radius:4px;background:var(--color-raised);border:1px solid var(--color-divider)"></div>
+          </div>
+          <div style="display:flex;gap:5px">
+            <div style="height:18px;flex:1;border-radius:4px;background:var(--color-surface);border:1px solid var(--color-divider)"></div><div style="height:18px;flex:1;border-radius:4px;background:var(--color-surface);border:1px solid var(--color-divider)"></div>
+          </div>
+        </div>
+        <p style="font-size:12px;margin-top:8px;color:var(--color-dim)">Four headline metrics at full weight; supporting figures drop to an inline strip that cannot orphan.</p>
+      </div>
+    </div>
+
+    <h2>Grid &amp; spacing</h2>
+    <div class="g2">
+      <div class="spec">
+        <div class="r"><span>Base unit</span><span>4px</span></div>
+        <div class="r"><span>Scale</span><span>4 · 8 · 12 · 16 · 22 · 32 · 48</span></div>
+        <div class="r"><span>Page padding</span><span>22px / 26px desktop</span></div>
+        <div class="r"><span>Panel padding</span><span>16px</span></div>
+        <div class="r"><span>Card gap</span><span>12px</span></div>
+        <div class="r"><span>Tile gap</span><span>8px</span></div>
+      </div>
+      <div class="spec">
+        <div class="r"><span>Sidebar</span><span>248px · 64px collapsed</span></div>
+        <div class="r"><span>Top bar</span><span>60px</span></div>
+        <div class="r"><span>Content max</span><span>1640px, centred</span></div>
+        <div class="r"><span>Tile min width</span><span>132px</span></div>
+        <div class="r"><span>Metric row</span><span>4 columns fixed</span></div>
+        <div class="r"><span>Touch target</span><span>44px minimum</span></div>
+      </div>
+    </div>
+
+    <h2>Breakpoints</h2>
+    <div class="tbl" style="grid-template-columns:.8fr .8fr 1fr 1.3fr">
+      <div class="hd">Name</div><div class="hd">Width</div><div class="hd">Sidebar</div><div class="hd">Behaviour</div>
+      <div class="cl">Wall</div><div class="cl m">≥1600</div><div class="cl m">expanded</div><div class="cl" style="color:var(--color-dim)">Metric row 4-up, tiles 8–10 per row</div>
+      <div class="cl">Desktop</div><div class="cl m">1200–1599</div><div class="cl m">expanded</div><div class="cl" style="color:var(--color-dim)">Metric row 4-up, two-column panels</div>
+      <div class="cl">Tablet landscape</div><div class="cl m">1024–1199</div><div class="cl m">collapsed rail</div><div class="cl" style="color:var(--color-dim)">Primary target — panels single column</div>
+      <div class="cl">Tablet portrait</div><div class="cl m">768–1023</div><div class="cl m">overlay drawer</div><div class="cl" style="color:var(--color-dim)">Metric row 2-up, detail panels stack</div>
+    </div>
+    <div class="hl"><p><b>No hover-only information.</b> The primary client is a touch device. Every value revealed on hover must also be reachable by tap, and no tooltip may be the sole source of a status, a threshold or an identifier.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>16</span></div>
+</section>
+
+<!-- ============ E17 EMPTY STATES ============ -->
+<section class="page" data-label="E17 Empty states">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 15</div><h1 class="t">Empty states &amp; vocabulary</h1><div class="sub">Rev 1 shipped placeholder glyphs as content. Absence is a state with copy, not a dash.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>Corrections</h3>
+    <div class="tbl" style="grid-template-columns:.85fr .85fr 1.5fr">
+      <div class="hd">Rev 1 renders</div><div class="hd">Rev 2 renders</div><div class="hd">Why</div>
+      <div class="cl m bad">—</div><div class="cl">Unassigned</div><div class="cl" style="color:var(--color-dim)">A group with no pool needs a name, not an em dash masquerading as one</div>
+      <div class="cl m bad">V—</div><div class="cl">Version unavailable</div><div class="cl" style="color:var(--color-dim)">Reads as a broken template; state that the controller is not reporting</div>
+      <div class="cl m bad">0/0</div><div class="cl">No monitors enrolled</div><div class="cl" style="color:var(--color-dim)">Zero of zero is a division, not a status; offer the enrolment action</div>
+      <div class="cl m bad">0 SEGMENTS</div><div class="cl">Segments not configured</div><div class="cl" style="color:var(--color-dim)">Distinguish "none exist yet" from "none matched"</div>
+      <div class="cl m bad">no systems yet</div><div class="cl">Empty pool · Add systems</div><div class="cl" style="color:var(--color-dim)">An empty pool is an invitation; give it the action and drop the glow</div>
+      <div class="cl m bad">0%</div><div class="cl">Awaiting first sample</div><div class="cl" style="color:var(--color-dim)">Zero percent CPU across a live fleet is almost certainly no data</div>
+    </div>
+
+    <h2>Three kinds of nothing</h2>
+    <div class="g3">
+      <div class="card"><h4>Not configured</h4><p>The feature exists, the operator has not set it up. Name it and offer the primary action. Neutral chrome.</p></div>
+      <div class="card"><h4>No data yet</h4><p>Configured, awaiting first report. Say what is expected and when. Slate, never a zero value.</p></div>
+      <div class="card"><h4>Filtered to nothing</h4><p>Data exists but the filter excludes it. Restate the filter and offer to clear it. Never the same copy as the two above.</p></div>
+    </div>
+
+    <h2>Vocabulary — one word per concept</h2>
+    <div class="tbl" style="grid-template-columns:.75fr 1.5fr .75fr">
+      <div class="hd">Use</div><div class="hd">Means</div><div class="hd">Never</div>
+      <div class="cl">System</div><div class="cl" style="color:var(--color-dim)">A physical or virtual host under monitoring</div><div class="cl m bad">node, machine, box</div>
+      <div class="cl">Application</div><div class="cl" style="color:var(--color-dim)">A watched service or process on a system</div><div class="cl m bad">proc, service, app</div>
+      <div class="cl">Target</div><div class="cl" style="color:var(--color-dim)">A probed network endpoint — proto, host, port</div><div class="cl m bad">check, probe, endpoint</div>
+      <div class="cl">Vantage</div><div class="cl" style="color:var(--color-dim)">A monitor's viewpoint onto a target</div><div class="cl m bad">agent, collector</div>
+      <div class="cl">Pool</div><div class="cl" style="color:var(--color-dim)">An operator-defined group of systems</div><div class="cl m bad">segment, group, cluster</div>
+      <div class="cl">Segment</div><div class="cl" style="color:var(--color-dim)">A network range — CIDR-defined, not chosen</div><div class="cl m bad">subnet, zone, VLAN</div>
+    </div>
+    <div class="hl"><p><b>Counts must agree.</b> Rev 1 reported 18 systems in one header and 9 in another. One count per concept, derived once, rendered everywhere from the same source — and label it with the noun above, never "nodes".</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>17</span></div>
+</section>
+
+<!-- ============ E18 HANDOFF ============ -->
+<section class="page" data-label="E18 Handoff">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 16</div><h1 class="t">Handoff</h1><div class="sub">Fix the specification first — three of its faults are why the interface drifted. Then the UI list, ordered by legibility gained per line touched.</div></div></div>
+  <div class="rule"></div>
+  <div class="body" style="gap:10px">
+    <div class="g3">
+      <div class="card" style="border-color:var(--color-crit)"><h4>G1 · Load the fonts</h4><p>Drop the Archivo <span class="mono">@import</span>. Self-host Plex Sans and Plex Mono as WOFF2 <span class="mono">@font-face</span> subsets. Until this ships, every measurement in the guide and app is <span class="mono">system-ui</span>.</p></div>
+      <div class="card" style="border-color:var(--color-crit)"><h4>G2 · Add a mono token</h4><p>Introduce <span class="mono">--font-mono</span> and govern it. The dominant face in the product currently has no entry in the system.</p></div>
+      <div class="card" style="border-color:var(--color-crit)"><h4>G3 · Add the functional tier</h4><p>Define ok, degraded, down, maintenance and unknown as tokens. Remove the leftover Modernist vermilion ramp rather than overriding it.</p></div>
+    </div>
+    <div class="tbl tight" style="grid-template-columns:26px 1.25fr 1.5fr .5fr">
+      <div class="hd">#</div><div class="hd">Change</div><div class="hd">Touches</div><div class="hd">Size</div>
+      <div class="cl m">1</div><div class="cl">Retire accent teal; adopt azure for all chrome</div><div class="cl m" style="color:var(--color-dim)">--teal → --accent tokens</div><div class="cl m good">S</div>
+      <div class="cl m">2</div><div class="cl">Strip glow and coloured rule from nominal cards</div><div class="cl m" style="color:var(--color-dim)">.kpi, .cell, pool cards</div><div class="cl m good">S</div>
+      <div class="cl m">3</div><div class="cl">Sans for nav, buttons, chips, headings</div><div class="cl m" style="color:var(--color-dim)">.nav-item, .seg, .chip, .kpi__k</div><div class="cl m good">S</div>
+      <div class="cl m">4</div><div class="cl">Raise ink-faint to clear 3:1</div><div class="cl m" style="color:var(--color-dim)">--ink-faint token</div><div class="cl m good">S</div>
+      <div class="cl m">5</div><div class="cl">Tile min-width 132px; single tile variant</div><div class="cl m" style="color:var(--color-dim)">.heat, .cell</div><div class="cl m wn">M</div>
+      <div class="cl m">6</div><div class="cl">Quiet-healthy: neutral chrome for operational</div><div class="cl m" style="color:var(--color-dim)">.cell.up, .tile, table rows</div><div class="cl m wn">M</div>
+      <div class="cl m">7</div><div class="cl">State cell always dot + label, every table</div><div class="cl m" style="color:var(--color-dim)">.grid td, Systems table</div><div class="cl m good">S</div>
+      <div class="cl m">8</div><div class="cl">Heartbeat switch → sparkbar + age</div><div class="cl m" style="color:var(--color-dim)">Systems table heartbeat column</div><div class="cl m wn">M</div>
+      <div class="cl m">9</div><div class="cl">Severity once per row; drop redundant dot and icon</div><div class="cl m" style="color:var(--color-dim)">.alert-row</div><div class="cl m good">S</div>
+      <div class="cl m">10</div><div class="cl">Replace node ID in top bar with hostname</div><div class="cl m" style="color:var(--color-dim)">.statuschip</div><div class="cl m good">S</div>
+      <div class="cl m">11</div><div class="cl">Empty-state copy per section 15</div><div class="cl m" style="color:var(--color-dim)">sidebar footer, pool cards, groups</div><div class="cl m wn">M</div>
+      <div class="cl m">12</div><div class="cl">Reconcile system counts to one source</div><div class="cl m" style="color:var(--color-dim)">summary derivation</div><div class="cl m wn">M</div>
+      <div class="cl m">13</div><div class="cl">Metric row to fixed 4 columns</div><div class="cl m" style="color:var(--color-dim)">.kpis</div><div class="cl m good">S</div>
+      <div class="cl m">14</div><div class="cl">Swap icon set to Lucide, outline only</div><div class="cl m" style="color:var(--color-dim)">icons module</div><div class="cl m bad">L</div>
+      <div class="cl m">15</div><div class="cl">New mark and wordmark; strip baked glow from exports</div><div class="cl m" style="color:var(--color-dim)">.brand, manifest, icons/, mark.svg</div><div class="cl m wn">M</div>
+      <div class="cl m">16</div><div class="cl">Add Maintenance state end to end</div><div class="cl m" style="color:var(--color-dim)">data model, tiles, tables, rules</div><div class="cl m bad">L</div>
+    </div>
+    <div class="g2">
+      <div class="card"><h4>Assets to produce</h4><p>Mark as SVG in four lockups, no baked glow; favicon 16/32; PWA icons 192/512 plus maskable 512; Plex Sans and Plex Mono self-hosted as WOFF2 subsets. All under SIL OFL 1.1 and ISC — no licence blockers.</p></div>
+      <div class="card"><h4>Not settled here</h4><p>Trademark and usage restrictions on the SolariNet name are the owner's to state; this guide specifies visual construction only. Motion timings remain unspecified pending a decision on live-tick animation.</p></div>
+    </div>
+    <div class="hl"><p><b>Standing rule.</b> When this guide does not cover a case, apply the test that produced it: does this pixel tell the operator something they did not already know? Decoration that survives that question is fine. Decoration that cannot answer it comes out.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>18</span></div>
+</section>
+
+</div>
+
+<script>window.guideTheme={accent:"#22B8F0",ink:"#DFE8F2",ground:"#070A0F",surface:"#0E151D"};</script>
+<script>
+/* Measurement runtime — WCAG 2.1 relative luminance and contrast, computed at render.
+   Written for this document because reference/guide-runtime.js is not present in the
+   workspace; the colour maths below is the published specification, not an approximation. */
+window.guideKit=(function(){
+  function chan(v){v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);}
+  function lum(hex){var h=hex.replace('#','');
+    if(h.length===3)h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    var r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+    return 0.2126*chan(r)+0.7152*chan(g)+0.0722*chan(b);}
+  function contrast(a,b){var l1=lum(a),l2=lum(b),hi=Math.max(l1,l2),lo=Math.min(l1,l2);
+    return Math.round(((hi+0.05)/(lo+0.05))*10)/10;}
+  function verdict(r){return r>=7?'AAA body':r>=4.5?'AA body':r>=3?'AA large / chrome':'prohibited';}
+  function renderMatrices(){
+    document.querySelectorAll('[data-contrast-matrix]').forEach(function(t){
+      var pal=JSON.parse(t.getAttribute('data-palette')||'[]');
+      var grounds=JSON.parse(t.getAttribute('data-grounds')||'[]');
+      var css='border-bottom:1px solid var(--color-divider);padding:6px 8px;font:400 12px/1.3 var(--font-body);';
+      var hd='border-bottom:2px solid var(--color-divider-strong);padding:6px 8px;font:700 12px/1.1 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--color-faint);text-align:left;';
+      var html='<thead><tr><th style="'+hd+'">Foreground</th>';
+      grounds.forEach(function(g){html+='<th style="'+hd+'">'+g.name+'</th>';});
+      html+='<th style="'+hd+'">Verdict</th></tr></thead><tbody>';
+      pal.forEach(function(p){
+        var ratios=grounds.map(function(g){return contrast(p.hex,g.hex);});
+        var worst=Math.min.apply(null,ratios);
+        var v=verdict(worst);
+        var struck=v==='prohibited';
+        html+='<tr'+(struck?' data-verdict="prohibited"':'')+'>';
+        html+='<td style="'+css+'"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:'+p.hex+';vertical-align:-1px;margin-right:7px"></span>'+p.name+'</td>';
+        ratios.forEach(function(r){
+          var c=r>=4.5?'var(--color-ok)':r>=3?'var(--color-warn)':'var(--color-crit)';
+          html+='<td style="'+css+'font-family:var(--font-mono);color:'+c+'">'+r.toFixed(1)+':1</td>';
+        });
+        html+='<td style="'+css+'font-family:var(--font-mono);font-size:12px;color:var(--color-dim)">'+v+'</td></tr>';
+      });
+      t.innerHTML=html+'</tbody>';
+    });
+  }
+  function pageBox(p){
+    var cs=getComputedStyle(p);
+    return {h:p.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)};
+  }
+  function checkOverflow(){
+    return document.fonts.ready.then(function(){
+      return new Promise(function(res){setTimeout(res,420);});
+    }).then(function(){
+      var bad=[];
+      document.querySelectorAll('.page').forEach(function(p){
+        if(p.scrollHeight>p.clientHeight+1){
+          bad.push({page:p.dataset.label,over:p.scrollHeight-p.clientHeight});
+        }
+      });
+      return bad;
+    });
+  }
+  function checkDensity(){
+    var out=[];
+    document.querySelectorAll('.page').forEach(function(p){
+      var used=0;
+      Array.prototype.forEach.call(p.children,function(c){used+=c.getBoundingClientRect().height;});
+      var box=pageBox(p).h;
+      var pct=Math.round((used/box)*1000)/10;
+      if(pct<90)out.push({page:p.dataset.label,fill:pct,flag:pct<75?'thin':'below-target'});
+    });
+    return out;
+  }
+  function checkTypeFloor(px){
+    var floor=px||parseFloat(document.body.dataset.typeFloor||12);
+    var bad=[];
+    document.querySelectorAll('.page *').forEach(function(el){
+      if(el.closest('[data-allow~="small-type"]'))return;
+      var direct=Array.prototype.some.call(el.childNodes,function(n){return n.nodeType===3&&n.textContent.trim();});
+      if(!direct)return;
+      var fs=parseFloat(getComputedStyle(el).fontSize);
+      if(fs<floor-0.01)bad.push({page:el.closest('.page')&&el.closest('.page').dataset.label,size:fs,text:el.textContent.trim().slice(0,32)});
+    });
+    return bad;
+  }
+  return {contrast:contrast,contrastVerdict:verdict,renderMatrices:renderMatrices,
+          checkOverflow:checkOverflow,checkDensity:checkDensity,checkTypeFloor:checkTypeFloor};
+})();
+guideKit.renderMatrices();
+document.querySelector('[data-theme-toggle]').addEventListener('click',function(){
+  var h=document.documentElement;
+  var dark=h.getAttribute('data-mode')==='dark';
+  h.setAttribute('data-mode',dark?'light':'dark');
+  this.textContent=dark?'Dark':'Light';
+  guideKit.renderMatrices();
+});
+</script>
+</body>
+</html>
