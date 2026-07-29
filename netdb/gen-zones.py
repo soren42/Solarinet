@@ -20,6 +20,9 @@ ZONEDIR    = "/etc/bind/zones"          # where the files land on the BIND host
 # CNAMEs). xenon = primary/master, radium = secondary (plain-BIND AXFR works).
 NS_HOSTS   = ["xenon", "radium"]
 SECONDARIES = ["10.1.0.10", "10.0.0.11"]  # radium + steel (ZimaBlade) = akoria.net secondaries
+# Zone-apex A records: the bare domain (e.g. https://akoria.net/) resolves to a
+# host IP. akoria.net -> xenon (10.0.0.20), the web / service-directory host.
+APEX_A = {"akoria.net": "10.0.0.20"}
 
 
 def load_source(path=SRC):
@@ -80,6 +83,10 @@ def forward(domain, hosts, ifaces, cnames):
     for h in NS_HOSTS:
         L.append(f"@              IN NS    {h}")
     L.append("")
+    if domain in APEX_A:
+        L.append("; ---- zone apex ----")
+        L.append(f"@              IN A     {APEX_A[domain]}")
+        L.append("")
     L.append("; ---- hosts (identity) ----")
     for n in sorted(hosts):
         L.append(f"{n:<14} IN A     {hosts[n]['ip']}")
