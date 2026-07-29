@@ -33,6 +33,86 @@
   when: ansible_os_family == 'Debian'
   failed_when: false
 
+# ---- Installer-based tools (npm / pipx / prebuilt binary / source) -----------
+# Formatters + theming tools that aren't reliably in distro repos. All
+# best-effort so a missing manager on one distro never fails the run.
+- name: Detect npm
+  ansible.builtin.command: command -v npm
+  register: solari_npm
+  changed_when: false
+  failed_when: false
+
+- name: Install npm globals ({{ solari_devtools_npm_globals | join(', ') }})
+  ansible.builtin.command: "npm install -g {{ item }}"
+  loop: "{{ solari_devtools_npm_globals }}"
+  when: solari_npm.rc == 0
+  changed_when: true
+  failed_when: false
+
+- name: Detect pipx
+  ansible.builtin.command: command -v pipx
+  register: solari_pipx
+  changed_when: false
+  failed_when: false
+
+- name: Install pipx tools system-wide ({{ solari_devtools_pipx_tools | join(', ') }})
+  ansible.builtin.command: "pipx install {{ item }}"
+  environment:
+    PIPX_HOME: /opt/pipx
+    PIPX_BIN_DIR: /usr/local/bin
+  loop: "{{ solari_devtools_pipx_tools }}"
+  when: solari_pipx.rc == 0
+  changed_when: true
+  failed_when: false
+
+- name: Install yq (mikefarah, single binary)
+  ansible.builtin.get_url:
+    url: "https://github.com/mikefarah/yq/releases/download/{{ solari_devtools_yq_version }}/yq_linux_{{ solari_devtools_arch_deb[ansible_architecture] }}"
+    dest: /usr/local/bin/yq
+    mode: "0755"
+  when: ansible_architecture in solari_devtools_arch_deb
+  failed_when: false
+
+- name: Install Tinty (base16 manager) prebuilt binary
+  ansible.builtin.unarchive:
+    src: "https://github.com/tinted-theming/tinty/releases/download/{{ solari_devtools_tinty_version }}/tinty-{{ solari_devtools_arch_rust[ansible_architecture] }}-unknown-linux-gnu.tar.gz"
+    dest: /usr/local/bin
+    remote_src: true
+    creates: /usr/local/bin/tinty
+    mode: "0755"
+  when: ansible_architecture in solari_devtools_arch_rust
+  failed_when: false
+
+- name: Install tinted-shell (base16 shell themes, read-only)
+  ansible.builtin.git:
+    repo: https://github.com/tinted-theming/tinted-shell.git
+    dest: "{{ solari_devtools_tinted_shell_dir }}"
+    depth: 1
+    version: main
+    update: false
+  when: solari_devtools_tinted_shell | bool
+  failed_when: false
+
+- name: Install bat-extras (batgrep/batman/prettybat/…) from source
+  when: solari_devtools_bat_extras | bool
+  block:
+    - name: Clone bat-extras
+      ansible.builtin.git:
+        repo: https://github.com/eth-p/bat-extras.git
+        dest: /opt/bat-extras
+        depth: 1
+        version: master
+        update: false
+    - name: Build + install bat-extras to /usr/local
+      ansible.builtin.command: ./build.sh --install --prefix /usr/local
+      args:
+        chdir: /opt/bat-extras
+        creates: /usr/local/bin/batgrep
+  rescue:
+    - name: bat-extras install skipped (non-fatal)
+      ansible.builtin.debug:
+        msg: "bat-extras install failed on {{ inventory_hostname }} — skipping."
+
 # ---- oh-my-zsh + powerlevel10k, system-wide (one copy) ----------------------
 - name: Install oh-my-zsh system-wide
   ansible.builtin.git:

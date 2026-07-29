@@ -16,6 +16,8 @@ solari_devtools_packages_debian:
   - mlocate
   - unzip
   - python3-pip
+  - byobu               # byobu-managed tmux — the default terminal multiplexer
+  - fonts-powerline     # glyphs for powerlevel10k / starship
 solari_devtools_packages_suse:
   - zsh
   - git
@@ -28,10 +30,33 @@ solari_devtools_packages_suse:
   - mlocate
   - unzip
   - python3-pip
+  - byobu
 
 # Optional packages - installed best-effort (names/availability vary by release).
-solari_devtools_optional_debian: [eza, thefuck, zsh-autosuggestions, zsh-syntax-highlighting, pipx]
-solari_devtools_optional_suse:   [eza, zsh-autosuggestions, zsh-syntax-highlighting, python3-pipx]
+# Formatters/linters that ship in-repo go here; the language-manager ones
+# (prettier/black/yq/tinty) are handled by the installer tasks below.
+solari_devtools_optional_debian: [eza, thefuck, zsh-autosuggestions, zsh-syntax-highlighting, pipx,
+                                  shfmt, clang-format, rustfmt, elixir, nodejs, npm]
+solari_devtools_optional_suse:   [eza, zsh-autosuggestions, zsh-syntax-highlighting, python3-pipx,
+                                  shfmt, clang-tools, rustfmt, elixir, nodejs, npm, powerline-fonts]
+
+# ---- Installer-based tools (not reliably in distro repos) --------------------
+# npm globals (needs nodejs+npm from the optional list above).
+solari_devtools_npm_globals: [prettier]
+# pipx system-wide installs (PIPX_HOME=/opt/pipx, bins -> /usr/local/bin).
+solari_devtools_pipx_tools: [black]
+# yq (mikefarah, single Go binary) — pinned release, arch-detected.
+solari_devtools_yq_version: "v4.44.3"
+# Tinty (base16/tinted-theming manager) — prebuilt binary from GitHub releases.
+solari_devtools_tinty_version: "v0.29.0"
+# tinted-shell (base16 shell themes) — cloned read-only, sourced from .zshrc.
+solari_devtools_tinted_shell: true
+solari_devtools_tinted_shell_dir: "/usr/share/tinted-shell"
+# bat-extras (batgrep/batman/prettybat/…) — built + installed from source.
+solari_devtools_bat_extras: true
+# arch map for binary downloads (ansible_architecture -> release naming).
+solari_devtools_arch_deb: { x86_64: amd64, aarch64: arm64, armv7l: arm }
+solari_devtools_arch_rust: { x86_64: x86_64, aarch64: aarch64 }
 
 # Shell framework (installed system-wide, single read-only copy).
 solari_devtools_ohmyzsh: true
