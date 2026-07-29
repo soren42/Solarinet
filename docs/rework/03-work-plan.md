@@ -52,7 +52,7 @@ Physical build per **02-ideal-state.md**: mount the 3U rack under the pull-out (
 11. **tachyon** — provision, set as fleet NTP, point the notify service at it, re-enable `notify`.
 
 **D. Verify (dashboard is the scoreboard)**
-12. SolariNet dashboard `xenon:9443` green · both DNS resolvers answer (`dig akoria.net @10.0.0.20` and `@10.0.0.11`) · SSO login works · Forgejo up · RabbitMQ connected (no AMQP errors in `sor-apply-dns` log) · every UPS < ~70%.
+12. SolariNet dashboard `dashboard.akoria.net` green · both DNS resolvers answer (`dig akoria.net @10.0.0.20` and `@10.0.0.11`) · SSO login works · Forgejo up · RabbitMQ connected (no AMQP errors in `sor-apply-dns` log) · every UPS < ~70%.
 
 ---
 

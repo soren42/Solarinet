@@ -17,7 +17,7 @@
 ## Servers (currently up)
 | Host | Role | IP | Serves |
 |------|------|----|--------|
-| **xenon** | Monitoring + web + DNS primary | 10.0.0.20 | SolariNet dashboard `:9443`, DNS (akoria.net BIND), landing page `akoria.net/`, the `sor-apply-dns` daemon |
+| **xenon** | Monitoring + web + DNS primary | 10.0.0.20 | SolariNet dashboard `dashboard.akoria.net` (SNI :443; old `:9443` retired), DNS (akoria.net BIND), landing page `akoria.net/`, the `sor-apply-dns` daemon |
 | **cesium** | Git + system-of-record | 10.1.0.200 | Forgejo `:3000`, SoR MariaDB (source of truth). Dell R410 — loud/hot |
 | **radium** | Identity + DNS | 10.1.0.10 | Samba AD DC, Keycloak SSO `sso.akoria.org:8443`, akoria.org DNS, SSSD. Pi CM5 |
 | **chlorine** | Internal CA | 10.7.0.10 | step-ca PKI |

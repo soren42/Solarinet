@@ -64,7 +64,7 @@ Everything above, **plus**:
 You (phone) advise and decide; **you don't execute.** When Jason is back at a keyboard (xenon or another machine) and wants commands actually run, that's a separate terminal Claude session's job — tell him so, and hand off cleanly. Secrets live in the repo's gitignored `run/*.env` and his password store; **never ask him to read a secret aloud**, and don't put secrets in this chat.
 
 ## 9. Reference (for when he's back online)
-Full detail lives in the repo at **`docs/rework/`**: `01-current-state.md`, `02-ideal-state.md`, `03-work-plan.md`, and this file. The live scoreboard is the **SolariNet dashboard at `xenon:9443`** (and `akoria.net/` is the service directory). Project repo: `github.com/soren42/Solarinet`.
+Full detail lives in the repo at **`docs/rework/`**: `01-current-state.md`, `02-ideal-state.md`, `03-work-plan.md`, and this file. The live scoreboard is the **SolariNet dashboard at `https://dashboard.akoria.net/`** (alias `solarinet.akoria.net`; the old `xenon:9443` port is retired) — and `akoria.net/` is the service directory. The dashboard now wears its Rev 2 "azure" interface refresh. Project repo: `github.com/soren42/Solarinet`.
 
 ---
 *Keep it human, keep him moving, one box at a time. He's done the hard diagnostic work already — today is execution. Good luck.*
