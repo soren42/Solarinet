@@ -1,8 +1,29 @@
+# Keep p10k's instant prompt quiet — the base16/tinted-shell block below emits
+# colour escape sequences that p10k would otherwise warn about.
+typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
+# ---- tinted-shell / Tinty (base16 theming) ----------------------------------
+# Apply a base16 colour scheme fleet-wide. Tinty is the manager (`tinty list`,
+# `tinty apply <scheme>`); if it's configured it wins. Otherwise source
+# tinted-shell's zsh plugin and fall back to a dark default on first run.
+# Paths are the system-wide clone laid down by the dev-tools Ansible role.
+if command -v tinty >/dev/null 2>&1; then
+  _tinty_init="$(tinty init 2>/dev/null)"
+  [[ -n "$_tinty_init" ]] && eval "$_tinty_init"
+  unset _tinty_init
+fi
+if [[ -z "$BASE16_THEME" ]]; then
+  [[ -s /usr/share/tinted-shell/base16-shell.plugin.zsh ]] && \
+    source /usr/share/tinted-shell/base16-shell.plugin.zsh
+  [[ -z "$BASE16_THEME" && -s /usr/share/tinted-shell/scripts/base16-default-dark.sh ]] && \
+    source /usr/share/tinted-shell/scripts/base16-default-dark.sh
 fi
 
 # If you come from bash you might have to change your $PATH.
