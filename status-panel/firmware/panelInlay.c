@@ -90,6 +90,6 @@ void panelScreenLinkLost(float t) {
 void panelScreenNoData(float t) {
   const char *msg = "NO DATA";
   int tw = panelTextW(msg), tx = (PANEL_W - tw) / 2;
-  panelText(tx, 3, msg, cQuiet, 0.28f + 0.14f * (0.5f + 0.5f * sinf(t * 0.8f)));
+  panelText(tx, 3, msg, cAzure, 0.28f + 0.14f * (0.5f + 0.5f * sinf(t * 0.8f)));
   for (int x = 0; x < PANEL_W; x += 4) panelFbSet(x, 9, cQuiet, 0.05f);
 }

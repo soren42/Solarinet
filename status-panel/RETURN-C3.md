@@ -424,13 +424,264 @@ acking).
 ### Rebuild
 
 ```
-FIXME_ALARM_SHA  b1/solari-panel-fw.uf2
-FIXME_ALARM_SHA  b2/solari-panel-fw.uf2
+6a42cd6a3b3a515f8b09dc1156b38a18e5920bd1a43860eb63ee15a41a247561  b1/solari-panel-fw.uf2
+6a42cd6a3b3a515f8b09dc1156b38a18e5920bd1a43860eb63ee15a41a247561  b2/solari-panel-fw.uf2
 ```
+
+Zero warnings, both dirs byte-identical, `protocol.c` md5 unchanged
+(`5754c9312bc7c2a01609355a17b64b3c`).
 
 Also fixed in this round, unrequested: `panelScreensB.c` had picked up one
 `-Wformat-truncation` warning from the DEVIATION 14 rewrite (gcc cannot see the
 999 ms clamp). Buffer widened 16 → 24 bytes; back to a zero-warning build.
+
+## TEXT LEGIBILITY ROUND (hardware finding, 2026-08-04)
+
+Jason, eyes on the live panel: B1's right-hand text was too dim to read. The
+design's brightness values were authored against an LCD mockup; the LED matrix's
+PWM response is far from linear at the bottom, and the driver's global brightness
+(0.25 floor, and low is exactly what the design wants at night) multiplies on top.
+
+**Fix: one gamma curve on small-font text, at the single seam all three text
+primitives funnel through** (`panelFont.c` `drawSmall`, reached by `panelText`,
+`panelTextOver` and `panelScroll`). `b' = b^0.55`.
+
+| call site | design b | rendered b |
+|---|---:|---:|
+| C2 "BY POOL" caption | 0.28 | 0.50 |
+| NO DATA pulse | 0.28–0.42 | 0.50–0.63 |
+| B0 "DOWN"/"DEG"/"MNT" labels | 0.30 | 0.52 |
+| B0 tier flag | 0.40 | 0.65 |
+| **B1 ticker (reported)** | **0.45** | **0.65** |
+| B2 "LOAD", B2 ">85" row | 0.45 | 0.65 |
+| D2 ticker | 0.48 | 0.67 |
+| B0 "UP", B1 "AGGREGATE", **B1 "% LINK" (reported)** | **0.50** | **0.69** |
+| inlay detail scroll | 0.55 | 0.73 |
+| D0 centre message | 0.60 | 0.76 |
+| inlay subject | 0.95 | 0.97 |
+
+**Why a curve and not a floor**, since you asked for the reasoning: a flat floor
+collapses the design's own hierarchy — C2's 0.28 caption and B1's 0.50 primary
+readout would land on the same brightness, discarding information the design is
+deliberately encoding. A gamma is monotonic, so every ink lifts while their order
+and relative separation survive. It is also future-proof in a way spot values are
+not: a screen written next month gets the correction for free.
+
+**One knob if it is still not enough.** The exponent, `panelFont.c` in
+`panelTextInk()`. 0.55 today; 0.45 would take the reported 0.45/0.50 inks to
+0.70/0.74, 0.35 would take them to 0.75/0.79. I did not go more aggressive
+unseen — past ~0.4 the dim captions start converging on the bright ones and the
+hierarchy flattens anyway.
+
+**Deliberately left alone**, per your "structural pixels and hues" instruction:
+
+- `panelBig()` — the BIG numerals are watermarks at b=0.3, a *background* element
+  that `panelTextOver`'s halo knockout is designed to sit on top of. Lifting the
+  watermark would cut the contrast that makes the overlaid label readable, which
+  is the opposite of the fix. This is the one case where "text" wants to stay dim.
+- Every non-text primitive: bars, ramps, lattice, particles, inlay rails, D2
+  sparks, C1 traces. Their dimness is the design working.
+- All hues. The change scales brightness only; no condition colour moves.
+
+If the eyes-on pass finds a *structural* element that dies on LEDs too — the C1
+traces and the A0 lattice are my guesses — that is a separate call, because
+raising those changes the composition rather than just its legibility.
+
+### Rebuild
+
+```
+dd976a918b7bf5df9c764d444701579351d04434950feaf0cd17e281dfed24e4  b1/solari-panel-fw.uf2
+```
+
+**This build was superseded before it could be verified.** It was flashed and
+judged on hardware: pixels measurably brighter, text still unreadable. The b2
+reproducibility half was cut short when the next round started, so `dd976a91`
+has a single-build hash only and should not be treated as a release image.
+
+## HUE CONTRAST ROUND (second hardware pass, 2026-08-04)
+
+Photo evidence: `~/Downloads/unicorn-contrast.jpg`. I read it rather than taking
+the diagnosis secondhand, and it confirms the Lead's reading: **the unlit LED
+packages are pale cream plastic and reflect enough ambient room light to sit at
+roughly the luminance of a mid-duty lit pixel.** In the macro the unlit packages
+read nearly white while the lit azure pixels are only modestly brighter.
+
+That is a **reflection floor**, and it is not in our signal path — no gamma
+exponent reaches it. Below that floor, dim ink of any colour is invisible. The
+b^0.55 curve was therefore treating the wrong variable, and the operator's
+direction (colour and saturation over brightness) is correct.
+
+**1. All small-font text now renders at high duty.** The gamma seam stays where
+it is; the mapping inside it becomes `0.85 + 0.15*b`:
+
+| design b | rendered b |
+|---:|---:|
+| 0.16 (B0 zero-state counts) | 0.874 |
+| 0.28 (C2 caption, NO DATA) | 0.892 |
+| 0.30 (B0 labels) | 0.895 |
+| 0.45 (B1 ticker, B2 rows) | 0.918 |
+| 0.50 (B1 "% LINK", "AGGREGATE") | 0.925 |
+| 0.55 (inlay detail) | 0.933 |
+| 0.60 (D0 centre message) | 0.940 |
+| 0.95 (inlay subject) | 0.993 |
+
+Still monotonic, so the design's ordering survives — but as a whisper. That is
+the point: hierarchy moved off luminance.
+
+**2. Hierarchy by hue.** `cQuiet` (78,107,126) is a desaturated slate — it is
+exactly the ink that dies against a cream reflection, at any duty. It is now
+used for **no small-font text anywhere**. The two-tier scheme, as directed:
+
+- **white (`cInk`)** — primary readouts: B1 "% LINK", B1 ticker, B2 "LOAD", B2
+  latency/loss reading, D0 centre message, inlay detail line.
+- **azure (`cAzure`)** — secondary labels and captions: B0 "DOWN"/"DEG"/"MNT"
+  and their zero-state counts, B0 tier flag, B2 ">85" row, C2 "BY POOL", the
+  NO DATA message.
+- **third level is size and position, not a third hue** — per your steer. I did
+  not introduce amber: it would collide with `cWarn` and make a caption read as
+  a condition. There is no text colour on this panel that is not either neutral,
+  azure, or a genuine condition colour.
+
+**Condition colours untouched.** ok / warn / crit / maint keep their hues and
+their thresholds. The only interaction is that a zero count now reads azure
+where it used to read slate, so hue alone still separates "0 down" from "3 down".
+
+**3. Structural pixels untouched**, per your instruction — bars, ramps, lattice,
+rails, C1 traces, D2 sparks, C2's tick rows. They are area elements, legible by
+mass, and `cQuiet` remains correct for them. This round is small-font text only.
+
+**4. Inlay detail line** was already `cInk`; it now renders at 0.933 under the
+new mapping, so it is covered by the same rule without a call-site change.
+
+`panelBig()` watermarks remain excluded from the seam and stay at b=0.3. With
+text now near full, the watermark/label contrast is better than it has ever
+been — this is the one element that should stay dim.
+
+### Rebuild (hue only — superseded, single build)
+
+```
+d8f85eefd3d71d4222c66661b153cdc6a942632bdf723d222cd9eb69fd8d117c  b1/solari-panel-fw.uf2
+```
+
+Preserved on lithium at `/home/jason/hue-only-d8f85eef.uf2`. Its reproducibility
+half was stopped to start the daylight round, so it is a test image, not a
+release image. Superseded by the round below.
+
+## DAYLIGHT ROUND (environment, 2026-08-04)
+
+The panel's permanent home is the family room beside floor-to-ceiling windows,
+with direct daylight on the board. That is the **normal** condition, not the
+worst case, which validates the high-duty text strategy and exposes a real bug in
+the auto-brightness path.
+
+**Bug: the panel could effectively never reach full brightness.**
+`runAutoBrightness()` normalised the raw light reading against the ADC's full
+4095, so the design's `0.25 + 0.75*sqrt(lux)` curve only reached 1.0 with the
+sensor **pegged** — which a phototransistor in a divider realistically never is.
+In daylight the panel was sitting well short of maximum while the operator was
+standing in front of it judging text legibility. Worth noting the two findings
+compound: dim text at a brightness ceiling that could not be reached.
+
+**Fix.** The reference is now `PANEL_LUX_FULL` (raw 1600, roughly 40% of scale),
+clamped above, so ordinary daylight pins global brightness at 1.0 with margin.
+The night floor of 0.25 is unchanged.
+
+**Also: asymmetric smoothing.** Brighten with k=0.08 (~0.5 s), dim with k=0.01
+(~4 s). The panel is never caught dim when the room lights up, and someone
+walking between the window and the board does not visibly pump it.
+
+**LUX+ reaches full — verified by reading the code, not assumed.**
+`handlePress()` sets `gAutoBright = false` before stepping, so manual control
+latches and auto-brightness stops fighting it; `panelHwSetBrightness()` clamps at
+1.00 (`panelHw.cpp:71`); the 0.05 step reaches it exactly.
+
+**UNVERIFIED and important:** I have not measured what the sensor actually reads
+in that room. The board reports no lux over the wire and MicroPython is gone, so
+**1600 is a reasoned guess, not a measurement.** It is deliberately a single named
+constant in `main.c` for exactly this reason — if the panel still looks held back
+in the sun, lower it. A rough report of how the panel behaves at the window
+versus at night would let me size it properly instead of guessing.
+
+### Rebuild
+
+```
+741fc80431dfcbeaffbe74442fdde318512dcf3d06fd3dfb6bbffe5e1d689513  b1/solari-panel-fw.uf2
+741fc80431dfcbeaffbe74442fdde318512dcf3d06fd3dfb6bbffe5e1d689513  b2/solari-panel-fw.uf2
+```
+
+Zero warnings, both dirs identical.
+
+## SEQ RESYNC ROUND (hardware-reproduced alarm failure, 2026-08-04)
+
+**Symptom.** A synthetic crit (eventId 160, sev 2) was raised and left active. The
+panel — awake, link healthy, buttons working — showed nothing: no inlay, no tone,
+no beacon. A wire tap during the active alarm proved the daemon was delivering
+`alarmActive=1`, `episodeId=160`, crit topAlert.
+
+**Root cause: `daemon/solariPanel.c`, not the firmware.** In `parseSnapshot()`,
+line 71 does `memset(&staged,0,sizeof(staged))` and line 83 does
+`*snapshot=staged` — which **overwrites the caller's `latest.seq` with 0 on every
+successful poll**. `runDaemon` then does `latest.seq++` before each send, so the
+daemon transmits **seq=1 forever**. The tap confirms it: a daemon up for hours
+reported `seq=1`; a healthy one would be in the thousands.
+
+The firmware then behaves exactly as protocol.h specifies. The first snapshot
+after boot is applied (no previous seq), `gLastSeq=1`, and thereafter
+`panelSeqNewer(1,1)==0` — equal is a duplicate — so **every subsequent snapshot
+is discarded**. That accounts for the entire symptom set:
+
+- fleet data looked plausible — it was the boot snapshot, still being animated
+  autonomously (CONTRACT §5);
+- link stayed healthy — rejected frames are CRC-valid and still refresh the
+  liveness timer;
+- buttons worked — unrelated path;
+- the crit raised *afterwards* never entered `PanelEnv`, so `runAlarm()` never
+  saw `alarmActive` and no alarm could rise.
+
+**None of the four suspects held.** The env/snapshot copy path is clean
+(`panelHist.c:125-127`); nothing gates the inlay on score anywhere in the
+firmware; the ack sentinel is fine (`gHaveAcked` starts false); and it is not a
+regression from today's rounds — the alarm machine is correct, it was starved of
+input.
+
+**The daemon fix is one line and is NOT mine to make** (daemon is out of scope).
+Before `*snapshot=staged;`:
+
+```c
+staged.seq = snapshot->seq;   /* seq belongs to the sender's session, not the payload */
+```
+
+**What I shipped: a receiver-side escape** (`main.c`, `onFrame`). If snapshots
+keep arriving but none has been *applied* for `SEQ_RESYNC_MS` (30 s, ~15
+consecutive rejections — far outside anything reordering or duplication can
+produce), the panel treats the sender as restarted, adopts the next snapshot
+unconditionally, and emits `PANEL_FT_LOG "seq resync: sender restarted"` so the
+journal shows it happened.
+
+Deliberately in `main.c` and not in the shared codec: `panelSeqNewer()` is not
+wrong, `protocol.c` is read-only to me, and this is receiver policy rather than a
+change to the ordering rule.
+
+**This is a mitigation, not the fix.** With the daemon still clobbering seq the
+panel updates every 30 s instead of every 2 s. It is worth having on its own
+merits, though: a *genuine* daemon restart resets seq to 1 legitimately, and
+without this escape that wedges the panel for ~32768 snapshots — about 18 hours —
+while it looks perfectly healthy the whole time.
+
+**Vol± ack: already correct**, verified by reading rather than assumed.
+`handlePress()` takes the ack branch before the button switch, so every button
+including Vol± is consumed as an acknowledge. The presses did nothing because
+`gAlarmArmed` was false — same root cause, not a second bug.
+
+### Rebuild
+
+```
+dbd338858ad90d08fd6cc627e59aa4623af97ebd5e847b374571c9697e042409  b1/solari-panel-fw.uf2
+dbd338858ad90d08fd6cc627e59aa4623af97ebd5e847b374571c9697e042409  b2/solari-panel-fw.uf2
+
+**This image was flashed and then ROLLED BACK — see the LINK FLAP round below.
+Do not ship it.**
+```
 
 ## NEXT
 
@@ -450,3 +701,110 @@ For the Lead's deploy phase:
    tone; then press ZZZ *after* acking to confirm the sleep path separately.
 6. If the tick budget is tight on screen D2, the per-pixel `powf` is the first
    thing to precompute into a lookup table.
+
+## LINK FLAP ROUND (incident dbd33885 + folded daylight fix, 2026-08-04)
+
+### Incident
+
+Build `dbd33885` was flashed at 18:42 and immediately emitted an
+`EV_LINKLOST`/`EV_LINKBACK` pair within the same second, repeating on a ~2 s
+cadence — 16 pairs in 40 s, locked to the snapshot interval. No `HELLO` frames in
+the journal, so the board was not rebooting. Rolled back to `d8f85eef` at 18:43.
+
+### Root cause — NOT the escape hatch
+
+The Lead's prime suspect was that the escape-hatch rework re-keyed the LINK LOST
+determination onto last-applied-snapshot age with a unit or threshold error. That
+is not what happened: **the link determination was never changed.** It read, then
+as before, `(ms - gLastFrameMs) > LINK_TIMEOUT_MS`, both operands `uint32_t`
+milliseconds. No unit error, no threshold change.
+
+The real defect was a latent one in the tick's *ordering*, at `main.c:382–392`:
+
+```c
+uint32_t ms = nowMs();                                /* sampled here      */
+...
+pumpSerial();                    /* onFrame(): gLastFrameMs = nowMs()      */
+bool lost = (ms - gLastFrameMs) > LINK_TIMEOUT_MS;    /* unsigned          */
+```
+
+A frame parsed during the tick stamps its arrival *after* `ms` was sampled.
+Reading a ~110-byte SNAPSHOT one byte at a time via `getchar_timeout_us` crosses
+a millisecond boundary, so `gLastFrameMs` lands 1+ ms **ahead** of `ms`. The
+subtraction is unsigned: "one millisecond in the future" evaluates to
+`4294967295`, comfortably past the 15 s timeout. The panel declared LINK LOST on
+the exact tick a healthy frame arrived, and LINK BACK on the next tick with no
+frame. One pair per snapshot. An 8-byte PING usually reads inside a single
+millisecond, which is why the flap tracked snapshots and not pings — the
+"diagnostic gift in the cadence" points at frame *size*, not at the escape hatch.
+
+Why it surfaced only now is inference, not observation: the defect is present in
+every build back to the first, and it fires only when snapshots are actually
+flowing. The earlier report that "the link is verified (`EV_LINKLOST`/`LINKBACK`
+round trip ... streaming through the journal)" is, on this reading, the same flap
+being read as a successful round-trip test. I did not have journal history to
+confirm that, and I am marking it INFERRED.
+
+### Fix
+
+Extracted the whole liveness/ordering machine into **`firmware/panelLink.c`** +
+`panelLink.h` — no hardware dependencies, plain C over a caller-supplied ms
+clock. Two changes of substance:
+
+1. Age is computed as `(int32_t)(now - then)`. A timestamp slightly in the future
+   yields a small **negative** age instead of a 49-day one, and the comparison is
+   correct across the `uint32` millisecond wrap at ~49.7 days. This alone fixes
+   the flap.
+2. `panelLinkPoll()` takes the clock as an argument, and `main.c` now samples it
+   **after** `pumpSerial()`, so the age is also honest rather than merely safe.
+
+The escape hatch itself was kept, unchanged in behaviour, and moved into the same
+tested unit. `gLastFrameMs`/`gLastAppliedMs`/`gHaveSeq`/`gLastSeq`/`gLinkLost`
+are gone from `main.c`, replaced by one `PanelLink gLink`.
+
+### Host unit test
+
+**`firmware/test/panelLinkTest.c`**, built and run by `make -C firmware/test`
+(plain `cc`, `-Wall -Wextra -Werror`; it links the real `panelLink.c` and the
+real `protocol.c`, no stubs). 21 assertions in 5 cases:
+
+1. **The incident, reproduced** — 7500 ticks at 40 ms, a snapshot every 50 ticks
+   (2 s), each arriving one millisecond *after* the tick's sampled clock, polled
+   with that stale clock. Asserts 150 snapshots driven, all applied, and **zero
+   LINKLOST and zero LINKBACK** over the 300 s stream.
+2. A genuine 15 s outage still raises LINKLOST, recovery still raises LINKBACK,
+   and both are edge-triggered rather than repeating.
+3. The `uint32` millisecond wrap: 6 s spanning rollover is healthy, 16 s
+   spanning rollover is correctly lost.
+4. Seq ordering — newer applies, equal and older drop, and the escape hatch stays
+   idle for the full 30 s window then fires exactly once.
+5. No spurious resync over 150 healthy snapshots.
+
+**The test was proven to fail on the defect**, not just to pass on the fix: with
+the signed compare replaced by the old unsigned semantics, case 1 fails on both
+LINKLOST and LINKBACK while every other case still passes.
+
+### Also folded in
+
+The daylight auto-brightness fix (`PANEL_LUX_FULL` 1600 + asymmetric smoothing),
+which was verified in `741fc804` but is missing from the board's current
+`d8f85eef`. One round, one image, as instructed.
+
+### Archiving
+
+`~/fw-archive/` created on lithium; the live `d8f85eef` image is archived there as
+`d8f85eef.uf2`. Adopted as standing practice before clearing build trees.
+
+### Build (lithium, `~/panel-build`)
+
+```
+b1 warnings: 0
+b2 warnings: 0
+2f208afab3973ec6d7c96a03bb33dfa4bb4ddd52ca2122c79d8f0a281a6c87b6  b1/solari-panel-fw.uf2
+2f208afab3973ec6d7c96a03bb33dfa4bb4ddd52ca2122c79d8f0a281a6c87b6  b2/solari-panel-fw.uf2
+[100%] Built target solari-panel-fw
+```
+
+Host test, same tree: `all panelLink cases pass` (21 assertions, `-Werror`).
+Archived as `~/fw-archive/2f208afa.uf2`. **This is the release candidate; it
+replaces `d8f85eef` on the board.**

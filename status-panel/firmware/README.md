@@ -98,12 +98,51 @@ collected in `../RETURN-C3.md`.
   either.
 - **Rotation** dwells 6 s per screen. Buttons A–D pick the theme, and pressing
   the current theme's button advances within it.
-- **Brightness** LUX+/LUX− step 0.05; light-sensor auto-brightness runs when
-  enabled, and either LUX button latches manual control. ZZZ blanks the panel;
+- **Brightness** LUX+/LUX− step 0.05 and reach 1.00; light-sensor auto-brightness
+  runs when enabled, and either LUX button latches manual control. Auto maps the
+  raw reading against `PANEL_LUX_FULL` (main.c), *not* the ADC's 4095 ceiling —
+  the panel lives in direct daylight, so full brightness has to be reachable well
+  below a pegged sensor. `PANEL_LUX_FULL` is the knob if it looks held back.
+  Response is asymmetric: brightens in ~0.5 s, dims over ~4 s. ZZZ blanks the panel;
   any button wakes it, as does the rising edge of an alarm.
+- **Text legibility** — the unlit LED packages are pale cream and reflect ambient
+  room light at roughly the luminance of a mid-duty lit pixel, so there is a
+  reflection floor under which dim ink of any colour is invisible. Two rules
+  follow, and both are load-bearing:
+  1. All small-font text is mapped into a narrow high band, `0.85 + 0.15*b`,
+     applied once in `panelFont.c` (`panelTextInk`, called from `drawSmall`, the
+     seam every small-font path funnels through). Text pixels are few and bright,
+     never many and dim.
+  2. Text hierarchy is carried by **hue**, not brightness: white (`cInk`) for
+     primary readouts, azure (`cAzure`) for secondary labels and captions, and
+     size/position for anything below that. `cQuiet` is never used for
+     small-font text — it is the ink that dies against the reflection.
+
+  `panelBig()` watermarks and all non-text primitives are excluded from the seam
+  and keep the design's own brightnesses; they are area elements, legible by mass.
+- **Seq resync** — snapshots older than or equal to the last applied seq are
+  discarded per protocol.h. If that state persists for 30 s while snapshots keep
+  arriving, the sender is assumed to have restarted (its seq counter resets to 1)
+  and the next snapshot is adopted unconditionally, with a `LOG` frame recording
+  it. Without this a sender restart wedges the panel for ~18 hours while it looks
+  perfectly healthy — stale data, valid frames, no link fault.
 - **Link loss** — no valid frame for 15 s raises the LINK LOST screen and emits
   `EV_LINKLOST` (0x04); recovery emits `EV_LINKBACK` (0x05). Deliberately amber,
   not red: the alarm's red-rail vocabulary stays reserved for fleet faults.
+
+  Both the liveness timer and the seq/resync rules live in **`panelLink.c`**, a
+  hardware-free translation unit, and are exercised by **`test/panelLinkTest.c`**
+  on the build host (`make -C firmware/test`). They were pulled out of the render
+  loop after build `dbd33885` flapped the link once per snapshot on hardware: the
+  tick sampled the clock *before* pumping serial, so a frame parsed during that
+  tick carried a timestamp a millisecond *ahead* of it, and the unsigned
+  subtraction turned "1 ms in the future" into 4294967295 ms of apparent age —
+  instantly past the 15 s timeout. A ~110-byte snapshot always crosses a
+  millisecond boundary during its byte-at-a-time read; an 8-byte ping usually
+  does not, which is why the flap tracked the snapshot cadence exactly. The
+  comparison is now signed (also correct across the 49.7-day `uint32` ms wrap)
+  and the poll is fed a post-pump timestamp. **Do not reimplement this arithmetic
+  in the tick.**
 - **Alarm** — a two-tone triad (990/660/990 Hz, 200 ms notes at 0/0.22/0.44 s)
   repeating every **60 s** while `alarmActive`. Acknowledge is **firmware-local
   and per-episode**: any button press during an armed alarm acks it and is

@@ -22,6 +22,7 @@
 
 #include "protocol.h"
 #include "panelHw.h"
+#include "panelLink.h"
 #include "panelFb.h"
 #include "panelFont.h"
 #include "panelHist.h"
@@ -43,7 +44,8 @@ bi_decl(bi_program_description("SolariNet fleet status panel (Galactic Unicorn)"
 /* ---- timing constants --------------------------------------------------- */
 #define TICK_MS          40u     /* DESIGN-BRIEF: 40 ms logic tick, ~25 Hz   */
 #define DWELL_SEC        6.0f    /* DESIGN-BRIEF: dwell default 6 s          */
-#define LINK_TIMEOUT_MS  15000u  /* CONTRACT §4: >15 s with no valid frame   */
+/* Link liveness and snapshot-ordering thresholds now live in panelLink.h,
+ * alongside the state machine they govern and its host unit test.          */
 /* OPERATOR AMENDMENT 2026-08-04, superseding the DESIGN-BRIEF's 12 s re-alarm:
  * the tone repeats every 60 s, and an episode left unacknowledged for 5 minutes
  * stops re-sounding permanently. Auto-silence is NOT an acknowledge — the inlay
@@ -51,6 +53,10 @@ bi_decl(bi_program_description("SolariNet fleet status panel (Galactic Unicorn)"
 #define REALARM_SEC      60.0f   /* was 12 s (DESIGN-BRIEF "Animation")       */
 #define AUTOSILENCE_SEC  300.0f  /* unacked for this long -> tone off, once   */
 #define BRIGHT_STEP      0.05f   /* DESIGN-BRIEF Ambiguity #3: 5% steps      */
+/* Raw light reading at which auto-brightness goes to full. Deliberately well
+ * below the ADC's 4095 ceiling: the panel lives in direct daylight and that is
+ * the NORMAL condition, not the extreme. Tunable knob — see runAutoBrightness. */
+#define PANEL_LUX_FULL   1600.0f
 #define DEBOUNCE_TICKS   2       /* 80 ms at the 25 Hz tick                  */
 
 /* ---- panel state -------------------------------------------------------- */
@@ -66,10 +72,9 @@ static bool  gSleeping = false;
 static bool  gAutoBright = true;   /* SHOULD; LUX+/- latches manual control  */
 static float gAutoBrightSmoothed = 0.85f;
 
-static uint32_t gLastFrameMs = 0;
-static bool     gLinkLost = false;
-static bool     gHaveSeq = false;
-static uint16_t gLastSeq = 0;
+/* Link liveness + snapshot ordering. See panelLink.c; do not reimplement the
+ * time arithmetic here, that is what flapped the link on 2026-08-04.       */
+static PanelLink gLink;
 
 /* Alarm state — CONTRACT §9. ack is firmware-local and scoped to episodeId;
  * a NEW episodeId re-arms the tone even if the previous one was acked. */
@@ -119,6 +124,14 @@ static void sendHello(void) {
   sendFrame(PANEL_FT_HELLO, p, 3 + n);
 }
 
+/* sendLog — PANEL_FT_LOG: ASCII text (<=128), diagnostics only. Used for the
+ * events the daemon journal should carry but that no EVENT kind covers.     */
+static void sendLog(const char *text) {
+  size_t n = strlen(text);
+  if (n > 128) n = 128;
+  sendFrame(PANEL_FT_LOG, (const uint8_t *)text, n);
+}
+
 static void sendEvent(uint8_t kind, uint8_t arg) {
   uint8_t p[2] = { kind, arg };
   sendFrame(PANEL_FT_EVENT, p, sizeof(p));
@@ -130,17 +143,30 @@ static void sendEvent(uint8_t kind, uint8_t arg) {
  * panelSeqNewer() in the shared codec, which is RFC1982 wraparound-aware.   */
 static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user) {
   (void)user;
-  gLastFrameMs = nowMs();     /* ANY valid frame, PING included, is liveness */
+  uint32_t arriveMs = nowMs();
+  panelLinkNoteFrame(&gLink, arriveMs);  /* ANY valid frame, PING included */
 
   switch (type) {
     case PANEL_FT_SNAPSHOT: {
       PanelSnapshot snap;
       if (panelDecodeSnapshot(payload, len, &snap) != 0) return;
-      /* The ordering test lives in the shared codec so firmware and daemon
-       * cannot disagree about it. Do not hand-roll the comparison here. */
-      if (gHaveSeq && !panelSeqNewer(snap.seq, gLastSeq)) return;
-      gLastSeq = snap.seq;
-      gHaveSeq = true;
+      /* The ordering test and the resync escape both live in panelLink.c, which
+       * is covered by test/panelLinkTest.c. Do not hand-roll either here.
+       *
+       * The escape exists because the ordering rule alone is a one-way trap.
+       * When the DAEMON restarts, its seq counter restarts at 1 while the panel
+       * still holds a much larger lastApplied, and panelSeqNewer() correctly
+       * calls every subsequent snapshot OLDER — for the next ~32768 snapshots,
+       * about 18 hours at the 2 s cadence. The panel is not visibly broken while
+       * this happens, which is what makes it nasty: rendering is autonomous
+       * (CONTRACT §5) so the screens keep animating the last applied snapshot,
+       * the rejected frames are CRC-valid and so keep refreshing the liveness
+       * timer, and the link never goes LOST. It silently shows stale data
+       * forever. A live crit alert raised after such a restart never reaches
+       * PanelEnv at all — no inlay, no tone, no beacon.                      */
+      bool resynced = false;
+      if (!panelLinkAcceptSnapshot(&gLink, snap.seq, arriveMs, &resynced)) return;
+      if (resynced) sendLog("seq resync: sender restarted");
       panelEnvApply(&gEnv, &snap);
       break;
     }
@@ -245,7 +271,7 @@ static void scanButtons(void) {
  * the firmware never recomputes score; episodeId is the re-arm key, and ack is
  * firmware-local per episode. */
 static void runAlarm(void) {
-  bool wantAlarm = gEnv.haveData && gEnv.alarmActive && !gLinkLost;
+  bool wantAlarm = gEnv.haveData && gEnv.alarmActive && !gLink.lost;
   uint32_t episode = gEnv.snap.topAlert.episodeId;
 
   if (wantAlarm) {
@@ -302,11 +328,24 @@ static void runAlarm(void) {
  * smoothed so a passing shadow does not visibly step the board. */
 static void runAutoBrightness(void) {
   if (!gAutoBright) return;
-  float lux = (float)panelHwLight() / 4095.0f;
+  /* The raw reading was previously normalised against the ADC's full 4095, so
+   * the panel only reached full brightness with the sensor pegged — which a
+   * phototransistor in a divider realistically never is. In this panel's actual
+   * home (family room, beside floor-to-ceiling windows, direct daylight on the
+   * board) that put the NORMAL condition well short of maximum. The reference
+   * is now PANEL_LUX_FULL, the raw reading at which the panel goes to 1.0, and
+   * anything brighter clamps there. See UNVERIFIED in RETURN-C3.md: the real
+   * daylight reading has not been measured, so this constant is the one knob to
+   * turn if the panel still looks held back in the sun. */
+  float lux = (float)panelHwLight() / PANEL_LUX_FULL;
   if (lux < 0.0f) lux = 0.0f;
   if (lux > 1.0f) lux = 1.0f;
   float target = 0.25f + 0.75f * sqrtf(lux);
-  gAutoBrightSmoothed += (target - gAutoBrightSmoothed) * 0.01f;
+  /* Asymmetric: brighten quickly (~0.5 s) so the panel is never caught dim when
+   * the room lights up, dim slowly (~4 s) so a passing shadow or someone
+   * walking between the window and the board does not visibly pump it. */
+  float k = (target > gAutoBrightSmoothed) ? 0.08f : 0.01f;
+  gAutoBrightSmoothed += (target - gAutoBrightSmoothed) * k;
   panelHwSetBrightness(gAutoBrightSmoothed);
 }
 
@@ -315,7 +354,7 @@ int main(void) {
   panelHwInit();
   panelEnvInit(&gEnv);
   panelParserInit(&gParser);
-  gLastFrameMs = nowMs();
+  panelLinkInit(&gLink, nowMs());
 
   sendHello();
 
@@ -334,17 +373,22 @@ int main(void) {
 
     pumpSerial();
 
-    /* CONTRACT §4: >15 s without any valid frame is LINK LOST; recovery is
-     * announced too so the daemon journal shows both edges. */
-    bool lost = (ms - gLastFrameMs) > LINK_TIMEOUT_MS;
-    if (lost && !gLinkLost)      { gLinkLost = true;  sendEvent(PANEL_EV_LINKLOST, 0); }
-    else if (!lost && gLinkLost) { gLinkLost = false; sendEvent(PANEL_EV_LINKBACK, 0); }
+    /* Sample the clock AFTER the pump: a frame parsed during this tick stamps
+     * its arrival later than `ms`, and feeding a stale `ms` here is precisely
+     * what produced one LINKLOST/LINKBACK pair per snapshot in build dbd33885.
+     * panelLinkPoll now tolerates that too (signed compare), but there is no
+     * reason to hand it a timestamp we know to be behind. */
+    switch (panelLinkPoll(&gLink, nowMs())) {
+      case PANEL_LINK_WENT_LOST: sendEvent(PANEL_EV_LINKLOST, 0); break;
+      case PANEL_LINK_CAME_BACK: sendEvent(PANEL_EV_LINKBACK, 0); break;
+      default: break;
+    }
 
     scanButtons();
     runAlarm();
     runAutoBrightness();
 
-    if (!gLinkLost) gScreenT += dt;
+    if (!gLink.lost) gScreenT += dt;
     if (gScreenT >= DWELL_SEC) { gScreenT = 0.0f; gScreen = (gScreen + 1) % 3; }
 
     panelFbClear();
@@ -356,7 +400,7 @@ int main(void) {
       continue;
     }
 
-    if (gLinkLost) {
+    if (gLink.lost) {
       /* Keep the last good picture underneath so the operator still sees the
        * fleet, then lay the link treatment over it. */
       kScreens[gTheme][gScreen](&gEnv, gT, dt);

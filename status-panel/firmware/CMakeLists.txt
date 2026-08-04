@@ -58,6 +58,7 @@ add_executable(solari-panel-fw
   main.c
   panelFb.c
   panelFont.c
+  panelLink.c
   panelHist.c
   panelScreensA.c
   panelScreensB.c

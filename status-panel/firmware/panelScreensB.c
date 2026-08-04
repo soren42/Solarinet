@@ -26,9 +26,16 @@ void panelScreenB0(const PanelEnv *env, float t, float dt) {
   int x = 2 + panelBigW(up) + 3;
   if (x < 22) x = 22;
 
-  int cx = panelTextOver(x, 0, dn, env->down ? cCrit : cQuiet,
+  /* HUE TIER (2026-08-04 hardware pass, see panelFont.c panelTextInk): text
+   * hierarchy is carried by colour, not brightness — white for a primary
+   * readout, azure for a secondary label. cQuiet is a desaturated slate that
+   * disappears against the unlit packages' cream reflection at ANY duty, so it
+   * is no longer used for small-font text anywhere. Condition colours
+   * (ok/warn/crit/maint) are untouched: a zero count reads azure, a real one
+   * reads its condition colour, and the hue is what tells them apart. */
+  int cx = panelTextOver(x, 0, dn, env->down ? cCrit : cAzure,
                          env->down ? 0.9f : 0.16f);
-  cx = panelTextOver(cx + 1, 0, "DOWN", cQuiet, 0.3f);
+  cx = panelTextOver(cx + 1, 0, "DOWN", cAzure, 0.3f);
 
   /* Prototype tests env.systems for a tier-0 down. Pool aggregates are the
    * better source here: CONTRACT §9 computes them server-side over the FULL
@@ -38,14 +45,14 @@ void panelScreenB0(const PanelEnv *env, float t, float dt) {
   for (int i = 0; i < env->poolCount; i++)
     if (env->pools[i].tier == 0 && env->pools[i].down > 0) tierZeroDown = 1;
   const char *tierMsg = env->down ? (tierZeroDown ? "TIER 0" : "TIER 3") : "OK";
-  panelTextOver(cx + 3, 0, tierMsg, tierZeroDown ? cCrit : cQuiet, 0.4f);
+  panelTextOver(cx + 3, 0, tierMsg, tierZeroDown ? cCrit : cAzure, 0.4f);
 
-  cx = panelTextOver(x, 6, dg, env->deg ? cWarn : cQuiet,
+  cx = panelTextOver(x, 6, dg, env->deg ? cWarn : cAzure,
                      env->deg ? 0.65f : 0.16f);
-  cx = panelTextOver(cx + 1, 6, "DEG", cQuiet, 0.3f);
-  cx = panelTextOver(cx + 3, 6, mn, env->maint ? cMaint : cQuiet,
+  cx = panelTextOver(cx + 1, 6, "DEG", cAzure, 0.3f);
+  cx = panelTextOver(cx + 3, 6, mn, env->maint ? cMaint : cAzure,
                      env->maint ? 0.5f : 0.16f);
-  panelTextOver(cx + 1, 6, "MNT", cQuiet, 0.3f);
+  panelTextOver(cx + 1, 6, "MNT", cAzure, 0.3f);
 }
 
 /* ---- B1 · Throughput ----------------------------------------------------
@@ -135,7 +142,7 @@ void panelScreenB2(const PanelEnv *env, float t, float dt) {
       snprintf(reading, sizeof(reading), "LOSS %d%%", (int)(env->loss + 0.5f));
     else
       snprintf(reading, sizeof(reading), "LOSS %.1f%%", (double)env->loss);
-    rcol = env->loss > 1.0f ? &cCrit : &cQuiet;
+    rcol = env->loss > 1.0f ? &cCrit : &cInk;
   }
   int rx = PANEL_W - panelTextW(reading);
   int rMinX = panelTextW("LOAD") + 3;
@@ -169,5 +176,5 @@ void panelScreenB2(const PanelEnv *env, float t, float dt) {
   int tx = PANEL_W - panelTextW(over);
   int minX = panelBigW(pct) + 3;
   if (tx < minX) tx = minX;
-  panelTextOver(tx, 6, over, hot ? cWarn : cQuiet, 0.45f);
+  panelTextOver(tx, 6, over, hot ? cWarn : cAzure, 0.45f);
 }
