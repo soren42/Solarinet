@@ -1,0 +1,32 @@
+/* Emphasis is a budget, not a style. Glow marks the single most
+   severe item in view; --sn-glow is 0 in light theme so it vanishes. */
+:root{
+  --sn-glow:.55; /* @kind other */
+  --sn-shadow-panel:0 10px 30px rgba(0,0,0,.55);
+  --sn-shadow-overlay:0 10px 30px rgba(0,0,0,.55),0 0 0 1px rgba(34,184,240,.22);
+  --sn-glow-crit:0 0 12px rgba(255,77,94,.28); /* @kind shadow */
+  --sn-glow-accent:0 0 12px rgba(34,184,240,.28); /* @kind shadow */
+  --sn-focus-ring:0 0 0 3px rgba(34,184,240,.18);
+  --sn-line-glow:rgba(34,184,240,.22);
+  --sn-scrim:rgba(2,5,10,.62);
+  --sn-blur-overlay:blur(3px); /* @kind other */
+  --sn-blur-topbar:blur(8px); /* @kind other */
+
+  /* the app field: hairline grid over the ground, never noisy */
+  --sn-grid-line:rgba(34,184,240,.045);
+  --sn-grid-pitch:34px; /* @kind spacing */
+
+  --sn-ease:cubic-bezier(.4,0,.2,1); /* @kind other */
+  --sn-dur-fast:120ms; /* @kind other */
+  --sn-dur-base:150ms; /* @kind other */
+  --sn-dur-slow:250ms; /* @kind other */
+}
+[data-sn-theme="light"]{
+  --sn-glow:0; /* @kind other */
+  --sn-shadow-panel:0 8px 22px rgba(40,60,90,.12);
+  --sn-shadow-overlay:0 8px 22px rgba(40,60,90,.12),0 0 0 1px rgba(10,127,176,.18);
+  --sn-glow-crit:none; /* @kind shadow */
+  --sn-glow-accent:none; /* @kind shadow */
+  --sn-scrim:rgba(40,60,90,.35);
+  --sn-grid-line:rgba(13,121,145,.05);
+}

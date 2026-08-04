@@ -1,0 +1,9 @@
+/* SolariNet self-hosts both faces as WOFF2 — no CDN, works air-gapped.
+   Extracted from the SolariNet Monitoring Dashboard build (latin subset).
+   IBM Plex Sans: one variable file, 400-700 axis.
+   IBM Plex Mono: one static file per weight. Both SIL OFL 1.1. */
+@font-face{font-family:"IBM Plex Sans";font-style:normal;font-weight:400 700;font-display:swap;src:url("../assets/fonts/IBMPlexSans-Variable.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:400;font-display:swap;src:url("../assets/fonts/IBMPlexMono-Regular.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:500;font-display:swap;src:url("../assets/fonts/IBMPlexMono-Medium.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:600;font-display:swap;src:url("../assets/fonts/IBMPlexMono-SemiBold.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:700;font-display:swap;src:url("../assets/fonts/IBMPlexMono-Bold.woff2") format("woff2")}

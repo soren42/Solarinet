@@ -1,0 +1,8 @@
+/* Three radii only. Tiles are the tightest, panels the softest. */
+:root{
+  --sn-radius-sm:5px;   /* node tiles, pills-as-rects, tags */
+  --sn-radius-md:9px;   /* controls: buttons, inputs, nav items */
+  --sn-radius-lg:14px;  /* panels, metric cards, tables, modals */
+  --sn-radius-pill:20px;/* chips, status chips, badges */
+  --sn-radius-full:50%; /* status dots only */
+}

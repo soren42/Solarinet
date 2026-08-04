@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/fonts.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/colors.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/typography.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/spacing.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/radii.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/effects.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/semantic.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/base.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/styles.css">
+<script src="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/_ds_bundle.js"></script>
+<style>
+  html, body { margin: 0; background: #070A0F; }
+  a { color: #22B8F0; text-decoration: none; }
+  a:hover { color: #5FCCFA; }
+</style>
+</helmet>
+
+<section style="display: flex; flex-direction: column; gap: 26px; padding: 30px 34px 40px; background: #070A0F; background-image: linear-gradient(rgba(34,184,240,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(34,184,240,.045) 1px, transparent 1px); background-size: 34px 34px; font-family: var(--sn-font-sans); color: #DFE8F2;">
+
+  <div style="display: flex; flex-direction: column; gap: 10px; max-width: 900px;">
+    <div style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Turn 2 · Scale-free faces · 30 to 3000 systems</div>
+    <h1 style="margin: 0; font-size: 27px; font-weight: 600; letter-spacing: -.01em; color: #DFE8F2;">Stop drawing systems. Draw distributions.</h1>
+    <p style="margin: 0; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">One LED per system runs out at 319. Everything below encodes <em>proportion</em> instead of population, so the picture is identical in kind at 30 systems and at 3000 — only the resolution of each cell changes. Load, throughput and bottlenecks share the board with condition, and the exceptions still own the brightest pixels. Turn 1 has been retrofitted to the same rule: its lattice now buckets systems once the fleet passes 319, worst state winning the cell.</p>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 14px 16px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Fleet condition</span>
+      <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ scenarioOptions }}" value="{{ scenario }}" onChange="{{ setScenario }}" hint-size="360px,44px"></x-import>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Fleet size</span>
+      <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ fleetOptions }}" value="{{ fleet }}" onChange="{{ setFleet }}" hint-size="380px,44px"></x-import>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Motion</span>
+      <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ motionOptions }}" value="{{ motion }}" onChange="{{ setMotion }}" hint-size="160px,44px"></x-import>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Front surface</span>
+      <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ diffuserOptions }}" value="{{ diffuser }}" onChange="{{ setDiffuser }}" hint-size="200px,44px"></x-import>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 9px; min-width: 190px;">
+      <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Panel brightness</span>
+      <input type="range" min="25" max="100" step="5" value="{{ brightnessPct }}" onInput="{{ setBrightness }}" style="width: 190px; accent-color: #22B8F0; height: 20px;">
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 7px; padding-left: 18px; border-left: 1px solid #22303F;">
+      <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Reported by the panel</span>
+      <span style="font-family: var(--sn-font-mono); font-size: 12px; color: #DFE8F2; font-variant-numeric: tabular-nums;">{{ summary }}</span>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 30px;">
+
+    <div id="2a" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="font-family: var(--sn-font-mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: #070A0F; background: #22B8F0; border-radius: 20px; padding: 4px 9px;">2A</span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #DFE8F2;">Load spectrum and throughput</h2>
+        <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">distribution histogram · 15-sample ribbon</span>
+      </div>
+      <p style="margin: 0; max-width: 760px; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">The left two thirds is a histogram of the whole fleet by CPU load — 35 buckets from idle to saturated, column height being the share of systems in that bucket. A healthy fleet is a single soft hill in the middle; a saturated one leans right into amber and red, and a bimodal fleet shows two hills, which is the shape that tells you a pool is mis-sized. Bar height is a fraction, never a count, so the picture holds at any scale. The right block is aggregate link throughput — ingress above the line, egress below, amber where utilisation passes 85%.</p>
+      <div style="padding: 15px 16px 13px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+        <div ref="{{ refE }}" style="height: 154px;"></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">
+          <span>Buckets 0-100% load · ingress above, egress below</span>
+          <span>53 &times; 11</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #4E6B7E;"></i>Systems under tolerance</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #F5A623;"></i>Bucket above 75% load</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #FF4D5E;"></i>Bucket above 90% load</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #22B8F0;"></i>Throughput ribbon</span>
+      </div>
+    </div>
+
+    <div id="2b" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="font-family: var(--sn-font-mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: #070A0F; background: #22B8F0; border-radius: 20px; padding: 4px 9px;">2B</span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #DFE8F2;">Worst-first strip and instrument</h2>
+        <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">severity quantiles · pool key · perf line</span>
+      </div>
+      <p style="margin: 0; max-width: 760px; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">The recommendation. Row 1 is the fleet sorted worst-first and cut into 53 equal quantiles — one cell is one system at 53 systems and roughly 57 systems at 3000, and either way trouble accumulates from the left edge, so <em>how far the red reaches</em> reads as outage scope without a single number. Row 2 is a pool key underneath it, so you can see which pool the trouble sits in. The middle band is the live throughput ribbon with bottlenecks in amber, and the lower half alternates the performance line with the current finding every four seconds.</p>
+      <div style="padding: 15px 16px 13px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+        <div ref="{{ refF }}" style="height: 154px;"></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">
+          <span>Row 1 severity · row 2 pools · rows 4-6 throughput · rows 7-11 text</span>
+          <span>53 &times; 11</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #FF4D5E;"></i>Red reach is outage scope</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #22B8F0;"></i>Pool key and throughput</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #F5A623;"></i>Link over 85%</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #DFE8F2;"></i>Perf line alternates with finding</span>
+      </div>
+    </div>
+
+    <div id="2c" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="font-family: var(--sn-font-mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: #070A0F; background: #22B8F0; border-radius: 20px; padding: 4px 9px;">2C</span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #DFE8F2;">Hive field</h2>
+        <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">texture grain is fleet size · warmth is load</span>
+      </div>
+      <p style="margin: 0; max-width: 760px; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">The ambient one, made scale-aware: the grain of the field is set by the log of the fleet size, so a small estate reads as slow broad swells and a large one as fine cellular texture — the panel looks bigger when the fleet is bigger. Warmth is mean load, drifting from azure toward amber as the footprint heats up, and each outage is a discrete red spark that pulses over the field, capped at nine before the count takes over. Text cycles system count, mean load and aggregate throughput.</p>
+      <div style="padding: 15px 16px 13px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+        <div ref="{{ refG }}" style="height: 154px;"></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">
+          <span>Grain from log(fleet) · text cycles every 5 s</span>
+          <span>53 &times; 11</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #22B8F0;"></i>Cool field is a rested fleet</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #F5A623;"></i>Warmth is mean load</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #FF4D5E;"></i>One spark per outage, max nine</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #DFE8F2;"></i>Count, load, throughput</span>
+      </div>
+    </div>
+
+  </div>
+
+  <p style="margin: 0; max-width: 900px; font-family: var(--sn-font-mono); font-size: 11px; line-height: 1.7; color: #6E8399;">Recommendation · ship <a href="#2b">2b</a> as the resting face and let the B button page to <a href="#2a">2a</a> for the load distribution and <a href="#1c">1c</a> for reachability history. Three faces, one vocabulary, and the only thing that changes between 30 systems and 3000 is what one cell stands for.</p>
+
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 26px; padding: 30px 34px 60px; background: #070A0F; background-image: linear-gradient(rgba(34,184,240,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(34,184,240,.045) 1px, transparent 1px); background-size: 34px 34px; font-family: var(--sn-font-sans); color: #DFE8F2; min-height: 100vh;">
+
+  <div style="display: flex; flex-direction: column; gap: 10px; max-width: 900px;">
+    <div style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Turn 1 · Ambient display · Galactic unicorn</div>
+    <h1 style="margin: 0; font-size: 27px; font-weight: 600; letter-spacing: -.01em; color: #DFE8F2;">SolariNet at a glance, on 583 LEDs</h1>
+    <p style="margin: 0; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">Four candidate faces for the panel. Each one holds the quiet-healthy principle — the calm majority stays a dim lattice, and amber, red and violet are the only things that pull the eye across a room. Scenario, brightness and diffuser apply to all four so they can be compared honestly.</p>
+    <p style="margin: 0; font-family: var(--sn-font-mono); font-size: 11px; line-height: 1.6; color: #6E8399;">53 &times; 11 grid · 583 LEDs · 6 mm pitch · 330 mm wide · RP2350 at 150 MHz, ~300 Hz refresh, 14-bit · fleet data arrives over USB serial from the UNO Q</p>
+  </div>
+
+  <p style="margin: 0; font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">Driven by the controls at the top of the page.</p>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 30px;">
+
+    <div id="1a" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="font-family: var(--sn-font-mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: #070A0F; background: #22B8F0; border-radius: 20px; padding: 4px 9px;">1A</span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #DFE8F2;">Lattice and ledger</h2>
+        <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">one LED per system · fixed counts</span>
+      </div>
+      <p style="margin: 0; max-width: 760px; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">The whole fleet as a 29-column lattice, one LED per system, ordered by pool. Healthy systems breathe at a fifth brightness; a fault is the only bright thing on the board. The right ledger holds the two numbers an operator actually needs, so nothing has to be counted by eye.</p>
+      <div style="padding: 15px 16px 13px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+        <div ref="{{ refA }}" style="height: 154px;"></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">
+          <span>Galactic unicorn · pico 2 w</span>
+          <span>53 &times; 11</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #4E6B7E;"></i>Operational, load in brightness</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #F5A623;"></i>Degraded</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #FF4D5E;"></i>Down, glows</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #9B87FF;"></i>Maintenance, dashed pulse</span>
+      </div>
+    </div>
+
+    <div id="1b" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="font-family: var(--sn-font-mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: #070A0F; background: #22B8F0; border-radius: 20px; padding: 4px 9px;">1B</span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #DFE8F2;">Pool bars and ticker</h2>
+        <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">six pools · scrolling detail line</span>
+      </div>
+      <p style="margin: 0; max-width: 760px; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">Six single-row stacked bars, one per pool, each with a two-LED status key at the left edge. Proportion is the message: how much of a pool has left nominal, and which pool it is. The lower half is a scrolling line naming the current findings in the same word order the console uses.</p>
+      <div style="padding: 15px 16px 13px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+        <div ref="{{ refB }}" style="height: 154px;"></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">
+          <span>Rows 1-6 pools · rows 7-11 ticker</span>
+          <span>53 &times; 11</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #4E6B7E;"></i>Bar length is systems in pool</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #22B8F0;"></i>Key column is worst state</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #DFE8F2;"></i>Ticker at 3 px per second</span>
+      </div>
+    </div>
+
+    <div id="1c" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="font-family: var(--sn-font-mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: #070A0F; background: #22B8F0; border-radius: 20px; padding: 4px 9px;">1C</span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #DFE8F2;">Reachability waterfall</h2>
+        <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">11 targets &times; 53 samples · time-shared text</span>
+      </div>
+      <p style="margin: 0; max-width: 760px; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">The only face that shows history: eleven probed targets down the rows, the last nine minutes of samples scrolling right to left. Latency is brightness, loss is red, so a flapping path leaves a visible scar. Every twelve seconds the panel time-shares — the lattice drops away and the p95 and loss figures take the full board for three seconds.</p>
+      <div style="padding: 15px 16px 13px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+        <div ref="{{ refC }}" style="height: 154px;"></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">
+          <span>10 s per column · newest at right</span>
+          <span>53 &times; 11</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #22B8F0;"></i>Brighter azure is slower RTT</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #F5A623;"></i>Over tolerance</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #FF4D5E;"></i>No reply from a vantage</span>
+      </div>
+    </div>
+
+    <div id="1d" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="font-family: var(--sn-font-mono); font-size: 10px; font-weight: 600; letter-spacing: .15em; color: #070A0F; background: #22B8F0; border-radius: 20px; padding: 4px 9px;">1D</span>
+        <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #DFE8F2;">Ambient field</h2>
+        <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #6E8399;">abstract by default · text on change</span>
+      </div>
+      <p style="margin: 0; max-width: 760px; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">A slow azure field whose drift rate is aggregate load and whose agitation is alert pressure — furniture when all is well, with the clock and system count cycling through a cleared window in the middle. A fault stains the field from the edge nearest the affected pool and pins the offending name in place until it is acknowledged.</p>
+      <div style="padding: 15px 16px 13px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+        <div ref="{{ refD }}" style="height: 154px;"></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">
+          <span>Field at 24 fps · text held 6 s</span>
+          <span>53 &times; 11</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #22B8F0;"></i>Field drift is aggregate load</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #FF4D5E;"></i>Stain marks the pool at fault</span>
+        <span style="display: flex; align-items: center; gap: 7px;"><i style="width: 8px; height: 8px; border-radius: 50%; background: #DFE8F2;"></i>3 &times; 5 glyphs, 13 per line</span>
+      </div>
+    </div>
+
+  </div>
+
+  <p style="margin: 0; max-width: 900px; font-family: var(--sn-font-mono); font-size: 11px; line-height: 1.7; color: #6E8399;">Note · the Galactic Unicorn grid is 53 &times; 11, not 58 &times; 11 — all four faces are drawn to 53 columns. Glyphs are a 3 &times; 5 bitmap font, 4 px per character, 13 characters per line, which is the practical text ceiling at this height.</p>
+
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultScenario&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;nominal&quot;,&quot;degraded&quot;,&quot;incident&quot;,&quot;maintenance&quot;],&quot;default&quot;:&quot;degraded&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Simulation&quot;},&quot;diffuser&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Simulation&quot;},&quot;glow&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Simulation&quot;}}">
+const W = 53, H = 11;
+const C = {
+  ok: [61, 214, 140], warn: [245, 166, 35], crit: [255, 77, 94],
+  maint: [155, 135, 255], unknown: [124, 138, 160], azure: [34, 184, 240],
+  quiet: [78, 107, 126], ink: [223, 232, 242]
+};
+const F = {
+  '0': '111,101,101,101,111', '1': '010,110,010,010,111', '2': '111,001,111,100,111',
+  '3': '111,001,111,001,111', '4': '101,101,111,001,001', '5': '111,100,111,001,111',
+  '6': '111,100,111,101,111', '7': '111,001,010,010,010', '8': '111,101,111,101,111',
+  '9': '111,101,111,001,111',
+  'A': '111,101,111,101,101', 'B': '110,101,110,101,110', 'C': '111,100,100,100,111',
+  'D': '110,101,101,101,110', 'E': '111,100,111,100,111', 'F': '111,100,111,100,100',
+  'G': '111,100,101,101,111', 'H': '101,101,111,101,101', 'I': '111,010,010,010,111',
+  'J': '001,001,001,101,111', 'K': '101,101,110,101,101', 'L': '100,100,100,100,111',
+  'M': '101,111,111,101,101', 'N': '110,101,101,101,101', 'O': '111,101,101,101,111',
+  'P': '111,101,111,100,100', 'Q': '111,101,101,111,001', 'R': '111,101,111,110,101',
+  'S': '111,100,111,001,111', 'T': '111,010,010,010,010', 'U': '101,101,101,101,111',
+  'V': '101,101,101,101,010', 'W': '101,101,111,111,101', 'X': '101,101,010,101,101',
+  'Y': '101,101,010,010,010', 'Z': '111,001,010,100,111',
+  '/': '001,001,010,100,100', ':': '000,010,000,010,000', '.': '000,000,000,000,010',
+  '-': '000,000,111,000,000', '%': '101,001,010,100,101', '+': '000,010,111,010,000',
+  '>': '100,010,001,010,100', ' ': '000,000,000,000,000'
+};
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+const POOLS = ['CORE', 'EDGE', 'DMZ', 'STOR', 'VMS', 'LAB'];
+const TARGETS = ['GATEWAY', 'DNS 1', 'DNS 2', 'TCP/443', 'TCP/22', 'NAS', 'VPN', 'MQTT', 'PIHOLE 1', 'PIHOLE 2', 'WAN'];
+
+const RANK = { down: 3, deg: 2, maint: 1, ok: 0 };
+function buildEnv(kind, fleet) {
+  const r = rng(9137);
+  const shares = [0.26, 0.2, 0.08, 0.13, 0.24, 0.09];
+  const pools = POOLS.map((name, i) => ({ name, total: Math.max(1, Math.round(fleet * shares[i])), deg: 0, down: 0, maint: 0 }));
+  const rate = {
+    nominal: { down: 0, deg: 0, maint: 0 },
+    degraded: { down: 0, deg: 0.013, maint: 0 },
+    incident: { down: 0.007, deg: 0.02, maint: 0 },
+    maintenance: { down: 0, deg: 0.006, maint: 0.045 }
+  }[kind];
+  const nOf = k => rate[k] > 0 ? Math.max(1, Math.round(fleet * rate[k])) : 0;
+  const order = { down: [2, 1, 0], deg: [0, 4, 1, 3, 4, 2], maint: [5, 3, 5, 3, 4] };
+  ['down', 'deg', 'maint'].forEach(k => {
+    const n = nOf(k);
+    for (let i = 0; i < n; i++) pools[order[k][i % order[k].length]][k]++;
+  });
+  const systems = [];
+  pools.forEach((p, pi) => {
+    const base = 0.22 + (pi % 3) * 0.13;
+    for (let i = 0; i < p.total; i++) {
+      let st = 'ok';
+      if (i < p.down) st = 'down'; else if (i < p.down + p.deg) st = 'deg';
+      else if (i < p.down + p.deg + p.maint) st = 'maint';
+      let load = base + r() * 0.42;
+      if (st === 'deg') load = 0.82 + r() * 0.17;
+      if (st === 'down') load = 0;
+      systems.push({ st, pool: pi, load, phase: r() * 6.283 });
+    }
+  });
+  const total = systems.length;
+  const count = k => systems.reduce((a, s) => a + (s.st === k ? 1 : 0), 0);
+  const down = count('down'), deg = count('deg'), maint = count('maint');
+  const worstPool = pools.findIndex(p => p.down > 0) >= 0 ? pools.findIndex(p => p.down > 0) : Math.max(0, pools.findIndex(p => p.deg > 0));
+
+  // load distribution — 35 buckets, share of fleet, scale-free
+  const BK = 35, hist = new Array(BK).fill(0);
+  systems.forEach(s => { if (s.st !== 'down') hist[Math.min(BK - 1, Math.floor(s.load * BK))]++; });
+  const histMax = Math.max(1, ...hist);
+  const loadHist = hist.map(v => v / histMax);
+  const meanLoad = systems.reduce((a, s) => a + s.load, 0) / total;
+
+  // throughput — 53 samples of aggregate link utilisation
+  const gbps = fleet * 0.0062 * (0.8 + meanLoad * 0.6);
+  const thru = Array.from({ length: W }, (_, i) => {
+    let v = 0.42 + Math.sin(i * 0.31) * 0.16 + Math.sin(i * 0.11 + 1.7) * 0.1 + (r() - 0.5) * 0.12;
+    if (kind === 'incident' && i > 34 && i < 46) v += 0.4;
+    if (kind === 'degraded' && i > 40) v += 0.22;
+    return Math.max(0.05, Math.min(1, v));
+  });
+  const egress = thru.map((v, i) => Math.max(0.04, v * (0.55 + Math.sin(i * 0.23) * 0.12)));
+
+  // worst-first quantile strip — 53 cells whatever the fleet size
+  const sorted = systems.slice().sort((a, b) => (RANK[b.st] - RANK[a.st]) || (b.load - a.load));
+  const strip = Array.from({ length: W }, (_, i) => {
+    const a = Math.floor(i * total / W), b = Math.max(a + 1, Math.floor((i + 1) * total / W));
+    let worst = 'ok', load = 0;
+    for (let k = a; k < b && k < total; k++) {
+      if (RANK[sorted[k].st] > RANK[worst]) worst = sorted[k].st;
+      load += sorted[k].load;
+    }
+    return { st: worst, load: load / (b - a), n: b - a };
+  });
+  const poolKey = [];
+  pools.forEach((p, i) => {
+    const n = Math.max(1, Math.round(W * p.total / total));
+    for (let k = 0; k < n && poolKey.length < W; k++) poolKey.push(i);
+  });
+  while (poolKey.length < W) poolKey.push(pools.length - 1);
+
+  const gLabel = gbps >= 10 ? Math.round(gbps) + 'G' : gbps.toFixed(1) + 'G';
+  const lines = {
+    nominal: ['ALL NOMINAL', total + ' SYSTEMS UP · 6 POOLS · NO ALERTS · P95 21MS · ' + gLabel + '/S'],
+    degraded: [deg + ' DEGRADED', 'DISK /VAR OVER TOLERANCE ON MOLYBDENUM · CORE-INFRA · 4M · EGRESS OVER 80% ON EDGE'],
+    incident: [down + ' DOWN', 'PIHOLE 1 UNREACHABLE FROM ALL 2 VANTAGES · DMZ · 3M > BOTTLENECK ON DMZ UPLINK'],
+    maintenance: [maint + ' IN MAINT', 'MAINTENANCE WINDOW ON LAB AND STOR UNTIL 02:00 · ' + deg + ' DEGRADED']
+  }[kind];
+  return {
+    kind, fleet, pools, systems, total, down, deg, maint, up: total - down,
+    worstPool, headline: lines[0], ticker: lines[1] + '   ·   ',
+    loadHist, meanLoad, thru, egress, strip, poolKey, gLabel,
+    perfLine: gLabel + ' ' + Math.round(meanLoad * 100) + '% ' + (kind === 'incident' ? 46 : kind === 'degraded' ? 28 : 21) + 'MS',
+    rtt: kind === 'incident' ? 46 : kind === 'degraded' ? 28 : 21,
+    loss: kind === 'incident' ? 2.4 : kind === 'degraded' ? 0.2 : 0
+  };
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      scenario: props.defaultScenario || 'degraded', motion: 'run',
+      brightness: 0.85, diffuser: props.diffuser ? 'on' : 'off'
+    };
+    this.state.fleet = 318;
+    this.refs4 = {
+      A: React.createRef(), B: React.createRef(), C: React.createRef(), D: React.createRef(),
+      E: React.createRef(), F: React.createRef(), G: React.createRef()
+    };
+    this.fb = new Float32Array(W * H * 3);
+    this.ms = { hist: null, t0: 0 };
+  }
+
+  componentDidMount() { this.t = 0; this.last = performance.now(); this.tick(); }
+  componentWillUnmount() { cancelAnimationFrame(this.raf); }
+
+  env() {
+    const k = this.state.scenario + ':' + this.state.fleet;
+    this.cacheEnv = this.cacheEnv || {};
+    if (!this.cacheEnv[k]) this.cacheEnv[k] = buildEnv(this.state.scenario, this.state.fleet);
+    return this.cacheEnv[k];
+  }
+
+  tick = () => {
+    this.raf = requestAnimationFrame(this.tick);
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - this.last) / 1000);
+    this.last = now;
+    if (now - (this.lastDraw || 0) < 38) return;
+    this.lastDraw = now;
+    if (this.state.motion === 'run') this.t += dt;
+    const env = this.env();
+    this.paint('A', env, this.modeLattice);
+    this.paint('B', env, this.modePools);
+    this.paint('C', env, this.modeWaterfall);
+    this.paint('D', env, this.modeField);
+    this.paint('E', env, this.modeSpectrum);
+    this.paint('F', env, this.modeInstrument);
+    this.paint('G', env, this.modeHive);
+  };
+
+  // ---- framebuffer helpers ----
+  clear() { this.fb.fill(0); }
+  set(x, y, col, b) {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = (y * W + x) * 3, k = b === undefined ? 1 : b;
+    this.fb[i] = col[0] * k; this.fb[i + 1] = col[1] * k; this.fb[i + 2] = col[2] * k;
+  }
+  add(x, y, col, b) {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = (y * W + x) * 3, k = b === undefined ? 1 : b;
+    this.fb[i] += col[0] * k; this.fb[i + 1] += col[1] * k; this.fb[i + 2] += col[2] * k;
+  }
+  dim(x, y, k) {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = (y * W + x) * 3;
+    this.fb[i] *= k; this.fb[i + 1] *= k; this.fb[i + 2] *= k;
+  }
+  text(x, y, str, col, b) {
+    let cx = x;
+    for (const ch of String(str).toUpperCase()) {
+      const g = F[ch] || F[' '];
+      const rows = g.split(',');
+      for (let ry = 0; ry < 5; ry++) for (let rx = 0; rx < 3; rx++)
+        if (rows[ry][rx] === '1') this.set(cx + rx, y + ry, col, b);
+      cx += 4;
+    }
+    return cx;
+  }
+  textW(str) { return String(str).length * 4 - 1; }
+
+  // ---- 1A · lattice + ledger ----
+  modeLattice = (env, t) => {
+    const cols = 29, slots = cols * H;
+    if (!env._lat || env._lat.length !== slots) {
+      const per = Math.max(1, Math.ceil(env.total / slots));
+      env._lat = Array.from({ length: slots }, (_, i) => {
+        const a = i * per;
+        if (a >= env.total) return null;
+        let worst = 'ok', load = 0, n = 0;
+        for (let k = a; k < Math.min(env.total, a + per); k++) {
+          if (RANK[env.systems[k].st] > RANK[worst]) worst = env.systems[k].st;
+          load += env.systems[k].load; n++;
+        }
+        return { st: worst, load: load / n, phase: (i * 0.37) % 6.283, n: n * 1 };
+      });
+    }
+    env._lat.forEach((s, idx) => {
+      if (!s) return;
+      const x = idx % cols, y = Math.floor(idx / cols);
+      if (s.st === 'ok') {
+        const b = 0.12 + s.load * 0.13 + Math.sin(t * 0.7 + s.phase) * 0.02;
+        this.set(x, y, C.quiet, b);
+      } else if (s.st === 'deg') {
+        this.set(x, y, C.warn, 0.62 + Math.sin(t * 2 + s.phase) * 0.08);
+      } else if (s.st === 'down') {
+        this.set(x, y, C.crit, 0.95);
+      } else {
+        this.set(x, y, C.maint, 0.34 + (Math.floor(t * 1.4 + s.phase) % 2) * 0.12);
+      }
+    });
+    for (let y = 0; y < H; y++) this.set(30, y, C.azure, y % 2 ? 0.07 : 0.13);
+    const upStr = String(env.up);
+    this.text(32, 0, upStr, C.ink, 0.52);
+    if (upStr.length <= 3) this.text(32 + upStr.length * 4 + 1, 0, 'UP', C.quiet, 0.4);
+    let l2, col;
+    const phase = Math.floor(t / 3.2) % 2;
+    if (env.down > 0 && phase === 0) { l2 = ' ' + env.down + 'DN'; col = C.crit; }
+    else if (env.deg > 0) { l2 = ' ' + env.deg + 'DG'; col = C.warn; }
+    else if (env.maint > 0) { l2 = env.maint + 'MT'; col = C.maint; }
+    else { l2 = ' OK'; col = C.ok; }
+    this.text(32, 6, l2, col, 0.7);
+  };
+
+  // ---- 1B · pool bars + ticker ----
+  modePools = (env, t) => {
+    env.pools.forEach((p, i) => {
+      const y = i;
+      const worst = p.down ? C.crit : p.deg ? C.warn : p.maint ? C.maint : C.quiet;
+      const kb = p.down ? 0.9 : p.deg ? 0.6 : p.maint ? 0.4 : 0.16;
+      this.set(0, y, worst, kb); this.set(1, y, worst, kb * 0.5);
+      const span = 50, x0 = 3;
+      const big = Math.max.apply(null, env.pools.map(q => q.total));
+      const len = Math.max(6, Math.round(span * p.total / big));
+      const seg = n => Math.max(n > 0 ? 1 : 0, Math.round(len * n / p.total));
+      const nd = seg(p.down), ng = seg(p.deg), nm = seg(p.maint);
+      for (let k = 0; k < len; k++) {
+        const x = x0 + k;
+        if (k >= len - nd) this.set(x, y, C.crit, 0.92);
+        else if (k >= len - nd - ng) this.set(x, y, C.warn, 0.6);
+        else if (k >= len - nd - ng - nm) this.set(x, y, C.maint, 0.38);
+        else this.set(x, y, C.quiet, 0.1 + 0.09 * (0.5 + 0.5 * Math.sin(t * 0.9 + k * 0.35 + i)));
+      }
+    });
+    for (let x = 0; x < W; x += 2) this.set(x, 6, C.azure, 0.06);
+    const s = env.ticker;
+    const total = this.textW(s) + W;
+    const off = Math.floor((t * 13) % total);
+    let cx = W - off;
+    for (const ch of s.toUpperCase()) {
+      if (cx > -4 && cx < W) {
+        const g = (F[ch] || F[' ']).split(',');
+        for (let ry = 0; ry < 5; ry++) for (let rx = 0; rx < 3; rx++)
+          if (g[ry][rx] === '1') this.set(cx + rx, 6 + ry, C.ink, 0.5);
+      }
+      cx += 4;
+    }
+  };
+
+  // ---- 1C · reachability waterfall ----
+  modeWaterfall = (env, t) => {
+    if (!this.ms.hist || this.ms.kind !== env.kind) {
+      this.ms.kind = env.kind;
+      const r = rng(4211);
+      this.ms.hist = TARGETS.map((n, i) => Array.from({ length: W }, () => this.sample(env, i, r)));
+      this.ms.step = t;
+      this.ms.r = r;
+    }
+    if (t - this.ms.step > 0.42) {
+      this.ms.step = t;
+      this.ms.hist.forEach((row, i) => { row.shift(); row.push(this.sample(env, i, this.ms.r)); });
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const v = this.ms.hist[y][x];
+      if (v.st === 'loss') this.set(x, y, C.crit, 0.85);
+      else if (v.st === 'slow') this.set(x, y, C.warn, 0.5);
+      else this.set(x, y, C.azure, 0.07 + v.rtt * 0.28);
+    }
+    const cyc = t % 12;
+    if (cyc > 9) {
+      const f = Math.min(1, (cyc - 9) / 0.4) * Math.min(1, (12 - cyc) / 0.4);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) this.dim(x, y, 1 - 0.92 * f);
+      const l1 = 'P95 ' + env.rtt + 'MS';
+      const l2 = 'LOSS ' + env.loss.toFixed(1) + '%';
+      this.text(Math.floor((W - this.textW(l1)) / 2), 0, l1, C.ink, 0.55 * f);
+      this.text(Math.floor((W - this.textW(l2)) / 2), 6, l2, env.loss > 1 ? C.crit : C.quiet, 0.75 * f);
+    }
+  };
+  sample(env, i, r) {
+    const bad = env.kind === 'incident' && (i === 8 || i === 3);
+    const soft = env.kind === 'degraded' && i === 6;
+    if (bad && r() > 0.25) return { st: 'loss' };
+    if ((bad || soft) && r() > 0.5) return { st: 'slow' };
+    return { st: 'ok', rtt: 0.15 + r() * (env.kind === 'nominal' ? 0.35 : 0.6) };
+  }
+
+  // ---- 1D · ambient field ----
+  modeField = (env, t) => {
+    const pressure = Math.min(1.4, (env.down * 3 + env.deg) / Math.max(8, env.total * 0.04));
+    const speed = 0.35 + env.meanLoad * 0.5;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const u = x / W, v = y / H;
+      let n = Math.sin(u * 6.1 + t * speed) * 0.5
+        + Math.sin(v * 4.3 - t * speed * 0.7) * 0.3
+        + Math.sin((u * 3.1 + v * 2.7) * 3.4 + t * speed * 1.3) * 0.4;
+      n = (n + 1.2) / 2.4;
+      const b = 0.05 + Math.pow(Math.max(0, n), 2.2) * 0.42;
+      this.set(x, y, C.azure, b);
+    }
+    if (env.down + env.deg + env.maint > 0) {
+      const px = env.worstPool < 3 ? 0 : W - 1;
+      const stain = env.down ? C.crit : env.deg ? C.warn : C.maint;
+      const amp = env.down ? 1 : env.deg ? 0.7 : 0.42;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const d = Math.abs(x - px) / 26;
+        const wob = 0.75 + 0.25 * Math.sin(t * (1.6 + pressure) + y * 0.6);
+        const k = Math.max(0, 1 - d) * amp * wob;
+        if (k > 0.02) { this.dim(x, y, 1 - k * 0.8); this.add(x, y, stain, k * 0.75); }
+      }
+    }
+    const slot = Math.floor(t / 6) % 2;
+    let msg, col;
+    if (env.down === 1) { msg = 'PIHOLE 1 DOWN'; col = C.crit; }
+    else if (env.down > 1) { msg = env.down + ' SYS DOWN'; col = C.crit; }
+    else if (slot === 0) { msg = '14:22'; col = C.ink; }
+    else if (env.deg > 0) { msg = env.deg + ' DEGRADED'; col = C.warn; }
+    else { msg = env.up + ' UP'; col = C.ok; }
+    const tw = this.textW(msg), tx = Math.floor((W - tw) / 2);
+    for (let y = 2; y <= 8; y++) for (let x = tx - 2; x <= tx + tw + 1; x++) this.dim(x, y, 0.12);
+    this.text(tx, 3, msg, col, 0.62);
+  };
+
+  // ---- 2A · load spectrum + throughput ----
+  modeSpectrum = (env, t) => {
+    const BK = env.loadHist.length;
+    for (let b = 0; b < BK; b++) {
+      const share = env.loadHist[b];
+      const pct = (b + 0.5) / BK;
+      const h = share <= 0 ? 0 : Math.max(1, Math.round(Math.pow(share, 0.62) * H));
+      const col = pct > 0.9 ? C.crit : pct > 0.75 ? C.warn : C.quiet;
+      const base = pct > 0.9 ? 0.85 : pct > 0.75 ? 0.55 : 0.13 + pct * 0.16;
+      for (let k = 0; k < h; k++) {
+        const y = H - 1 - k;
+        const tip = k === h - 1 ? 1.5 : 1;
+        this.set(b, y, col, base * tip * (0.92 + 0.08 * Math.sin(t * 1.1 + b * 0.4)));
+      }
+    }
+    for (let y = 0; y < H; y++) this.set(36, y, C.azure, y % 2 ? 0.06 : 0.12);
+    const off = Math.floor(t * 2) % W;
+    for (let k = 0; k < 15; k++) {
+      const x = 38 + k;
+      const iv = (off + k + W - 15) % W;
+      const inn = env.thru[iv], out = env.egress[iv];
+      const hi = Math.max(1, Math.round(inn * 5)), ho = Math.max(1, Math.round(out * 5));
+      for (let j = 0; j < hi; j++) this.set(x, 4 - j, inn > 0.85 ? C.warn : C.azure, j === hi - 1 ? 0.55 : 0.16);
+      for (let j = 0; j < ho; j++) this.set(x, 6 + j, C.azure, j === ho - 1 ? 0.4 : 0.12);
+    }
+    this.set(52, 5, C.azure, 0.25);
+  };
+
+  // ---- 2B · worst-first strip + instrument rows ----
+  modeInstrument = (env, t) => {
+    env.strip.forEach((c, x) => {
+      if (c.st === 'down') this.set(x, 0, C.crit, 0.95);
+      else if (c.st === 'deg') this.set(x, 0, C.warn, 0.6);
+      else if (c.st === 'maint') this.set(x, 0, C.maint, 0.4);
+      else this.set(x, 0, C.quiet, 0.09 + c.load * 0.16);
+    });
+    env.poolKey.forEach((pi, x) => {
+      const p = env.pools[pi];
+      const col = p.down ? C.crit : p.deg ? C.warn : p.maint ? C.maint : C.azure;
+      this.set(x, 1, col, p.down ? 0.2 : p.deg || p.maint ? 0.13 : 0.05 + (pi % 2) * 0.03);
+    });
+    const off = Math.floor(t * 2.2) % W;
+    for (let x = 0; x < W; x++) {
+      const v = env.thru[(x + off) % W];
+      const bot = env.egress[(x + off) % W];
+      const h = Math.max(1, Math.round(v * 3));
+      const hot = v > 0.85;
+      for (let k = 0; k < h; k++) this.set(x, 5 - k, hot ? C.warn : C.azure, k === h - 1 ? (hot ? 0.6 : 0.42) : 0.12);
+      if (bot > 0.62) this.set(x, 5, C.azure, 0.14);
+    }
+    const slot = Math.floor(t / 4) % 2;
+    let msg = slot === 0 ? env.perfLine : env.headline;
+    let col = slot === 0 ? C.ink : env.down ? C.crit : env.deg ? C.warn : env.maint ? C.maint : C.ok;
+    msg = msg.slice(0, 13);
+    this.text(Math.max(0, Math.floor((W - this.textW(msg)) / 2)), 6, msg, col, slot === 0 ? 0.62 : 0.72);
+  };
+
+  // ---- 2C · hive field ----
+  modeHive = (env, t) => {
+    const gran = 0.6 + Math.log10(Math.max(10, env.total)) * 1.5;
+    const warmth = Math.min(1, Math.max(0, (env.meanLoad - 0.35) / 0.5));
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const u = x / W * gran, v = y / H * gran * 0.4;
+      let n = Math.sin(u * 2.1 + t * 0.5) * 0.5 + Math.sin(v * 3.3 - t * 0.31) * 0.3
+        + Math.sin((u + v) * 1.7 + t * 0.77) * 0.4;
+      n = Math.max(0, (n + 1.2) / 2.4);
+      const b = 0.03 + Math.pow(n, 3.1) * 0.62;
+      const col = [
+        C.azure[0] + (C.warn[0] - C.azure[0]) * warmth * n,
+        C.azure[1] + (C.warn[1] - C.azure[1]) * warmth * n,
+        C.azure[2] + (C.warn[2] - C.azure[2]) * warmth * n
+      ];
+      this.set(x, y, col, b);
+    }
+    const sparks = Math.min(9, env.down);
+    for (let i = 0; i < sparks; i++) {
+      const x = 4 + ((i * 11 + 3) % (W - 8));
+      const y = (i * 4 + 2) % H;
+      const puls = 0.7 + 0.3 * Math.sin(t * 3 + i);
+      this.set(x, y, C.crit, puls);
+      this.add(x - 1, y, C.crit, puls * 0.25); this.add(x + 1, y, C.crit, puls * 0.25);
+      this.add(x, y - 1, C.crit, puls * 0.2); this.add(x, y + 1, C.crit, puls * 0.2);
+    }
+    const slot = Math.floor(t / 5) % 3;
+    let msg, col;
+    if (env.down > 0 && slot !== 1) { msg = env.down + ' DOWN ' + Math.round(env.meanLoad * 100) + '%'; col = C.crit; }
+    else if (slot === 0) { msg = env.total + ' SYS'; col = C.ink; }
+    else if (slot === 1) { msg = Math.round(env.meanLoad * 100) + '% LOAD'; col = warmth > 0.6 ? C.warn : C.ink; }
+    else { msg = env.gLabel + '/S'; col = C.ink; }
+    const tw = this.textW(msg), tx = Math.floor((W - tw) / 2);
+    for (let y = 2; y <= 8; y++) for (let x = tx - 2; x <= tx + tw + 1; x++) this.dim(x, y, 0.1);
+    this.text(tx, 3, msg, col, 0.6);
+  };
+
+  // ---- LED cell paint (DOM) ----
+  cells(key) {
+    const host = this.refs4[key].current;
+    if (!host) return null;
+    if (!host._leds) {
+      host.style.display = 'grid';
+      host.style.gridTemplateColumns = 'repeat(' + W + ', 10px)';
+      host.style.gridAutoRows = '10px';
+      host.style.gap = '4px';
+      host.style.width = W * 10 + (W - 1) * 4 + 'px';
+      const leds = [];
+      for (let i = 0; i < W * H; i++) {
+        const d = document.createElement('i');
+        d.style.cssText = 'display:block;width:10px;height:10px;border-radius:3px;background:#0E1014;';
+        host.appendChild(d);
+        leds.push(d);
+      }
+      host._leds = leds;
+      host._prev = new Array(W * H).fill('');
+    }
+    return host;
+  }
+
+  paint(key, env, mode) {
+    const host = this.cells(key);
+    if (!host) return;
+    const wantFilter = this.state.diffuser === 'on' ? 'blur(2.4px) saturate(1.12) brightness(1.1)' : 'none';
+    if (host.style.filter !== wantFilter) host.style.filter = wantFilter;
+    const glow = this.props.glow !== false;
+    this.clear();
+    mode(env, this.t);
+    const g = this.state.brightness, leds = host._leds, prev = host._prev;
+    for (let n = 0; n < W * H; n++) {
+      const i = n * 3;
+      const R = Math.min(255, Math.round(this.fb[i] * g)),
+        G2 = Math.min(255, Math.round(this.fb[i + 1] * g)),
+        B = Math.min(255, Math.round(this.fb[i + 2] * g));
+      const lum = (R + G2 + B) / 765;
+      const bg = 'rgb(' + (14 + R) + ',' + (16 + G2) + ',' + (20 + B) + ')';
+      const sh = glow && lum > 0.28 ? '0 0 ' + Math.round(6 + lum * 12) + 'px rgba(' + R + ',' + G2 + ',' + B + ',.75)' : 'none';
+      const sig = bg + '|' + sh;
+      if (prev[n] === sig) continue;
+      prev[n] = sig;
+      leds[n].style.background = bg;
+      leds[n].style.boxShadow = sh;
+    }
+  }
+
+  renderVals() {
+    const env = this.env();
+    return {
+      refA: this.refs4.A, refB: this.refs4.B, refC: this.refs4.C, refD: this.refs4.D,
+      refE: this.refs4.E, refF: this.refs4.F, refG: this.refs4.G,
+      fleet: this.state.fleet,
+      fleetOptions: [
+        { value: 30, label: '30 systems' },
+        { value: 318, label: '318' },
+        { value: 900, label: '900' },
+        { value: 3000, label: '3000' }
+      ],
+      setFleet: v => this.setState({ fleet: v }),
+      scenario: this.state.scenario,
+      scenarioOptions: [
+        { value: 'nominal', label: 'All nominal' },
+        { value: 'degraded', label: 'Degraded' },
+        { value: 'incident', label: 'Outage' },
+        { value: 'maintenance', label: 'Maintenance' }
+      ],
+      setScenario: v => this.setState({ scenario: v }),
+      motion: this.state.motion,
+      motionOptions: [{ value: 'run', label: 'Run' }, { value: 'hold', label: 'Hold' }],
+      setMotion: v => this.setState({ motion: v }),
+      diffuser: this.state.diffuser,
+      diffuserOptions: [{ value: 'off', label: 'Bare LEDs' }, { value: 'on', label: 'Diffuser' }],
+      setDiffuser: v => this.setState({ diffuser: v }),
+      brightnessPct: Math.round(this.state.brightness * 100),
+      setBrightness: e => this.setState({ brightness: Number(e.target.value) / 100 }),
+      summary: env.total + ' systems · ' + env.up + ' up · ' + env.deg + ' degraded · ' + env.down + ' down · ' + env.maint + ' maint'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/fonts.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/colors.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/typography.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/spacing.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/radii.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/effects.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/semantic.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/tokens/base.css">
+<link rel="stylesheet" href="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/styles.css">
+<script src="_ds/solarinet-design-system-95eca032-3639-4049-9550-a009a861af05/_ds_bundle.js"></script>
+<style>
+  html, body { margin: 0; background: #070A0F; }
+  a { color: #22B8F0; text-decoration: none; }
+  a:hover { color: #5FCCFA; }
+</style>
+</helmet>
+
+<section style="display: flex; flex-direction: column; gap: 26px; padding: 30px 34px 56px; background: #070A0F; background-image: linear-gradient(rgba(34,184,240,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(34,184,240,.045) 1px, transparent 1px); background-size: 34px 34px; font-family: var(--sn-font-sans); color: #DFE8F2; min-height: 100vh;">
+
+  <div style="display: flex; flex-direction: column; gap: 10px; max-width: 940px;">
+    <div style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Turn 3 · Four themes, twelve screens, one alarm path</div>
+    <h1 style="margin: 0; font-size: 27px; font-weight: 600; letter-spacing: -.01em; color: #DFE8F2;">Buttons choose a language, not a screen</h1>
+    <p style="margin: 0; font-size: 13.5px; line-height: 1.55; color: #9DB0C4; text-wrap: pretty;">A is abstract, B is text, C is charts, D is the composite instruments. Each button holds three screens that cycle on a dwell timer, so a theme is a register the panel speaks in rather than a single view. Pressing the active theme's button advances its screens by hand. Severity is weighted by tier: a workstation going dark is a dim red pixel, DNS going dark takes the board and the speaker.</p>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-start;">
+
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+      <div style="display: flex; gap: 16px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+
+        <div style="display: flex; flex-direction: column; gap: 10px; padding-top: 4px;">
+          <button onClick="{{ pressA }}" style="width: 44px; height: 44px; border-radius: 9px; border: 1px solid #22303F; background: {{ btnA }}; color: #DFE8F2; font-family: var(--sn-font-mono); font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="border-color: #34546B;">A</button>
+          <button onClick="{{ pressB }}" style="width: 44px; height: 44px; border-radius: 9px; border: 1px solid #22303F; background: {{ btnB }}; color: #DFE8F2; font-family: var(--sn-font-mono); font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="border-color: #34546B;">B</button>
+          <button onClick="{{ pressC }}" style="width: 44px; height: 44px; border-radius: 9px; border: 1px solid #22303F; background: {{ btnC }}; color: #DFE8F2; font-family: var(--sn-font-mono); font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="border-color: #34546B;">C</button>
+          <button onClick="{{ pressD }}" style="width: 44px; height: 44px; border-radius: 9px; border: 1px solid #22303F; background: {{ btnD }}; color: #DFE8F2; font-family: var(--sn-font-mono); font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="border-color: #34546B;">D</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div style="padding: 16px 18px 14px; border-radius: 9px; background: #0A0C10; border: 1px solid #1A222C; box-shadow: inset 0 0 0 1px rgba(0,0,0,.6);">
+            <div ref="{{ refPanel }}" style="height: 172px;"></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 0 2px;">
+            <span style="font-family: var(--sn-font-mono); font-size: 11px; font-weight: 600; letter-spacing: .1em; color: #DFE8F2;">{{ themeLabel }}</span>
+            <span style="font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">{{ screenLabel }}</span>
+            <span style="flex: 1;"></span>
+            <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Escalation {{ scoreLabel }}</span>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px; padding-top: 4px; font-family: var(--sn-font-mono); font-size: 9px; letter-spacing: .1em; color: #3F4C5C;">
+          <div style="width: 30px; height: 30px; border-radius: 7px; border: 1px solid #1A222C; display: flex; align-items: center; justify-content: center;">+</div>
+          <div style="width: 30px; height: 30px; border-radius: 7px; border: 1px solid #1A222C; display: flex; align-items: center; justify-content: center;">&minus;</div>
+          <div style="width: 30px; height: 30px; border-radius: 7px; border: 1px solid #1A222C; display: flex; align-items: center; justify-content: center;">VOL</div>
+          <div style="width: 30px; height: 30px; border-radius: 7px; border: 1px solid #1A222C; display: flex; align-items: center; justify-content: center;">ZZZ</div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 18px; padding: 14px 16px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+        <div style="display: flex; flex-direction: column; gap: 7px;">
+          <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Condition</span>
+          <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ scenarioOptions }}" value="{{ scenario }}" onChange="{{ setScenario }}" hint-size="540px,44px"></x-import>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 7px;">
+          <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Fleet size</span>
+          <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ fleetOptions }}" value="{{ fleet }}" onChange="{{ setFleet }}" hint-size="330px,44px"></x-import>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 7px;">
+          <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Dwell</span>
+          <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ dwellOptions }}" value="{{ dwell }}" onChange="{{ setDwell }}" hint-size="250px,44px"></x-import>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 7px;">
+          <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Speaker</span>
+          <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.SegmentedControl" options="{{ soundOptions }}" value="{{ sound }}" onChange="{{ setSound }}" hint-size="160px,44px"></x-import>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 9px;">
+          <span style="font-family: var(--sn-font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: #6E8399;">Brightness</span>
+          <input type="range" min="25" max="100" step="5" value="{{ brightnessPct }}" onInput="{{ setBrightness }}" style="width: 150px; accent-color: #22B8F0; height: 20px;">
+        </div>
+        <x-import component-from-global-scope="SolariNetDesignSystem_95eca0.Button" variant="secondary" onClick="{{ ack }}" hint-size="140px,40px">Acknowledge</x-import>
+      </div>
+
+      <p style="margin: 0; max-width: 900px; font-family: var(--sn-font-mono); font-size: 11px; line-height: 1.7; color: #6E8399;">Severity is scored per pool on the fraction of that pool affected, so the threshold means the same thing at 30 systems and at 3000. Compare <em>Core service down</em> with <em>Workstations down</em> at every fleet size — the first interrupts at all four, the second at none. Audio needs one click on the page before the browser will let the speaker sound.</p>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 20px; width: 420px;">
+
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #DFE8F2;">Theme map</h2>
+        <div style="display: grid; grid-template-columns: 18px 1fr; gap: 10px 12px; font-size: 12.5px; line-height: 1.5; color: #9DB0C4;">
+          <span style="font-family: var(--sn-font-mono); font-size: 12px; font-weight: 600; color: #22B8F0;">A</span>
+          <span><strong style="color: #DFE8F2; font-weight: 600;">Abstract.</strong> No glyphs. Tier-ordered state lattice · VLAN flow gates converging on the internet gate with WAN rows beyond it · MQ and SNMP lanes with queue backlog.</span>
+          <span style="font-family: var(--sn-font-mono); font-size: 12px; font-weight: 600; color: #22B8F0;">B</span>
+          <span><strong style="color: #DFE8F2; font-weight: 600;">Text.</strong> Up, down and degraded counts in seven-pixel numerals · throughput and link utilisation · aggregate load and p95 latency.</span>
+          <span style="font-family: var(--sn-font-mono); font-size: 12px; font-weight: 600; color: #22B8F0;">C</span>
+          <span><strong style="color: #DFE8F2; font-weight: 600;">Charts.</strong> Load distribution over the throughput ribbon · three stacked live traces · per-pool load bars ordered worst first.</span>
+          <span style="font-family: var(--sn-font-mono); font-size: 12px; font-weight: 600; color: #22B8F0;">D</span>
+          <span><strong style="color: #DFE8F2; font-weight: 600;">Instruments.</strong> Reachability waterfall · pool bars with ticker · ambient field. The faces from the earlier turns, kept intact.</span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #DFE8F2;">Tier weighting</h2>
+        <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #9DB0C4; text-wrap: pretty;">Tier sets how much of a pool has to fail before the panel is allowed to interrupt. Hue still reports condition alone — tier moves brightness, glow, and the right to take the board.</p>
+        <div style="display: grid; grid-template-columns: 14px 1fr auto; gap: 9px 14px; align-items: center; font-family: var(--sn-font-mono); font-size: 11px; color: #9DB0C4;">
+          <i style="width: 10px; height: 10px; border-radius: 50%; background: #FF4D5E; box-shadow: 0 0 10px rgba(255,77,94,.75);"></i>
+          <span>Tier 0 · core infra — DNS, DHCP, NTP, gateway</span>
+          <span style="color: #DFE8F2;">any</span>
+          <i style="width: 9px; height: 9px; border-radius: 50%; background: #FF4D5E;"></i>
+          <span>Tier 1 · production apps, storage, DMZ</span>
+          <span style="color: #DFE8F2;">any</span>
+          <i style="width: 8px; height: 8px; border-radius: 50%; background: #C43C49;"></i>
+          <span>Tier 2 · HA and DR standby</span>
+          <span style="color: #DFE8F2;">20%</span>
+          <i style="width: 7px; height: 7px; border-radius: 50%; background: #8E3138;"></i>
+          <span>Tier 3 · workstations, lab</span>
+          <span style="color: #DFE8F2;">20%</span>
+        </div>
+        <p style="margin: 0; font-family: var(--sn-font-mono); font-size: 11px; line-height: 1.6; color: #6E8399;">Score is the worst pool, not the sum: a tier 0 or 1 pool scores 100 the moment anything in it goes down, while tier 2 and 3 reach 100 only when a fifth of the pool is dark. The inlay fires at 100, so one DNS server interrupts at any fleet size and sixty workstations out of nine hundred do not.</p>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 12px; padding: 20px; border: 1px solid #22303F; border-radius: 14px; background: #0E151D;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #DFE8F2;">Alert inlay</h2>
+        <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #9DB0C4; text-wrap: pretty;">Universal across all four themes. Both edge columns become red rails, the running screen drops to a tenth brightness behind it, the subject holds the top line, and the troubleshooting detail scrolls beneath — vantages, duration, blast radius, first action. The speaker sounds a two-tone alarm on the rising edge, repeating every twelve seconds until acknowledged.</p>
+        <p style="margin: 0; font-family: var(--sn-font-mono); font-size: 11px; line-height: 1.6; color: #6E8399;">Acknowledge suppresses the inlay and the tone but leaves the fault painted in the running screen. A new subject reaching 100 re-arms it.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <p style="margin: 0; max-width: 940px; font-family: var(--sn-font-mono); font-size: 11px; line-height: 1.7; color: #6E8399;">Earlier explorations remain in <a href="Galactic Unicorn Panel.dc.html">Galactic Unicorn Panel</a>. Grid is 53 &times; 11 · 583 LEDs · 3 &times; 5 glyphs with a 4 &times; 7 numeral set for headline figures.</p>
+
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1560,&quot;height&quot;:980}}">
+const W = 53, H = 11;
+const C = {
+  ok: [61, 214, 140], warn: [245, 166, 35], crit: [255, 77, 94],
+  maint: [155, 135, 255], azure: [34, 184, 240], quiet: [78, 107, 126], ink: [223, 232, 242]
+};
+const F = {
+  '0': '111,101,101,101,111', '1': '010,110,010,010,111', '2': '111,001,111,100,111',
+  '3': '111,001,111,001,111', '4': '101,101,111,001,001', '5': '111,100,111,001,111',
+  '6': '111,100,111,101,111', '7': '111,001,010,010,010', '8': '111,101,111,101,111',
+  '9': '111,101,111,001,111',
+  'A': '111,101,111,101,101', 'B': '110,101,110,101,110', 'C': '111,100,100,100,111',
+  'D': '110,101,101,101,110', 'E': '111,100,111,100,111', 'F': '111,100,111,100,100',
+  'G': '111,100,101,101,111', 'H': '101,101,111,101,101', 'I': '111,010,010,010,111',
+  'J': '001,001,001,101,111', 'K': '101,101,110,101,101', 'L': '100,100,100,100,111',
+  'M': '101,111,111,101,101', 'N': '110,101,101,101,101', 'O': '111,101,101,101,111',
+  'P': '111,101,111,100,100', 'Q': '111,101,101,111,001', 'R': '111,101,111,110,101',
+  'S': '111,100,111,001,111', 'T': '111,010,010,010,010', 'U': '101,101,101,101,111',
+  'V': '101,101,101,101,010', 'W': '101,101,111,111,101', 'X': '101,101,010,101,101',
+  'Y': '101,101,010,010,010', 'Z': '111,001,010,100,111',
+  '/': '001,001,010,100,100', ':': '000,010,000,010,000', '.': '000,000,000,000,010',
+  '-': '000,000,111,000,000', '%': '101,001,010,100,101', '+': '000,010,111,010,000',
+  '>': '100,010,001,010,100', '!': '010,010,010,000,010', ' ': '000,000,000,000,000'
+};
+const BIG = {
+  '0': '0110,1001,1001,1001,1001,1001,0110', '1': '0010,0110,0010,0010,0010,0010,0111',
+  '2': '0110,1001,0001,0010,0100,1000,1111', '3': '1110,0001,0001,0110,0001,0001,1110',
+  '4': '0010,0110,1010,1010,1111,0010,0010', '5': '1111,1000,1000,1110,0001,1001,0110',
+  '6': '0110,1000,1000,1110,1001,1001,0110', '7': '1111,0001,0010,0010,0100,0100,0100',
+  '8': '0110,1001,1001,0110,1001,1001,0110', '9': '0110,1001,1001,0111,0001,0001,0110',
+  '.': '0000,0000,0000,0000,0000,0000,0110', '%': '1001,1001,0010,0010,0100,1001,1001',
+  'G': '0111,1000,1000,1011,1001,1001,0110', 'M': '1001,1111,1111,1001,1001,1001,1001',
+  'S': '0111,1000,1000,0110,0001,0001,1110', ' ': '0000,0000,0000,0000,0000,0000,0000'
+};
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+const RANK = { down: 3, deg: 2, maint: 1, ok: 0 };
+const TIER_W = [100, 40, 12, 4];
+const POOLS = [
+  { name: 'CORE', tier: 0, share: 0.05 }, { name: 'APPS', tier: 1, share: 0.22 },
+  { name: 'DMZ', tier: 1, share: 0.08 }, { name: 'STOR', tier: 1, share: 0.12 },
+  { name: 'HADR', tier: 2, share: 0.13 }, { name: 'WKS', tier: 3, share: 0.3 },
+  { name: 'LAB', tier: 3, share: 0.1 }
+];
+const SCEN = {
+  nominal: [],
+  degraded: [['APPS', 'deg', 0.014], ['STOR', 'deg', 0.006]],
+  wks: [['WKS', 'down', 0.02], ['LAB', 'down', 0.006]],
+  core: [['CORE', 'down', 1], ['APPS', 'deg', 0.01], ['DMZ', 'deg', 0.004]],
+  maintenance: [['LAB', 'maint', 0.06], ['HADR', 'maint', 0.03], ['APPS', 'deg', 0.005]]
+};
+const THEMES = {
+  A: { label: 'THEME A · ABSTRACT', screens: ['State lattice', 'Flow gates', 'MQ and SNMP'] },
+  B: { label: 'THEME B · TEXT', screens: ['Condition counts', 'Throughput', 'Load and latency'] },
+  C: { label: 'THEME C · CHARTS', screens: ['Load distribution', 'Live traces', 'Pool load'] },
+  D: { label: 'THEME D · INSTRUMENTS', screens: ['Reachability', 'Pool bars', 'Ambient field'] }
+};
+
+function buildEnv(kind, fleet) {
+  const r = rng(9137);
+  const pools = POOLS.map(p => ({ name: p.name, tier: p.tier, total: Math.max(1, Math.round(fleet * p.share)), down: 0, deg: 0, maint: 0 }));
+  const byName = {};
+  pools.forEach(p => { byName[p.name] = p; });
+  SCEN[kind].forEach(([nm, st, rate]) => {
+    const p = byName[nm];
+    p[st] += rate >= 1 ? Math.min(p.total, rate) : Math.min(p.total, Math.max(1, Math.round(fleet * rate)));
+  });
+  const systems = [];
+  pools.forEach((p, pi) => {
+    const base = 0.2 + (pi % 3) * 0.14;
+    for (let i = 0; i < p.total; i++) {
+      let st = 'ok';
+      if (i < p.down) st = 'down';
+      else if (i < p.down + p.deg) st = 'deg';
+      else if (i < p.down + p.deg + p.maint) st = 'maint';
+      let load = base + r() * 0.4;
+      if (st === 'deg') load = 0.82 + r() * 0.17;
+      if (st === 'down') load = 0;
+      systems.push({ st, pool: pi, tier: p.tier, load, phase: r() * 6.283 });
+    }
+  });
+  const total = systems.length;
+  const n = k => systems.reduce((a, s) => a + (s.st === k ? 1 : 0), 0);
+  const down = n('down'), deg = n('deg'), maint = n('maint');
+  // scale-free severity: each pool scored on the fraction of itself affected, tier setting the gate
+  const poolScore = p => {
+    const fd = p.down / p.total, fg = p.deg / p.total;
+    if (p.tier <= 1) return p.down > 0 ? 100 + Math.round(40 * fd) : Math.min(80, Math.round(60 * fg / 0.1));
+    // tier 2 and 3 interrupt only when a fifth of the pool is dark AND at least five systems are
+    if (fd >= 0.2 && p.down >= 5) return 100 + Math.round(40 * fd);
+    return Math.min(85, Math.round(85 * fd / 0.2 + 30 * fg / 0.4));
+  };
+  const scored = pools.map(p => ({ p, v: poolScore(p) })).sort((a, b) => b.v - a.v);
+  const score = scored[0].v;
+  const scoreWhy = scored[0].p.name;
+  const BK = 35, hist = new Array(BK).fill(0);
+  systems.forEach(s => { if (s.st !== 'down') hist[Math.min(BK - 1, Math.floor(s.load * BK))]++; });
+  const hMax = Math.max(1, ...hist);
+  const loadHist = hist.map(v => v / hMax);
+  const meanLoad = systems.reduce((a, s) => a + s.load, 0) / total;
+  const gbps = fleet * 0.0062 * (0.8 + meanLoad * 0.6);
+  const gLabel = gbps >= 10 ? Math.round(gbps) + 'G' : gbps.toFixed(1) + 'G';
+  const thru = Array.from({ length: W }, (_, i) => {
+    let v = 0.42 + Math.sin(i * 0.31) * 0.16 + Math.sin(i * 0.11 + 1.7) * 0.1 + (r() - 0.5) * 0.1;
+    if (kind === 'core' && i > 34 && i < 46) v += 0.42;
+    if (kind === 'degraded' && i > 40) v += 0.2;
+    return Math.max(0.05, Math.min(1, v));
+  });
+  const egress = thru.map((v, i) => Math.max(0.04, v * (0.55 + Math.sin(i * 0.23) * 0.12)));
+  const rttHist = Array.from({ length: W }, (_, i) => Math.max(0.04, Math.min(1, 0.3 + Math.sin(i * 0.19 + 2) * 0.12 + (kind === 'core' && i > 38 ? 0.45 : 0) + (r() - 0.5) * 0.08)));
+  const cpuHist = Array.from({ length: W }, (_, i) => Math.max(0.05, Math.min(1, meanLoad + Math.sin(i * 0.26) * 0.12 + (r() - 0.5) * 0.07)));
+  const poolLoad = pools.map((p, pi) => {
+    const ss = systems.filter(s => s.pool === pi);
+    return { name: p.name, tier: p.tier, p, load: ss.reduce((a, s) => a + s.load, 0) / Math.max(1, ss.length) };
+  }).sort((a, b) => (b.p.down * 9 + b.p.deg) - (a.p.down * 9 + a.p.deg) || b.load - a.load);
+  const sorted = systems.slice().sort((a, b) => (RANK[b.st] - RANK[a.st]) || (a.tier - b.tier) || (b.load - a.load));
+  const strip = Array.from({ length: W }, (_, i) => {
+    const a = Math.floor(i * total / W), b = Math.max(a + 1, Math.floor((i + 1) * total / W));
+    let worst = 'ok', tier = 3, load = 0;
+    for (let k = a; k < b && k < total; k++) {
+      if (RANK[sorted[k].st] > RANK[worst]) { worst = sorted[k].st; tier = sorted[k].tier; }
+      load += sorted[k].load;
+    }
+    return { st: worst, tier, load: load / (b - a) };
+  });
+  const alert = {
+    core: { subject: 'DNS 1 DOWN', detail: 'CORE INFRA · ALL 2 VANTAGES · 3M · DHCP LEASES AT RISK · ' + Math.round(total * 0.67) + ' SYSTEMS RESOLVING VIA DNS 2 · RESTART BIND ON MOLYBDENUM' },
+    wks: { subject: down + ' WKS DOWN', detail: 'WORKSTATIONS · TIER 3 · NO SERVICE IMPACT' },
+    degraded: { subject: deg + ' DEGRADED', detail: 'DISK /VAR OVER TOLERANCE · APPS · 4M' },
+    maintenance: { subject: maint + ' IN MAINT', detail: 'WINDOW ON LAB AND HADR UNTIL 02:00' },
+    nominal: { subject: 'ALL NOMINAL', detail: 'NO FINDINGS' }
+  }[kind];
+  return {
+    kind, fleet, pools, systems, total, down, deg, maint, up: total - down, score, scoreWhy,
+    loadHist, meanLoad, gbps, gLabel, thru, egress, rttHist, cpuHist, poolLoad, strip,
+    rtt: kind === 'core' ? 46 : kind === 'degraded' ? 28 : 21,
+    loss: kind === 'core' ? 2.4 : kind === 'degraded' ? 0.2 : 0,
+    alert, ticker: alert.subject + ' · ' + alert.detail + '   ·   '
+  };
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { theme: 'A', screen: 0, scenario: 'core', fleet: 318, dwell: 6, brightness: 0.85, sound: 'on', acked: false };
+    this.refP = React.createRef();
+    this.fb = new Float32Array(W * H * 3);
+    this.t = 0; this.screenT = 0; this.lastAlarm = -99; this.wf = null;
+  }
+  componentDidMount() {
+    this.last = performance.now();
+    this.unlock = () => { if (this.ac && this.ac.state === 'suspended') this.ac.resume(); };
+    window.addEventListener('pointerdown', this.unlock);
+    this.timer = setInterval(this.tick, 40);
+    this.tick();
+  }
+  componentWillUnmount() { clearInterval(this.timer); window.removeEventListener('pointerdown', this.unlock); }
+
+  env() {
+    const k = this.state.scenario + ':' + this.state.fleet;
+    this.cache = this.cache || {};
+    if (!this.cache[k]) this.cache[k] = buildEnv(this.state.scenario, this.state.fleet);
+    return this.cache[k];
+  }
+  alarming(env) { return env.score >= 100 && !this.state.acked; }
+
+  beep() {
+    try {
+      if (!this.ac) this.ac = new (window.AudioContext || window.webkitAudioContext)();
+      if (this.ac.state === 'suspended') return;
+      const now = this.ac.currentTime;
+      [0, 0.22, 0.44].forEach((off, i) => {
+        const o = this.ac.createOscillator(), g = this.ac.createGain();
+        o.type = 'square';
+        o.frequency.value = i % 2 ? 660 : 990;
+        g.gain.setValueAtTime(0.0001, now + off);
+        g.gain.exponentialRampToValueAtTime(0.08, now + off + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.17);
+        o.connect(g); g.connect(this.ac.destination);
+        o.start(now + off); o.stop(now + off + 0.2);
+      });
+    } catch (e) {}
+  }
+
+  tick = () => {
+    const now = performance.now();
+    const dt = Math.min(0.2, (now - this.last) / 1000);
+    this.last = now;
+    this.t += dt; this.screenT += dt;
+    const env = this.env();
+    if (this.screenT >= this.state.dwell) { this.screenT = 0; this.setState(s => ({ screen: (s.screen + 1) % 3 })); }
+    if (this.alarming(env) && this.state.sound === 'on' && this.t - this.lastAlarm > 12) { this.lastAlarm = this.t; this.beep(); }
+    try { this.paint(env); } catch (e) { if (!this._logged) { this._logged = 1; console.error('paint failed', this.state.theme, this.state.screen, e); } }
+  };
+
+  clear() { this.fb.fill(0); }
+  set(x, y, c, b) {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = (y * W + x) * 3, k = b === undefined ? 1 : b;
+    this.fb[i] = c[0] * k; this.fb[i + 1] = c[1] * k; this.fb[i + 2] = c[2] * k;
+  }
+  add(x, y, c, b) {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = (y * W + x) * 3, k = b === undefined ? 1 : b;
+    this.fb[i] += c[0] * k; this.fb[i + 1] += c[1] * k; this.fb[i + 2] += c[2] * k;
+  }
+  dim(x, y, k) {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = (y * W + x) * 3;
+    this.fb[i] *= k; this.fb[i + 1] *= k; this.fb[i + 2] *= k;
+  }
+  dimAll(k) { for (let i = 0; i < this.fb.length; i++) this.fb[i] *= k; }
+  text(x, y, str, col, b) {
+    let cx = x;
+    for (const ch of String(str).toUpperCase()) {
+      const g = (F[ch] || F[' ']).split(',');
+      for (let ry = 0; ry < 5; ry++) for (let rx = 0; rx < 3; rx++) if (g[ry][rx] === '1') this.set(cx + rx, y + ry, col, b);
+      cx += 4;
+    }
+    return cx;
+  }
+  textW(s) { return String(s).length * 4 - 1; }
+  // foreground text over the watermark numeral: knock a 1 px gap around every lit pixel
+  textOver(x, y, str, col, b) {
+    let cx = x;
+    for (const ch of String(str).toUpperCase()) {
+      const g = (F[ch] || F[' ']).split(',');
+      for (let ry = 0; ry < 5; ry++) for (let rx = 0; rx < 3; rx++) {
+        if (g[ry][rx] !== '1') continue;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) this.dim(cx + rx + dx, y + ry + dy, 0.12);
+      }
+      cx += 4;
+    }
+    return this.text(x, y, str, col, b);
+  }
+  big(x, y, str, col, b) {
+    let cx = x;
+    for (const ch of String(str).toUpperCase()) {
+      const g = (BIG[ch] || BIG[' ']).split(',');
+      for (let ry = 0; ry < 7; ry++) for (let rx = 0; rx < 4; rx++) if (g[ry][rx] === '1') this.set(cx + rx, y + ry, col, b);
+      cx += 5;
+    }
+    return cx;
+  }
+  bigW(s) { return String(s).length * 5 - 1; }
+  scroll(y, str, col, b, speed) {
+    const total = this.textW(str) + W;
+    const off = Math.floor((this.t * (speed || 13)) % total);
+    let cx = W - off;
+    for (const ch of String(str).toUpperCase()) {
+      if (cx > -4 && cx < W) {
+        const g = (F[ch] || F[' ']).split(',');
+        for (let ry = 0; ry < 5; ry++) for (let rx = 0; rx < 3; rx++) if (g[ry][rx] === '1') this.set(cx + rx, y + ry, col, b);
+      }
+      cx += 4;
+    }
+  }
+
+  screenFn(env, t) {
+    const fn = this['s' + this.state.theme + this.state.screen];
+    if (fn) fn.call(this, env, t);
+  }
+
+  // ===== THEME A · abstract =====
+  sA0(env, t) {
+    const cols = W, slots = cols * H;
+    if (!env._lat) {
+      const src = env.systems.slice().sort((a, b) => a.tier - b.tier || RANK[b.st] - RANK[a.st]);
+      const per = Math.max(1, Math.ceil(src.length / slots));
+      env._lat = Array.from({ length: slots }, (_, i) => {
+        const a = i * per;
+        if (a >= src.length) return null;
+        let worst = 'ok', tier = 3, load = 0, n = 0;
+        for (let k = a; k < Math.min(src.length, a + per); k++) {
+          if (RANK[src[k].st] > RANK[worst]) { worst = src[k].st; tier = src[k].tier; }
+          if (src[k].tier < tier && worst === 'ok') tier = src[k].tier;
+          load += src[k].load; n++;
+        }
+        return { st: worst, tier, load: load / n, phase: (i * 0.41) % 6.283 };
+      });
+    }
+    env._lat.forEach((s, i) => {
+      if (!s) return;
+      const x = i % cols, y = Math.floor(i / cols);
+      const heat = [1, 0.62, 0.4, 0.26][s.tier];
+      if (s.st === 'ok') this.set(x, y, C.quiet, (0.1 + s.load * 0.14) * (0.6 + heat * 0.5) + Math.sin(t * 0.6 + s.phase) * 0.015);
+      else if (s.st === 'deg') this.set(x, y, C.warn, (0.3 + 0.5 * heat) * (0.92 + 0.08 * Math.sin(t * 2 + s.phase)));
+      else if (s.st === 'down') this.set(x, y, C.crit, 0.3 + 0.68 * heat * (s.tier === 0 ? 0.7 + 0.3 * Math.abs(Math.sin(t * 3)) : 1));
+      else this.set(x, y, C.maint, 0.2 + 0.16 * heat + (Math.floor(t * 1.4 + s.phase) % 2) * 0.1);
+    });
+  }
+
+  sA1(env, t) {
+    if (!this.flow || this.flow.kind !== env.kind + env.fleet) {
+      const r = rng(77), lanes = [0, 1, 2, 3];
+      this.flow = { kind: env.kind + env.fleet, p: [], r };
+      for (let i = 0; i < 90; i++) this.flow.p.push({ x: r() * 30, lane: lanes[i % 4], v: 0.25 + r() * 0.5, out: false, y: 0 });
+    }
+    const gateX = 34, wanX = 44;
+    const laneY = [1, 3, 5, 7];
+    const laneLoad = [env.pools[0], env.pools[1], env.pools[2], env.pools[5]];
+    laneY.forEach((y, i) => {
+      for (let x = 0; x < gateX; x++) this.set(x, y, C.quiet, 0.045);
+      const p = laneLoad[i];
+      const col = p.down ? C.crit : p.deg ? C.warn : C.azure;
+      this.set(0, y, col, p.down ? 0.9 : p.deg ? 0.55 : 0.2);
+      this.set(1, y, col, (p.down ? 0.9 : p.deg ? 0.55 : 0.2) * 0.4);
+    });
+    for (let y = 0; y < H; y++) this.set(gateX, y, C.azure, y === 5 ? 0.4 : 0.09 + (y % 2) * 0.05);
+    this.flow.p.forEach(pt => {
+      const p = laneLoad[pt.lane];
+      const speed = pt.v * (0.5 + env.meanLoad) * (p.down ? 0.1 : p.deg ? 0.5 : 1) * 14;
+      pt.x += speed * 0.04;
+      if (!pt.out && pt.x >= gateX) { pt.out = true; pt.y = 5; }
+      if (pt.x > W + 2) { pt.x = 0; pt.out = false; }
+      const y = pt.out ? 5 : laneY[pt.lane];
+      const col = p.down ? C.crit : p.deg ? C.warn : C.azure;
+      const b = pt.out ? 0.5 : 0.4;
+      this.add(Math.round(pt.x), y, col, b);
+      this.add(Math.round(pt.x) - 1, y, col, b * 0.3);
+    });
+    const up = Math.min(1, env.gbps / 25), dn = Math.min(1, env.gbps / 18);
+    for (let x = wanX; x < W; x++) {
+      const k = (x - wanX) / (W - wanX);
+      this.set(x, 3, k < up ? C.azure : C.quiet, k < up ? 0.45 : 0.05);
+      this.set(x, 7, k < dn ? C.azure : C.quiet, k < dn ? 0.3 : 0.05);
+      this.set(x, 9, env.loss > 1 ? C.crit : env.rtt > 30 ? C.warn : C.ok, env.loss > 1 ? 0.7 : 0.22);
+    }
+  }
+
+  sA2(env, t) {
+    const lanes = [
+      { y: 1, rate: 0.7, col: C.azure, backlog: env.kind === 'core' ? 0.8 : 0.15 },
+      { y: 3, rate: 0.45, col: C.azure, backlog: 0.05 },
+      { y: 6, rate: 0.9, col: C.ok, backlog: 0.02 },
+      { y: 8, rate: 0.3, col: C.ok, backlog: env.kind === 'degraded' ? 0.5 : 0.03 }
+    ];
+    lanes.forEach((l, i) => {
+      for (let x = 4; x < W; x++) this.set(x, l.y, C.quiet, 0.04);
+      const q = Math.round(l.backlog * 3);
+      for (let k = 0; k < 3; k++) this.set(k, l.y, k < q ? (l.backlog > 0.5 ? C.crit : C.warn) : C.quiet, k < q ? 0.7 : 0.06);
+      const n = 5;
+      for (let j = 0; j < n; j++) {
+        const x = 5 + ((t * l.rate * 22 + j * 10 + i * 4) % (W - 6));
+        const col = l.backlog > 0.5 ? C.warn : l.col;
+        this.add(Math.round(x), l.y, col, 0.45);
+        this.add(Math.round(x) - 1, l.y, col, 0.15);
+      }
+    });
+    for (let x = 0; x < W; x++) this.set(x, 5, C.quiet, x % 4 === 0 ? 0.07 : 0.02);
+    this.set(0, 10, C.azure, 0.1); this.set(1, 10, C.azure, 0.1);
+  }
+
+  // ===== THEME B · text =====
+  sB0(env, t) {
+    const up = String(env.up);
+    this.big(1, 2, up, C.quiet, 0.3);
+    this.textOver(1, 0, 'UP', C.ok, 0.5);
+    const rows = [
+      [String(env.down), 'DOWN', env.down ? C.crit : C.quiet, env.down ? 0.9 : 0.16],
+      [String(env.deg), 'DEG', env.deg ? C.warn : C.quiet, env.deg ? 0.65 : 0.16],
+      [String(env.maint), 'MNT', env.maint ? C.maint : C.quiet, env.maint ? 0.5 : 0.16]
+    ];
+    const x = Math.max(22, 2 + this.bigW(up) + 3);
+    let cx = this.textOver(x, 0, rows[0][0], rows[0][2], rows[0][3]);
+    cx = this.textOver(cx + 1, 0, rows[0][1], C.quiet, 0.3);
+    const t0 = env.systems.some(s => s.st === 'down' && s.tier === 0);
+    const tierMsg = env.down ? (t0 ? 'TIER 0' : 'TIER 3') : 'OK';
+    this.textOver(cx + 3, 0, tierMsg, t0 ? C.crit : C.quiet, 0.4);
+    cx = this.textOver(x, 6, rows[1][0], rows[1][2], rows[1][3]);
+    cx = this.textOver(cx + 1, 6, rows[1][1], C.quiet, 0.3);
+    cx = this.textOver(cx + 3, 6, rows[2][0], rows[2][2], rows[2][3]);
+    this.textOver(cx + 1, 6, rows[2][1], C.quiet, 0.3);
+  }
+
+  sB1(env, t) {
+    this.big(1, 2, env.gLabel, C.quiet, 0.3);
+    this.textOver(1, 0, 'AGGREGATE', C.azure, 0.5);
+    const x0 = Math.max(26, this.bigW(env.gLabel) + 4);
+    const util = Math.min(1, env.gbps / 25);
+    for (let k = 0; k < 24; k++) {
+      const on = k / 24 < util;
+      const col = k / 24 > 0.85 ? C.crit : k / 24 > 0.7 ? C.warn : C.azure;
+      this.set(x0 + k, 1, on ? col : C.quiet, on ? 0.5 : 0.05);
+      this.set(x0 + k, 2, on ? col : C.quiet, on ? 0.18 : 0.03);
+    }
+    const pct = Math.round(util * 100) + '%';
+    this.textOver(x0, 4, pct + ' LINK', util > 0.85 ? C.warn : C.ink, 0.5);
+    this.scroll(6, 'IN ' + env.gLabel + '/S · OUT ' + (env.gbps * 0.6).toFixed(1) + 'G/S · PEAK ' + (env.gbps * 1.4).toFixed(1) + 'G · DMZ UPLINK ' + Math.round(util * 100) + '%   ·   ', C.ink, 0.45, 11);
+  }
+
+  sB2(env, t) {
+    const pct = Math.round(env.meanLoad * 100) + '%';
+    this.big(1, 2, pct, env.meanLoad > 0.75 ? C.warn : C.quiet, env.meanLoad > 0.75 ? 0.22 : 0.3);
+    this.textOver(1, 0, 'MEAN LOAD', C.ink, 0.45);
+    const x0 = Math.max(26, this.bigW(pct) + 4);
+    const cx = this.textOver(x0, 0, 'P95 ' + env.rtt + 'MS', env.rtt > 35 ? C.warn : C.ink, 0.5);
+    this.textOver(cx + 3, 0, env.loss.toFixed(1) + '%', env.loss > 1 ? C.crit : C.quiet, 0.45);
+    const hot = env.systems.filter(s => s.load > 0.85).length;
+    this.textOver(x0, 6, hot + ' OVER 85', hot ? C.warn : C.quiet, 0.45);
+  }
+
+  // ===== THEME C · charts =====
+  sC0(env, t) {
+    const BK = env.loadHist.length;
+    for (let b = 0; b < BK; b++) {
+      const share = env.loadHist[b], pct = (b + 0.5) / BK;
+      const h = share <= 0 ? 0 : Math.max(1, Math.round(Math.pow(share, 0.62) * 7));
+      const col = pct > 0.9 ? C.crit : pct > 0.75 ? C.warn : C.quiet;
+      const base = pct > 0.9 ? 0.8 : pct > 0.75 ? 0.5 : 0.12 + pct * 0.15;
+      for (let k = 0; k < h; k++) this.set(b, 7 - k, col, base * (k === h - 1 ? 1.5 : 1));
+    }
+    for (let x = 0; x < BK; x++) this.set(x, 8, C.quiet, x % 7 === 0 ? 0.12 : 0.03);
+    const off = Math.floor(t * 2.2) % W;
+    for (let k = 0; k < 15; k++) {
+      const x = 38 + k, v = env.thru[(off + k) % W], o = env.egress[(off + k) % W];
+      const hi = Math.max(1, Math.round(v * 4)), ho = Math.max(1, Math.round(o * 4));
+      for (let j = 0; j < hi; j++) this.set(x, 4 - j, v > 0.85 ? C.warn : C.azure, j === hi - 1 ? 0.55 : 0.14);
+      for (let j = 0; j < ho; j++) this.set(x, 6 + j, C.azure, j === ho - 1 ? 0.38 : 0.11);
+    }
+    for (let y = 0; y < H; y++) this.set(36, y, C.quiet, y % 2 ? 0.05 : 0.1);
+  }
+
+  sC1(env, t) {
+    const off = Math.floor(t * 2.4) % W;
+    const traces = [
+      { data: env.thru, y0: 0, h: 3, col: C.azure, hot: 0.85 },
+      { data: env.cpuHist, y0: 4, h: 3, col: C.ok, hot: 0.8 },
+      { data: env.rttHist, y0: 8, h: 3, col: C.azure, hot: 0.7 }
+    ];
+    traces.forEach(tr => {
+      for (let x = 0; x < W; x++) {
+        const v = tr.data[(x + off) % W];
+        const h = Math.max(1, Math.round(v * tr.h));
+        const col = v > tr.hot ? (tr.col === C.azure ? C.warn : C.warn) : tr.col;
+        for (let k = 0; k < h; k++) {
+          const y = tr.y0 + tr.h - 1 - k;
+          this.set(x, y, col, k === h - 1 ? 0.5 : 0.12);
+        }
+      }
+    });
+    for (let x = 0; x < W; x += 3) { this.add(x, 3, C.quiet, 0.05); this.add(x, 7, C.quiet, 0.05); }
+  }
+
+  sC2(env, t) {
+    env.poolLoad.slice(0, 7).forEach((p, i) => {
+      const y = i + 2;
+      if (y > 8) return;
+      const key = p.p.down ? C.crit : p.p.deg ? C.warn : p.p.maint ? C.maint : C.quiet;
+      this.set(0, y, key, p.p.down ? 0.9 : p.p.deg ? 0.6 : p.p.maint ? 0.4 : 0.12);
+      const len = Math.round(p.load * 46);
+      for (let k = 0; k < 46; k++) {
+        const on = k < len;
+        const frac = k / 46;
+        const col = frac > 0.85 ? C.crit : frac > 0.7 ? C.warn : C.azure;
+        this.set(2 + k, y, on ? col : C.quiet, on ? (k === len - 1 ? 0.6 : 0.22) : 0.03);
+      }
+      const t0 = p.tier === 0;
+      if (t0) this.set(49, y, C.crit, 0.18);
+    });
+    for (let x = 0; x < W; x++) this.set(x, 0, C.quiet, x % 4 === 0 ? 0.08 : 0.02);
+    this.text(2, 9, 'BY POOL', C.quiet, 0.28);
+  }
+
+  // ===== THEME D · instruments =====
+  sD0(env, t) {
+    if (!this.wf || this.wf.kind !== env.kind + env.fleet) {
+      const r = rng(4211);
+      this.wf = { kind: env.kind + env.fleet, r, step: t, rows: [] };
+      for (let i = 0; i < H; i++) this.wf.rows.push(Array.from({ length: W }, () => this.sample(env, i, r)));
+    }
+    if (t - this.wf.step > 0.42) {
+      this.wf.step = t;
+      this.wf.rows.forEach((row, i) => { row.shift(); row.push(this.sample(env, i, this.wf.r)); });
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const v = this.wf.rows[y][x];
+      if (v.st === 'loss') this.set(x, y, C.crit, 0.85);
+      else if (v.st === 'slow') this.set(x, y, C.warn, 0.5);
+      else this.set(x, y, C.azure, 0.06 + v.rtt * 0.26);
+    }
+  }
+  sample(env, i, r) {
+    const bad = env.kind === 'core' && (i === 1 || i === 3);
+    const soft = env.kind === 'degraded' && i === 6;
+    if (bad && r() > 0.25) return { st: 'loss' };
+    if ((bad || soft) && r() > 0.5) return { st: 'slow' };
+    return { st: 'ok', rtt: 0.15 + r() * (env.kind === 'nominal' ? 0.35 : 0.6) };
+  }
+
+  sD1(env, t) {
+    const big = Math.max.apply(null, env.pools.map(p => p.total));
+    env.pools.forEach((p, i) => {
+      if (i > 5) return;
+      const y = i;
+      const worst = p.down ? C.crit : p.deg ? C.warn : p.maint ? C.maint : C.quiet;
+      const kb = p.down ? 0.9 : p.deg ? 0.6 : p.maint ? 0.4 : 0.14;
+      this.set(0, y, worst, kb); this.set(1, y, worst, kb * 0.5);
+      const len = Math.max(6, Math.round(50 * p.total / big));
+      const seg = n => Math.max(n > 0 ? 1 : 0, Math.round(len * n / p.total));
+      const nd = seg(p.down), ng = seg(p.deg), nm = seg(p.maint);
+      for (let k = 0; k < len; k++) {
+        const x = 3 + k;
+        if (k >= len - nd) this.set(x, y, C.crit, 0.9);
+        else if (k >= len - nd - ng) this.set(x, y, C.warn, 0.58);
+        else if (k >= len - nd - ng - nm) this.set(x, y, C.maint, 0.36);
+        else this.set(x, y, C.quiet, 0.09 + 0.08 * (0.5 + 0.5 * Math.sin(t * 0.9 + k * 0.35 + i)));
+      }
+    });
+    for (let x = 0; x < W; x += 2) this.set(x, 6, C.quiet, 0.05);
+    this.scroll(6, env.ticker, C.ink, 0.48, 13);
+  }
+
+  sD2(env, t) {
+    const gran = 0.6 + Math.log10(Math.max(10, env.total)) * 1.5;
+    const warmth = Math.min(1, Math.max(0, (env.meanLoad - 0.35) / 0.5));
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const u = x / W * gran, v = y / H * gran * 0.4;
+      let n = Math.sin(u * 2.1 + t * 0.5) * 0.5 + Math.sin(v * 3.3 - t * 0.31) * 0.3 + Math.sin((u + v) * 1.7 + t * 0.77) * 0.4;
+      n = Math.max(0, (n + 1.2) / 2.4);
+      const b = 0.03 + Math.pow(n, 3.1) * 0.6;
+      this.set(x, y, [
+        C.azure[0] + (C.warn[0] - C.azure[0]) * warmth * n,
+        C.azure[1] + (C.warn[1] - C.azure[1]) * warmth * n,
+        C.azure[2] + (C.warn[2] - C.azure[2]) * warmth * n
+      ], b);
+    }
+    const sparks = Math.min(9, env.down);
+    for (let i = 0; i < sparks; i++) {
+      const x = 4 + ((i * 11 + 3) % (W - 8)), y = (i * 4 + 2) % H;
+      const tier = env.systems.find(s => s.st === 'down') || { tier: 3 };
+      const puls = (0.35 + 0.65 * [1, 0.7, 0.45, 0.3][tier.tier]) * (0.7 + 0.3 * Math.sin(t * 3 + i));
+      this.set(x, y, C.crit, puls);
+      this.add(x - 1, y, C.crit, puls * 0.25); this.add(x + 1, y, C.crit, puls * 0.25);
+    }
+    const slot = Math.floor(t / 5) % 3;
+    const msg = slot === 0 ? env.total + ' SYS' : slot === 1 ? Math.round(env.meanLoad * 100) + '% LOAD' : env.gLabel + '/S';
+    const col = slot === 1 && warmth > 0.6 ? C.warn : C.ink;
+    const tw = this.textW(msg), tx = Math.floor((W - tw) / 2);
+    for (let y = 2; y <= 8; y++) for (let x = tx - 2; x <= tx + tw + 1; x++) this.dim(x, y, 0.1);
+    this.text(tx, 3, msg, col, 0.6);
+  }
+
+  inlay(env, t) {
+    this.dimAll(0.1);
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(t * 2.2));
+    for (let y = 0; y < H; y++) { this.set(0, y, C.crit, pulse); this.set(W - 1, y, C.crit, pulse); }
+    const subj = env.alert.subject.slice(0, 12);
+    this.text(Math.max(2, Math.floor((W - this.textW(subj)) / 2)), 1, subj, C.crit, 0.95);
+    this.scroll(6, env.alert.detail + '   ·   ', C.ink, 0.55, 11);
+  }
+
+  cells() {
+    const host = this.refP.current;
+    if (!host) return null;
+    if (!host._leds) {
+      host.style.display = 'grid';
+      host.style.gridTemplateColumns = 'repeat(' + W + ', 11px)';
+      host.style.gridAutoRows = '11px';
+      host.style.gap = '4px';
+      host.style.width = W * 11 + (W - 1) * 4 + 'px';
+      host._leds = [];
+      host._prev = new Array(W * H).fill('');
+      for (let i = 0; i < W * H; i++) {
+        const d = document.createElement('i');
+        d.style.cssText = 'display:block;width:11px;height:11px;border-radius:3px;background:#0E1014;';
+        host.appendChild(d); host._leds.push(d);
+      }
+    }
+    return host;
+  }
+
+  paint(env) {
+    const host = this.cells();
+    if (!host) return;
+    this.clear();
+    this.screenFn(env, this.t);
+    if (this.alarming(env)) this.inlay(env, this.t);
+    const g = this.state.brightness, leds = host._leds, prev = host._prev;
+    for (let n = 0; n < W * H; n++) {
+      const i = n * 3;
+      const R = Math.min(255, Math.round(this.fb[i] * g)),
+        G = Math.min(255, Math.round(this.fb[i + 1] * g)),
+        B = Math.min(255, Math.round(this.fb[i + 2] * g));
+      const lum = (R + G + B) / 765;
+      const bg = 'rgb(' + (14 + R) + ',' + (16 + G) + ',' + (20 + B) + ')';
+      const sh = lum > 0.28 ? '0 0 ' + Math.round(6 + lum * 12) + 'px rgba(' + R + ',' + G + ',' + B + ',.75)' : 'none';
+      const sig = bg + sh;
+      if (prev[n] === sig) continue;
+      prev[n] = sig;
+      leds[n].style.background = bg;
+      leds[n].style.boxShadow = sh;
+    }
+  }
+
+  press(th) {
+    this.screenT = 0;
+    this.setState(s => s.theme === th ? { screen: (s.screen + 1) % 3 } : { theme: th, screen: 0 });
+  }
+
+  renderVals() {
+    const env = this.env();
+    const th = THEMES[this.state.theme];
+    const btn = k => this.state.theme === k ? '#17384B' : '#121A24';
+    return {
+      refPanel: this.refP,
+      themeLabel: th.label,
+      screenLabel: 'Screen ' + (this.state.screen + 1) + ' of 3 · ' + th.screens[this.state.screen],
+      scoreLabel: env.score + ' · ' + env.scoreWhy + (env.score >= 100 ? ' · alarm' : ' · quiet'),
+      btnA: btn('A'), btnB: btn('B'), btnC: btn('C'), btnD: btn('D'),
+      pressA: () => this.press('A'), pressB: () => this.press('B'),
+      pressC: () => this.press('C'), pressD: () => this.press('D'),
+      scenario: this.state.scenario,
+      scenarioOptions: [
+        { value: 'nominal', label: 'All nominal' },
+        { value: 'degraded', label: 'Degraded' },
+        { value: 'wks', label: 'Workstations down' },
+        { value: 'core', label: 'Core service down' },
+        { value: 'maintenance', label: 'Maintenance' }
+      ],
+      setScenario: v => this.setState({ scenario: v, acked: false }),
+      fleet: this.state.fleet,
+      fleetOptions: [{ value: 30, label: '30' }, { value: 318, label: '318' }, { value: 900, label: '900' }, { value: 3000, label: '3000' }],
+      setFleet: v => this.setState({ fleet: v }),
+      dwell: this.state.dwell,
+      dwellOptions: [{ value: 3, label: '3 s' }, { value: 6, label: '6 s' }, { value: 30, label: '30 s' }],
+      setDwell: v => { this.screenT = 0; this.setState({ dwell: v }); },
+      sound: this.state.sound,
+      soundOptions: [{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }],
+      setSound: v => this.setState({ sound: v }),
+      brightnessPct: Math.round(this.state.brightness * 100),
+      setBrightness: e => this.setState({ brightness: Number(e.target.value) / 100 }),
+      ack: () => this.setState({ acked: true })
+    };
+  }
+}
+</script>
+</body>
+</html>
