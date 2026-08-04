@@ -1,0 +1,24 @@
+/* 4px base unit. Layout constants are fixed, not fluid —
+   fixed column counts keep a metric row from orphaning its last card. */
+:root{
+  --sn-space-1:4px;
+  --sn-space-2:8px;
+  --sn-space-3:12px;
+  --sn-space-4:16px;
+  --sn-space-5:22px;
+  --sn-space-6:32px;
+  --sn-space-7:48px;
+
+  --sn-page-pad-y:22px;
+  --sn-page-pad-x:26px;
+  --sn-panel-pad:16px;
+  --sn-card-gap:12px;
+  --sn-tile-gap:8px;
+
+  --sn-sidebar-w:248px;
+  --sn-sidebar-w-collapsed:64px;
+  --sn-topbar-h:60px;
+  --sn-content-max:1640px;
+  --sn-tile-min:132px;
+  --sn-tap:44px;
+}

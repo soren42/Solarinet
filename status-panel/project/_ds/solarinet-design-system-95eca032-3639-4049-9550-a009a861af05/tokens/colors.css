@@ -1,0 +1,70 @@
+/* SolariNet palette — Interface & Identity Standards Rev 2.0.0.
+   Three tiers. Tier 1 primary (capped at three), tier 2 neutrals,
+   tier 3 functional. A hue that reports condition never decorates. */
+:root{
+  /* tier 1 · primary */
+  --sn-azure:#22B8F0;          /* Signal Azure — accent, interactive */
+  --sn-azure-bright:#5FCCFA;
+  --sn-azure-deep:#0E86B8;
+  --sn-void:#070A0F;           /* Void — ground */
+  --sn-halide:#DFE8F2;         /* Halide — ink */
+
+  /* tier 2 · neutrals & surfaces (dark) */
+  --sn-void-deep:#03050A;
+  --sn-surface:#0E151D;
+  --sn-raised:#16202C;
+  --sn-elevated:#16273B;
+  --sn-divider:#22303F;
+  --sn-divider-strong:#31465C;
+  --sn-ink-dim:#9DB0C4;
+  --sn-ink-faint:#6E8399;
+  --sn-quiet:#4E6B7E;
+  --sn-neutral-700:#8299AF;
+  --sn-on-field:#06090D;
+
+  /* tier 3 · functional — condition only */
+  --sn-ok:#3DD68C;             /* Operational */
+  --sn-warn:#F5A623;           /* Degraded */
+  --sn-crit:#FF4D5E;           /* Down / critical / destructive */
+  --sn-maint:#9B87FF;          /* Maintenance — operator declared */
+  --sn-unknown:#7C8AA0;        /* Unknown / unreported / disabled */
+
+  /* functional tints — fill percentages fixed by the emphasis budget */
+  --sn-ok-tint:rgba(61,214,140,.12);
+  --sn-warn-tint:rgba(245,166,35,.12);
+  --sn-crit-tint:rgba(255,77,94,.16);
+  --sn-maint-tint:rgba(155,135,255,.12);
+  --sn-unknown-tint:rgba(124,138,160,.12);
+  --sn-azure-tint:rgba(34,184,240,.13);
+}
+
+/* Light theme. Same architecture, ratios re-cleared against paper. */
+[data-sn-theme="light"]{
+  --sn-azure:#0A7FB0;
+  --sn-azure-bright:#065C81;
+  --sn-azure-deep:#054B6B;
+  --sn-void:#FFFFFF;
+  --sn-void-deep:#B9C3CE;
+  --sn-halide:#0F1720;
+  --sn-surface:#F4F7FA;
+  --sn-raised:#EAEFF5;
+  --sn-elevated:#E1E8F1;
+  --sn-divider:#D3DCE6;
+  --sn-divider-strong:#B3C1D0;
+  --sn-ink-dim:#47596C;
+  --sn-ink-faint:#5C6E80;
+  --sn-quiet:#5A6E80;
+  --sn-neutral-700:#54687C;
+  --sn-on-field:#FFFFFF;
+  --sn-ok:#0B7F53;
+  --sn-warn:#94590A;
+  --sn-crit:#C4172C;
+  --sn-maint:#5B41C8;
+  --sn-unknown:#5A6B7D;
+  --sn-ok-tint:rgba(11,127,83,.10);
+  --sn-warn-tint:rgba(148,89,10,.10);
+  --sn-crit-tint:rgba(196,23,44,.10);
+  --sn-maint-tint:rgba(91,65,200,.10);
+  --sn-unknown-tint:rgba(90,107,125,.10);
+  --sn-azure-tint:rgba(10,127,176,.10);
+}

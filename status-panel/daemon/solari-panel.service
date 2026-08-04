@@ -1,0 +1,24 @@
+[Unit]
+Description=SolariNet Galactic Unicorn status panel
+Documentation=https://github.com/soren42/Solarinet
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/solariPanel --config /etc/solari-panel/solari-panel.conf
+Restart=always
+RestartSec=3
+User=jason
+SupplementaryGroups=dialout
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ReadOnlyPaths=/etc/solari-panel
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

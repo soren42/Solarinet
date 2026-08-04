@@ -1,0 +1,43 @@
+/* Semantic aliases. Author UI against these, not the raw palette —
+   they are what carries the theme switch and the hue-assignment rule. */
+:root{
+  /* text */
+  --sn-text-primary:var(--sn-halide);
+  --sn-text-secondary:var(--sn-ink-dim);
+  --sn-text-tertiary:var(--sn-ink-faint);
+  --sn-text-on-accent:var(--sn-on-field);
+  --sn-text-link:var(--sn-azure);
+  --sn-text-link-hover:var(--sn-azure-bright);
+
+  /* surfaces */
+  --sn-surface-app:var(--sn-void);
+  --sn-surface-sunken:var(--sn-void-deep);
+  --sn-surface-card:var(--sn-surface);
+  --sn-surface-control:var(--sn-raised);
+  --sn-surface-control-active:var(--sn-elevated);
+  --sn-surface-overlay:var(--sn-surface);
+
+  /* borders */
+  --sn-border-hairline:var(--sn-divider);
+  --sn-border-strong:var(--sn-divider-strong);
+  --sn-border-interactive:var(--sn-line-glow);
+
+  /* accent — chrome, links, focus, selection, info. Never condition. */
+  --sn-accent:var(--sn-azure);
+  --sn-accent-hover:var(--sn-azure-bright);
+  --sn-accent-press:var(--sn-azure-deep);
+  --sn-selection:rgba(34,184,240,.30);
+
+  /* status — condition only. Never chrome. */
+  --sn-status-operational:var(--sn-ok);
+  --sn-status-degraded:var(--sn-warn);
+  --sn-status-down:var(--sn-crit);
+  --sn-status-maintenance:var(--sn-maint);
+  --sn-status-unknown:var(--sn-unknown);
+  --sn-status-stale:var(--sn-unknown);
+
+  /* coverage ceilings, documented as tokens so they get read
+     accent <= 10% of a surface · fault <= 5% · glow <= 1 element */
+  --sn-ceiling-accent:10%; /* @kind other */
+  --sn-ceiling-fault:5%; /* @kind other */
+}

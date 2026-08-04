@@ -1,0 +1,16 @@
+# solari-panel.conf — SolariNet status-panel daemon.
+# Install as /etc/solari-panel/solari-panel.conf (mode 0644).
+#
+# passFile REQUIREMENTS (the daemon hard-enforces these and exits otherwise):
+#   - contains the panel principal's password on one line
+#   - owned by the service user (User= in solari-panel.service)
+#   - mode 0600 — the daemon REFUSES any group/other access bits
+#   Create it:  install -m 600 -o jason -g jason /dev/null /etc/solari-panel/panel.pass
+#               printf '%s' 'THE-PASSWORD' > /etc/solari-panel/panel.pass
+apiBase=https://dashboard.akoria.net
+user=panel
+passFile=/etc/solari-panel/panel.pass
+pollSec=5
+snapshotSec=2
+# Glob is resolved at open time, first match wins; a literal path also works.
+serialDev=/dev/serial/by-id/*

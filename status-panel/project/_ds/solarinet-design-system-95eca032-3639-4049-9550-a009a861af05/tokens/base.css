@@ -1,0 +1,15 @@
+/* Minimal element defaults. No component styling lives here. */
+:root{color-scheme:dark}
+[data-sn-theme="light"]{color-scheme:light}
+body{background:var(--sn-surface-app);color:var(--sn-text-primary);font-family:var(--sn-font-sans);font-size:var(--sn-text-body);line-height:var(--sn-lh-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;-webkit-tap-highlight-color:transparent}
+::selection{background:var(--sn-selection);color:var(--sn-halide)}
+a{color:var(--sn-text-link);text-decoration:none}
+a:hover{color:var(--sn-text-link-hover);text-decoration:underline}
+a:focus-visible,button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:none;box-shadow:var(--sn-focus-ring);border-radius:var(--sn-radius-sm)}
+code,kbd,samp,pre{font-family:var(--sn-font-mono)}
+/* numbers must not shimmy as values tick */
+.sn-tnum,table,[class*="metric"],[class*="mono"]{font-variant-numeric:tabular-nums}
+*::-webkit-scrollbar{width:10px;height:10px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:var(--sn-border-strong);border-radius:10px;border:2px solid transparent;background-clip:padding-box}
+*::-webkit-scrollbar-thumb:hover{background:var(--sn-ink-faint);background-clip:padding-box}

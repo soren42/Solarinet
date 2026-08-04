@@ -21,6 +21,7 @@ require_once __DIR__ . '/lib/Coerce.php';
 return static function (Router $router): void {
     $groups = [
         __DIR__ . '/routes/summary.php',
+        __DIR__ . '/routes/panel.php',
         __DIR__ . '/routes/nodes.php',
         __DIR__ . '/routes/probes.php',
         __DIR__ . '/routes/alerts.php',
