@@ -1233,17 +1233,53 @@
     const stRef = useRef(null);
     const fbRef = useRef(null);
     const clockRef = useRef(0);
+    /* Perf: visRef tracks which tiles are actually on screen (offscreen tiles
+       skip both sim and paint — on a phone that is most of the grid), prevRef
+       holds each tile's last-painted framebuffer so a static screen skips the
+       putImageData + composite entirely. Both are invisible when everything is
+       in view and animating; they only shed work that cannot be seen. */
+    const visRef = useRef(SCREENS.map(function () { return true; }));
+    const prevRef = useRef(null);
+    const paintedRef = useRef(null);
 
     if (!fbRef.current) fbRef.current = fbNew();
     if (!stRef.current) stRef.current = SCREENS.map(function () { return {}; });
+    if (!prevRef.current) prevRef.current = SCREENS.map(function () { return new Float32Array(PW * PH * 3); });
+
+    /* Observe tile visibility once; entries map back through canvasRefs. */
+    useEffect(function () {
+      if (typeof IntersectionObserver === "undefined") return undefined;
+      const obs = new IntersectionObserver(function (entries) {
+        for (let k = 0; k < entries.length; k++) {
+          const idx = canvasRefs.current.indexOf(entries[k].target);
+          if (idx >= 0) visRef.current[idx] = entries[k].isIntersecting;
+        }
+      }, { rootMargin: "80px" });
+      for (let i = 0; i < canvasRefs.current.length; i++)
+        if (canvasRefs.current[i]) obs.observe(canvasRefs.current[i]);
+      return function () { obs.disconnect(); };
+    }, []);
 
     useEffect(function () {
       const fb = fbRef.current;
       const sts = stRef.current;
+      /* env/armed/gain changed: every tile must repaint at least once. */
+      paintedRef.current = SCREENS.map(function () { return false; });
 
-      function drawAll(t, dt) {
+      function drawAll(t, dt, force) {
         for (let i = 0; i < SCREENS.length; i++) {
+          if (!force && !visRef.current[i]) continue;
           paintScreen(fb, i, env, t, dt, sts[i], armed);
+          const prev = prevRef.current[i];
+          let dirty = !paintedRef.current[i];
+          if (!dirty) {
+            for (let n = 0; n < prev.length; n++) {
+              if (fb[n] !== prev[n]) { dirty = true; break; }
+            }
+          }
+          if (!dirty) continue;
+          prev.set(fb);
+          paintedRef.current[i] = true;
           paintCanvas(canvasRefs.current[i], fb, gain);
         }
       }
@@ -1260,7 +1296,7 @@
             paintScreen(fb, i, env, t, FIXTURE_DT, sts[i], armed);
           }
         }
-        drawAll(FIXTURE_T, FIXTURE_DT);
+        drawAll(FIXTURE_T, FIXTURE_DT, true);
         return undefined;
       }
 
