@@ -45,6 +45,11 @@ void panelScreenD2(const PanelEnv *env, float t, float dt);
  * armed and unacknowledged. */
 void panelInlay(const PanelEnv *env, float t);
 
+/* panelBeacon — OPERATOR AMENDMENT: 4-pixel top-right red flasher, live from an
+ * episode's rising edge until it is acknowledged, independent of tone state.
+ * Painted after everything else, including in sleep. */
+void panelBeacon(float t);
+
 /* panelScreenLinkLost — CONTRACT §4: >15 s with no valid frame. Not a design
  * screen; the brief only says "renders the design's stale indicator", so this
  * is the smallest treatment that reads as an explicit link fault. */

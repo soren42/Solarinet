@@ -42,6 +42,30 @@ void panelInlay(const PanelEnv *env, float t) {
   panelScroll(t, 6, detail, cInk, 0.55f, 11.0f);
 }
 
+/* ---- Unacknowledged-episode beacon --------------------------------------
+ * OPERATOR AMENDMENT 2026-08-04 (supersedes nothing in the DESIGN-BRIEF; the
+ * brief has no beacon). Four pixels in the top-right corner — x = 51,52 by
+ * y = 0,1 — flash crit red at ~1 Hz from the rising edge of an episode until
+ * that episode is acknowledged. It is deliberately NOT tied to the tone: after
+ * the 5-minute auto-silence the tone stops and the beacon keeps flashing, which
+ * is the whole point of the overnight case.
+ *
+ * Painted LAST, after the active screen and after the inlay, so it overrides
+ * both — the inlay's own right-hand rail runs through x=52 and would otherwise
+ * mask it. Also painted in the sleep branch, where the framebuffer is otherwise
+ * blank, so a dark panel still carries the fault.
+ *
+ * Square 1 Hz, 50% duty, at full framebuffer brightness (b=1.0). The remaining
+ * scale is the LED driver's global brightness, which floors at 0.25
+ * (panelHw.cpp:70) — so the beacon cannot be dimmed out, only dimmed down, and
+ * at any setting it is the brightest thing on a sleeping panel.
+ * Input:  t, the animation clock in seconds. Output: none (paints).         */
+void panelBeacon(float t) {
+  if (fmodf(t, 1.0f) >= 0.5f) return;
+  for (int y = 0; y <= 1; y++)
+    for (int x = PANEL_W - 2; x <= PANEL_W - 1; x++) panelFbSet(x, y, cCrit, 1.0f);
+}
+
 /* ---- LINK LOST ----------------------------------------------------------
  * CONTRACT §4: more than 15 s without a valid frame. DESIGN-BRIEF specifies no
  * screen for this, so the treatment is deliberately minimal and deliberately

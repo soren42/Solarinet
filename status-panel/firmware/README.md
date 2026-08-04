@@ -100,14 +100,21 @@ collected in `../RETURN-C3.md`.
   the current theme's button advances within it.
 - **Brightness** LUX+/LUX− step 0.05; light-sensor auto-brightness runs when
   enabled, and either LUX button latches manual control. ZZZ blanks the panel;
-  any button wakes it, as does an arming alarm.
+  any button wakes it, as does the rising edge of an alarm.
 - **Link loss** — no valid frame for 15 s raises the LINK LOST screen and emits
   `EV_LINKLOST` (0x04); recovery emits `EV_LINKBACK` (0x05). Deliberately amber,
   not red: the alarm's red-rail vocabulary stays reserved for fleet faults.
 - **Alarm** — a two-tone triad (990/660/990 Hz, 200 ms notes at 0/0.22/0.44 s)
-  repeating every 12 s while `alarmActive`. Acknowledge is **firmware-local and
-  per-episode**: any button press during an armed alarm acks it and is consumed;
-  a new `episodeId` re-arms.
+  repeating every **60 s** while `alarmActive`. Acknowledge is **firmware-local
+  and per-episode**: any button press during an armed alarm acks it and is
+  consumed; a new `episodeId` re-arms.
+  - **Auto-silence** — an episode unacknowledged for 5 minutes stops re-sounding
+    for good. This is not an ack: the inlay and the beacon both stay up.
+  - **Beacon** — x=51,52 × y=0,1 flash red at 1 Hz from the rising edge until
+    ack, on top of every screen and the inlay, and on the blank panel while
+    asleep. Independent of tone state, so it survives auto-silence.
+  - The 60 s interval, the auto-silence and the beacon are an operator
+    amendment (2026-08-04) superseding the DESIGN-BRIEF's 12 s alarm spec.
 
 ## Flashing
 

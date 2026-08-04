@@ -121,7 +121,9 @@ void panelScreenB2(const PanelEnv *env, float t, float dt) {
    * Both figures are clamped to the widest form that fits (999 ms, 100%). */
   panelTextOver(1, 0, "LOAD", cInk, 0.45f);
 
-  char reading[16];
+  /* 24 bytes, not 16: the compiler cannot see the ms clamp below and warns that
+   * "P95 %dMS" could write up to 18 bytes for a full-range int. */
+  char reading[24];
   PanelColor *rcol;
   if ((((int)(t / 5.0f)) & 1) == 0) {
     int ms = (int)(env->rtt + 0.5f);

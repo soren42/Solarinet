@@ -371,9 +371,66 @@ brightness multiplier — no count, no colour.
 ### Rebuild
 
 ```
-FIXME_P4_SHA  b1/solari-panel-fw.uf2
-FIXME_P4_SHA  b2/solari-panel-fw.uf2
+93816f1979922cd9a21362beee1f5a4571942aa2ba576304a3028d9fcbbb0293  b1/solari-panel-fw.uf2
+93816f1979922cd9a21362beee1f5a4571942aa2ba576304a3028d9fcbbb0293  b2/solari-panel-fw.uf2
 ```
+
+Zero warnings. `protocol.c` md5 `5754c9312bc7c2a01609355a17b64b3c` (the
+resync-drain + `panelSeqNewer` revision). This is the image the Lead flashed.
+
+## ALARM AMENDMENT ROUND (operator-directed, 2026-08-04)
+
+Operator-directed change relayed by the Lead, **superseding the DESIGN-BRIEF's
+12 s re-alarm spec**. Recorded here as an amendment, not a deviation: the brief
+is wrong on this point by decision, not by my reading of it. Alarm machine only;
+ack semantics, inlay, and episode re-arm are untouched.
+
+| # | Change | Where |
+|---|---|---|
+| 1 | Re-alarm tone interval 12 s → **60 s**. Rising-edge tone and the 3-note triad (990/660/990 Hz at 0 / 0.22 / 0.44 s) unchanged. | `main.c` `REALARM_SEC` |
+| 2 | **Auto-silence at 5 min** unacked from the rising edge: tone stops permanently for that episode. Explicitly *not* an ack — inlay stays, beacon stays, a new `episodeId` re-arms sound normally. | `main.c` `AUTOSILENCE_SEC`, `runAlarm()` |
+| 3 | **Unacked beacon**: x=51,52 × y=0,1 flash crit red at 1 Hz (50% duty, b=1.0) from the rising edge until ack, independent of tone state. | `panelInlay.c` `panelBeacon()` |
+
+Auto-silence is one-way within an episode. It is cleared in exactly three
+places, all of which end the episode anyway: the ack path in `handlePress()`,
+the alarm-cleared branch of `runAlarm()`, and the rising edge of a new
+`episodeId`. There is no path that re-sounds a silenced episode.
+
+**Beacon render order and sleep visibility — the code paths:**
+
+- `main.c` — normal branch: screen → `panelInlay()` → `panelBeacon()`. The
+  beacon is painted **after** the inlay because the inlay's right-hand rail
+  runs down x=52 and would otherwise mask two of the four beacon pixels.
+  `panelBeacon()` is called outside the branch, so it also covers the zero-node
+  NO DATA case, which draws no inlay.
+- `main.c` — sleep branch: `panelFbClear()` → `if (gAlarmArmed) panelBeacon(gT)`
+  → `panelFbFlush()`. This is the cited path: the ZZZ branch previously did a
+  bare clear-and-flush and returned; it now paints the beacon on the otherwise
+  dark panel before flushing.
+- Dimming: `panelBeacon()` writes at framebuffer brightness 1.0, and the LED
+  driver's global brightness **floors at 0.25** (`panelHw.cpp:70`, clamp in
+  `panelHwSetBrightness`). The beacon can be dimmed down but not out, and at
+  any setting it is the brightest thing on a sleeping panel.
+
+**DEVIATION 15 (required by change 2+3).** `runAlarm()` used to re-assert
+`gSleeping = false` on **every tick** while armed, which pinned the panel awake
+for the entire life of an unacknowledged episode. That is incompatible with the
+amendment: after auto-silence the intended overnight state is a quiet, sleeping
+panel carrying nothing but the beacon. The wake is now a **one-shot at the
+rising edge**. Ack semantics are unaffected (any button during an alarm is still
+consumed as ack, so the operator still cannot reach ZZZ mid-alarm without
+acking).
+
+### Rebuild
+
+```
+FIXME_ALARM_SHA  b1/solari-panel-fw.uf2
+FIXME_ALARM_SHA  b2/solari-panel-fw.uf2
+```
+
+Also fixed in this round, unrequested: `panelScreensB.c` had picked up one
+`-Wformat-truncation` warning from the DEVIATION 14 rewrite (gcc cannot see the
+999 ms clamp). Buffer widened 16 → 24 bytes; back to a zero-warning build.
 
 ## NEXT
 
@@ -387,7 +444,9 @@ For the Lead's deploy phase:
    the single highest-value check, since none of it has been seen.
 4. Pull the cable for >15 s to confirm LINK LOST + `EV_LINKLOST`, then restore
    for `EV_LINKBACK`.
-5. Drive a synthetic `alarmActive` episode to check the triad, the 12 s re-alarm
-   and per-episode ack.
+5. Drive a synthetic `alarmActive` episode to check the triad, the **60 s**
+   re-alarm and per-episode ack. Budget 5 minutes of wall clock if you want to
+   see auto-silence fire, and leave it unacked to watch the beacon outlive the
+   tone; then press ZZZ *after* acking to confirm the sleep path separately.
 6. If the tick budget is tight on screen D2, the per-pixel `powf` is the first
    thing to precompute into a lookup table.

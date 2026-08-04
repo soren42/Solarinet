@@ -44,7 +44,12 @@ bi_decl(bi_program_description("SolariNet fleet status panel (Galactic Unicorn)"
 #define TICK_MS          40u     /* DESIGN-BRIEF: 40 ms logic tick, ~25 Hz   */
 #define DWELL_SEC        6.0f    /* DESIGN-BRIEF: dwell default 6 s          */
 #define LINK_TIMEOUT_MS  15000u  /* CONTRACT §4: >15 s with no valid frame   */
-#define REALARM_SEC      12.0f   /* DESIGN-BRIEF: tone repeats every 12 s    */
+/* OPERATOR AMENDMENT 2026-08-04, superseding the DESIGN-BRIEF's 12 s re-alarm:
+ * the tone repeats every 60 s, and an episode left unacknowledged for 5 minutes
+ * stops re-sounding permanently. Auto-silence is NOT an acknowledge — the inlay
+ * and the beacon both stay up, and a new episodeId re-arms sound as normal.  */
+#define REALARM_SEC      60.0f   /* was 12 s (DESIGN-BRIEF "Animation")       */
+#define AUTOSILENCE_SEC  300.0f  /* unacked for this long -> tone off, once   */
 #define BRIGHT_STEP      0.05f   /* DESIGN-BRIEF Ambiguity #3: 5% steps      */
 #define DEBOUNCE_TICKS   2       /* 80 ms at the 25 Hz tick                  */
 
@@ -73,6 +78,8 @@ static uint32_t gAckedEpisode = 0;
 static bool     gHaveAcked = false;
 static float    gAlarmToneAt = -1000.0f;  /* start time of the current triad */
 static int      gToneNote = 3;            /* 3 = triad finished              */
+static float    gAlarmRaisedAt = 0.0f;    /* gT at this episode's rising edge*/
+static bool     gAlarmSilenced = false;   /* auto-silenced: tone off, seen   */
 
 static uint8_t  gBtnStable[PANEL_BTN_COUNT];
 static uint8_t  gBtnCount[PANEL_BTN_COUNT];
@@ -186,6 +193,7 @@ static void handlePress(PanelButton b) {
     gAckedEpisode = gEnv.snap.topAlert.episodeId;
     gHaveAcked = true;
     gAlarmArmed = false;
+    gAlarmSilenced = false;
     panelHwToneOff();
     gToneNote = 3;
     sendEvent(PANEL_EV_ACK, 0);
@@ -245,20 +253,37 @@ static void runAlarm(void) {
     if (!ackedThis && !gAlarmArmed) {
       /* Rising edge, or a NEW episodeId after an acknowledged one. */
       gAlarmArmed = true;
+      gAlarmSilenced = false;
+      gAlarmRaisedAt = gT;
       gAlarmToneAt = gT - REALARM_SEC;   /* sound immediately */
+      /* The rising edge wakes the board ONCE. It used to re-assert every tick,
+       * which made an unacknowledged episode pin the panel awake indefinitely —
+       * incompatible with the amendment's overnight case, where the tone stops
+       * after 5 minutes and the beacon is meant to be what carries the fault on
+       * a sleeping panel. Recorded as a deviation in RETURN-C3.md.           */
+      gSleeping = false;
     }
-    if (ackedThis) gAlarmArmed = false;
+    if (ackedThis) { gAlarmArmed = false; gAlarmSilenced = false; }
   } else {
     if (gAlarmArmed) { panelHwToneOff(); gToneNote = 3; }
     gAlarmArmed = false;
+    gAlarmSilenced = false;
   }
 
   if (!gAlarmArmed) return;
-  gSleeping = false;    /* an armed alarm always wakes the board */
+
+  /* Auto-silence: one-way, per episode, tone only. Cleared exclusively by an
+   * ack, by the alarm clearing, or by a new episodeId — all three above. */
+  if (!gAlarmSilenced && gT - gAlarmRaisedAt >= AUTOSILENCE_SEC) {
+    gAlarmSilenced = true;
+    panelHwToneOff();
+    gToneNote = 3;
+  }
+  if (gAlarmSilenced) return;
 
   /* DESIGN-BRIEF "Animation": 3-note square triad at offsets 0 / 0.22 / 0.44 s,
-   * frequencies 990 / 660 / 990 Hz, each note 200 ms; the triad repeats every
-   * 12 s until acknowledged. */
+   * frequencies 990 / 660 / 990 Hz, each note 200 ms. The triad itself is
+   * unchanged; only its repeat interval moved to REALARM_SEC (60 s). */
   if (gT - gAlarmToneAt >= REALARM_SEC) { gAlarmToneAt = gT; gToneNote = 0; }
   static const float noteAt[3]  = { 0.0f, 0.22f, 0.44f };
   static const uint16_t noteHz[3] = { 990, 660, 990 };
@@ -324,7 +349,10 @@ int main(void) {
 
     panelFbClear();
     if (gSleeping) {
-      panelFbFlush();           /* blanked, but the tick keeps running */
+      /* Blanked, but the tick keeps running — and an unacknowledged episode
+       * still shows its beacon on the otherwise dark panel. */
+      if (gAlarmArmed) panelBeacon(gT);
+      panelFbFlush();
       continue;
     }
 
@@ -339,6 +367,11 @@ int main(void) {
       kScreens[gTheme][gScreen](&gEnv, gT, dt);
       if (gAlarmArmed) panelInlay(&gEnv, gT);
     }
+    /* Beacon last of all: it must sit on top of the inlay, whose right-hand
+     * rail runs through x=52. Placed outside the branch so it also covers the
+     * zero-node NO DATA case, which draws no inlay. (LINK LOST cannot coexist
+     * with an armed alarm — runAlarm() clears it.)                          */
+    if (gAlarmArmed) panelBeacon(gT);
     panelFbFlush();
   }
 }
