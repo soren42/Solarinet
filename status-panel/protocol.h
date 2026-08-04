@@ -57,12 +57,60 @@ typedef enum {                     /* host -> panel */
   PANEL_FT_SNAPSHOT = 0x01,        /* full panel state, §snapshot below     */
   PANEL_FT_PING     = 0x02,        /* empty payload, link-alive             */
   PANEL_FT_HELLOREQ = 0x03,        /* empty payload, ask panel for HELLO    */
+  PANEL_FT_CONTROL  = 0x04,        /* CONTRACT-CP §3: u32 cmdId (LE),
+                                      u8 kind (PanelControlKind), u8 arg,
+                                      u8[2] reserved. Idempotent; firmware
+                                      consumes strictly ascending cmdId,
+                                      cmdId <= lastCmdId is ignored.        */
                                    /* panel -> host (diagnostics only)      */
   PANEL_FT_HELLO    = 0x81,        /* u8 protoVer, u8 fwMajor, u8 fwMinor,
                                       then ASCII build string (<=32)        */
   PANEL_FT_EVENT    = 0x82,        /* u8 kind (PanelEventKind), u8 arg      */
-  PANEL_FT_LOG      = 0x83         /* ASCII text (<=128)                    */
+  PANEL_FT_LOG      = 0x83,        /* ASCII text (<=128)                    */
+  PANEL_FT_STATE    = 0x84         /* CONTRACT-CP §3: u8 theme, u8 screen,
+                                      u8 brightnessPct, u8 autoBright,
+                                      u8 sleeping, u8 alarmArmed,
+                                      u8 alarmAcked, u8 dwellSec (v1.1 CP
+                                      amendment: was reserved — current
+                                      dwell so the page's dwell control can
+                                      confirm; 0 = unreported),
+                                      u32 ackedEpisodeId (LE),
+                                      u32 lastCmdId (LE) — highest cmdId
+                                      CONSUMED (applied or rejected), never
+                                      advanced on mere receipt. Emitted on
+                                      any state change + 30 s heartbeat.    */
 } PanelFrameType;
+
+typedef enum {                     /* PANEL_FT_CONTROL kinds; all idempotent */
+  PANEL_CTL_SETTHEME   = 1,        /* arg 0-3                               */
+  PANEL_CTL_SETSCREEN  = 2,        /* arg 0-2 within current theme          */
+  PANEL_CTL_BRIGHTNESS = 3,        /* arg 0-100, latches manual (as LUX±)   */
+  PANEL_CTL_AUTOBRIGHT = 4,        /* arg ignored; re-enable light sensor   */
+  PANEL_CTL_ACKALARM   = 5,        /* arg ignored; same path as button ack  */
+  PANEL_CTL_SETDWELL   = 6,        /* arg seconds; 3/6/30 valid, else reject*/
+  PANEL_CTL_SLEEP      = 7         /* arg 0 wake / 1 sleep                  */
+} PanelControlKind;
+
+#define PANEL_CONTROL_SIZE 8u      /* CONTROL payload bytes                 */
+#define PANEL_STATE_SIZE   16u     /* STATE payload bytes                   */
+
+/* CONTROL/STATE codecs — implemented in protocol.c, shared by BOTH sides
+ * (declared here so neither side ever declares them locally).             */
+size_t panelEncodeControl(uint32_t cmdId, uint8_t kind, uint8_t arg,
+                          uint8_t *payload, size_t cap);
+int panelDecodeControl(const uint8_t *payload, size_t len, uint32_t *cmdId,
+                       uint8_t *kind, uint8_t *arg);
+size_t panelEncodeState(uint8_t theme, uint8_t screen, uint8_t brightnessPct,
+                        uint8_t autoBright, uint8_t sleeping,
+                        uint8_t alarmArmed, uint8_t alarmAcked,
+                        uint8_t dwellSec, uint32_t ackedEpisodeId,
+                        uint32_t lastCmdId, uint8_t *payload, size_t cap);
+int panelDecodeState(const uint8_t *payload, size_t len, uint8_t *theme,
+                     uint8_t *screen, uint8_t *brightnessPct,
+                     uint8_t *autoBright, uint8_t *sleeping,
+                     uint8_t *alarmArmed, uint8_t *alarmAcked,
+                     uint8_t *dwellSec, uint32_t *ackedEpisodeId,
+                     uint32_t *lastCmdId);
 
 typedef enum {
   PANEL_EV_BUTTON      = 0x01,     /* arg = button index 0..8               */

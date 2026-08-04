@@ -47,6 +47,68 @@ int panelSeqNewer(uint16_t candidate, uint16_t lastApplied) {
   return difference != 0u && difference < 0x8000u;
 }
 
+/* Purpose: encode a CONTROL payload at its fixed protocol offsets. Input: command fields/output buffer. Output: payload size, or zero for invalid capacity. */
+size_t panelEncodeControl(uint32_t cmdId, uint8_t kind, uint8_t arg,
+                          uint8_t *payload, size_t cap) {
+  if (payload == NULL || cap < PANEL_CONTROL_SIZE) return 0u;
+  memset(payload, 0, PANEL_CONTROL_SIZE);
+  writeLe32(payload, cmdId);
+  payload[4] = kind;
+  payload[5] = arg;
+  return PANEL_CONTROL_SIZE;
+}
+
+/* Purpose: decode a CONTROL payload at its fixed protocol offsets. Input: complete payload/output fields. Output: zero success, -1 for malformed input. */
+int panelDecodeControl(const uint8_t *payload, size_t len, uint32_t *cmdId,
+                       uint8_t *kind, uint8_t *arg) {
+  if (payload == NULL || cmdId == NULL || kind == NULL || arg == NULL || len < PANEL_CONTROL_SIZE) return -1;
+  *cmdId = readLe32(payload);
+  *kind = payload[4];
+  *arg = payload[5];
+  return 0;
+}
+
+/* Purpose: encode a STATE payload at its fixed protocol offsets. Input: state fields/output buffer. Output: payload size, or zero for invalid capacity. */
+size_t panelEncodeState(uint8_t theme, uint8_t screen, uint8_t brightnessPct,
+                        uint8_t autoBright, uint8_t sleeping, uint8_t alarmArmed,
+                        uint8_t alarmAcked, uint8_t dwellSec, uint32_t ackedEpisodeId,
+                        uint32_t lastCmdId, uint8_t *payload, size_t cap) {
+  if (payload == NULL || cap < PANEL_STATE_SIZE) return 0u;
+  memset(payload, 0, PANEL_STATE_SIZE);
+  payload[0] = theme;
+  payload[1] = screen;
+  payload[2] = brightnessPct;
+  payload[3] = autoBright;
+  payload[4] = sleeping;
+  payload[5] = alarmArmed;
+  payload[6] = alarmAcked;
+  payload[7] = dwellSec;
+  writeLe32(payload + 8, ackedEpisodeId);
+  writeLe32(payload + 12, lastCmdId);
+  return PANEL_STATE_SIZE;
+}
+
+/* Purpose: decode a STATE payload at its fixed protocol offsets. Input: complete payload/output fields. Output: zero success, -1 for malformed input. */
+int panelDecodeState(const uint8_t *payload, size_t len, uint8_t *theme,
+                     uint8_t *screen, uint8_t *brightnessPct,
+                     uint8_t *autoBright, uint8_t *sleeping,
+                     uint8_t *alarmArmed, uint8_t *alarmAcked,
+                     uint8_t *dwellSec, uint32_t *ackedEpisodeId,
+                     uint32_t *lastCmdId) {
+  if (payload == NULL || theme == NULL || screen == NULL || brightnessPct == NULL || autoBright == NULL || sleeping == NULL || alarmArmed == NULL || alarmAcked == NULL || dwellSec == NULL || ackedEpisodeId == NULL || lastCmdId == NULL || len < PANEL_STATE_SIZE) return -1;
+  *theme = payload[0];
+  *screen = payload[1];
+  *brightnessPct = payload[2];
+  *autoBright = payload[3];
+  *sleeping = payload[4];
+  *alarmArmed = payload[5];
+  *alarmAcked = payload[6];
+  *dwellSec = payload[7];
+  *ackedEpisodeId = readLe32(payload + 8);
+  *lastCmdId = readLe32(payload + 12);
+  return 0;
+}
+
 /* Purpose: encode one complete protocol frame. Input: type/payload/output buffer. Output: frame length, or zero on invalid capacity/input. */
 size_t panelEncodeFrame(uint8_t type, const uint8_t *payload, size_t payloadLen, uint8_t *out, size_t outCap) {
   size_t total = PANEL_HDR_SIZE + payloadLen + PANEL_CRC_SIZE; uint16_t crc;
@@ -86,7 +148,7 @@ int panelDecodeSnapshot(const uint8_t *p, size_t len, PanelSnapshot *s) {
 /* Purpose: keep a possible overlapping magic suffix after parser rejection. Input: parser/start offset. Output: parser buffer repositioned. */
 static void parserResync(PanelParser *p, size_t start) { size_t i, remain = 0u; for (i=start;i+1u<p->have;++i) if(p->buf[i]==PANEL_MAGIC0 && p->buf[i+1u]==PANEL_MAGIC1){ remain=p->have-i; memmove(p->buf,p->buf+i,remain); break; } if(remain==0u && p->have>start && p->buf[p->have-1u]==PANEL_MAGIC0){p->buf[0]=PANEL_MAGIC0;remain=1u;} p->have=remain; p->resyncs++; }
 /* Purpose: identify defined frame types. Input: type byte. Output: nonzero when dispatchable. */
-static int knownType(uint8_t type) { return type >= PANEL_FT_SNAPSHOT && type <= PANEL_FT_HELLOREQ ? 1 : (type >= PANEL_FT_HELLO && type <= PANEL_FT_LOG ? 1 : 0); }
+static int knownType(uint8_t type) { return type >= PANEL_FT_SNAPSHOT && type <= PANEL_FT_CONTROL ? 1 : (type >= PANEL_FT_HELLO && type <= PANEL_FT_STATE ? 1 : 0); }
 /* Purpose: initialize frame parser state. Input: parser. Output: zeroed parser. */
 void panelParserInit(PanelParser *p) { if (p != NULL) memset(p, 0, sizeof(*p)); }
 /* Purpose: consume serial bytes and dispatch valid frames. Input: bytes/time/callback. Output: callback invocations; malformed frames are discarded. */

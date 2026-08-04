@@ -172,6 +172,7 @@
     { id: "fleet", label: "Fleet Overview", icon: "overview" },
     { id: "reachability", label: "Reachability", icon: "reachability" },
     { id: "topology", label: "Topology Map", icon: "topology" },
+    { id: "panel", label: "Panel", icon: "grid" },
     { id: "alerts", label: "Alerts", icon: "alerts", badge: "alerts" },
     { id: "opie", label: "Analysis", icon: "pulse", badge: "opie" },
     { group: "Manage" },

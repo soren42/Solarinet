@@ -76,6 +76,8 @@ version:          1.0+<pinned epoch>
 | File | Purpose |
 |---|---|
 | `main.c` | boot, frame RX, screen rotation, buttons, alarm state machine, 25 Hz tick |
+| `panelLink.h/.c` | link liveness + snapshot ordering (host-tested) |
+| `panelCtl.h/.c` | CONTROL dedupe/validation + STATE cadence (host-tested) |
 | `panelHw.h/.cpp` | the **only** C++ TU — thin `extern "C"` wrapper over the Pimoroni driver (matrix, buttons, light sensor, I2S synth) |
 | `panelFb.h/.c` | float RGB framebuffer and the `set/add/dim/dimAll` primitives |
 | `panelFont.h/.c` | 3x5 small and 4x7 BIG bitmap glyph tables + text/scroll drawing |
@@ -105,6 +107,24 @@ collected in `../RETURN-C3.md`.
   below a pegged sensor. `PANEL_LUX_FULL` is the knob if it looks held back.
   Response is asymmetric: brightens in ~0.5 s, dims over ~4 s. ZZZ blanks the panel;
   any button wakes it, as does the rising edge of an alarm.
+- **Software control** (CONTRACT-CP.md §3/§6, firmware 1.1). Host `CONTROL`
+  frames (0x04) set theme, screen, brightness, auto-brightness, dwell and
+  sleep, and acknowledge the alarm. Every one applies through the same function
+  a physical button calls, so the two can never drift; the differences are that
+  CONTROL carries explicit arguments (`sleep(0/1)` rather than ZZZ's toggle) and
+  that only kind 5 acknowledges — a control command is never swallowed as an ack
+  the way any button press is.
+- **Dedupe and confirmation.** `lastCmdId` is the highest cmdId *consumed*;
+  anything at or below it is ignored silently, so the daemon re-serving the
+  whole pending queue every poll costs nothing. A command the firmware rejects
+  (unknown kind, out-of-range arg) still consumes, because the server's only
+  completion signal is `lastCmdId` coming back in a `STATE` frame — a rejection
+  has to be terminal or it re-serves for 120 s and surfaces as an expiry.
+  `lastCmdId` resets to 0 on reboot by design (CONTRACT-CP §10 replay window).
+- **`STATE` (0x84)** goes out on any change to a reported field *or* to
+  `lastCmdId`, and every 30 s as a heartbeat. Change-triggered reports have a
+  1 s floor so per-tick auto-brightness drift cannot flood the link; the
+  heartbeat is exempt and a withheld change is never dropped.
 - **Text legibility** — the unlit LED packages are pale cream and reflect ambient
   room light at roughly the luminance of a mid-duty lit pixel, so there is a
   reflection floor under which dim ink of any colour is invisible. Two rules

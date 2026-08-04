@@ -102,8 +102,107 @@ function panelTier(?string $role, ?string $class): int
     return 3;
 }
 
+/**
+ * Identify the local, read-only account reserved for the panel daemon.
+ *
+ * Input: current authenticated session principal.
+ * Output: true only for local username panel with viewer role.
+ */
+function panelIsServicePrincipal(array $principal): bool
+{
+    return ($principal['source'] ?? null) === 'local'
+        && ($principal['username'] ?? null) === 'panel'
+        && ($principal['role'] ?? null) === 'viewer';
+}
+
+/**
+ * Record rejected panel write attempts without including request content.
+ *
+ * Input: route name and current session principal, if present.
+ * Output: one PHP error-log record carrying principal and remote address.
+ */
+function panelLogRejectedWrite(string $route, ?array $principal): void
+{
+    $username = is_array($principal) ? (string) ($principal['username'] ?? 'unknown') : 'anonymous';
+    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+    error_log("[panel] rejected write route=$route principal=$username ip=$ip");
+}
+
+/**
+ * Validate one CONTROL command using the protocol's wire argument ranges.
+ *
+ * Input: decoded JSON body containing integer kind and arg fields.
+ * Output: [kind, arg] or a 400 JSON response for malformed/unsupported input.
+ *
+ * @return array{0:int,1:int}
+ */
+function panelCommandInput(array $body): array
+{
+    $kind = $body['kind'] ?? null;
+    $arg = $body['arg'] ?? null;
+    if (!is_int($kind) || !is_int($arg)) {
+        Response::error('bad_request', 'kind and arg must be integers.', 400);
+    }
+    if ($kind < 1 || $kind > 7 || $arg < 0 || $arg > 255) {
+        Response::error('bad_request', 'Unsupported command kind or argument.', 400);
+    }
+    $valid = match ($kind) {
+        1 => $arg <= 3,
+        2 => $arg <= 2,
+        3 => $arg <= 100,
+        4, 5 => true, // Protocol reserves but deliberately ignores this byte.
+        6 => in_array($arg, [3, 6, 30], true),
+        7 => $arg <= 1,
+    };
+    if (!$valid) {
+        Response::error('bad_request', 'Argument is invalid for this command kind.', 400);
+    }
+    return [$kind, $arg];
+}
+
+/**
+ * Validate a decoded STATE frame before its latest-state upsert.
+ *
+ * Input: decoded JSON body carrying all protocol STATE values.
+ * Output: normalised associative state array or a 400 JSON response.
+ *
+ * @return array<string,int>
+ */
+function panelStateInput(array $body): array
+{
+    $ranges = [
+        'theme' => [0, 3], 'screen' => [0, 2], 'brightnessPct' => [0, 100],
+        'autoBright' => [0, 1], 'sleeping' => [0, 1], 'alarmArmed' => [0, 1],
+        'alarmAcked' => [0, 1], 'dwellSec' => [0, 255],
+        'ackedEpisodeId' => [0, 4294967295], 'lastCmdId' => [0, 4294967295],
+    ];
+    $state = [];
+    foreach ($ranges as $field => [$minimum, $maximum]) {
+        $value = $body[$field] ?? null;
+        if (!is_int($value) || $value < $minimum || $value > $maximum) {
+            Response::error('bad_request', "$field is outside its protocol range.", 400);
+        }
+        $state[$field] = $value;
+    }
+    return $state;
+}
+
 return static function (Router $router): void {
     $router->get('/api/panel', static function (): void {
+        $principal = Auth::current() ?? [];
+        $isServicePrincipal = panelIsServicePrincipal($principal);
+        $isOperator = in_array($principal['role'] ?? null, ['operator', 'admin'], true);
+
+        // Expiry is durable queue maintenance, not a dashboard-user side effect.
+        // It runs before the read-only snapshot so the returned status is current.
+        if ($isServicePrincipal) {
+            Db::exec(
+                "UPDATE panelCommand
+                    SET status = 'expired', expiredAt = NOW(6)
+                  WHERE status = 'pending'
+                    AND createdAt < DATE_SUB(NOW(6), INTERVAL 120 SECOND)"
+            );
+        }
         /*
          * A transaction makes this a consistent read even while reporters are
          * upserting.  The route uses aggregates/grouping only: no per-system
@@ -191,6 +290,19 @@ return static function (Router $router): void {
             );
             // Contract timestamp is sampled at payload composition, not request entry.
             $nowRow = Db::row('SELECT UNIX_TIMESTAMP(NOW()) AS ts, UNIX_TIMESTAMP(MAX(sampledAt)) AS newestSampleTs FROM hostCurrent');
+            $panelStateRow = Db::row(
+                'SELECT theme, screen, brightnessPct, autoBright, sleeping,
+                        alarmArmed, alarmAcked, dwellSec, ackedEpisodeId, lastCmdId, reportedAt
+                   FROM panelState WHERE stateId = 1'
+            );
+            $recentCommandRows = $isOperator ? Db::rows(
+                'SELECT cmdId, kind, arg, status, createdAt, appliedAt, expiredAt
+                   FROM panelCommand ORDER BY cmdId DESC LIMIT 16'
+            ) : [];
+            $commandRows = $isServicePrincipal ? Db::rows(
+                "SELECT cmdId, kind, arg FROM panelCommand
+                  WHERE status = 'pending' ORDER BY cmdId ASC"
+            ) : [];
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -369,7 +481,7 @@ return static function (Router $router): void {
         foreach ($systemsAll as $system) {
             $loadSum += $system['loadPct'];
         }
-        Response::ok([
+        $payload = [
             'ts' => (int) ($nowRow['ts'] ?? time()), 'score' => $score,
             'stateRoll' => $stateRoll, 'alerts' => $alerts,
             'meanLoadPct' => $systemsAll === [] ? 0 : (int) round($loadSum / count($systemsAll)),
@@ -379,6 +491,156 @@ return static function (Router $router): void {
             'pools' => $pools, 'systems' => $systems, 'topAlert' => $topAlert,
             'alarmActive' => $alarmActive, 'episodeId' => $episodeId,
             'dataStale' => ($nowRow['newestSampleTs'] ?? null) !== null && ((int) $nowRow['ts'] - (int) $nowRow['newestSampleTs']) > 30,
-        ]);
+            'panelState' => $panelStateRow === null ? null : [
+                'theme' => (int) $panelStateRow['theme'],
+                'screen' => (int) $panelStateRow['screen'],
+                'brightnessPct' => (int) $panelStateRow['brightnessPct'],
+                'autoBright' => (int) $panelStateRow['autoBright'],
+                'sleeping' => (int) $panelStateRow['sleeping'],
+                'alarmArmed' => (int) $panelStateRow['alarmArmed'],
+                'alarmAcked' => (int) $panelStateRow['alarmAcked'],
+                'dwellSec' => (int) $panelStateRow['dwellSec'],
+                'ackedEpisodeId' => (int) $panelStateRow['ackedEpisodeId'],
+                'lastCmdId' => (int) $panelStateRow['lastCmdId'],
+                'reportedAt' => $panelStateRow['reportedAt'],
+            ],
+        ];
+        if ($isOperator) {
+            $payload['recentCommands'] = array_map(static function (array $row): array {
+                /* R4: the expiry sweep only runs on service-principal polls, so
+                 * with the daemon down nothing writes 'expired'. Present overdue
+                 * pendings as expired read-side — status stays the authority in
+                 * the DB, the observer just isn't lied to about liveness. */
+                $status = (string) $row['status'];
+                if ($status === 'pending'
+                    && strtotime((string) $row['createdAt']) < time() - 120) {
+                    $status = 'expired';
+                }
+                return [
+                    'id' => (int) $row['cmdId'], 'kind' => (int) $row['kind'], 'arg' => (int) $row['arg'],
+                    'status' => $status, 'createdAt' => $row['createdAt'],
+                    'appliedAt' => $row['appliedAt'], 'expiredAt' => $row['expiredAt'],
+                    'failureReason' => $status === 'expired' ? 'expired' : null,
+                ];
+            }, $recentCommandRows);
+        }
+        if ($isServicePrincipal) {
+            $payload['commands'] = array_map(static fn (array $row): array => [
+                'id' => (int) $row['cmdId'], 'kind' => (int) $row['kind'], 'arg' => (int) $row['arg'],
+            ], $commandRows);
+        }
+        Response::ok($payload);
+    });
+
+    /**
+     * Queue a validated CONTROL command for the physical panel.
+     *
+     * Input: authenticated admin/operator JSON {kind:int,arg:int}.
+     * Output: {cmdId} on success; 400 validation, 403 authorization, or 409 cap.
+     */
+    $router->post('/api/panel/command', static function (): void {
+        $principal = Auth::current();
+        if (panelIsServicePrincipal($principal ?? [])) {
+            panelLogRejectedWrite('command', $principal);
+            Response::error('forbidden', 'The panel service principal is read-only for commands.', 403);
+        }
+        if (!is_array($principal) || !in_array($principal['role'] ?? null, ['operator', 'admin'], true)) {
+            panelLogRejectedWrite('command', $principal);
+            Response::error('forbidden', 'This action requires an operator role.', 403);
+        }
+        [$kind, $arg] = panelCommandInput(solari_json_body());
+
+        // A command submission must not report a stale full queue merely
+        // because no principal has polled since the oldest command expired.
+        Db::exec(
+            "UPDATE panelCommand
+                SET status = 'expired', expiredAt = NOW(6)
+              WHERE status = 'pending'
+                AND createdAt < DATE_SUB(NOW(6), INTERVAL 120 SECOND)"
+        );
+
+        // Keep the pending cap race-free: the indexed pending range is locked
+        // until this request inserts or rejects its command.
+        $pdo = Db::pdo();
+        $pdo->beginTransaction();
+        try {
+            $pending = (int) Db::scalar(
+                "SELECT COUNT(*) FROM panelCommand WHERE status = 'pending' FOR UPDATE"
+            );
+            if ($pending >= 16) {
+                $pdo->rollBack();
+                Response::error('queue_full', 'The panel command queue already has 16 pending commands.', 409);
+            }
+            Db::exec(
+                'INSERT INTO panelCommand (kind, arg, createdBy) VALUES (:kind, :arg, :createdBy)',
+                [':kind' => $kind, ':arg' => $arg, ':createdBy' => (string) $principal['username']]
+            );
+            $cmdId = (int) $pdo->lastInsertId();
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+        Response::ok(['cmdId' => $cmdId]);
+    });
+
+    /**
+     * Persist the newest physical-panel STATE report and confirm consumed commands.
+     *
+     * Input: local panel service JSON STATE frame fields.
+     * Output: stored panelState summary; commands through lastCmdId become applied.
+     */
+    $router->post('/api/panel/state', static function (): void {
+        $principal = Auth::current();
+        if (!panelIsServicePrincipal($principal ?? [])) {
+            panelLogRejectedWrite('state', $principal);
+            Response::error('forbidden', 'Only the local panel service principal may report state.', 403);
+        }
+        $state = panelStateInput(solari_json_body());
+        $pdo = Db::pdo();
+        $pdo->beginTransaction();
+        try {
+            Db::exec(
+                'INSERT INTO panelState
+                    (stateId, theme, screen, brightnessPct, autoBright, sleeping,
+                     alarmArmed, alarmAcked, dwellSec, ackedEpisodeId, lastCmdId, reportedAt)
+                 VALUES
+                    (1, :theme, :screen, :brightnessPct, :autoBright, :sleeping,
+                     :alarmArmed, :alarmAcked, :dwellSec, :ackedEpisodeId, :lastCmdId, NOW(6))
+                 ON DUPLICATE KEY UPDATE
+                    theme = VALUES(theme), screen = VALUES(screen),
+                    brightnessPct = VALUES(brightnessPct), autoBright = VALUES(autoBright),
+                    sleeping = VALUES(sleeping), alarmArmed = VALUES(alarmArmed),
+                    alarmAcked = VALUES(alarmAcked), dwellSec = VALUES(dwellSec), ackedEpisodeId = VALUES(ackedEpisodeId),
+                    lastCmdId = VALUES(lastCmdId), reportedAt = VALUES(reportedAt)',
+                array_combine(array_map(static fn (string $key): string => ':' . $key, array_keys($state)), $state)
+            );
+            Db::exec(
+                "UPDATE panelCommand
+                    SET status = 'applied', appliedAt = NOW(6)
+                  /* Late confirmation wins only BRIEFLY (§10/R1): a firmware
+                   * reboot resets lastCmdId, so an unbounded sweep would
+                   * resurrect all expired history as falsely applied. */
+                  WHERE (status = 'pending'
+                         OR (status = 'expired'
+                             AND expiredAt > DATE_SUB(NOW(6), INTERVAL 15 SECOND)))
+                    AND cmdId <= :lastCmdId",
+                [':lastCmdId' => $state['lastCmdId']]
+            );
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+        $stored = Db::row(
+            'SELECT theme, screen, brightnessPct, autoBright, sleeping,
+                    alarmArmed, alarmAcked, dwellSec, ackedEpisodeId, lastCmdId, reportedAt
+               FROM panelState WHERE stateId = 1'
+        );
+        Response::ok(['panelState' => $stored]);
     });
 };

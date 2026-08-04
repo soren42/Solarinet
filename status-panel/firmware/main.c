@@ -7,6 +7,15 @@
  *   3. sample buttons and run the interaction state machine
  *   4. run the alarm state machine (arm / re-alarm / acknowledge)
  *   5. paint the active screen, then the inlay if the alarm is live
+ *   6. report STATE to the host when it changed, or on the 30 s heartbeat
+ *
+ * Host CONTROL frames (CONTRACT-CP.md §3/§6) arrive in step 1 and are applied
+ * through the SAME functions the physical buttons call — pressTheme(),
+ * ackAlarm(), panelHwSetBrightness(). There is deliberately no second copy of
+ * any of that behaviour; a software theme press and a physical one are the same
+ * press. What differs is only that CONTROL carries an explicit argument where a
+ * button carries an implicit one: sleep(0/1) instead of ZZZ's toggle, and ack
+ * only via ackAlarm() rather than "any button while the alarm is armed".
  *
  * Rendering is autonomous (CONTRACT §5): the panel animates at its own 25 Hz
  * tick from the LAST applied snapshot. Data staleness only changes what is
@@ -21,6 +30,7 @@
 #include "pico/binary_info.h"
 
 #include "protocol.h"
+#include "panelCtl.h"
 #include "panelHw.h"
 #include "panelLink.h"
 #include "panelFb.h"
@@ -43,7 +53,7 @@ bi_decl(bi_program_description("SolariNet fleet status panel (Galactic Unicorn)"
 
 /* ---- timing constants --------------------------------------------------- */
 #define TICK_MS          40u     /* DESIGN-BRIEF: 40 ms logic tick, ~25 Hz   */
-#define DWELL_SEC        6.0f    /* DESIGN-BRIEF: dwell default 6 s          */
+#define DWELL_DEFAULT_SEC 6.0f   /* DESIGN-BRIEF: dwell default 6 s          */
 /* Link liveness and snapshot-ordering thresholds now live in panelLink.h,
  * alongside the state machine they govern and its host unit test.          */
 /* OPERATOR AMENDMENT 2026-08-04, superseding the DESIGN-BRIEF's 12 s re-alarm:
@@ -67,6 +77,10 @@ static int   gTheme = 3;       /* CONTRACT §5: boot = Theme D ...            */
 static int   gScreen = 1;      /* ... screen 2 of 3, the "resting face"      */
 static float gT = 0.0f;        /* seconds since boot, the animation clock    */
 static float gScreenT = 0.0f;  /* dwell accumulator                          */
+/* Dwell is runtime-settable via CONTROL setDwell (3/6/30 s only, validated in
+ * panelCtl.c). It is NOT a STATE field — the contract's STATE payload has no
+ * room for it — so a setDwell is confirmed to the server by lastCmdId alone.  */
+static float gDwellSec = DWELL_DEFAULT_SEC;
 
 static bool  gSleeping = false;
 static bool  gAutoBright = true;   /* SHOULD; LUX+/- latches manual control  */
@@ -75,6 +89,10 @@ static float gAutoBrightSmoothed = 0.85f;
 /* Link liveness + snapshot ordering. See panelLink.c; do not reimplement the
  * time arithmetic here, that is what flapped the link on 2026-08-04.       */
 static PanelLink gLink;
+
+/* CONTROL dedupe + STATE cadence. See panelCtl.c; the ascending-cmdId rule and
+ * the change/heartbeat decision live there so the host suite can drive them.  */
+static PanelCtl gCtl;
 
 /* Alarm state — CONTRACT §9. ack is firmware-local and scoped to episodeId;
  * a NEW episodeId re-arms the tone even if the previous one was acked. */
@@ -137,6 +155,14 @@ static void sendEvent(uint8_t kind, uint8_t arg) {
   sendFrame(PANEL_FT_EVENT, p, sizeof(p));
 }
 
+/* Defined below, next to the button handler it shares its code paths with.
+ * Forward-declared because CONTROL frames are applied where they arrive, inside
+ * onFrame: a single pump can deliver several commands (the daemon re-serves the
+ * whole pending queue every poll) and they must apply in the order they were
+ * queued, which stashing one pending action for the tick to pick up would not
+ * preserve.                                                                   */
+static void applyControl(PanelCtlAction act, uint8_t arg);
+
 /* onFrame — parser callback, fires once per CRC-valid frame.
  * Applies the protocol.h receiver rules: a snapshot whose seq equals the last
  * applied seq is a duplicate and ignored, and so is an older one — both via
@@ -172,7 +198,22 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
     }
     case PANEL_FT_HELLOREQ:
       sendHello();
+      /* The daemon asks for HELLO on every link-up, and CONTRACT-CP §10 makes
+       * a STATE frame the proof that this firmware speaks CONTROL at all —
+       * until it arrives, the daemon withholds the queue. Answer both now
+       * rather than making a restarted daemon wait for the heartbeat. */
+      panelCtlForceReport(&gCtl);
       break;
+    case PANEL_FT_CONTROL: {
+      /* CONTRACT-CP §3/§10. Dedupe and validation are panelCtl's; application
+       * is the button code paths'. Nothing is acknowledged on the wire here —
+       * the panel's next STATE report, carrying the advanced lastCmdId, is the
+       * only completion signal the server accepts. */
+      uint32_t cmdId; uint8_t kind, cmdArg, arg = 0;
+      if (panelDecodeControl(payload, len, &cmdId, &kind, &cmdArg) != 0) return;
+      applyControl(panelCtlConsume(&gCtl, cmdId, kind, cmdArg, &arg), arg);
+      break;
+    }
     case PANEL_FT_PING:
     default:
       break;   /* unknown types are skipped, never desync (protocol.h) */
@@ -208,6 +249,23 @@ static void pressTheme(int theme) {
   else { gTheme = theme; gScreen = 0; sendEvent(PANEL_EV_THEMECHANGE, (uint8_t)theme); }
 }
 
+/* ackAlarm — acknowledge the CURRENT episode. The single acknowledge path:
+ * both "any button while the alarm is armed" (CONTRACT §5, DESIGN-BRIEF
+ * Ambiguity #4) and CONTROL ackAlarm (CONTRACT-CP §3 kind 5) come through here,
+ * so the two can never drift. Ack is firmware-local and scoped to episodeId; a
+ * new episodeId re-arms the tone even after this ran.
+ * Input:  none. Output: none; emits EV_ACK when it actually silenced an alarm. */
+static void ackAlarm(void) {
+  if (!gAlarmArmed) return;
+  gAckedEpisode = gEnv.snap.topAlert.episodeId;
+  gHaveAcked = true;
+  gAlarmArmed = false;
+  gAlarmSilenced = false;
+  panelHwToneOff();
+  gToneNote = 3;
+  sendEvent(PANEL_EV_ACK, 0);
+}
+
 /* handlePress — one debounced button-down edge.
  * CONTRACT §5 (Lead's recorded resolution of DESIGN-BRIEF Ambiguity #4): ANY
  * button press during an active alarm is consumed as acknowledge — it does not
@@ -215,16 +273,7 @@ static void pressTheme(int theme) {
 static void handlePress(PanelButton b) {
   sendEvent(PANEL_EV_BUTTON, (uint8_t)b);
 
-  if (gAlarmArmed) {
-    gAckedEpisode = gEnv.snap.topAlert.episodeId;
-    gHaveAcked = true;
-    gAlarmArmed = false;
-    gAlarmSilenced = false;
-    panelHwToneOff();
-    gToneNote = 3;
-    sendEvent(PANEL_EV_ACK, 0);
-    return;
-  }
+  if (gAlarmArmed) { ackAlarm(); return; }
   if (gSleeping) { gSleeping = false; return; }   /* any button wakes */
 
   switch (b) {
@@ -252,6 +301,99 @@ static void handlePress(PanelButton b) {
     default:
       break;
   }
+}
+
+/* applyControl — perform one validated CONTROL action.
+ * Input:  the action panelCtlConsume returned and its validated argument.
+ * Output: none. PANEL_CTLACT_NONE is the normal no-op path (duplicate, unknown
+ *         kind, or out-of-range arg) and deliberately does nothing at all.
+ *
+ * Every arm here routes into an existing physical-input path. Two deliberate
+ * differences from handlePress, both because CONTROL carries explicit intent
+ * where a button carries implicit intent:
+ *   - No "any command acknowledges the alarm". The control page has its own ACK
+ *     button (kind 5); silently swallowing a theme change as an ack would make
+ *     the page's other controls dead whenever an alarm is up.
+ *   - No "any command wakes the panel". Sleep is kind 7 with an explicit 0/1,
+ *     so a theme change can be staged on a sleeping panel without lighting it.
+ * Both are recorded in RETURN-CP3.md.                                         */
+static void applyControl(PanelCtlAction act, uint8_t arg) {
+  switch (act) {
+    case PANEL_CTLACT_THEME:
+      pressTheme((int)arg);   /* identical semantics to the A-D buttons */
+      break;
+    case PANEL_CTLACT_SCREEN:
+      gScreen = (int)arg;
+      gScreenT = 0.0f;        /* as a manual advance does: restart the dwell */
+      break;
+    case PANEL_CTLACT_BRIGHTNESS:
+      gAutoBright = false;    /* latches manual, exactly as LUX+/- do */
+      panelHwSetBrightness((float)arg / 100.0f);
+      break;
+    case PANEL_CTLACT_AUTOBRIGHT:
+      gAutoBright = true;
+      break;
+    case PANEL_CTLACT_ACKALARM:
+      ackAlarm();
+      break;
+    case PANEL_CTLACT_DWELL:
+      gDwellSec = (float)arg;
+      gScreenT = 0.0f;        /* never strand the panel past a shortened dwell */
+      break;
+    case PANEL_CTLACT_SLEEP:
+      gSleeping = (arg != 0u);
+      break;
+    case PANEL_CTLACT_NONE:
+    default:
+      break;
+  }
+}
+
+/* brightnessPct — the STATE field, from the hardware's own 0..1 scalar.
+ * Input:  none. Output: 0..100, rounded.                                      */
+static uint8_t brightnessPct(void) {
+  float v = panelHwGetBrightness() * 100.0f + 0.5f;
+  if (v < 0.0f) v = 0.0f;
+  if (v > 100.0f) v = 100.0f;
+  return (uint8_t)v;
+}
+
+/* reportState — emit PANEL_FT_STATE when panelCtl says one is due.
+ * Input:  current ms. Output: none.
+ *
+ * alarmAcked reports whether the CURRENTLY SHOWN episode is acknowledged, not
+ * merely whether an ack ever happened: gHaveAcked survives the episode it
+ * belongs to, and a new episodeId re-arms (runAlarm), so the page must see the
+ * ack fall away when the alarm changes. ackedEpisodeId carries the identity so
+ * the server can match it against the episode it raised — CONTRACT-CP §10
+ * acceptance 4 checks exactly that.                                           */
+static void reportState(uint32_t ms) {
+  PanelCtlState st;
+  uint8_t payload[PANEL_STATE_SIZE];
+  size_t n;
+
+  st.theme          = (uint8_t)gTheme;
+  st.screen         = (uint8_t)gScreen;
+  st.brightnessPct  = brightnessPct();
+  st.autoBright     = gAutoBright ? 1u : 0u;
+  st.sleeping       = gSleeping ? 1u : 0u;
+  st.alarmArmed     = gAlarmArmed ? 1u : 0u;
+  st.alarmAcked     = (gHaveAcked &&
+                       gAckedEpisode == gEnv.snap.topAlert.episodeId) ? 1u : 0u;
+  st.dwellSec       = (uint8_t)gDwellSec;
+  st.ackedEpisodeId = gHaveAcked ? gAckedEpisode : 0u;
+
+  if (!panelCtlPoll(&gCtl, &st, ms)) return;
+
+  /* dwellSec occupies STATE byte 7 (v1.1 CP amendment; was reserved) so the
+   * page's dwell control can confirm. It is a plain codec argument — this side
+   * never touches wire offsets. gDwellSec is only ever 3/6/30, so the float
+   * truncation above is exact and 0 ("unreported") is unreachable here. */
+  n = panelEncodeState(st.theme, st.screen, st.brightnessPct, st.autoBright,
+                       st.sleeping, st.alarmArmed, st.alarmAcked, st.dwellSec,
+                       st.ackedEpisodeId, panelCtlLastCmdId(&gCtl),
+                       payload, sizeof(payload));
+  if (n) sendFrame(PANEL_FT_STATE, payload, n);
 }
 
 /* scanButtons — 2-tick (80 ms) debounce, rising edges only. */
@@ -355,6 +497,7 @@ int main(void) {
   panelEnvInit(&gEnv);
   panelParserInit(&gParser);
   panelLinkInit(&gLink, nowMs());
+  panelCtlInit(&gCtl, nowMs());
 
   sendHello();
 
@@ -389,7 +532,12 @@ int main(void) {
     runAutoBrightness();
 
     if (!gLink.lost) gScreenT += dt;
-    if (gScreenT >= DWELL_SEC) { gScreenT = 0.0f; gScreen = (gScreen + 1) % 3; }
+    if (gScreenT >= gDwellSec) { gScreenT = 0.0f; gScreen = (gScreen + 1) % 3; }
+
+    /* After every state-moving step of the tick and before the paint, so a
+     * command applied this tick is reported this tick — and so the sleeping
+     * short-circuit below cannot skip the heartbeat. */
+    reportState(nowMs());
 
     panelFbClear();
     if (gSleeping) {

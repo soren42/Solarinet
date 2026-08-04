@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Inventory, CodesScreen, MaintenanceScreen, GitScreen, CaScreen, DnsScreen } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Inventory, CodesScreen, MaintenanceScreen, GitScreen, CaScreen, DnsScreen, PanelScreen } = window;
 
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
@@ -208,6 +208,7 @@
         { id: "go-git", group: "Navigate", label: "Git", icon: "git", action: () => go("git"), sub: `${((S.git && S.git.repos) || []).length} repos` },
         { id: "go-ca", group: "Navigate", label: "Certificates", icon: "shield", action: () => go("certificates"), sub: `${((S.ca && S.ca.nodeCerts) || []).length} node certs` },
         { id: "go-dns", group: "Navigate", label: "DNS", icon: "dns", action: () => go("dns"), sub: "query · zones · parity" },
+        { id: "go-panel", group: "Navigate", label: "Panel", icon: "grid", action: () => go("panel"), sub: "12 virtual screens · panel controls" },
         { id: "go-cfg", group: "Navigate", label: "Config & Rules", icon: "settings", action: () => go("settings") },
         { id: "view-heat", group: "Actions", label: "Fleet: Heatmap view", icon: "grid", action: () => { setFleetView("heat"); go("fleet"); } },
         { id: "view-table", group: "Actions", label: "Fleet: Table view", icon: "table", action: () => { setFleetView("table"); go("fleet"); } },
@@ -258,6 +259,7 @@
             {route.name === "git" && GitScreen && <GitScreen />}
             {route.name === "certificates" && CaScreen && <CaScreen />}
             {route.name === "dns" && DnsScreen && <DnsScreen />}
+            {route.name === "panel" && PanelScreen && <PanelScreen />}
             {route.name === "settings" && <ConfigScreen onNav={go} />}
           </div>
         </div>
