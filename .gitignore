@@ -66,3 +66,4 @@ __pycache__/
 # status-panel build artifacts
 status-panel/daemon/solariPanel
 status-panel/daemon/tests/codec_test
+status-panel/firmware/test/panelLinkTest
