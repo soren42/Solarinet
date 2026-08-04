@@ -1,8 +1,10 @@
 #include "../../protocol.h"
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 int panelParseSnapshotForTest(const char *text, PanelSnapshot *snapshot);
+int panelForwardCommandsForTest(int fd, const char *text, int stateSeen);
 
 static int frames;
 static int controlFrames, stateFrames;
@@ -18,6 +20,16 @@ static void receive(uint8_t type, const uint8_t *payload, size_t len, void *user
 static int require(int condition, const char *message) {
   if (!condition) { fprintf(stderr, "%s\n", message); return 1; }
   return 0;
+}
+
+/* Callback for the forwardCommands pipe test: counts CONTROL frames and
+ * decodes the cmdId of the last one into *user. */
+static void receiveControl(uint8_t type, const uint8_t *payload, size_t len, void *user) {
+  uint8_t k, a;
+  if (type == PANEL_FT_CONTROL) {
+    ++controlFrames;
+    (void)panelDecodeControl(payload, len, (uint32_t *)user, &k, &a);
+  }
 }
 
 static size_t snapshotFrame(uint16_t seq, uint8_t *frame) {
@@ -80,6 +92,31 @@ int main(void) {
   memset(&lastGood,0x5a,sizeof(lastGood));
   if(require(panelParseSnapshotForTest(goodJson,&lastGood)==0&&lastGood.rxKbps==340u&&lastGood.txKbps==70000u&&lastGood.rttTenthMs==300u&&lastGood.lossPermille==500u,"valid snapshot parse failed")) return 1;
   if(require(panelParseSnapshotForTest(badJson,&lastGood)==-1&&lastGood.ts==42u&&lastGood.score==140u,"malformed snapshot clobbered last good state")) return 1;
+
+  /* forwardCommands must navigate the real API envelope: commands lives at
+   * data.commands, not the root. This is the exact bug class that shipped —
+   * a root-level lookup silently forwards nothing. Feed a pipe, then parse
+   * what came out and assert a CONTROL frame with the right cmdId emerged. */
+  {
+    int pipeFds[2];
+    uint8_t buf[256]; ssize_t got;
+    const char *envelopeJson="{\"ok\":true,\"data\":{\"ts\":1,\"commands\":[{\"id\":21,\"kind\":1,\"arg\":0}]}}";
+    const char *rootJson="{\"ok\":true,\"commands\":[{\"id\":22,\"kind\":1,\"arg\":0}]}";
+    if(require(pipe(pipeFds)==0,"pipe failed")) return 1;
+    /* gate closed: nothing may be written even for a well-formed envelope */
+    if(require(panelForwardCommandsForTest(pipeFds[1],envelopeJson,0)==0,"forward with gate closed errored")) return 1;
+    /* gate open, real envelope: exactly one CONTROL frame with cmdId 21 */
+    if(require(panelForwardCommandsForTest(pipeFds[1],envelopeJson,1)==0,"forward with envelope errored")) return 1;
+    /* root-level commands (the buggy shape) must forward nothing */
+    if(require(panelForwardCommandsForTest(pipeFds[1],rootJson,1)==0,"forward with root json errored")) return 1;
+    close(pipeFds[1]);
+    controlFrames=0; cmdId=0u; panelParserInit(&parser);
+    while((got=read(pipeFds[0],buf,sizeof(buf)))>0)
+      for(i=0;i<(size_t)got;++i) panelParserFeed(&parser,buf+i,1u,(uint32_t)i,receiveControl,&cmdId);
+    close(pipeFds[0]);
+    if(require(controlFrames==1,"forwardCommands did not emit exactly one CONTROL frame (envelope navigation broken?)")) return 1;
+    if(require(cmdId==21u,"forwarded CONTROL carried wrong cmdId")) return 1;
+  }
   puts("codec tests passed");
   return 0;
 }
