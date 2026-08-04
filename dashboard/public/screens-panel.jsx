@@ -1578,6 +1578,9 @@
     const [now, setNow] = useState(Date.now());
     const pendRef = useRef({});
     pendRef.current = pend;
+    /* The live poll's tick, exposed so a successful command POST can nudge an
+       early reconcile instead of waiting out the 5 s interval. */
+    const tickRef = useRef(null);
 
     // ---- fixture mode: load the committed snapshot, no API traffic --------
     useEffect(function () {
@@ -1673,15 +1676,27 @@
       if (fixtureMode) return undefined;
       let alive = true;
       let timer = 0;
-      let inFlight = false;      // one request at a time: a slow poll never races the next
+      /* One request at a time — but with a staleness cap, not a boolean.
+         api() has no fetch timeout, and mobile Safari suspending a tab
+         mid-fetch can leave a promise that NEVER settles; a plain boolean
+         guard then wedges the poll permanently (observed live: commands
+         applied server-side in seconds while the page showed pending
+         forever). After 15 s an open request is presumed dead and a new one
+         starts; reqSeq makes sure a zombie that settles late is discarded
+         rather than clobbering newer data. */
+      let inFlightAt = 0;        // epoch ms of the open request, 0 = none
+      let reqSeq = 0;
       let lastMs = -Infinity;    // newest server ts APPLIED to the rings
       function tick() {
         const A = api();
         if (!A || !A.get) { setErr("The dashboard API client is unavailable."); return; }
-        if (inFlight) return;    // the previous request is still open; skip this slot
-        inFlight = true;
+        const tStart = Date.now();
+        if (inFlightAt && tStart - inFlightAt < 15000) return;  // open and young
+        inFlightAt = tStart;
+        const my = ++reqSeq;
         A.get("/api/panel").then(function (d) {
-          inFlight = false;
+          if (my !== reqSeq) return;         // superseded: a zombie, drop it
+          inFlightAt = 0;
           if (!alive || !d) return;
           setErr(null);
           /* Monotonic on the SERVER ts, not on arrival order. A response that
@@ -1703,13 +1718,23 @@
              command lifecycle keeps reconciling. */
           reconcile(d.recentCommands);
         }).catch(function (e) {
-          inFlight = false;
+          if (my !== reqSeq) return;
+          inFlightAt = 0;
           if (alive) setErr((e && e.message) || "Could not reach /api/panel.");
         });
       }
+      tickRef.current = tick;
       tick();
       timer = window.setInterval(tick, POLL_MS);
-      return function () { alive = false; window.clearInterval(timer); };
+      /* Coming back to a suspended tab: poll immediately instead of waiting
+         out the interval (and, via the staleness cap, instead of never). */
+      function onVis() { if (!document.hidden) tick(); }
+      document.addEventListener("visibilitychange", onVis);
+      return function () {
+        alive = false; tickRef.current = null;
+        window.clearInterval(timer);
+        document.removeEventListener("visibilitychange", onVis);
+      };
     }, [fixtureMode]);
 
     // ---- a slow clock so staleness ages visibly --------------------------
@@ -1741,6 +1766,9 @@
           n[key] = { kind: kind, arg: arg, status: "pending", at: Date.now(), cmdId: Number(d && d.cmdId) };
           return n;
         });
+        /* The panel typically applies within a second or two; poll early so
+           the confirmation shows promptly instead of on the next 5 s slot. */
+        window.setTimeout(function () { if (tickRef.current) tickRef.current(); }, 1500);
       }).catch(function (e) {
         setPend(function (p) {
           const n = Object.assign({}, p);
