@@ -22,6 +22,8 @@
 #define BODY_MAX 65536u
 typedef struct { char apiBase[512], user[128], passFile[512], serialDev[512]; unsigned int pollSec, snapshotSec; } Config;
 typedef struct { char data[BODY_MAX + 1u]; size_t len; long status; char contentType[128]; } HttpResponse;
+typedef struct { uint8_t theme, screen, brightnessPct, autoBright, sleeping, alarmArmed, alarmAcked, dwellSec; uint32_t ackedEpisodeId, lastCmdId; } PanelStateReport;
+typedef struct { CURL *curl; const Config *config; PanelStateReport lastState; uint32_t lastStatePostMs; int stateSeen, haveState, withholdingLogged; } PanelLink;
 static volatile sig_atomic_t running = 1;
 
 /* Purpose: write timestamped operational log records. Input: printf-style message. Output: one stdout line. */
@@ -50,6 +52,8 @@ static void setCurlCommon(CURL *curl,HttpResponse *response){memset(response,0,s
 static CURLcode request(CURL *curl,const char *url,const char *post,HttpResponse *response){CURLcode result;setCurlCommon(curl,response);curl_easy_setopt(curl,CURLOPT_URL,url);curl_easy_setopt(curl,CURLOPT_POST,post!=NULL?1L:0L);if(post!=NULL){curl_easy_setopt(curl,CURLOPT_POSTFIELDS,post);curl_easy_setopt(curl,CURLOPT_POSTFIELDSIZE,(long)strlen(post));}result=curl_easy_perform(curl);if(result==CURLE_OK)curl_easy_getinfo(curl,CURLINFO_RESPONSE_CODE,&response->status);return result;}
 /* Purpose: create an authenticated in-memory-cookie curl client. Input: config/password. Output: ready handle or NULL. */
 static CURL *login(const Config *config,const char *password){CURL *curl=curl_easy_init();HttpResponse response;cJSON *json;char url[768];char *body;struct curl_slist *headers=NULL;CURLcode result;if(curl==NULL)return NULL;json=cJSON_CreateObject();if(json==NULL||!cJSON_AddStringToObject(json,"username",config->user)||!cJSON_AddStringToObject(json,"password",password)){cJSON_Delete(json);curl_easy_cleanup(curl);return NULL;}body=cJSON_PrintUnformatted(json);cJSON_Delete(json);if(body==NULL){curl_easy_cleanup(curl);return NULL;}curl_easy_setopt(curl,CURLOPT_COOKIEFILE,"");snprintf(url,sizeof(url),"%s/api/auth/login",config->apiBase);headers=curl_slist_append(NULL,"Content-Type: application/json");if(headers==NULL){cJSON_free(body);curl_easy_cleanup(curl);return NULL;}curl_easy_setopt(curl,CURLOPT_HTTPHEADER,headers);curl_easy_setopt(curl,CURLOPT_COPYPOSTFIELDS,body);result=request(curl,url,body,&response);curl_easy_setopt(curl,CURLOPT_HTTPHEADER,NULL);curl_slist_free_all(headers);memset(body,0,strlen(body));cJSON_free(body);if(result!=CURLE_OK||response.status<200L||response.status>=300L){logMessage("login failed (HTTP %ld)",response.status);curl_easy_cleanup(curl);return NULL;}return curl;}
+/* Purpose: upload the latest decoded STATE using the hardened shared curl handle. Input: link/state. Output: zero on an accepted JSON response, -1 otherwise. */
+static int postState(PanelLink *link,const PanelStateReport *state){cJSON *json;char *body,url[768];struct curl_slist *headers;HttpResponse response;CURLcode result;if(link->curl==NULL)return -1;json=cJSON_CreateObject();if(json==NULL)return -1;if(!cJSON_AddNumberToObject(json,"theme",state->theme)||!cJSON_AddNumberToObject(json,"screen",state->screen)||!cJSON_AddNumberToObject(json,"brightnessPct",state->brightnessPct)||!cJSON_AddNumberToObject(json,"autoBright",state->autoBright)||!cJSON_AddNumberToObject(json,"sleeping",state->sleeping)||!cJSON_AddNumberToObject(json,"alarmArmed",state->alarmArmed)||!cJSON_AddNumberToObject(json,"alarmAcked",state->alarmAcked)||!cJSON_AddNumberToObject(json,"dwellSec",state->dwellSec)||!cJSON_AddNumberToObject(json,"ackedEpisodeId",state->ackedEpisodeId)||!cJSON_AddNumberToObject(json,"lastCmdId",state->lastCmdId)){cJSON_Delete(json);return -1;}body=cJSON_PrintUnformatted(json);cJSON_Delete(json);if(body==NULL)return -1;headers=curl_slist_append(NULL,"Content-Type: application/json");if(headers==NULL){cJSON_free(body);return -1;}snprintf(url,sizeof(url),"%s/api/panel/state",link->config->apiBase);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,headers);result=request(link->curl,url,body,&response);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,NULL);curl_slist_free_all(headers);cJSON_free(body);if(result!=CURLE_OK||response.status<200L||response.status>=300L||strncasecmp(trim(response.contentType),"application/json",16u)!=0){logMessage("panel state post failed (curl=%d HTTP=%ld)",(int)result,response.status);return -1;}return 0;}
 /* Purpose: clamp signed JSON integer to protocol byte range. Input: JSON item/default. Output: 0..255 value. */
 static uint8_t byteValue(const cJSON *item,int fallback){int n=cJSON_IsNumber(item)?item->valueint:fallback;return (uint8_t)(n<0?0:(n>255?255:n));}
 /* Purpose: clamp a JSON number to an unsigned 16-bit wire value. Input: item/default. Output: 0..65535. */
@@ -98,17 +102,98 @@ static int openSerial(const char *pattern) { glob_t matches;size_t i,count=1u;co
 static void sleepMs(long milliseconds) { struct timespec pauseTime;pauseTime.tv_sec=milliseconds/1000L;pauseTime.tv_nsec=(milliseconds%1000L)*1000000L;nanosleep(&pauseTime,NULL); }
 /* Purpose: reliably write one complete frame to serial. Input: fd/frame bytes. Output: zero success, -1 timeout/disconnect. */
 static int writeAll(int fd,const uint8_t *bytes,size_t length){size_t sent=0u;uint32_t deadline=nowMs()+2000u;while(sent<length){ssize_t result=write(fd,bytes+sent,length-sent);if(result>0){sent+=(size_t)result;continue;}if(result<0&&errno==EINTR)continue;if(result<0&&(errno==EAGAIN||errno==EWOULDBLOCK)){if((int32_t)(nowMs()-deadline)>=0)return -1;sleepMs(10L);continue;}return -1;}return 0;}
-/* Purpose: log diagnostic panel frames to journal stdout. Input: parsed frame. Output: one safe diagnostic line. */
-static void panelFrame(uint8_t type,const uint8_t *payload,size_t length,void *user){size_t i,n;char text[160];(void)user;if(type==PANEL_FT_HELLO)logMessage("panel HELLO (%lu bytes)",(unsigned long)length);else if(type==PANEL_FT_EVENT&&length>=2u)logMessage("panel EVENT kind=%u arg=%u",payload[0],payload[1]);else if(type==PANEL_FT_LOG){n=length<sizeof(text)-1u?length:sizeof(text)-1u;for(i=0;i<n;++i)text[i]=(payload[i]>=32u&&payload[i]<127u)?(char)payload[i]:'.';text[n]='\0';logMessage("panel LOG %s",text);}}
+/* Purpose: upload and record one decoded STATE report. Input: parser callback values/link context. Output: state capability and upload cadence maintained. */
+static void handleState(const uint8_t *payload,size_t length,PanelLink *link){PanelStateReport state;int changed;memset(&state,0,sizeof(state));if(panelDecodeState(payload,length,&state.theme,&state.screen,&state.brightnessPct,&state.autoBright,&state.sleeping,&state.alarmArmed,&state.alarmAcked,&state.dwellSec,&state.ackedEpisodeId,&state.lastCmdId)!=0){logMessage("malformed panel STATE (%lu bytes)",(unsigned long)length);return;}link->stateSeen=1;changed=!link->haveState||memcmp(&state,&link->lastState,sizeof(state))!=0;if(changed)logMessage("panel STATE theme=%u screen=%u brightness=%u auto=%u sleeping=%u armed=%u acked=%u dwell=%u episode=%lu lastCmdId=%lu",state.theme,state.screen,state.brightnessPct,state.autoBright,state.sleeping,state.alarmArmed,state.alarmAcked,state.dwellSec,(unsigned long)state.ackedEpisodeId,(unsigned long)state.lastCmdId);if(changed||(uint32_t)(nowMs()-link->lastStatePostMs)>=30000u){if(postState(link,&state)==0){link->lastState=state;link->haveState=1;link->lastStatePostMs=nowMs();}}}
+/* Purpose: log diagnostic panel frames and dispatch STATE reports. Input: parsed frame/link context. Output: one safe diagnostic action. */
+static void panelFrame(uint8_t type,const uint8_t *payload,size_t length,void *user){size_t i,n;char text[160];PanelLink *link=(PanelLink *)user;if(type==PANEL_FT_HELLO)logMessage("panel HELLO (%lu bytes)",(unsigned long)length);else if(type==PANEL_FT_EVENT&&length>=2u)logMessage("panel EVENT kind=%u arg=%u",payload[0],payload[1]);else if(type==PANEL_FT_LOG){n=length<sizeof(text)-1u?length:sizeof(text)-1u;for(i=0;i<n;++i)text[i]=(payload[i]>=32u&&payload[i]<127u)?(char)payload[i]:'.';text[n]='\0';logMessage("panel LOG %s",text);}else if(type==PANEL_FT_STATE&&link!=NULL)handleState(payload,length,link);}
 /* Purpose: drain incoming serial diagnostics. Input: fd/parser. Output: parser receives all currently available bytes. */
-static int readSerial(int fd,PanelParser *parser){uint8_t bytes[256];ssize_t n;do{n=read(fd,bytes,sizeof(bytes));if(n>0)panelParserFeed(parser,bytes,(size_t)n,nowMs(),panelFrame,NULL);}while(n>0);return n<0&&(errno!=EAGAIN&&errno!=EWOULDBLOCK&&errno!=EINTR)?-1:0;}
+static int readSerial(int fd,PanelParser *parser,PanelLink *link){uint8_t bytes[256];ssize_t n;do{n=read(fd,bytes,sizeof(bytes));if(n>0)panelParserFeed(parser,bytes,(size_t)n,nowMs(),panelFrame,link);}while(n>0);return n<0&&(errno!=EAGAIN&&errno!=EWOULDBLOCK&&errno!=EINTR)?-1:0;}
 /* Purpose: send a snapshot or keepalive frame. Input: fd/current snapshot/selection. Output: zero success, -1 failure. */
 static int sendFrame(int fd,const PanelSnapshot *snapshot,int sendSnapshot){uint8_t payload[PANEL_MAX_PAYLOAD],frame[PANEL_HDR_SIZE+PANEL_MAX_PAYLOAD+PANEL_CRC_SIZE];size_t payloadLength=0u,frameLength;if(sendSnapshot)payloadLength=panelEncodeSnapshot(snapshot,payload,sizeof(payload));frameLength=panelEncodeFrame(sendSnapshot?PANEL_FT_SNAPSHOT:PANEL_FT_PING,sendSnapshot?payload:NULL,payloadLength,frame,sizeof(frame));return frameLength==0u?-1:writeAll(fd,frame,frameLength);}
+/* Purpose: forward every currently served command in API order after a snapshot write. Input: fd/poll JSON/link state. Output: zero success, -1 on serial failure. */
+static int forwardCommands(int fd,const char *text,PanelLink *link){cJSON *root,*commands,*item,*idItem,*kindItem,*argItem;int i,count;uint8_t payload[PANEL_CONTROL_SIZE],frame[PANEL_HDR_SIZE+PANEL_CONTROL_SIZE+PANEL_CRC_SIZE];size_t frameLength;uint32_t cmdId;int kind,arg;root=cJSON_Parse(text);if(root==NULL){logMessage("panel commands malformed");return 0;}/* The API envelope is {"ok":..,"data":{..,"commands":[..]}} — commands
+ * lives under "data" (same navigation as parseSnapshot), not at the root. */
+{cJSON *data=cJSON_GetObjectItemCaseSensitive(root,"data");commands=data!=NULL?cJSON_GetObjectItemCaseSensitive(data,"commands"):NULL;}if(commands==NULL){cJSON_Delete(root);return 0;}if(!cJSON_IsArray(commands)||(count=cJSON_GetArraySize(commands))>16){cJSON_Delete(root);logMessage("panel commands malformed or over limit");return 0;}if(count!=0&&!link->stateSeen){if(!link->withholdingLogged){logMessage("withholding panel commands until STATE confirms CONTROL capability");link->withholdingLogged=1;}cJSON_Delete(root);return 0;}for(i=0;i<count;++i){item=cJSON_GetArrayItem(commands,i);idItem=cJSON_IsObject(item)?cJSON_GetObjectItemCaseSensitive(item,"id"):NULL;kindItem=cJSON_IsObject(item)?cJSON_GetObjectItemCaseSensitive(item,"kind"):NULL;argItem=cJSON_IsObject(item)?cJSON_GetObjectItemCaseSensitive(item,"arg"):NULL;cmdId=u32Value(idItem,0u);kind=cJSON_IsNumber(kindItem)?kindItem->valueint:-1;arg=cJSON_IsNumber(argItem)?argItem->valueint:-1;/* R3: NO kind-range check here — the firmware consumes unknown kinds (a
+ * consuming reject), so forwarding under version skew yields an honest
+ * outcome; a daemon-side range check would strand the command pending and
+ * let the late-confirm sweep falsify it as applied. Structural guards only. */
+if(!cJSON_IsNumber(idItem)||!cJSON_IsNumber(kindItem)||!cJSON_IsNumber(argItem)||cmdId==0u||kind<0||kind>255||arg<0||arg>255||panelEncodeControl(cmdId,(uint8_t)kind,(uint8_t)arg,payload,sizeof(payload))!=PANEL_CONTROL_SIZE){logMessage("skipping invalid command id=%u kind=%u",cmdId,(unsigned int)(kind<0?0:kind));continue;}frameLength=panelEncodeFrame(PANEL_FT_CONTROL,payload,sizeof(payload),frame,sizeof(frame));if(frameLength==0u||writeAll(fd,frame,frameLength)!=0){cJSON_Delete(root);return -1;}logMessage("forwarded panel command id=%lu kind=%d arg=%d",(unsigned long)cmdId,kind,arg);}cJSON_Delete(root);return 0;}
+/* glanceWrite — publish at-a-glance facts for the solari-glance App Lab app,
+ * which mirrors panel health onto the UNO Q's on-board 8x13 LED matrix.
+ * Input:  latest snapshot (may be absent), last poll outcome, link, serial fd
+ *         state. Output: atomic rewrite of /run/solari-panel/glance.json via
+ *         rename so the reader never sees a torn file. Every failure here is
+ *         silent by design — the glance is cosmetic and must never disturb
+ *         the daemon's real work. */
+static void glanceWrite(const PanelSnapshot *snap,int haveSnap,int pollOk,const PanelLink *link,int serialUp){
+  FILE *f=fopen("/run/solari-panel/glance.json.tmp","w");
+  if(f==NULL)return;
+  fprintf(f,"{\"ts\":%lu,\"pollOk\":%d,\"serialUp\":%d,\"stateSeen\":%d",
+          (unsigned long)time(NULL),pollOk?1:0,serialUp?1:0,link->stateSeen?1:0);
+  if(haveSnap)
+    fprintf(f,",\"score\":%u,\"alarmActive\":%u,\"dataStale\":%u,"
+              "\"up\":%u,\"degraded\":%u,\"down\":%u,\"unknown\":%u,\"maint\":%u,"
+              "\"warn\":%u,\"crit\":%u",
+            snap->score,snap->alarmActive,snap->dataStale,
+            snap->stateRoll[0],snap->stateRoll[1],snap->stateRoll[2],snap->stateRoll[3],snap->stateRoll[4],
+            snap->alertCounts[1],snap->alertCounts[2]);
+  if(link->haveState)
+    fprintf(f,",\"sleeping\":%u,\"alarmAcked\":%u,\"brightnessPct\":%u,\"theme\":%u",
+            link->lastState.sleeping,link->lastState.alarmAcked,
+            link->lastState.brightnessPct,link->lastState.theme);
+  fputs("}\n",f);
+  fclose(f);
+  (void)rename("/run/solari-panel/glance.json.tmp","/run/solari-panel/glance.json");
+}
+
 /* Purpose: run daemon's fail-soft polling and serial service loop. Input: config and password. Output: process status. */
-static int runDaemon(const Config *config,const char *password){CURL *curl=NULL;PanelSnapshot latest;PanelParser parser;int haveLatest=0,fd=-1;uint32_t now=nowMs(),nextPoll=now,nextFrame=now,nextSerial=now,authDelay=1u,transientDelay=1u,serialDelay=1u;memset(&latest,0,sizeof(latest));panelParserInit(&parser);while(running){now=nowMs();if(curl==NULL&&(int32_t)(now-nextPoll)>=0){curl=login(config,password);if(curl==NULL){nextPoll=now+authDelay*1000u;authDelay=authDelay<60u?authDelay*2u:60u;continue;}authDelay=1u;nextPoll=now;}if(curl!=NULL&&(int32_t)(now-nextPoll)>=0){HttpResponse response;char url[768];CURLcode result;snprintf(url,sizeof(url),"%s/api/panel",config->apiBase);result=request(curl,url,NULL,&response);if(result==CURLE_OK&&response.status==401L){curl_easy_cleanup(curl);curl=login(config,password);if(curl!=NULL)result=request(curl,url,NULL,&response);}if(result==CURLE_OK&&response.status>=200L&&response.status<300L&&strncasecmp(trim(response.contentType),"application/json",16u)==0&&parseSnapshot(response.data,&latest)==0){haveLatest=1;transientDelay=1u;nextPoll=now+config->pollSec*1000u;}else if(response.status==401L){curl_easy_cleanup(curl);curl=NULL;nextPoll=now+authDelay*1000u;authDelay=authDelay<60u?authDelay*2u:60u;}else{logMessage("panel fetch failed (curl=%d HTTP=%ld)",(int)result,response.status);nextPoll=now+transientDelay*1000u;transientDelay=transientDelay<60u?transientDelay*2u:60u;}}if(fd<0&&(int32_t)(now-nextSerial)>=0){fd=openSerial(config->serialDev);if(fd<0){nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}else{serialDelay=1u;nextSerial=now;panelParserInit(&parser);nextFrame=now;}}if(fd>=0){if(readSerial(fd,&parser)!=0){logMessage("serial read failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;continue;}if((int32_t)(now-nextFrame)>=0){if(haveLatest){int64_t age=(int64_t)time(NULL)-(int64_t)latest.ts;latest.dataStale=(uint8_t)(latest.dataStale!=0u||age>35);latest.seq++;}if(sendFrame(fd,&latest,haveLatest)!=0){logMessage("serial write failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}nextFrame=now+config->snapshotSec*1000u;}}sleepMs(20L);}if(fd>=0)close(fd);if(curl!=NULL)curl_easy_cleanup(curl);return 0;}
+static int runDaemon(const Config *config,const char *password){
+  CURL *curl=NULL; PanelSnapshot latest; PanelParser parser; PanelLink link;
+  int haveLatest=0,fd=-1;
+  uint32_t now=nowMs(),nextPoll=now,nextFrame=now,nextSerial=now,authDelay=1u,transientDelay=1u,serialDelay=1u;
+  int lastPollOk=0; uint32_t nextGlance=now;   /* at-a-glance matrix feed */
+  memset(&latest,0,sizeof(latest)); memset(&link,0,sizeof(link)); link.config=config; panelParserInit(&parser);
+  while(running){
+    now=nowMs(); link.curl=curl;
+    if(curl==NULL&&(int32_t)(now-nextPoll)>=0){curl=login(config,password);link.curl=curl;if(curl==NULL){nextPoll=now+authDelay*1000u;authDelay=authDelay<60u?authDelay*2u:60u;continue;}authDelay=1u;nextPoll=now;}
+    if(curl!=NULL&&(int32_t)(now-nextPoll)>=0){
+      HttpResponse response; char url[768]; CURLcode result;
+      snprintf(url,sizeof(url),"%s/api/panel",config->apiBase); result=request(curl,url,NULL,&response);
+      if(result==CURLE_OK&&response.status==401L){curl_easy_cleanup(curl);curl=login(config,password);link.curl=curl;if(curl!=NULL)result=request(curl,url,NULL,&response);}
+      if(result==CURLE_OK&&response.status>=200L&&response.status<300L&&strncasecmp(trim(response.contentType),"application/json",16u)==0&&parseSnapshot(response.data,&latest)==0){
+        haveLatest=1; lastPollOk=1; transientDelay=1u; nextPoll=now+config->pollSec*1000u;
+        if(fd>=0){
+          int64_t age=(int64_t)time(NULL)-(int64_t)latest.ts;
+          latest.dataStale=(uint8_t)(latest.dataStale!=0u||age>35); latest.seq++;
+          if(sendFrame(fd,&latest,1)!=0||forwardCommands(fd,response.data,&link)!=0){logMessage("serial write failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}else nextFrame=now+config->snapshotSec*1000u;
+        }
+      }else if(response.status==401L){curl_easy_cleanup(curl);curl=NULL;link.curl=NULL;nextPoll=now+authDelay*1000u;authDelay=authDelay<60u?authDelay*2u:60u;}
+      else{logMessage("panel fetch failed (curl=%d HTTP=%ld)",(int)result,response.status);lastPollOk=0;nextPoll=now+transientDelay*1000u;transientDelay=transientDelay<60u?transientDelay*2u:60u;}
+    }
+    if(fd<0&&(int32_t)(now-nextSerial)>=0){fd=openSerial(config->serialDev);if(fd<0){nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}else{serialDelay=1u;nextSerial=now;panelParserInit(&parser);link.stateSeen=0;link.haveState=0;link.withholdingLogged=0;nextFrame=now;
+      /* Ask the panel for HELLO + an immediate STATE (panelCtlForceReport):
+       * without this, a daemon restart against an already-booted panel waits
+       * out the 30 s heartbeat before the capability gate opens.           */
+      {uint8_t frame[PANEL_HDR_SIZE+PANEL_CRC_SIZE];size_t n=panelEncodeFrame(PANEL_FT_HELLOREQ,NULL,0u,frame,sizeof(frame));if(n>0u)(void)writeAll(fd,frame,n);}}}
+    if(fd>=0){
+      if(readSerial(fd,&parser,&link)!=0){logMessage("serial read failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;continue;}
+      if((int32_t)(now-nextFrame)>=0){if(haveLatest){int64_t age=(int64_t)time(NULL)-(int64_t)latest.ts;latest.dataStale=(uint8_t)(latest.dataStale!=0u||age>35);latest.seq++;}if(sendFrame(fd,&latest,haveLatest)!=0){logMessage("serial write failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}nextFrame=now+config->snapshotSec*1000u;}
+    }
+    /* Feed the on-board glance matrix every 2 s (cosmetic, fail-silent). */
+    if((int32_t)(now-nextGlance)>=0){glanceWrite(&latest,haveLatest,lastPollOk,&link,fd>=0);nextGlance=now+2000u;}
+    sleepMs(20L);
+  }
+  if(fd>=0) close(fd);
+  if(curl!=NULL) curl_easy_cleanup(curl);
+  return 0;
+}
 /* Purpose: parse command-line configuration option and launch daemon. Input: argc/argv. Output: process exit code. */
 #ifdef SOLARI_PANEL_TEST
 int panelParseSnapshotForTest(const char *text,PanelSnapshot *snapshot){return parseSnapshot(text,snapshot);}
+/* Test shim for forwardCommands: builds a PanelLink locally (the type is
+ * private to this TU) so the test can exercise envelope navigation and the
+ * stateSeen capability gate against a pipe fd. */
+int panelForwardCommandsForTest(int fd,const char *text,int stateSeen){PanelLink link;memset(&link,0,sizeof(link));link.stateSeen=(uint8_t)stateSeen;return forwardCommands(fd,text,&link);}
 #else
 int main(int argc,char **argv){Config config;char password[512];const char *path=DEFAULT_CONFIG;if(argc==3&&strcmp(argv[1],"--config")==0)path=argv[2];else if(argc!=1){fprintf(stderr,"usage: %s [--config path]\n",argv[0]);return 2;}if(loadConfig(path,&config)!=0||readPassword(config.passFile,password,sizeof(password))!=0){logMessage("configuration or password file unavailable");return 1;}signal(SIGINT,stopSignal);signal(SIGTERM,stopSignal);signal(SIGPIPE,SIG_IGN);if(curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK)return 1;runDaemon(&config,password);curl_global_cleanup();memset(password,0,sizeof(password));return 0;}
 #endif

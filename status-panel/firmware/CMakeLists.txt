@@ -54,10 +54,25 @@ if(NOT EXISTS "${SOLARI_PROTOCOL_C}")
   add_compile_definitions(SOLARI_PROTOCOL_STUBBED=1)
 endif()
 
+# The CONTROL/STATE codec (CONTRACT-CP.md §2) lives in the shared protocol.c
+# alongside the snapshot codec, so no extra source is needed here. Fail the
+# configure rather than the link if it is missing — a link error against a
+# Pimoroni/SDK-heavy target is far harder to read than this line.
+if(EXISTS "${SOLARI_PROTOCOL_C}")
+  file(READ "${SOLARI_PROTOCOL_C}" SOLARI_PROTOCOL_C_TEXT)
+  string(FIND "${SOLARI_PROTOCOL_C_TEXT}" "panelDecodeControl" SOLARI_CP_FOUND)
+  if(SOLARI_CP_FOUND EQUAL -1)
+    message(FATAL_ERROR
+      "protocol.c has no CONTROL/STATE codec (panelDecodeControl) — this "
+      "firmware requires CONTRACT-CP.md §3. Update the shared codec first.")
+  endif()
+endif()
+
 add_executable(solari-panel-fw
   main.c
   panelFb.c
   panelFont.c
+  panelCtl.c
   panelLink.c
   panelHist.c
   panelScreensA.c
@@ -78,7 +93,7 @@ target_include_directories(solari-panel-fw PRIVATE
 string(TIMESTAMP SOLARI_BUILD_STAMP "%Y%m%d" UTC)
 target_compile_definitions(solari-panel-fw PRIVATE
   SOLARI_FW_VERSION_MAJOR=1
-  SOLARI_FW_VERSION_MINOR=0
+  SOLARI_FW_VERSION_MINOR=1   # 1.1: CONTROL/STATE support (CONTRACT-CP.md)
   SOLARI_BUILD_EPOCH=${SOLARI_SOURCE_DATE_EPOCH}
   PICO_STDIO_ENABLE_CRLF_SUPPORT=0   # binary-safe stdio: no LF->CRLF mangling
   PICO_STDIO_DEFAULT_CRLF=0

@@ -1,0 +1,6 @@
+name: SolariNet Glance
+icon: 🟨
+description:
+  Mirrors SolariNet status-panel health onto the UNO Q's on-board 8x13 LED
+  matrix - link chain, fleet score, up/degraded/down strip, and the alarm
+  beacon - fed from the solariPanel daemon's /run/solari-panel/glance.json.

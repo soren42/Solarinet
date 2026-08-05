@@ -47,6 +47,14 @@ return static function (Router $router): void {
             header('Connection: keep-alive');
             header('X-Accel-Buffering: no');   // nginx: do not buffer the stream
         }
+        /* CRITICAL: release the PHP session-file lock before entering the
+         * long-lived loop. Auth has already been checked by the router; we
+         * never write the session here. Without this, the lock is held for
+         * the stream's whole MAX_SECONDS lifetime and EVERY other request
+         * from the same browser session (whoami, every poll, every command)
+         * serializes behind it — the dashboard starves itself. Found live
+         * 2026-08-05: page blank until the stream's 50 s bound expired. */
+        session_write_close();
         @ini_set('zlib.output_compression', '0');
         @ini_set('output_buffering', '0');
         @set_time_limit(0);

@@ -1,0 +1,7583 @@
+{
+  "_": "SolariNet status panel — committed parity fixture (CONTRACT-CP.md v1.1 §10).",
+  "_usage": "The dashboard Panel page renders this deterministically at /?fixture=1 (no network). Each scenario's `history` is a chronological list of GET /api/panel `data` payloads, CADENCE seconds apart; the page resamples them into the 53-deep client history rings exactly as it does live.",
+  "version": 1,
+  "cadenceSec": 5,
+  "defaultScenario": "normal",
+  "scenarios": [
+    {
+      "id": "normal",
+      "label": "Normal · quiet fleet",
+      "note": "All 15 roster systems up, 12 samples of history: every ribbon, histogram and trace is fully populated. panelState reports theme C screen 2, auto-brightness on, dwellSec 6 (a preset, shown as selected).",
+      "history": [
+        {
+          "ts": 1785815945,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 294722,
+          "txKbps": 156488,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 23,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 60
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 89
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 5
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:03"
+          }
+        },
+        {
+          "ts": 1785815950,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 331819,
+          "txKbps": 167195,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 22,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 30
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 55
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 42
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 35
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 94
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 6
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:08"
+          }
+        },
+        {
+          "ts": 1785815955,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 359002,
+          "txKbps": 159734,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 23,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 32
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 56
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 27
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 37
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 92
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:13"
+          }
+        },
+        {
+          "ts": 1785815960,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 369013,
+          "txKbps": 143736,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 24,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 25
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 33
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 57
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:18"
+          }
+        },
+        {
+          "ts": 1785815965,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 359196,
+          "txKbps": 123119,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 29
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 58
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 29
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 36
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:23"
+          }
+        },
+        {
+          "ts": 1785815970,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 332207,
+          "txKbps": 103040,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 31
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 58
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 42
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 23
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 85
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 88
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:28"
+          }
+        },
+        {
+          "ts": 1785815975,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 295304,
+          "txKbps": 88510,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 32
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 59
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 34
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 85
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 93
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 18
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:33"
+          }
+        },
+        {
+          "ts": 1785815980,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 258401,
+          "txKbps": 91055,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 60
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 25
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 36
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 6
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 85
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 4
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:38"
+          }
+        },
+        {
+          "ts": 1785815985,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 231412,
+          "txKbps": 95767,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 22,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 30
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 61
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 5
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:43"
+          }
+        },
+        {
+          "ts": 1785815990,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 221595,
+          "txKbps": 109016,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 23,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 32
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 55
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 42
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 35
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 67
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 88
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 6
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:48"
+          }
+        },
+        {
+          "ts": 1785815995,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 231606,
+          "txKbps": 126884,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 22,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 33
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 56
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 27
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 37
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 61
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 93
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:53"
+          }
+        },
+        {
+          "ts": 1785816000,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 2,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 258788,
+          "txKbps": 144215,
+          "rttTenthMs": 182,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 29
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 57
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 61
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 92
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 6,
+            "reportedAt": "2026-08-04 03:59:58"
+          }
+        }
+      ]
+    },
+    {
+      "id": "alarm",
+      "label": "Alarm · tier-0 down, unacknowledged",
+      "note": "RADIUM (CORE, tier 0) down and NEON degraded → score 100, alarmActive, unacknowledged episode 4211. Exercises the universal inlay, the beacon, the D1 ticker, the control pending/failed states via recentCommands, and dwellSec 3.",
+      "history": [
+        {
+          "ts": 1785815945,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 36,
+          "rxKbps": 297856,
+          "txKbps": 162797,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 12,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 46,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 61
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 89
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:03"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:20"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:01"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:55:45"
+            }
+          ]
+        },
+        {
+          "ts": 1785815950,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 35,
+          "rxKbps": 335497,
+          "txKbps": 167099,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 12,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 56
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 23
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:08"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:25"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:06"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:55:50"
+            }
+          ]
+        },
+        {
+          "ts": 1785815955,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 36,
+          "rxKbps": 363223,
+          "txKbps": 161232,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 13,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 57
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 36
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 89
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 18
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:13"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:30"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:11"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:55:55"
+            }
+          ]
+        },
+        {
+          "ts": 1785815960,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 36,
+          "rxKbps": 373778,
+          "txKbps": 146829,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 14,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 44,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 25
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 59
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 25
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 35
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 46
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 18
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:18"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:35"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:16"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:00"
+            }
+          ]
+        },
+        {
+          "ts": 1785815965,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 36,
+          "rxKbps": 364505,
+          "txKbps": 127808,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 10,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 45,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 60
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 47
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 89
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:23"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:40"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:21"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:05"
+            }
+          ]
+        },
+        {
+          "ts": 1785815970,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 35,
+          "rxKbps": 338060,
+          "txKbps": 101323,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 11,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 55
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 41
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:28"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:45"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:26"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:10"
+            }
+          ]
+        },
+        {
+          "ts": 1785815975,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 35,
+          "rxKbps": 301701,
+          "txKbps": 88388,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 12,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 44,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 39,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 56
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 27
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 36
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 42
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 89
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:33"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:50"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:31"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:15"
+            }
+          ]
+        },
+        {
+          "ts": 1785815980,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 35,
+          "rxKbps": 265342,
+          "txKbps": 84528,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 11,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 45,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 39,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 58
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 35
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:38"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:58:55"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:36"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:20"
+            }
+          ]
+        },
+        {
+          "ts": 1785815985,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 238897,
+          "txKbps": 90835,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 11,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 46,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 59
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 29
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:43"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:00"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:41"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:25"
+            }
+          ]
+        },
+        {
+          "ts": 1785815990,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 36,
+          "rxKbps": 229624,
+          "txKbps": 105679,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 12,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 44,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 60
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 23
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 87
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:48"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:05"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:46"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:30"
+            }
+          ]
+        },
+        {
+          "ts": 1785815995,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 36,
+          "rxKbps": 228179,
+          "txKbps": 125142,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 13,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 55
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 36
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:53"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:10"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:51"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:35"
+            }
+          ]
+        },
+        {
+          "ts": 1785816000,
+          "score": 133,
+          "stateRoll": {
+            "up": 7,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 1,
+            "warn": 3,
+            "crit": 1
+          },
+          "meanLoadPct": 36,
+          "rxKbps": 255906,
+          "txKbps": 144068,
+          "rttTenthMs": 461,
+          "lossPermille": 24,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 2,
+              "degraded": 0,
+              "down": 1,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 11,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 2,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 44,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 4,
+              "degraded": 1,
+              "down": 0,
+              "unknown": 1,
+              "maint": 1,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "down",
+              "loadPct": 0
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 57
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "degraded",
+              "loadPct": 49
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 25
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 35
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 46
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "unknown",
+              "loadPct": 0
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 87
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "degraded",
+              "loadPct": 99
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "maint",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": {
+            "id": 4211,
+            "severity": "crit",
+            "subject": "BIND DOWN",
+            "detail": "CORE INFRA. ALL 2 VANTAGES. RESTART BIND ON RADIUM"
+          },
+          "alarmActive": true,
+          "episodeId": 4211,
+          "dataStale": false,
+          "panelState": {
+            "theme": 3,
+            "screen": 2,
+            "brightnessPct": 100,
+            "autoBright": 0,
+            "sleeping": 0,
+            "alarmArmed": 1,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 41,
+            "dwellSec": 3,
+            "reportedAt": "2026-08-04 03:59:58"
+          },
+          "recentCommands": [
+            {
+              "id": 41,
+              "kind": 1,
+              "arg": 3,
+              "status": "applied",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:15"
+            },
+            {
+              "id": 42,
+              "kind": 3,
+              "arg": 100,
+              "status": "pending",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": null,
+              "createdAt": "2026-08-04 03:59:56"
+            },
+            {
+              "id": 40,
+              "kind": 7,
+              "arg": 1,
+              "status": "expired",
+              "appliedAt": null,
+              "expiredAt": null,
+              "failureReason": "expired",
+              "createdAt": "2026-08-04 03:56:40"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stale",
+      "label": "Stale · upstream data older than 30 s",
+      "note": "Same fleet as normal but dataStale=1 and panelState.reportedAt 4 minutes old. A2 lane 1 (host data freshness) goes to full backlog; the page shows the staleness chip. dwellSec 0 = the panel has never reported a dwell, so no interval is marked selected.",
+      "history": [
+        {
+          "ts": 1785815945,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 294722,
+          "txKbps": 156488,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 23,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 60
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 89
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 5
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:01"
+          }
+        },
+        {
+          "ts": 1785815950,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 331819,
+          "txKbps": 167195,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 22,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 30
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 55
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 42
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 35
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 94
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 6
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:06"
+          }
+        },
+        {
+          "ts": 1785815955,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 359002,
+          "txKbps": 159734,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 23,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 32
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 56
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 27
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 37
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 92
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:11"
+          }
+        },
+        {
+          "ts": 1785815960,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 369013,
+          "txKbps": 143736,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 24,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 25
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 33
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 57
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:16"
+          }
+        },
+        {
+          "ts": 1785815965,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 359196,
+          "txKbps": 123119,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 29
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 58
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 29
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 36
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 65
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 8
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:21"
+          }
+        },
+        {
+          "ts": 1785815970,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 332207,
+          "txKbps": 103040,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 31
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 58
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 42
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 23
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 85
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 88
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:26"
+          }
+        },
+        {
+          "ts": 1785815975,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 295304,
+          "txKbps": 88510,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 32
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 59
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 34
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 85
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 93
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 18
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:31"
+          }
+        },
+        {
+          "ts": 1785815980,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 258401,
+          "txKbps": 91055,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 60
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 25
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 36
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 10
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 6
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 85
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 91
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 4
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:36"
+          }
+        },
+        {
+          "ts": 1785815985,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 231412,
+          "txKbps": 95767,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 22,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 42,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 30
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 15
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 61
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 12
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 66
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 5
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:41"
+          }
+        },
+        {
+          "ts": 1785815990,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 221595,
+          "txKbps": 109016,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 23,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 40,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 21
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 32
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 55
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 42
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 35
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 67
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 88
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 6
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:46"
+          }
+        },
+        {
+          "ts": 1785815995,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 231606,
+          "txKbps": 126884,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 22,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 33
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 56
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 27
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 37
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 14
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 61
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 93
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 16
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:51"
+          }
+        },
+        {
+          "ts": 1785816000,
+          "score": 0,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 37,
+          "rxKbps": 258788,
+          "txKbps": 144215,
+          "rttTenthMs": 210,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 21,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 22
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 29
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 57
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 39
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 40
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 45
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 11
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 61
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 86
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 92
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 19
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 7
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": true,
+          "panelState": {
+            "theme": 0,
+            "screen": 0,
+            "brightnessPct": 25,
+            "autoBright": 0,
+            "sleeping": 1,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 7,
+            "dwellSec": 0,
+            "reportedAt": "2026-08-04 03:55:56"
+          }
+        }
+      ]
+    },
+    {
+      "id": "emptyHistory",
+      "label": "Empty history · first poll only",
+      "note": "One sample. Every history ring holds a single filled slot, so C0's ribbon, C1's traces and A1's WAN ramps must render from the oldest-real-sample clamp rather than blank or flicker. panelState is null — the panel has never reported.",
+      "history": [
+        {
+          "ts": 1785816000,
+          "score": 12,
+          "stateRoll": {
+            "up": 9,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 1,
+            "crit": 0
+          },
+          "meanLoadPct": 38,
+          "rxKbps": 294722,
+          "txKbps": 156488,
+          "rttTenthMs": 194,
+          "lossPermille": 0,
+          "pools": [
+            {
+              "name": "CORE",
+              "tier": 0,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 23,
+              "total": 3
+            },
+            {
+              "name": "APPS",
+              "tier": 1,
+              "up": 3,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 43,
+              "total": 3
+            },
+            {
+              "name": "STOR",
+              "tier": 1,
+              "up": 2,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 2
+            },
+            {
+              "name": "WKS",
+              "tier": 3,
+              "up": 7,
+              "degraded": 0,
+              "down": 0,
+              "unknown": 0,
+              "maint": 0,
+              "loadPct": 41,
+              "total": 7
+            }
+          ],
+          "systems": [
+            {
+              "name": "XENON",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 24
+            },
+            {
+              "name": "RADIUM",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 28
+            },
+            {
+              "name": "CHLORINE",
+              "pool": 0,
+              "tier": 0,
+              "state": "up",
+              "loadPct": 17
+            },
+            {
+              "name": "CESIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 60
+            },
+            {
+              "name": "BENZENE",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 43
+            },
+            {
+              "name": "LITHIUM",
+              "pool": 1,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 26
+            },
+            {
+              "name": "HELIUM",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 38
+            },
+            {
+              "name": "AMINO",
+              "pool": 2,
+              "tier": 1,
+              "state": "up",
+              "loadPct": 44
+            },
+            {
+              "name": "STARSHIP",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 13
+            },
+            {
+              "name": "STEEL",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 9
+            },
+            {
+              "name": "ARGON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 64
+            },
+            {
+              "name": "KRYPTON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 90
+            },
+            {
+              "name": "NEON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 89
+            },
+            {
+              "name": "BORON",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 20
+            },
+            {
+              "name": "MOLYBDENUM",
+              "pool": 3,
+              "tier": 3,
+              "state": "up",
+              "loadPct": 5
+            }
+          ],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": null
+        }
+      ]
+    },
+    {
+      "id": "noData",
+      "label": "No data · zero-node fleet",
+      "note": "CONTRACT §9: a zero-node fleet is valid data, not an error. All 12 tiles must render the NO DATA treatment, not a blank board. dwellSec 12 is deliberately not one of the 3/6/30 presets: the page must report the value without marking any button selected.",
+      "history": [
+        {
+          "ts": 1785816000,
+          "score": 0,
+          "stateRoll": {
+            "up": 0,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+            "maint": 0
+          },
+          "alerts": {
+            "info": 0,
+            "warn": 0,
+            "crit": 0
+          },
+          "meanLoadPct": 0,
+          "rxKbps": 0,
+          "txKbps": 0,
+          "rttTenthMs": 0,
+          "lossPermille": 0,
+          "pools": [],
+          "systems": [],
+          "topAlert": null,
+          "alarmActive": false,
+          "episodeId": 0,
+          "dataStale": false,
+          "panelState": {
+            "theme": 2,
+            "screen": 1,
+            "brightnessPct": 70,
+            "autoBright": 1,
+            "sleeping": 0,
+            "alarmArmed": 0,
+            "alarmAcked": 0,
+            "ackedEpisodeId": 0,
+            "lastCmdId": 0,
+            "dwellSec": 12,
+            "reportedAt": "2026-08-04 03:59:58"
+          }
+        }
+      ]
+    }
+  ]
+}
