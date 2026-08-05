@@ -75,6 +75,13 @@ def buildFrame(facts, phase):
         fb[2 * W + c] = 4
         fb[3 * W + c] = 4
 
+    # Heartbeat: when the bar is empty (score 0 = calm fleet) breathe a
+    # single mid-bar pixel, ~3 s period, so healthy still reads as alive.
+    if px == 0 and not facts.get("alarmActive", 0):
+        beat = [0, 1, 2, 3, 4, 5, 4, 3, 2, 1, 0, 0][phase % 12]
+        fb[2 * W + 6] = beat
+        fb[3 * W + 6] = beat
+
     # --- rows 5-7: fleet strip -------------------------------------------
     def strip(row, count, level):
         for c in range(min(int(count), W)):
