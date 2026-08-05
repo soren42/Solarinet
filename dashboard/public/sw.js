@@ -19,7 +19,7 @@
    ============================================================ */
 "use strict";
 
-const CACHE_VERSION = "solari-v4";
+const CACHE_VERSION = "solari-v5";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
 const API_CACHE = CACHE_VERSION + "-api";
 
@@ -43,8 +43,15 @@ const SHELL_ASSETS = [
   "icons.jsx",
   "components.jsx",
   "screens.jsx",
+  "layout.jsx",
   "screens2.jsx",
   "screens3.jsx",
+  "screens4.jsx",
+  "screens5.jsx",
+  "screens6.jsx",
+  "screens7.jsx",
+  "screens8.jsx",
+  "screens-panel.jsx",
   "app.jsx",
   // vendored libs (on-prem / air-gapped — §8.1)
   "vendor/react.production.min.js",
