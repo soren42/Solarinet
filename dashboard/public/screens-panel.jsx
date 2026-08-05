@@ -1643,6 +1643,20 @@
       const tNow = Date.now();
       keys.forEach(function (k) {
         const p = prev[k];
+        /* A POST whose fetch never settled (Safari suspending the tab
+           mid-request) sits at "sending" forever — the chip renders it the
+           same as pending, so without this it is an eternal spinner. 15 s is
+           far beyond any honest POST round-trip. */
+        if (p.status === "sending") {
+          if (tNow - p.at > 15000) {
+            next[k] = Object.assign({}, p, {
+              status: "failed",
+              reason: "the request never completed (connection dropped mid-request) — try again",
+            });
+            changed = true;
+          } else next[k] = p;
+          return;
+        }
         if (p.status !== "pending") { next[k] = p; return; }
         let row = null;
         if (rows && p.cmdId != null) {
@@ -1747,32 +1761,58 @@
     const send = useCallback(function (kind, arg) {
       const key = CMD_GROUP[kind];
       const A = api();
+      /* `stamp` identifies THIS attempt: the timeout and both settle paths
+         only touch the pend entry if it is still this attempt's (a newer
+         click replaces the entry and takes over the group). */
+      const stamp = Date.now();
       setPend(function (p) {
         const n = Object.assign({}, p);
-        n[key] = { kind: kind, arg: arg, status: "sending", at: Date.now() };
+        n[key] = { kind: kind, arg: arg, status: "sending", at: stamp };
         return n;
       });
       if (!A || !A.post) {
         setPend(function (p) {
           const n = Object.assign({}, p);
-          n[key] = { kind: kind, arg: arg, status: "failed", at: Date.now(), reason: "the dashboard API client is unavailable" };
+          n[key] = { kind: kind, arg: arg, status: "failed", at: stamp, reason: "the dashboard API client is unavailable" };
           return n;
         });
         return;
       }
-      A.post("/api/panel/command", { kind: kind, arg: arg }).then(function (d) {
+      /* api()'s fetch has no timeout; a request Safari abandons on tab
+         suspend would otherwise leave "sending" forever. If the response
+         does arrive after this fires, the settle paths below still run and
+         self-correct the state (the server DID accept the command). */
+      const giveUp = window.setTimeout(function () {
         setPend(function (p) {
+          const cur = p[key];
+          if (!cur || cur.status !== "sending" || cur.at !== stamp) return p;
           const n = Object.assign({}, p);
-          n[key] = { kind: kind, arg: arg, status: "pending", at: Date.now(), cmdId: Number(d && d.cmdId) };
+          n[key] = Object.assign({}, cur, {
+            status: "failed",
+            reason: "no response after 12 s (connection may have dropped) — try again",
+          });
+          return n;
+        });
+      }, 12000);
+      A.post("/api/panel/command", { kind: kind, arg: arg }).then(function (d) {
+        window.clearTimeout(giveUp);
+        setPend(function (p) {
+          const cur = p[key];
+          if (cur && cur.at !== stamp) return p;      // superseded by a newer click
+          const n = Object.assign({}, p);
+          n[key] = { kind: kind, arg: arg, status: "pending", at: stamp, cmdId: Number(d && d.cmdId) };
           return n;
         });
         /* The panel typically applies within a second or two; poll early so
            the confirmation shows promptly instead of on the next 5 s slot. */
         window.setTimeout(function () { if (tickRef.current) tickRef.current(); }, 1500);
       }).catch(function (e) {
+        window.clearTimeout(giveUp);
         setPend(function (p) {
+          const cur = p[key];
+          if (cur && cur.at !== stamp) return p;      // superseded by a newer click
           const n = Object.assign({}, p);
-          n[key] = { kind: kind, arg: arg, status: "failed", at: Date.now(), reason: (e && e.message) || "the request was rejected" };
+          n[key] = { kind: kind, arg: arg, status: "failed", at: stamp, reason: (e && e.message) || "the request was rejected" };
           return n;
         });
       });
