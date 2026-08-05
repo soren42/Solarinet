@@ -259,3 +259,23 @@ in order, suppresses first, publishes second, checkpoint correct after
 crash-between-disposition-and-checkpoint), A12 (recovery published exactly
 once and only for a previously published incident), A13 (audit rows never
 reach MQ), A14 (id helper: IPv6, icmp port-omission, malformed — C unit).
+
+## 8. Interface amendments (Lead, during build)
+
+**A-1 (LC3 scope grant).** dashboard/public/api.jsx: LC3 may make a surgical
+passthrough edit ONLY — mapNode() and mapAssetNode() pass `criticality` and
+`lifecycle` through verbatim; mapDiscovered() passes `tombstone` through.
+Nothing else in api.jsx changes.
+
+**A-2 (discovery notice, frozen).** No new column. The discovery READ route
+(dashboard/api/routes/discovery.php — LC2 scope addition) computes, per
+discovered row, `tombstone: {assetId, lifecycle, displayName} | null` by
+joining asset ON ip WHERE lifecycle <> 'active'. LC1's C side writes only
+what it already planned (status='ignored' on the reappearance row); the
+JOIN, not a stored field, is the notice. UI renders the notice only when
+`tombstone` is non-null; absent field = no notice (graceful pre-deploy).
+
+**A-3 (missing-field semantics, binding on LC3).** UI must treat absent
+criticality/lifecycle as "unknown" (no chip, no grey), NEVER as tier 0 /
+non-active — a wrong default would mislabel every host. (LC3 already
+building this way; now contractual.)
