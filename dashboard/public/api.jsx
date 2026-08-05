@@ -125,6 +125,7 @@
   }
   // expose raw helpers for screens that want ad-hoc calls
   function post(path, body) { return getJSON(path, { method: "POST", body: body || {} }); }
+  function del(path, body) { return getJSON(path, { method: "DELETE", body: body || {} }); }
 
   // =====================================================================
   // ENDPOINT PATHS (the PHP agent must match these exactly)
@@ -138,6 +139,8 @@
     alerts:       "/api/alerts",            // ?status=active|history|all
     alertAck:     "/api/alerts/ack",         // POST {eventId}
     alertAckAll:  "/api/alerts/ack-all",     // POST {} -> { count }
+    pushSubscribe: "/api/push/subscribe",
+    pushVapid:     "/api/push/vapid",
     opie:         "/api/opie",               // ?status=all|done|investigating
     opieReport:   function (id) { return "/api/opie/" + encodeURIComponent(id); },
     rules:        "/api/rules",
@@ -184,6 +187,7 @@
     // read-only integrations
     forgejo:      "/api/forgejo",        // Forgejo repos/commits/PRs summary
     ca:           "/api/ca",             // CA/PKI health/roots/provisioners/node-certs
+    identity:     "/api/identity",       // Keycloak realm users/factors/groups
 
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
@@ -371,6 +375,13 @@
       : (typeof w.mdnsServices === "string"
         ? w.mdnsServices.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
         : []);
+    // openPorts arrives as an array from /api/discovery (comma-joined "port/svc"
+    // tokens split server-side); tolerate a raw comma-joined string too.
+    var openPorts = Array.isArray(w.openPorts)
+      ? w.openPorts
+      : (typeof w.openPorts === "string"
+        ? w.openPorts.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
+        : []);
     return {
       discId: w.discId,
       host: w.host || w.ip,
@@ -394,6 +405,11 @@
       enrichedAt: w.enrichedAt || null,
       mdnsName: w.mdnsName || null,
       mdnsServices: mdnsSvcs,
+      // active-recon (nmap) enrichment — any may be null on a not-yet-scanned host
+      osGuess: w.osGuess || null,
+      openPorts: openPorts,
+      banners: w.banners || null,
+      nmapEnrichedAt: w.nmapEnrichedAt || null,
       // best-effort LLDP/topology neighbor {gearName,peerPort,localIf,linkType,speedMbps,rssi,viaLldp} or null
       neighbor: w.neighbor || null,
     };
@@ -445,6 +461,38 @@
       provisioners: A(w.provisioners),
       nodeCerts: A(w.nodeCerts),
       warnDays: w.warnDays != null ? w.warnDays : 60,
+    };
+  }
+
+  // Identity (Keycloak users) summary — server-shaped; normalise the user list
+  // and the available/reason fail-soft envelope so the screen never sees null.
+  function mapIdentity(w) {
+    w = w || {};
+    var A = function (v) { return Array.isArray(v) ? v : []; };
+    return {
+      available: !!w.available,
+      reason: w.reason || null,
+      realmUrl: w.realmUrl || null,
+      users: A(w.users).map(function (u) {
+        u = u || {};
+        var f = u.factors || {};
+        return {
+          id: u.id,
+          username: u.username || "",
+          email: u.email || null,
+          enabled: !!u.enabled,
+          emailVerified: !!u.emailVerified,
+          createdAt: u.createdAt || null,
+          groups: A(u.groups),
+          factors: {
+            password: !!f.password,
+            otp: !!f.otp,
+            webauthn: !!f.webauthn,
+            webauthnPasswordless: !!f.webauthnPasswordless,
+            types: A(f.types),
+          },
+        };
+      }),
     };
   }
 
@@ -545,6 +593,9 @@
       // missing token / unreachable CA never forces the whole dashboard offline.
       getJSON(EP.forgejo).catch(function () { return null; }),
       getJSON(EP.ca).catch(function () { return null; }),
+      // Identity (Keycloak) — tolerate absence so a missing/unreachable
+      // directory never forces the whole dashboard offline.
+      getJSON(EP.identity).catch(function () { return null; }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -569,6 +620,7 @@
       // Git (Forgejo) + CA/PKI — mapped (null-tolerant) integration payloads.
       var git = mapForgejo(res[17]);
       var ca = mapCa(res[18]);
+      var identity = mapIdentity(res[19]);
       // inventory — combined read; normalise each list, tolerate a null/partial payload.
       var invW = res[15] && typeof res[15] === "object" ? res[15] : {};
       var inventory = {
@@ -675,7 +727,7 @@
         builds: builds, enrollments: enrollments, config: configW, netgear: netgear,
         pools: poolsW, assets: assetsW,
         inventory: inventory,
-        git: git, ca: ca,
+        git: git, ca: ca, identity: identity,
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
@@ -754,6 +806,7 @@
     endpoints: EP,
     get: getJSON,
     post: post,
+    delete: del,
 
     // detail / history / topology reads
     node: loadNode,
@@ -882,6 +935,8 @@
     forgejoInfo: function () { return getJSON(EP.forgejo).then(mapForgejo); },
     // CA/PKI summary (step-ca health/roots/provisioners/node-certs).
     caInfo: function () { return getJSON(EP.ca).then(mapCa); },
+    // Identity summary (Keycloak realm users/factors/groups).
+    identityInfo: function () { return getJSON(EP.identity).then(mapIdentity); },
 
     // ---- alert lifecycle ----
     ackAlert: function (eventId) { return post(EP.alertAck, { eventId: eventId }); },
@@ -911,6 +966,11 @@
     authConfig: function () { return getJSON(EP.authConfig); },
     login:  function (username, password) { return post(EP.login, { username: username, password: password }); },
     logout: function () { return post(EP.logout, {}); },
+
+    // ---- browser Web Push ----
+    pushVapid: function () { return getJSON(EP.pushVapid); },
+    subscribePush: function (subscription) { return post(EP.pushSubscribe, subscription); },
+    unsubscribePush: function (endpoint) { return del(EP.pushSubscribe, { endpoint: endpoint }); },
 
     // live SSE stream (§8.4 / §11.1) — optional; screens may subscribe.
     stream: function (onEvent) {
@@ -998,7 +1058,7 @@
   // ---------------------------------------------------------------------
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", function () {
-      navigator.serviceWorker.register("sw.js").catch(function (e) {
+      navigator.serviceWorker.register("/sw.js").catch(function (e) {
         console.warn("[SolariNet] service worker registration failed:", e && e.message);
       });
     });

@@ -65,6 +65,8 @@
     tag2: <><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="7.5" cy="7.5" r="1.6"/></>,
     // git — commit graph (branch + node), Git (Forgejo) nav
     git: <><circle cx="6" cy="6" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="6" cy="18" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="18" cy="9" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><path d="M6 8.6v6.8M8.4 7.2A6 6 0 0 0 15.4 9M15.4 9a6 6 0 0 1-7 1.8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></>,
+    // users — Identity (Keycloak realm users) nav
+    users: <><circle cx="9" cy="8" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.9"/><path d="M3 20c0-3.6 2.7-6 6-6s6 2.4 6 6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/><circle cx="17" cy="8.5" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.7" opacity="0.7"/><path d="M15 20c.2-2.7 1.9-4.6 4.4-5.1" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" opacity="0.7"/></>,
   };
 
   function Icon({ name, size = 18, className, style }) {

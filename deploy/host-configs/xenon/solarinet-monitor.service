@@ -1,0 +1,14 @@
+# /etc/systemd/system/solarinet-monitor.service
+[Unit]
+Description=SolariNet monitor outpost (reachability probes -> server)
+After=network-online.target solarinet-server.service
+Wants=network-online.target
+[Service]
+Type=simple
+User=jason
+WorkingDirectory=/home/jason/Code/Solarinet
+ExecStart=/home/jason/Code/Solarinet/build-io/src/monitor/solariMonitor --config /home/jason/Code/Solarinet/run/monitor/monitor.conf --loop
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

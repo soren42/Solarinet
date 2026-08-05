@@ -1,0 +1,18 @@
+# /etc/systemd/system/solarinet-server.service
+[Unit]
+Description=SolariNet SCP server (ingest/control + solariCtl bridge)
+After=network-online.target mariadb.service
+Wants=network-online.target mariadb.service
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet
+EnvironmentFile=/home/jason/Code/Solarinet/run/server.env
+ExecStart=/home/jason/Code/Solarinet/build-io/src/server/solariServer --config /home/jason/Code/Solarinet/run/server.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

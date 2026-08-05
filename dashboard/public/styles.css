@@ -835,6 +835,21 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
 .btn-ack:active { color: var(--ok); border-color: var(--ok); }
 
 /* ===================== OPERATOR PROFILE (TopBar) ===================== */
+.notify-toggle {
+  display: inline-flex; align-items: center; gap: 7px; height: var(--tap); padding: 0 11px;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); color: var(--ink-dim);
+  cursor: pointer; font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .04em;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.notify-toggle:hover:not(:disabled), .notify-toggle:focus-visible { border-color: var(--line-glow); color: var(--ink); outline: none; }
+.notify-toggle.enabled { border-color: rgba(47,230,160,.42); color: var(--ok); background: var(--ok-bg); }
+.notify-toggle.denied { color: var(--crit); cursor: not-allowed; }
+.notify-toggle:disabled { opacity: .72; cursor: wait; }
+.notify-toggle.unsupported { color: var(--ink-faint); cursor: not-allowed; }
+.notify-toggle__lamp { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
+.notify-toggle.enabled .notify-toggle__lamp { background: var(--ok); box-shadow: 0 0 calc(7px * var(--glow)) var(--ok); }
+.notify-toggle.denied .notify-toggle__lamp { background: var(--crit); }
+@media (max-width: 720px) { .notify-toggle { width: var(--tap); justify-content: center; padding: 0; } .notify-toggle__label { display: none; } }
 .profile { position: relative; flex: 0 0 auto; }
 .profile-chip {
   display: inline-flex; align-items: center; gap: 9px;

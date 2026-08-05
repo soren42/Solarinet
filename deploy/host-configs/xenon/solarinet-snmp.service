@@ -1,0 +1,11 @@
+# /etc/systemd/system/solarinet-snmp.service
+[Unit]
+Description=SolariNet SNMP gear poller (IF-MIB interface counters)
+After=network-online.target mariadb.service solarinet-server.service
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=jason
+WorkingDirectory=/home/jason/Code/Solarinet
+# DB password comes from $SOLARI_DB_PASS (run/db.env uses `export`, so source it).
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec build-io/src/server/solariSnmpPoll --config run/server.conf --community public --once'

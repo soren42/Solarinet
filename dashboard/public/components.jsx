@@ -182,6 +182,7 @@
     { id: "maintenance", label: "Maintenance", icon: "maintenance" },
     { id: "git", label: "Git", icon: "git" },
     { id: "certificates", label: "Certificates", icon: "shield" },
+    { id: "identity", label: "Identity", icon: "users" },
     { id: "settings", label: "Config & Rules", icon: "settings" },
   ];
 
@@ -191,6 +192,73 @@
     const api = window.SolariAPI;
     const done = () => window.location.reload();
     return (api && api.logout ? api.logout() : Promise.resolve()).then(done, done);
+  }
+
+  // Public VAPID keys identify an application server; they are deliberately
+  // safe in client code. The API copy lets an operator rotate the key without a
+  // dashboard deploy, while this copy keeps first-run enablement resilient.
+  const PUSH_VAPID_FALLBACK = "BK9zeslyJEedhIEoLnuY1OoKI0SIPPodZn6udVOnEmvLHOEVevAmHeJm-zeFZQ6L5anH8bEQ-9x8G_18KOyhSD0";
+
+  function urlBase64ToUint8Array(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const bytes = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(bytes, (c) => c.charCodeAt(0));
+  }
+
+  function NotificationsToggle() {
+    const [state, setState] = useState("loading");
+    const [busy, setBusy] = useState(false);
+    const supported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+    useEffect(() => {
+      if (!supported) { setState("unsupported"); return undefined; }
+      navigator.serviceWorker.ready.then((reg) => reg.pushManager.getSubscription()).then((sub) => {
+        setState(Notification.permission === "denied" ? "denied" : (sub ? "enabled" : "off"));
+      }).catch(() => setState(Notification.permission === "denied" ? "denied" : "off"));
+      return undefined;
+    }, []);
+
+    function enable() {
+      setBusy(true);
+      Notification.requestPermission().then((permission) => {
+        if (permission !== "granted") { setState(permission === "denied" ? "denied" : "off"); return null; }
+        return navigator.serviceWorker.ready.then((reg) => {
+          const api = window.SolariAPI;
+          return Promise.resolve(api && api.pushVapid ? api.pushVapid() : null).catch(() => null).then((data) => {
+            const key = (data && data.publicKey) || PUSH_VAPID_FALLBACK;
+            return reg.pushManager.getSubscription().then((existing) => existing || reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(key),
+            })).then((subscription) => {
+              if (!api || !api.subscribePush) throw new Error("Push API unavailable");
+              return api.subscribePush(subscription.toJSON()).then(() => setState("enabled"));
+            });
+          });
+        });
+      }).catch(() => setState(Notification.permission === "denied" ? "denied" : "off"))
+        .then(() => setBusy(false));
+    }
+
+    function disable() {
+      setBusy(true);
+      navigator.serviceWorker.ready.then((reg) => reg.pushManager.getSubscription()).then((subscription) => {
+        if (!subscription) return null;
+        const endpoint = subscription.endpoint;
+        return subscription.unsubscribe().then(() => {
+          const api = window.SolariAPI;
+          return api && api.unsubscribePush ? api.unsubscribePush(endpoint) : null;
+        });
+      }).then(() => setState("off"), () => setState("enabled")).then(() => setBusy(false));
+    }
+
+    const enabled = state === "enabled";
+    const label = state === "denied" ? "Notifications blocked" : state === "unsupported" ? "Push unavailable" : enabled ? "Notifications on" : "Notifications off";
+    return <button className={"notify-toggle " + state} onClick={enabled ? disable : enable}
+      disabled={busy || state === "loading" || state === "unsupported" || state === "denied"}
+      aria-pressed={enabled} title={state === "denied" ? "Allow notifications in browser settings" : label}>
+      <span className="notify-toggle__lamp" aria-hidden="true" />
+      <span className="notify-toggle__label">{busy ? "Updating…" : label}</span>
+    </button>;
   }
 
   // ---------- operator profile chip (TopBar) ----------
@@ -312,6 +380,7 @@
         <button className="iconbtn" onClick={onToggleTheme} aria-label="Toggle theme">
           <Icon name={theme === "dark" ? "sun" : "moon"} size={19} />
         </button>
+        <NotificationsToggle />
         <ProfileChip operator={operator} />
       </header>
     );
@@ -442,6 +511,6 @@
   Object.assign(window, {
     StatusDot, Sparkline, TimeSeries, BandwidthGauge, RadialGauge, HealthDonut, RTTBars,
     Sidebar, TopBar, CommandPalette, Toasts, NAV, STATE_LABEL, metricColor,
-    ProfileChip, solariLogout, DangerModal,
+    ProfileChip, NotificationsToggle, solariLogout, DangerModal,
   });
 })();
