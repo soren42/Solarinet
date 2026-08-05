@@ -1,0 +1,13 @@
+# Mirrors the solariPanel daemon's glance facts into the solari-glance App
+# Lab app directory. The app's python side runs in a container that mounts
+# only the app dir (as /app), /dev and the router socket — /run/solari-panel
+# is invisible to it, so this path unit fires on every atomic rename of
+# glance.json and copies it where the container can read it.
+[Unit]
+Description=Sync solari-panel glance facts into the App Lab app dir
+
+[Path]
+PathChanged=/run/solari-panel/glance.json
+
+[Install]
+WantedBy=multi-user.target

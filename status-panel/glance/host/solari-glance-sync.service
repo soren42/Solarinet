@@ -1,0 +1,9 @@
+# Companion to solari-glance-sync.path — one copy per glance.json change.
+[Unit]
+Description=Copy glance.json into the solari-glance app dir
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/install -m 0644 -o arduino -g arduino \
+  /run/solari-panel/glance.json \
+  /home/arduino/ArduinoApps/solari-glance/glance.json

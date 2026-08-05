@@ -118,11 +118,40 @@ static int forwardCommands(int fd,const char *text,PanelLink *link){cJSON *root,
  * outcome; a daemon-side range check would strand the command pending and
  * let the late-confirm sweep falsify it as applied. Structural guards only. */
 if(!cJSON_IsNumber(idItem)||!cJSON_IsNumber(kindItem)||!cJSON_IsNumber(argItem)||cmdId==0u||kind<0||kind>255||arg<0||arg>255||panelEncodeControl(cmdId,(uint8_t)kind,(uint8_t)arg,payload,sizeof(payload))!=PANEL_CONTROL_SIZE){logMessage("skipping invalid command id=%u kind=%u",cmdId,(unsigned int)(kind<0?0:kind));continue;}frameLength=panelEncodeFrame(PANEL_FT_CONTROL,payload,sizeof(payload),frame,sizeof(frame));if(frameLength==0u||writeAll(fd,frame,frameLength)!=0){cJSON_Delete(root);return -1;}logMessage("forwarded panel command id=%lu kind=%d arg=%d",(unsigned long)cmdId,kind,arg);}cJSON_Delete(root);return 0;}
+/* glanceWrite — publish at-a-glance facts for the solari-glance App Lab app,
+ * which mirrors panel health onto the UNO Q's on-board 8x13 LED matrix.
+ * Input:  latest snapshot (may be absent), last poll outcome, link, serial fd
+ *         state. Output: atomic rewrite of /run/solari-panel/glance.json via
+ *         rename so the reader never sees a torn file. Every failure here is
+ *         silent by design — the glance is cosmetic and must never disturb
+ *         the daemon's real work. */
+static void glanceWrite(const PanelSnapshot *snap,int haveSnap,int pollOk,const PanelLink *link,int serialUp){
+  FILE *f=fopen("/run/solari-panel/glance.json.tmp","w");
+  if(f==NULL)return;
+  fprintf(f,"{\"ts\":%lu,\"pollOk\":%d,\"serialUp\":%d,\"stateSeen\":%d",
+          (unsigned long)time(NULL),pollOk?1:0,serialUp?1:0,link->stateSeen?1:0);
+  if(haveSnap)
+    fprintf(f,",\"score\":%u,\"alarmActive\":%u,\"dataStale\":%u,"
+              "\"up\":%u,\"degraded\":%u,\"down\":%u,\"unknown\":%u,\"maint\":%u,"
+              "\"warn\":%u,\"crit\":%u",
+            snap->score,snap->alarmActive,snap->dataStale,
+            snap->stateRoll[0],snap->stateRoll[1],snap->stateRoll[2],snap->stateRoll[3],snap->stateRoll[4],
+            snap->alertCounts[1],snap->alertCounts[2]);
+  if(link->haveState)
+    fprintf(f,",\"sleeping\":%u,\"alarmAcked\":%u,\"brightnessPct\":%u,\"theme\":%u",
+            link->lastState.sleeping,link->lastState.alarmAcked,
+            link->lastState.brightnessPct,link->lastState.theme);
+  fputs("}\n",f);
+  fclose(f);
+  (void)rename("/run/solari-panel/glance.json.tmp","/run/solari-panel/glance.json");
+}
+
 /* Purpose: run daemon's fail-soft polling and serial service loop. Input: config and password. Output: process status. */
 static int runDaemon(const Config *config,const char *password){
   CURL *curl=NULL; PanelSnapshot latest; PanelParser parser; PanelLink link;
   int haveLatest=0,fd=-1;
   uint32_t now=nowMs(),nextPoll=now,nextFrame=now,nextSerial=now,authDelay=1u,transientDelay=1u,serialDelay=1u;
+  int lastPollOk=0; uint32_t nextGlance=now;   /* at-a-glance matrix feed */
   memset(&latest,0,sizeof(latest)); memset(&link,0,sizeof(link)); link.config=config; panelParserInit(&parser);
   while(running){
     now=nowMs(); link.curl=curl;
@@ -132,14 +161,14 @@ static int runDaemon(const Config *config,const char *password){
       snprintf(url,sizeof(url),"%s/api/panel",config->apiBase); result=request(curl,url,NULL,&response);
       if(result==CURLE_OK&&response.status==401L){curl_easy_cleanup(curl);curl=login(config,password);link.curl=curl;if(curl!=NULL)result=request(curl,url,NULL,&response);}
       if(result==CURLE_OK&&response.status>=200L&&response.status<300L&&strncasecmp(trim(response.contentType),"application/json",16u)==0&&parseSnapshot(response.data,&latest)==0){
-        haveLatest=1; transientDelay=1u; nextPoll=now+config->pollSec*1000u;
+        haveLatest=1; lastPollOk=1; transientDelay=1u; nextPoll=now+config->pollSec*1000u;
         if(fd>=0){
           int64_t age=(int64_t)time(NULL)-(int64_t)latest.ts;
           latest.dataStale=(uint8_t)(latest.dataStale!=0u||age>35); latest.seq++;
           if(sendFrame(fd,&latest,1)!=0||forwardCommands(fd,response.data,&link)!=0){logMessage("serial write failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}else nextFrame=now+config->snapshotSec*1000u;
         }
       }else if(response.status==401L){curl_easy_cleanup(curl);curl=NULL;link.curl=NULL;nextPoll=now+authDelay*1000u;authDelay=authDelay<60u?authDelay*2u:60u;}
-      else{logMessage("panel fetch failed (curl=%d HTTP=%ld)",(int)result,response.status);nextPoll=now+transientDelay*1000u;transientDelay=transientDelay<60u?transientDelay*2u:60u;}
+      else{logMessage("panel fetch failed (curl=%d HTTP=%ld)",(int)result,response.status);lastPollOk=0;nextPoll=now+transientDelay*1000u;transientDelay=transientDelay<60u?transientDelay*2u:60u;}
     }
     if(fd<0&&(int32_t)(now-nextSerial)>=0){fd=openSerial(config->serialDev);if(fd<0){nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}else{serialDelay=1u;nextSerial=now;panelParserInit(&parser);link.stateSeen=0;link.haveState=0;link.withholdingLogged=0;nextFrame=now;
       /* Ask the panel for HELLO + an immediate STATE (panelCtlForceReport):
@@ -150,6 +179,8 @@ static int runDaemon(const Config *config,const char *password){
       if(readSerial(fd,&parser,&link)!=0){logMessage("serial read failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;continue;}
       if((int32_t)(now-nextFrame)>=0){if(haveLatest){int64_t age=(int64_t)time(NULL)-(int64_t)latest.ts;latest.dataStale=(uint8_t)(latest.dataStale!=0u||age>35);latest.seq++;}if(sendFrame(fd,&latest,haveLatest)!=0){logMessage("serial write failure; reopening");close(fd);fd=-1;nextSerial=now+serialDelay*1000u;serialDelay=serialDelay<30u?serialDelay*2u:30u;}nextFrame=now+config->snapshotSec*1000u;}
     }
+    /* Feed the on-board glance matrix every 2 s (cosmetic, fail-silent). */
+    if((int32_t)(now-nextGlance)>=0){glanceWrite(&latest,haveLatest,lastPollOk,&link,fd>=0);nextGlance=now+2000u;}
     sleepMs(20L);
   }
   if(fd>=0) close(fd);
