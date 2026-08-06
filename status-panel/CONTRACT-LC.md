@@ -279,3 +279,46 @@ JOIN, not a stored field, is the notice. UI renders the notice only when
 criticality/lifecycle as "unknown" (no chip, no grey), NEVER as tier 0 /
 non-active — a wrong default would mislabel every host. (LC3 already
 building this way; now contractual.)
+
+## 9. Review-LC12 adjudications (Lead, binding)
+
+**J1 (M1 — verb keys FROZEN, an interface-freeze failure I own).** §3.3 named
+routes but not verb argument keys. Frozen now: CRIT_SET takes `asset=<id>` OR
+`node=<id>` plus `tier=<0..4>` (C side as implemented); PHP adapts.
+LIFECYCLE_SET takes `asset=<id>`, `to=<state>`. ASSET_PURGE takes
+`asset=<id>`, `confirm=<name>`.
+
+**J2 (M3 — "open" stays clearedAt IS NULL).** The cascade sets clearedAt on
+exactly the fired rows it closes (targeted, not the historical mass-sweep D1
+rejected), AND writes the eventKind='cleared' incident row — which is BORN
+with clearedAt=NOW, since a recovery notice is not an open alert. All four
+existing "open" readers stay untouched. eventKind remains the incident
+model; clearedAt remains the open/ack flag. Both, always, together.
+
+**J3 (M2 — cascade must catch legacy + host rows).** Asset cascade clears
+open rows matching f.assetId = ? OR (f.assetId IS NULL AND targetId
+suffix-matches one of the asset's captured targets via the id helper).
+Node retire cascade clears by nodeId. New host-scope inserts carry nodeId
+(as today) — assetId stays NULL for them by design; the node cascade owns
+them.
+
+**J4 (M4/M5 — purge confirm).** Server-side comparison in C is mandatory:
+confirmName must equal displayName OR host OR ip (ip is NOT NULL UNIQUE, so
+every asset — including nameless — is purgeable). PHP passes confirmName
+through verbatim; UI already derives displayName||host||ip.
+
+**J5 (M6).** Disposition selects publish CANDIDATES; maintenanceWindow
+suppression still applies after. Order: eventKind/audit gate → disposition
+gate → maintenance gate → publish.
+
+**J6 (M7).** Engine inherits cleared-row disposition+effectiveTier from the
+fired row via openedEventId (one SELECT), never recomputes. D4 verbatim.
+
+**J7 (M9).** alertPublish (SCP PUB) fires for every evaluated breach
+INDEPENDENT of tier gating — tier 0 suppresses the DB insert and MQ, never
+the PUB. opied keeps full visibility per D5.
+
+**J8 (M8).** serverDbLifecycleTransition gains a live-DB test case in
+test_server_db_live (runs under SOLARI_TEST_DB; the Lead runs it against
+the solarinet_stage clone as a deploy gate) — the failure-path rollback
+mutation must fail the test.
