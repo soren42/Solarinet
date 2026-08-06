@@ -22,6 +22,255 @@
     return !n.isAsset && n.state !== "down" && n.state !== "retired" && n.lastSeenMin != null && n.lastSeenMin > staleThresholdMin();
   }
 
+  /* ===================== LIFECYCLE + CRITICALITY =====================
+     CONTRACT-LC §3.1/§3.2. Criticality is an ENTITY setting (asset/node row)
+     composed with the rule severity at fire time — never a rule edit, so the
+     control belongs on the detail views, not in Alert rules. Lifecycle is a
+     tombstone column on the asset; nodes reuse their terminal state='retired'.
+     Exported on window for screens3 (Assets / AssetDetail / ServiceDetail),
+     which reads them lazily so script order stays irrelevant. */
+  function lcToast(msg, icon) { if (window.__solariToast) window.__solariToast(msg, icon); }
+
+  const TIERS = [
+    { tier: 0, key: "ignore", label: "Ignore", note: "Still monitored and graphed. Never raises an alert." },
+    { tier: 1, key: "low", label: "Low", note: "Alerts cap at warning, and nothing is ever notified." },
+    { tier: 2, key: "normal", label: "Normal", note: "Standard alerting and notification." },
+    { tier: 3, key: "high", label: "High", note: "Critical alerts notify, and the status panel alarms with them." },
+    { tier: 4, key: "vital", label: "Vital", note: "Every alert fires critical, notifies at once, and holds the panel alarm while this is down." },
+  ];
+  const TIER_DEFAULT = 2;
+  // null — NOT 2 — when the server hasn't sent the column, so a pre-migration
+  // server renders nothing rather than labelling every host "Ignore".
+  const tierOf = (e) => (e && e.criticality != null ? Number(e.criticality) : null);
+  const tierInfo = (t) => (t != null && TIERS[t]) ? TIERS[t] : null;
+
+  // Role gating — FAIL CLOSED, the same rule the panel page uses (readRole in
+  // screens-panel.jsx, CONTRACT-CP §10). Anything that is not a confirmed
+  // operator or admin — a viewer, a missing profile, a whoami that failed or
+  // has not answered yet, an offline fixture with no session — renders
+  // read-only. Controls are presentation; authority is server-side. Showing a
+  // write button on an unresolved identity is how a viewer ends up looking at
+  // Delete, and no server 403 undoes having offered it.
+  const opRole = () => {
+    const o = window.SOLARI && window.SOLARI.operator;
+    if (!o || typeof o.role !== "string") return null;
+    const r = o.role.toLowerCase();
+    return (r === "operator" || r === "admin") ? r : "viewer";
+  };
+  const canOperate = () => { const r = opRole(); return r === "operator" || r === "admin"; };
+  const canAdmin = () => opRole() === "admin";
+
+  // api()'s fetch has no timeout, and DangerModal spins until its promise
+  // settles — so every lifecycle call gets a hard give-up. Same reasoning as
+  // the panel page's send() (screens-panel.jsx), shorter fuse: these are DB
+  // writes behind solariCtl, not a round trip to a microcontroller.
+  const LC_GIVE_UP_MS = 15000;
+  function withGiveUp(p, ms) {
+    return new Promise(function (resolve, reject) {
+      const t = window.setTimeout(function () {
+        reject(new Error("no response after " + Math.round(ms / 1000) + " s — try again"));
+      }, ms || LC_GIVE_UP_MS);
+      p.then(function (v) { window.clearTimeout(t); resolve(v); },
+        function (e) { window.clearTimeout(t); reject(e); });
+    });
+  }
+  // §3.3 routes. LC2 owns the PHP side; until it lands these 404/501, which is
+  // why every caller toasts the failure and leaves the last known-good state up.
+  function lcPost(path, body) {
+    const a = (window.SOLARI && window.SOLARI.api) || null;
+    if (!a || !a.post) return Promise.reject(new Error("API client unavailable (offline)"));
+    return withGiveUp(a.post(path, body || {}), LC_GIVE_UP_MS);
+  }
+  const SolariLC = {
+    assetLifecycle: (id, action) => lcPost("/api/assets/" + encodeURIComponent(id) + "/lifecycle", { action: action, confirm: true }),
+    assetPurge: (id, confirmName) => lcPost("/api/assets/" + encodeURIComponent(id) + "/purge", { confirmName: confirmName }),
+    assetCriticality: (id, tier) => lcPost("/api/assets/" + encodeURIComponent(id) + "/criticality", { tier: Number(tier) }),
+    nodeCriticality: (id, tier) => lcPost("/api/nodes/" + encodeURIComponent(id) + "/criticality", { tier: Number(tier) }),
+  };
+
+  // List chip. Deliberately absent at the default tier — a badge on every row is
+  // noise; the chip means "this one is weighted differently". Monochrome except
+  // vital (accent) and ignore (dimmed, reads as switched off).
+  function TierChip({ tier }) {
+    const t = tierInfo(tier);
+    if (!t || t.tier === TIER_DEFAULT) return null;
+    return <span className={"tierchip t" + t.tier} title={t.label + " — " + t.note}>{t.label}</span>;
+  }
+
+  // Tombstone chip. 'active' (and a server that doesn't send the column) renders
+  // nothing.
+  const LIFECYCLE_LABEL = { decommissioned: "Decommissioned", deleted: "Deleted" };
+  function LifecycleChip({ lifecycle }) {
+    const lbl = LIFECYCLE_LABEL[lifecycle];
+    if (!lbl) return null;
+    return <span className={"lcchip " + lifecycle} title={lifecycle === "deleted"
+      ? "Deleted — hidden from the default list, kept so discovery can't silently re-adopt it"
+      : "Decommissioned — not probed, not alerting, reversible"}>{lbl}</span>;
+  }
+
+  // Segmented tier picker. Not a dropdown: five fixed options read better open,
+  // and the behaviour line has to be legible WHILE choosing. The picked tier
+  // shows immediately and rolls back if the write is refused, so an unmigrated
+  // server can never leave a lie on screen. Viewers get the read-only variant —
+  // the tier is information they should see, just not a control they can press.
+  function CriticalityControl({ tier, onCommit, label, hint, readOnly }) {
+    const [pending, setPending] = useState(null);
+    const [failed, setFailed] = useState(null);
+    useEffect(() => { if (pending != null && tier === pending) setPending(null); }, [tier, pending]);
+    // Callers pass readOnly explicitly; defaulting it to the fail-closed
+    // predicate means a future call site that forgets gets read-only, not a
+    // control a viewer can press.
+    const ro = readOnly != null ? readOnly : !canOperate();
+    const shown = pending != null ? pending : tier;
+    const info = tierInfo(shown);
+    const note = info ? info.note : "This server hasn't reported a criticality tier for this entity yet.";
+    function pick(t) {
+      if (ro || t === shown) return;
+      setPending(t); setFailed(null);
+      Promise.resolve(onCommit(t)).then(function () {
+        lcToast("Criticality → " + TIERS[t].label, "check");
+      }).catch(function (e) {
+        const msg = (e && e.message) || "error";
+        setPending(null); setFailed(msg);
+        lcToast("Criticality change failed: " + msg, "close");
+      });
+    }
+    return (
+      <div className="lc-crit">
+        <div className="lc-crit__lab">{label || "Criticality"}{hint ? <span className="lc-crit__hint">{hint}</span> : null}</div>
+        {ro
+          ? <div className="tierseg tierseg--ro">{info ? <span className={"tierchip t" + info.tier + " on"}>{info.label}</span> : <span className="muted">not set</span>}</div>
+          : (
+            <div className="tierseg" role="group" aria-label="Criticality tier">
+              {TIERS.map((t) => (
+                <button key={t.tier} type="button" title={t.note} aria-pressed={shown === t.tier}
+                  className={"t" + t.tier + (shown === t.tier ? " on" : "") + (pending === t.tier ? " busy" : "")}
+                  onClick={() => pick(t.tier)}>{t.label}</button>
+              ))}
+            </div>
+          )}
+        <div className="tierseg__note">
+          {note}
+          {failed ? <span className="tierseg__err"> · last change failed: {failed}</span> : null}
+        </div>
+      </div>
+    );
+  }
+
+  // Asset lifecycle action set (§3.1). Decommission / delete / restore are
+  // reversible and confirm with a plain DangerModal; purge is the true row
+  // delete — admin only, and it demands the system's name typed back.
+  const LC_DONE = { decommission: "Decommissioned", delete: "Deleted", restore: "Restored" };
+  function LifecycleActions({ asset, onDone }) {
+    const [kind, setKind] = useState(null);   // decommission | delete | restore | purge | null
+    if (!asset || asset.assetId == null) return null;
+    const lc = asset.lifecycle || "active";
+    // Purge is confirmed by typing this name. CONTRACT-LC §9 J4: the server
+    // compares displayName, else host, else ip — derive it in exactly that
+    // order or the UI asks for a string the server will refuse. The modal
+    // shows the derived string rather than making the operator guess which of
+    // the three this system happens to be identified by.
+    const name = asset.displayName || asset.host || asset.ip || ("asset " + asset.assetId);
+    const nameSource = asset.displayName ? "display name" : (asset.host ? "hostname" : "IP address");
+    const sub = [asset.ip, asset.host].filter(Boolean).join(" · ");
+    if (!canOperate()) return null;
+    // The failure path rethrows: DangerModal keeps itself open (and drops its
+    // busy state) when onConfirm rejects, which is what a failed write wants.
+    function run(action) {
+      return SolariLC.assetLifecycle(asset.assetId, action).then(function () {
+        lcToast(LC_DONE[action] + " " + name, action === "restore" ? "check" : "close");
+        setKind(null); if (onDone) onDone(action);
+      }).catch(function (e) {
+        lcToast(LC_DONE[action] + " failed: " + ((e && e.message) || "error"), "close");
+        throw e;
+      });
+    }
+    function purge() {
+      return SolariLC.assetPurge(asset.assetId, name).then(function () {
+        lcToast("Purged " + name + " — row and probe history gone", "close");
+        setKind(null); if (onDone) onDone("purge");
+      }).catch(function (e) {
+        lcToast("Purge failed: " + ((e && e.message) || "error"), "close");
+        throw e;
+      });
+    }
+    return (
+      <React.Fragment>
+        {lc === "active" && (
+          <button className="btn-ghost lc-btn" onClick={() => setKind("decommission")}>
+            <Icon name="close" size={14} />Decommission
+          </button>
+        )}
+        {lc !== "active" && (
+          <button className="btn-primary" onClick={() => setKind("restore")}>
+            <Icon name="check" size={14} />Restore
+          </button>
+        )}
+        {lc !== "deleted" && (
+          <button className="btn-danger" onClick={() => setKind("delete")}>
+            <Icon name="close" size={14} />Delete
+          </button>
+        )}
+        {lc === "deleted" && canAdmin() && (
+          <button className="btn-danger" onClick={() => setKind("purge")}>
+            <Icon name="close" size={14} />Purge
+          </button>
+        )}
+
+        {kind === "decommission" && (
+          <DangerModal title={`Decommission ${name}?`} sub={sub} verb="Decommission" busyVerb="Decommissioning…"
+            onConfirm={() => run("decommission")} onClose={() => setKind(null)}>
+            <p style={{ margin: 0 }}>
+              Probing stops, open alerts are cleared, and this system stops counting toward the
+              status panel. It stays in the list, greyed, and its history is kept.
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              Reversible — <b>Restore</b> brings it back and probing resumes.
+            </p>
+          </DangerModal>
+        )}
+        {kind === "delete" && (
+          <DangerModal title={`Delete ${name}?`} sub={sub} verb="Delete" busyVerb="Deleting…"
+            onConfirm={() => run("delete")} onClose={() => setKind(null)}>
+            <p style={{ margin: 0 }}>
+              Everything decommissioning does, and the system also drops out of the lists.
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              The row is kept on purpose: if this host turns up on a future scan, Discovery flags
+              it instead of quietly re-adopting it. Still reversible with <b>Restore</b>.
+            </p>
+          </DangerModal>
+        )}
+        {kind === "restore" && (
+          <DangerModal icon="check" title={`Restore ${name}?`} sub={sub} verb="Restore" busyVerb="Restoring…"
+            onConfirm={() => run("restore")} onClose={() => setKind(null)}>
+            <p style={{ margin: 0 }}>
+              The system returns to active monitoring: its probe targets are re-created on the next
+              cycle and it starts alerting again at its current criticality.
+            </p>
+          </DangerModal>
+        )}
+        {kind === "purge" && (
+          <DangerModal title={`Purge ${name}?`} sub={sub} verb="Purge permanently" busyVerb="Purging…" confirmName={name}
+            onConfirm={purge} onClose={() => setKind(null)}>
+            <p style={{ margin: 0 }}>
+              Deletes the row itself along with every probe target and reachability sample.
+              <b style={{ color: "var(--crit)" }}> This cannot be undone</b>, and nothing stops this host
+              being adopted again from a future scan.
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              Recorded alert history is kept — the audit trail is never deleted.
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              The server checks the name below against this system's stored name
+              (<span className="td-mono">{nameSource}</span>), so it has to match exactly.
+            </p>
+          </DangerModal>
+        )}
+      </React.Fragment>
+    );
+  }
+
   /* ===================== ATTENTION PANEL =====================
      The operator's first read: everything that currently needs a human,
      ranked crit → warn → info, each row a click-through to the owning
@@ -219,17 +468,38 @@
   function FleetOverview({ onOpenNode, onNav, view, setView, fleet }) {
     const [stateFilter, setStateFilter] = useState("all");
     const [roleFilter, setRoleFilter] = useState("all");
-    const [showRetired, setShowRetired] = useState(false);   // retired nodes hidden by default
+    const [showRetired, setShowRetired] = useState(false);   // retired/decommissioned hidden by default
+    const [showDeleted, setShowDeleted] = useState(false);   // deleted hidden by default (CONTRACT-LC §3.1)
     const [dense, setDense] = useState(true);
     // problem-first default: worst state floats to the top until re-sorted
     const [sort, setSort] = useState({ key: "state", dir: 1 });
 
-    const retiredCount = useMemo(() => fleet.filter((n) => n.state === "retired").length, [fleet]);
-    const filtered = useMemo(() => fleet.filter((n) =>
-      (showRetired || n.state !== "retired") &&
-      (stateFilter === "all" || n.state === stateFilter) &&
-      (roleFilter === "all" || n.role === roleFilter)
-    ), [fleet, stateFilter, roleFilter, showRetired]);
+    // Lifecycle + criticality ride in on the fleet rows themselves (api.jsx
+    // passes both through per CONTRACT-LC A-1). Assets carry the tombstone
+    // column; a real node says the same thing through its terminal state, so
+    // both collapse to one axis for filtering. Absent = unknown, never tier 0.
+    function rowLc(n) {
+      return n.lifecycle || (n.state === "retired" ? "decommissioned" : "active");
+    }
+    function rowTier(n) {
+      return n.criticality != null ? Number(n.criticality) : null;
+    }
+
+    const lcCounts = useMemo(function () {
+      const c = { decommissioned: 0, deleted: 0 };
+      fleet.forEach(function (n) { const lc = rowLc(n); if (c[lc] != null) c[lc]++; });
+      return c;
+    }, [fleet]);
+    // Rows are decorated once here (lc + tier) so the three views don't each
+    // re-derive them per cell.
+    const filtered = useMemo(() => fleet.filter((n) => {
+      const lc = rowLc(n);
+      if (lc === "deleted" && !showDeleted) return false;
+      if (lc === "decommissioned" && !showRetired) return false;
+      return (stateFilter === "all" || n.state === stateFilter) &&
+        (roleFilter === "all" || n.role === roleFilter);
+    }).map((n) => Object.assign({}, n, { lc: rowLc(n), tier: rowTier(n) })),
+      [fleet, stateFilter, roleFilter, showRetired, showDeleted]);
 
     const roll = S.fleetRoll;
     const active = Math.max(1, roll.total - (roll.retired || 0));   // KPI denominators exclude retired
@@ -283,13 +553,23 @@
               {k !== "all" && <Icon name={ROLE_ICON[k]} size={14} />}{lbl}
             </button>
           ))}
-          {retiredCount > 0 && (
+          {(lcCounts.decommissioned > 0 || lcCounts.deleted > 0) && (
             <React.Fragment>
               <div style={{ width: 1, height: 24, background: "var(--line)", margin: "0 4px" }} />
-              <button className={"chip" + (showRetired ? " on" : "")} onClick={() => setShowRetired((v) => !v)}
-                title={showRetired ? "Hide retired nodes" : "Show retired nodes"}>
-                <span className="dot unknown" />Retired<span className="chip__n">{retiredCount}</span>
-              </button>
+              {lcCounts.decommissioned > 0 && (
+                <button className={"chip" + (showRetired ? " on" : "")} onClick={() => setShowRetired((v) => !v)}
+                  title={showRetired ? "Hide retired and decommissioned systems" : "Show retired and decommissioned systems"}>
+                  <span className="dot unknown" />Retired<span className="chip__n">{lcCounts.decommissioned}</span>
+                </button>
+              )}
+              {/* Deleted rows are kept server-side so discovery can't silently
+                  re-adopt them (§3.1) — this chip is the only way to see them. */}
+              {lcCounts.deleted > 0 && (
+                <button className={"chip" + (showDeleted ? " on" : "")} onClick={() => setShowDeleted((v) => !v)}
+                  title={showDeleted ? "Hide deleted systems" : "Show deleted systems"}>
+                  <span className="dot unknown" />Deleted<span className="chip__n">{lcCounts.deleted}</span>
+                </button>
+              )}
             </React.Fragment>
           )}
           {view === "heat" && (
@@ -310,8 +590,8 @@
     const load = n.state === "down" ? 0 : n.cpuPct;
     const stale = isStale(n);
     return (
-      <div className={"cell " + n.state + (dense ? "" : " cozy-cell")} onClick={() => onOpenNode(n)}
-        title={`${n.hostFqdn} — ${n.state}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`}>
+      <div className={"cell " + n.state + (dense ? "" : " cozy-cell") + (n.lc && n.lc !== "active" ? " lc-dormant" : "")} onClick={() => onOpenNode(n)}
+        title={`${n.hostFqdn} — ${n.state}${n.lc && n.lc !== "active" ? " · " + n.lc : ""}${stale ? " · stale (last seen " + fmt.ago(n.lastSeenMin) + ")" : ""}`}>
         {/* Rev2 §13: ONE tile design — name + dot, mono meta, sparkline. */}
         <div className="cell__top">
           <span className="cell__name">{n.name}</span>
@@ -396,10 +676,10 @@
           </tr></thead>
           <tbody>
             {sorted.map((n) => (
-              <tr key={n.nodeId} onClick={() => onOpenNode(n)}>
+              <tr key={n.nodeId} className={n.lc && n.lc !== "active" ? "lc-dormant" : undefined} onClick={() => onOpenNode(n)}>
                 {/* Rev2 §05: the state cell always carries dot PLUS word */}
                 <td><StatusDot state={n.state} /> <span className={"statetext " + n.state} style={{ fontSize: 12, fontWeight: 600 }}>{n.state}</span></td>
-                <td><div className="td-host"><Icon name={ROLE_ICON[n.role]} size={15} className="ico" />{n.name}<span className="td-mono" style={{ fontSize: 10, color: "var(--ink-faint)" }}>.akoria.net</span></div></td>
+                <td><div className="td-host"><Icon name={ROLE_ICON[n.role]} size={15} className="ico" />{n.name}<span className="td-mono" style={{ fontSize: 10, color: "var(--ink-faint)" }}>.akoria.net</span><TierChip tier={n.tier} /><LifecycleChip lifecycle={n.lc} /></div></td>
                 <td><span className="tag">{n.role}</span></td>
                 <td className="td-mono">{n.segName} <span style={{ color: "var(--ink-faint)" }}>{n.ip}</span></td>
                 <td style={{ textAlign: "right" }}><Bar pct={n.cpuPct} /></td>
@@ -509,6 +789,11 @@
       const iv = setInterval(load, 10000);
       return function () { live = false; clearInterval(iv); };
     }, [node.nodeId]);
+    // Criticality rides in on the node record (CONTRACT-LC A-1). The local
+    // override holds the operator's own change until the next poll re-reads it;
+    // null on both means the server never reported one, which is "not set".
+    const [tierSet, setTierSet] = useState(null);
+    const [confirmRetire, setConfirmRetire] = useState(false);
     // Prefer fetched detail; fall back to the live list entry, then the passed node.
     const n = detail || (S.nodes || S.fleet || []).find((x) => x.nodeId === node.nodeId) || node;
     const hist = history ? Object.assign({}, n.hist || {}, history) : (n.hist || { cpu: [], ram: [], net: [], disk: [] });
@@ -521,6 +806,26 @@
       disk: { data: hist.disk, color: "var(--warn)", label: "Disk %", max: 100 },
     };
     const cur = metricMap[metric];
+    const retired = n.state === "retired";
+
+    const tier = tierSet != null ? tierSet : (n.criticality != null ? Number(n.criticality) : null);
+
+    function commitTier(t) { return SolariLC.nodeCriticality(n.nodeId, t).then(function () { setTierSet(t); }); }
+    // Nodes have no tombstone column: retiring IS the node lifecycle transition
+    // (§3.1), and it now also clears the node's open alerts server-side.
+    function retireGo() {
+      const a = S.api;
+      if (!a || !a.retireNode) { lcToast("Retire unavailable (offline)", "close"); return Promise.reject(new Error("offline")); }
+      return withGiveUp(a.retireNode(n.nodeId), LC_GIVE_UP_MS).then(function () {
+        lcToast(`Retired ${n.name} — removed from the active roster`, "close");
+        setConfirmRetire(false);
+        if (a.refresh) a.refresh().catch(function () {});
+        onBack();
+      }).catch(function (e) {
+        lcToast("Retire failed: " + ((e && e.message) || "error"), "close");
+        throw e;
+      });
+    }
 
     return (
       <div className="page">
@@ -530,6 +835,9 @@
           <div style={{ marginLeft: "auto", display: "flex", gap: 9 }}>
             <button className="backbtn" onClick={() => onSurvey(n)}><Icon name="survey" size={15} />Survey now</button>
             <button className="backbtn" onClick={() => onSurvey(n, "config")}><Icon name="settings" size={15} />Push config</button>
+            {canOperate() && !retired && (
+              <button className="btn-danger" onClick={() => setConfirmRetire(true)}><Icon name="close" size={15} />Retire</button>
+            )}
           </div>
         </div>
 
@@ -548,6 +856,12 @@
               </div>
             </div>
           </div>
+        </div>
+
+        {/* how much this node's alerts are worth (CONTRACT-LC §3.2) */}
+        <div className="lc-bar">
+          <CriticalityControl tier={tier} readOnly={!canOperate()} onCommit={commitTier}
+            hint={retired ? "retired — the tier applies again if this node returns" : null} />
         </div>
 
         {/* gauges */}
@@ -693,6 +1007,20 @@
             </div>
           </div>
         </div>
+
+        {confirmRetire && (
+          <DangerModal title={`Retire ${n.name}?`} sub={`${n.hostFqdn || n.name} · ${n.ip || ""}`}
+            verb="Retire node" busyVerb="Retiring…" onConfirm={retireGo} onClose={() => setConfirmRetire(false)}>
+            <p style={{ margin: 0 }}>
+              The node leaves the active roster: no more samples are expected, its open alerts are
+              cleared, and it drops out of the fleet views behind the “Retired” filter.
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              Nothing on the host itself is touched. To also wipe the agent from the machine, use
+              <b> Decommission</b> in the node's config dialog instead.
+            </p>
+          </DangerModal>
+        )}
       </div>
     );
   }
@@ -1073,5 +1401,10 @@
     );
   }
 
-  Object.assign(window, { FleetOverview, NodeDetail, AlertsScreen, AttentionPanel });
+  Object.assign(window, {
+    FleetOverview, NodeDetail, AlertsScreen, AttentionPanel,
+    // CONTRACT-LC shared surface (screens3 consumes these)
+    TierChip, LifecycleChip, CriticalityControl, LifecycleActions,
+    SolariLC, solariCanOperate: canOperate, solariWithGiveUp: withGiveUp,
+  });
 })();
