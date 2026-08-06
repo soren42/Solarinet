@@ -342,7 +342,7 @@ solariStatus serverProvisionApprove(serverContext *ctx, uint64_t enrId,
 
     /* Audit the approval alongside the alert/audit trail. */
     (void)serverDbWriteAlertEvent(ctx->db, 0, enrId, NULL, "info",
-                                  "enrollment approved", now);
+                                  "enrollment approved", now, "audit", 0, 0, 2, "suppress", NULL);
 
     solariLogf(SOLARI_LOG_INFO,
                "provision/approve: enroll %llu host=%s approved by %s, cert issued",
@@ -386,7 +386,7 @@ solariStatus serverProvisionReject(serverContext *ctx, uint64_t enrId,
     /* Drop any held CSR; a rejected request must not retain key material. */
     (void)serverDbEnrollClearCsr(ctx->db, enrId);
     (void)serverDbWriteAlertEvent(ctx->db, 0, enrId, NULL, "warn",
-                                  "enrollment rejected", now);
+                                  "enrollment rejected", now, "audit", 0, 0, 2, "suppress", NULL);
 
     solariLogf(SOLARI_LOG_INFO,
                "provision/reject: enroll %llu host=%s rejected by %s",
@@ -500,7 +500,7 @@ solariStatus serverProvisionDecommission(serverContext *ctx, uint64_t nodeId,
                    operator_, (unsigned)(wipeScope & 0xFFu),
                    (unsigned long long)token);
     if ((st = serverDbWriteAlertEvent(ctx->db, 0, nodeId, NULL, "crit",
-                                      detail, now)) != SOLARI_OK) {
+                                      detail, now, "audit", 0, 0, 2, "suppress", NULL)) != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR,
                    "provision/decommission: audit row write failed for node %llu: %s",
                    (unsigned long long)nodeId, solariStrError(st));
@@ -556,7 +556,7 @@ solariStatus serverProvisionRetire(serverContext *ctx, uint64_t nodeId)
     }
     now = solariNowUnixMs();
     (void)serverDbWriteAlertEvent(ctx->db, 0, nodeId, NULL, "warn",
-                                  "node retired", now);
+                                  "node retired", now, "audit", 0, 0, 2, "suppress", NULL);
 
     solariLogf(SOLARI_LOG_INFO, "provision/retire: node=%llu marked retired",
                (unsigned long long)nodeId);
@@ -680,6 +680,21 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
                    "provision/adopt: discovered %llu has no addressable target",
                    (unsigned long long)discId);
         return ERR_INVALID_ARG;
+    }
+
+    /* A discovered address belonging to a retained lifecycle tombstone is
+     * evidence worth surfacing, never permission to resurrect monitoring. */
+    {
+        uint64_t assetId = 0;
+        bool active = false;
+        if (serverDbGetAssetIdByIp(ctx->db, ent.ip, &assetId) == SOLARI_OK && assetId != 0 &&
+            serverDbAssetIsActive(ctx->db, assetId, &active) == SOLARI_OK && !active) {
+            (void)serverDbSetDiscoveredStatus(ctx->db, discId, "ignored");
+            solariLogf(SOLARI_LOG_INFO,
+                       "provision/adopt: discovered %s ignored; asset %llu is lifecycle-tombstoned",
+                       ent.ip, (unsigned long long)assetId);
+            return SOLARI_OK;
+        }
     }
 
     /* Catalog the adopted entity as a probe target NOW (before dispatch), so it

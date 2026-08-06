@@ -238,7 +238,7 @@ solariStatus serverAssetsRemove(serverContext *ctx, const char *assetKey,
 {
     char targets[ASSET_REMOVE_TARGET_CAP][SERVER_TARGETID_MAX];
     uint64_t assetId = 0;
-    size_t count = 0, i;
+    size_t count = 0;
     char detail[256];
     solariStatus st;
 
@@ -257,27 +257,23 @@ solariStatus serverAssetsRemove(serverContext *ctx, const char *assetKey,
                                   ASSET_REMOVE_TARGET_CAP, &count);
     if (st != SOLARI_OK) return st;
 
+    st = serverDbPurgeAsset(ctx->db, assetId, targets, count);
+    if (st != SOLARI_OK) return st;
+    if (removedTargets) *removedTargets = count;
+
+    /* Audit AFTER the purge commits (review R2-S3): writing it first left a
+     * durable "asset removed" record when the purge itself rolled back. A
+     * failed audit write no longer un-does a completed purge — log loudly
+     * and return success, since the removal genuinely happened. */
     snprintf(detail, sizeof detail, "asset removed by %s asset=%llu targets=%zu",
              operator_, (unsigned long long)assetId, count);
     st = serverDbWriteAlertEvent(ctx->db, 0, 0, NULL, "warn",
-                                 detail, solariNowUnixMs());
-    if (st != SOLARI_OK) {
+                                 detail, solariNowUnixMs(), "audit", 0, assetId, 2, "suppress", NULL);
+    if (st != SOLARI_OK)
         solariLogf(SOLARI_LOG_ERROR,
-                   "assets/remove: audit row write failed asset=%llu: %s",
+                   "assets/remove: audit row write failed asset=%llu: %s "
+                   "(purge already committed)",
                    (unsigned long long)assetId, solariStrError(st));
-        return st;
-    }
-
-    for (i = 0; i < count; i++) {
-        st = serverDbPurgeProbeState(ctx->db, targets[i]);
-        if (st != SOLARI_OK) return st;
-        st = serverDbDeleteProbeTarget(ctx->db, targets[i]);
-        if (st != SOLARI_OK) return st;
-    }
-
-    st = serverDbDeleteAsset(ctx->db, assetId);
-    if (st != SOLARI_OK) return st;
-    if (removedTargets) *removedTargets = count;
 
     solariLogf(SOLARI_LOG_WARN, "assets/remove: asset=%llu targets=%zu by=%s",
                (unsigned long long)assetId, count, operator_);
