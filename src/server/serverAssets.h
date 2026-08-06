@@ -38,6 +38,7 @@ solariStatus serverAssetsAdopt(serverContext *ctx, const serverAdoptOpts *o,
 /* Update an existing asset's metadata (keyed by ip) and sync its heartbeat
  * target to monitorHost. Empty-string fields are written as-is (the caller
  * sends the full desired metadata). */
+solariStatus serverAssetsResyncHeartbeat(serverContext *ctx, uint64_t assetId);
 solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
                                  const char *displayName, const char *className,
                                  uint64_t poolId, const char *tagsJson,

@@ -731,6 +731,11 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         }
         st=serverDbLifecycleTransition(ctl->ctx->db,assetId,to,targets,count);
         if(st==SOLARI_OK && strcmp(to,"active")!=0)for(i=0;i<count;i++)serverAlertDropTargetState(targets[i]);
+        /* Restore resumes probing immediately: the heartbeat sync is otherwise
+         * event-driven and nothing else touches the asset (A1 deploy gap). */
+        if(st==SOLARI_OK && strcmp(to,"active")==0 &&
+           serverAssetsResyncHeartbeat(ctl->ctx,assetId)!=SOLARI_OK)
+            solariLogf(SOLARI_LOG_WARN,"lifecycle: restore heartbeat resync failed asset=%llu",(unsigned long long)assetId);
         return st==SOLARI_OK?ctlReplyOk(replyOut,replyCap,NULL):ctlReplyErr(replyOut,replyCap,st,"lifecycle update failed");
     }
 

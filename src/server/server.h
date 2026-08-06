@@ -182,6 +182,8 @@ solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
 /* Look up an asset id by ip (*assetId = 0 if none). */
 solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *assetId);
 /* Fetch the values accepted by ASSET_PURGE's server-side confirmation check. */
+solariStatus serverDbGetAssetHeartbeatInfo(serverDb *db, uint64_t assetId,
+                                           char *ip, size_t ipCap, int *monitorHost);
 solariStatus serverDbGetAssetConfirmValues(serverDb *db, uint64_t assetId,
                                            char *displayName, size_t displayCap,
                                            char *host, size_t hostCap,

@@ -197,6 +197,23 @@ solariStatus serverAssetsAdopt(serverContext *ctx, const serverAdoptOpts *o,
     return SOLARI_OK;
 }
 
+/* serverAssetsResyncHeartbeat — re-run probe-target sync for one asset by id.
+ * Input: assetId. Output: status. Lifecycle restore calls this so probes
+ * resume immediately instead of waiting for the next asset-touch event
+ * (acceptance A1 gap found during deploy: restore left targets absent). */
+solariStatus serverAssetsResyncHeartbeat(serverContext *ctx, uint64_t assetId)
+{
+    char ip[SERVER_IP_MAX];
+    int  monitorHost = 0;
+    solariStatus st;
+
+    if (!ctx || !ctx->db || !assetId) return ERR_INVALID_ARG;
+    st = serverDbGetAssetHeartbeatInfo(ctx->db, assetId, ip, sizeof ip, &monitorHost);
+    if (st != SOLARI_OK) return st;
+    assetSyncHeartbeat(ctx, ip, monitorHost != 0, NULL, assetId);
+    return SOLARI_OK;
+}
+
 solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
                                  const char *displayName, const char *className,
                                  uint64_t poolId, const char *tagsJson,

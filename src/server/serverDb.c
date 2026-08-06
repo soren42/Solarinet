@@ -655,6 +655,34 @@ solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *asse
     return SOLARI_OK;
 }
 
+/* serverDbGetAssetHeartbeatInfo - ip + monitorHost flag for one asset.
+ * Input: assetId. Output: ip (caller buffer) and monitorHost (0/1).
+ * Used by the lifecycle-restore heartbeat resync. */
+solariStatus serverDbGetAssetHeartbeatInfo(serverDb *db, uint64_t assetId,
+                                           char *ip, size_t ipCap, int *monitorHost)
+{
+    char       sql[160];
+    MYSQL     *conn;
+    MYSQL_RES *res;
+    MYSQL_ROW  row;
+
+    if (!db || !assetId || !ip || !ipCap || !monitorHost) return ERR_INVALID_ARG;
+    conn = dbConn(db);
+    if (!conn) return ERR_DB;
+    snprintf(sql, sizeof sql,
+             "SELECT ip, monitorHost FROM asset WHERE assetId=%llu",
+             (unsigned long long)assetId);
+    if (mysql_query(conn, sql) != 0) return ERR_DB;
+    res = mysql_store_result(conn);
+    if (!res) return ERR_DB;
+    row = mysql_fetch_row(res);
+    if (!row || !row[0]) { mysql_free_result(res); return ERR_DB; }  /* no such asset */
+    snprintf(ip, ipCap, "%s", row[0]);
+    *monitorHost = row[1] ? atoi(row[1]) : 0;
+    mysql_free_result(res);
+    return SOLARI_OK;
+}
+
 solariStatus serverDbGetAssetConfirmValues(serverDb *db, uint64_t assetId,
                                            char *displayName, size_t displayCap,
                                            char *host, size_t hostCap,
