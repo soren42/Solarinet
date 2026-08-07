@@ -269,3 +269,18 @@ pixel), never a healthy full-height marker over a dead router. wanBackup
 becomes the only live path, which is exactly the at-a-glance story the
 screen exists to tell. Firmware implements first; virtual conforms; harness
 pins both states.
+
+**A-4 (IF-MIB → wire state mapping, NORMATIVE — bug found by AW3 in
+AW1's payload assembly).** gearInterfaceCurrent.operStatus is IF-MIB
+(1=up, 2=down, 3=testing, 4=unknown, 5=dormant, 6=notPresent,
+7=lowerLayerDown, nullable); §3.1 wire state is 0=down, 1=up, 2=degraded.
+Passing operStatus through unmapped makes every down device read DEGRADED
+(amber-solid) and state 0 unreachable — a down router would defeat A-3
+exactly as written. Normative mapping (panelGearState()):
+  1 → 1 (up) · 3,5 → 2 (degraded: present but not passing normal traffic)
+  2,7 → 0 (down) · 4,6,NULL,anything else → 0 (down)
+Principle: FAIL DARK — an unknown state must never render healthier than
+down. Verification: stage-DB rows driven through the live endpoint proving
+all three wire states reachable; cross-lab review mutation-checks the
+mapper. Fixture stays wire-encoded (AW3's harness tests downstream of this
+mapping by design — the mapping's own test lives server-side).
