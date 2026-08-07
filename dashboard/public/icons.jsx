@@ -14,6 +14,7 @@
     alerts: <><path d="M12 3l9 16H3z"/><rect x="11" y="9" width="2" height="5" rx="1" fill="#05080e"/><circle cx="12" cy="16.5" r="1.1" fill="#05080e"/></>,
     discovery: <><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M16 16l5 5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"/><circle cx="11" cy="11" r="2"/></>,
     provision: <><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/></>,
+    rackwire: <><rect x="2" y="3" width="20" height="6" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.8"/><rect x="5" y="5.4" width="2.2" height="2.2" rx="0.5"/><rect x="9.4" y="5.4" width="2.2" height="2.2" rx="0.5"/><rect x="13.8" y="5.4" width="2.2" height="2.2" rx="0.5"/><path d="M6.1 9v4.5a2.5 2.5 0 0 0 2.5 2.5h6.8a2.5 2.5 0 0 1 2.5 2.5V21" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><circle cx="17.9" cy="21" r="1.6"/></>,
     settings: <><circle cx="12" cy="12" r="3"/><path d="M12 2l1.5 3 3.3-.6L17 7.7 20 9l-1.3 3L20 15l-2.2 2.3.2 3.3L15 21l-3 1-3-1-2.9.6.2-3.3L4 15l1.3-3L4 9l3-1.3-.2-3.3L10 5z" opacity="0.35"/></>,
     // metrics
     cpu: <><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1" fill="#05080e"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></>,

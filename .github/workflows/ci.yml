@@ -82,16 +82,45 @@ jobs:
   dashboard:
     name: dashboard API + ops scripts
     runs-on: ubuntu-latest
+    services:
+      # Disposable scratch DB for CONTRACT-RW §6: never point tests at the
+      # live `sor` (cesium) — this container is thrown away with the job.
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: rwci_scratch
+          MARIADB_DATABASE: solarinet_stage
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -uroot -prwci_scratch"
+          --health-interval=5s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@v4
       - name: Install PHP CLI
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y php-cli
+          sudo apt-get install -y php-cli mariadb-client
       - name: PHP syntax
         run: find dashboard/api -name '*.php' -print | sort | xargs -n1 php -l
       - name: PHP bridge tests
         run: php tests/dashboard/test_solari_ctl.php
+      - name: RackWire API route tests
+        run: php tests/dashboard/test_rackwire_api.php
+      - name: RackWire UI parse + token bridge tests
+        run: node tests/dashboard/test_rackwire_ui.js
+      - name: Migration 020 against a scratch solarinet_stage DB (CONTRACT-RW §6)
+        env:
+          MYSQL_PWD: rwci_scratch
+        run: |
+          MYSQL="mariadb -h127.0.0.1 -P3306 -uroot solarinet_stage"
+          $MYSQL < netdb/sor/schema.sql
+          $MYSQL < netdb/sor/migrations/001-surrogate-pks.sql
+          $MYSQL < netdb/sor/migrations/014_inventory.sql
+          $MYSQL < netdb/sor/migrations/015_barcodes.sql
+          $MYSQL < netdb/sor/migrations/020_rackwire.sql
+          echo "-- re-applying 020 to prove idempotency --"
+          $MYSQL < netdb/sor/migrations/020_rackwire.sql
       - name: Deploy script syntax
         run: |
           bash -n \

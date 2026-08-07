@@ -39,6 +39,16 @@ return static function (Router $router): void {
         // it (that would fatally redeclare `Inv`). See routes/inv_codes.php.
         __DIR__ . '/routes/inv_codes.php',
         __DIR__ . '/routes/dns.php',
+        // rackwire.php is SoR-backed CRUD (Sor::db(), like inventory.php /
+        // inv_codes.php above), not a solariCtl bridge — it registers here,
+        // not in routes_mutations.php, even though it contains POST/mutation
+        // routes. routes_mutations.php's doc comment describes the
+        // solariCtl-only convention; inventory.php already establishes SoR
+        // writes as a routes.php-loaded exception to that convention, and
+        // rackwire.php follows the same precedent for the same reason (a
+        // single file owns its GET+POST routes and its private helper
+        // class/functions without a cross-file load-order dependency).
+        __DIR__ . '/routes/rackwire.php',
     ];
     foreach ($groups as $file) {
         $register = require $file;

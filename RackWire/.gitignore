@@ -1,0 +1,7 @@
+# Pre-integration source drop — the shipped app lives in dashboard/public/rackwire/
+Connection Planner.dc.html
+device-library.js
+live-adapter.js
+support.js
+uploads/
+.thumbnail

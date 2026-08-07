@@ -52,6 +52,7 @@ const SHELL_ASSETS = [
   "screens7.jsx",
   "screens8.jsx",
   "screens-panel.jsx",
+  "screens-rackwire.jsx",
   "app.jsx",
   // vendored libs (on-prem / air-gapped — §8.1)
   "vendor/react.production.min.js",

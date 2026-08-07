@@ -179,6 +179,7 @@
     { id: "assets", label: "Systems", icon: "host" },
     { id: "inventory", label: "Inventory", icon: "inventory" },
     { id: "codes", label: "Tags & Scan", icon: "tag2" },
+    { id: "rackwire", label: "RackWire", icon: "rackwire" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
     { id: "maintenance", label: "Maintenance", icon: "maintenance" },
