@@ -185,3 +185,33 @@ Corrupt/absent config → defaults, not a crash.
   silent > 60 min is considered stalled; packet (RETURN-AW<n>.md) is part
   of the run, not a follow-up; no git operations; no service restarts; no
   DB writes to live solarinet (stage clone only).
+
+## 9. Amendments (Lead, during build)
+
+**A-1 (layout, NORMATIVE — resolves the §1 left/right contradiction).**
+§1's second bullet transcribed the original request's wording ("to the switch
+and hub on the right") without resolving it against "internet right of the
+router line". Operative reading, ratified: traffic order
+
+    APs → hubs → switch → router → internet (+wanBackup)
+
+x/y constants (53×11 grid, bands spread n gates evenly, centred when n==1):
+```
+ap     band x 2..16      h=3   y0 = round(i*(11-3)/(n-1)); 4 when n==1
+hub    band x 20..34     h = i even ? 6 : 5; y0 = i even ? 0 : 11-h  (stagger)
+switch band x 38..44     h=8   y0=1
+router band x 46..48     h=11  y0=0
+internet column x=51 · wanBackup column x=52
+```
+9-device inventory → AP gates at x 2/9/16, hubs 20/27/34, switch 41,
+router 47. Legs: band gate i → next band gate (i mod nNext); final leg
+router→internet. Wire brightness from src rxLevel; particle spawn/brightness
+from src txLevel; level 0 = no particles. Gate colour up=accent /
+degraded=warn / down=crit with every-other-pixel skip for "broken".
+gearCount 0 → the screen calls the existing no-data treatment.
+BOTH renderers (firmware A1, virtual A1) implement THESE constants — the
+fixture is the parity oracle.
+
+**A-2 (page pend keys).** Kinds 8/9 pend per-screen in the dashboard page
+("screenEn:<idx>" / "screenWt:<idx>"), page-local; the one-key-per-kind
+CMD_GROUP does not apply to per-screen commands.
