@@ -67,7 +67,7 @@ typedef enum {                     /* host -> panel */
                                       then ASCII build string (<=32)        */
   PANEL_FT_EVENT    = 0x82,        /* u8 kind (PanelEventKind), u8 arg      */
   PANEL_FT_LOG      = 0x83,        /* ASCII text (<=128)                    */
-  PANEL_FT_STATE    = 0x84         /* CONTRACT-CP §3: u8 theme, u8 screen,
+  PANEL_FT_STATE    = 0x84,        /* CONTRACT-CP §3: u8 theme, u8 screen,
                                       u8 brightnessPct, u8 autoBright,
                                       u8 sleeping, u8 alarmArmed,
                                       u8 alarmAcked, u8 dwellSec (v1.1 CP
@@ -79,6 +79,8 @@ typedef enum {                     /* host -> panel */
                                       CONSUMED (applied or rejected), never
                                       advanced on mere receipt. Emitted on
                                       any state change + 30 s heartbeat.    */
+  PANEL_FT_CONFIG   = 0x85         /* CONTRACT-AW §3.3: u8[12] screenCfg,
+                                      u8 flags, u8[3] reserved.              */
 } PanelFrameType;
 
 typedef enum {                     /* PANEL_FT_CONTROL kinds; all idempotent */
@@ -88,11 +90,14 @@ typedef enum {                     /* PANEL_FT_CONTROL kinds; all idempotent */
   PANEL_CTL_AUTOBRIGHT = 4,        /* arg ignored; re-enable light sensor   */
   PANEL_CTL_ACKALARM   = 5,        /* arg ignored; same path as button ack  */
   PANEL_CTL_SETDWELL   = 6,        /* arg seconds; 3/6/30 valid, else reject*/
-  PANEL_CTL_SLEEP      = 7         /* arg 0 wake / 1 sleep                  */
+  PANEL_CTL_SLEEP      = 7,        /* arg 0 wake / 1 sleep                  */
+  PANEL_CTL_SCREENEN   = 8,        /* arg (screenIdx << 1) | enabled        */
+  PANEL_CTL_SCREENWT   = 9         /* arg (screenIdx << 3) | weightCode     */
 } PanelControlKind;
 
 #define PANEL_CONTROL_SIZE 8u      /* CONTROL payload bytes                 */
 #define PANEL_STATE_SIZE   16u     /* STATE payload bytes                   */
+#define PANEL_CONFIG_SIZE  16u     /* CONFIG payload bytes                  */
 
 /* CONTROL/STATE codecs — implemented in protocol.c, shared by BOTH sides
  * (declared here so neither side ever declares them locally).             */
@@ -111,6 +116,10 @@ int panelDecodeState(const uint8_t *payload, size_t len, uint8_t *theme,
                      uint8_t *alarmArmed, uint8_t *alarmAcked,
                      uint8_t *dwellSec, uint32_t *ackedEpisodeId,
                      uint32_t *lastCmdId);
+size_t panelEncodeConfig(const uint8_t screenCfg[12], uint8_t flags,
+                         uint8_t *payload, size_t cap);
+int panelDecodeConfig(const uint8_t *payload, size_t len,
+                      uint8_t screenCfg[12], uint8_t *flags);
 
 typedef enum {
   PANEL_EV_BUTTON      = 0x01,     /* arg = button index 0..8               */
@@ -191,6 +200,7 @@ typedef enum {
 
 #define PANEL_MAX_POOLS    8u
 #define PANEL_MAX_SYSTEMS  64u
+#define PANEL_MAX_GEAR     12u
 #define PANEL_GLOBALS_SIZE 40u
 #define PANEL_POOL_STRIDE  20u
 #define PANEL_SYS_STRIDE   16u
@@ -227,6 +237,10 @@ typedef struct {
     char     subject[PANEL_ALERT_SUBJ + 1];
     char     detail[PANEL_ALERT_DETAIL + 1];
   } topAlert;
+  uint8_t gearCount;
+  struct {
+    uint8_t role, state, rxLevel, txLevel;
+  } gear[PANEL_MAX_GEAR];
 } PanelSnapshot;
 
 /* ---- shared codec (implemented once, in protocol.c) --------------------- */
@@ -254,8 +268,10 @@ size_t panelEncodeSnapshot(const PanelSnapshot *snap,
                            uint8_t *payload, size_t cap);
 
 /* panelDecodeSnapshot — parse a SNAPSHOT payload into snap.
- * Returns 0 on success, -1 on malformed input (bad counts/length).
- * Trailing bytes beyond the computed layout are ignored (fwd compat).      */
+ * Returns 0 on success, -1 on malformed base input (bad counts/length).
+ * The same-version additive gear trailer is presence-detected: it is used
+ * only when its count is <= 12 and count+entries fit entirely after the base
+ * layout. An absent, short, or oversized trailer means gearCount = 0.       */
 int panelDecodeSnapshot(const uint8_t *payload, size_t len,
                         PanelSnapshot *snap);
 

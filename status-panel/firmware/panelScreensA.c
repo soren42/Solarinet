@@ -75,83 +75,167 @@ void panelScreenA0(const PanelEnv *env, float t, float dt) {
 }
 
 /* ---- A1 · Flow gates ----------------------------------------------------
- * DESIGN-BRIEF: 4 lanes at y = 1,3,5,7; trunk quiet x=0..33 at b=0.045;
- * internet gate bar at x=34 (azure, 0.4 at y=5 else 0.09-0.14); 90 particles
- * travelling left-to-right, converging to y=5 past the gate, speed scaled by
- * pool state (down 0.1x, deg 0.5x, ok 1x); WAN ramps from x=44..52 on rows
- * y=3 (upload) and y=7 (download); row y=9 is the loss/RTT indicator.       */
+ * CONTRACT-AW.md §4 / Amendment A-1: AP 2..16, hub 20..34, switch 38..44,
+ * router 46..48, internet x=51 and wan backup x=52. Gates communicate state
+ * by hue and a down-state discontinuity; cQuiet is only connective texture,
+ * never the sole state distinction (firmware/README.md "Text legibility"). */
 #define A1_PARTICLES 90
-typedef struct { float x, v; uint8_t lane, out; } A1Particle;
+typedef struct { float progress, v; uint8_t source; } A1Particle;
+typedef struct { int gear, x, y0, height; } A1Gate;
 static A1Particle gA1[A1_PARTICLES];
 static int gA1Ready = 0;
 
+/* Purpose: choose a gate colour from CONTRACT-AW's gear state values.
+ * Input: gear state. Output: theme accent, warning, or critical colour. */
+static PanelColor *a1GateColor(uint8_t state) {
+  /* Gear state is the §9 fixture's own compact status: 0 down, 1 up,
+   * 2 degraded; it is intentionally not the PanelState wire enum. */
+  return state == 0u ? &cCrit : state == 2u ? &cWarn : &cAzure;
+}
+
+/* Purpose: paint one vertical flow gate with a visibly broken down state.
+ * Input: x/y extent/state. Output: gate pixels on the framebuffer. */
+static void a1Gate(int x, int y0, int height, uint8_t state, float brightness) {
+  PanelColor *color = a1GateColor(state);
+  int y;
+  for (y = y0; y < y0 + height; ++y) {
+    if (state == 0u && ((y - y0) & 1) != 0) continue;
+    panelFbSet(x, y, *color, brightness);
+  }
+}
+
+/* Purpose: spread gate positions over an inclusive horizontal band.
+ * Input: band/count/ordinal. Output: one deterministic integer x coordinate. */
+static int a1BandX(int low, int high, int count, int ordinal) {
+  if (count <= 1) return (low + high) / 2;
+  return low + (ordinal * (high - low) + (count - 1) / 2) / (count - 1);
+}
+
+/* Purpose: paint an A1 traffic leg; its trunk reflects the source RX level.
+ * Input: source/destination gates and source receive level. Output: none. */
+static void a1Leg(const A1Gate *source, const A1Gate *destination,
+                  uint8_t rxLevel) {
+  int x;
+  int fromY = source->y0 + source->height / 2;
+  int toY = destination->y0 + destination->height / 2;
+  int span = destination->x - source->x;
+  float brightness = 0.04f + (float)rxLevel * 0.06f;
+  if (span <= 0) return;
+  for (x = source->x + 1; x < destination->x; ++x) {
+    int y = fromY + ((toY - fromY) * (x - source->x) + span / 2) / span;
+    panelFbSet(x, y, cQuiet, brightness);
+  }
+}
+
 void panelScreenA1(const PanelEnv *env, float t, float dt) {
-  const int gateX = 34, wanX = 44;
-  static const int laneY[4] = { 1, 3, 5, 7 };
-  /* Prototype lanes are pools[0],[1],[2],[5] (CORE/APPS/DMZ/WKS). Generalised
-   * to the first three pools plus pool 5, each clamped to the pools present. */
-  static const int laneWant[4] = { 0, 1, 2, 5 };
+  A1Gate aps[PANEL_MAX_GEAR], hubs[PANEL_MAX_GEAR], switches[PANEL_MAX_GEAR];
+  A1Gate router, internet = { -1, 51, 0, 11 }, wan = { -1, 52, 3, 5 };
+  int apCount = 0, hubCount = 0, switchCount = 0, haveRouter = 0, haveWan = 0;
+  int i;
+
+  /* A same-version v1 snapshot may omit the additive gear trailer. */
+  if (env->snap.gearCount == 0u) { panelScreenNoData(t); return; }
+
+  for (i = 0; i < (int)env->snap.gearCount; ++i) {
+    switch (env->snap.gear[i].role) {
+      case 0u: if (!haveRouter) { router.gear = i; router.x = 47; router.y0 = 0; router.height = 11; haveRouter = 1; } break;
+      case 1u: if (switchCount < (int)PANEL_MAX_GEAR) switches[switchCount++].gear = i; break;
+      case 2u: if (hubCount < (int)PANEL_MAX_GEAR) hubs[hubCount++].gear = i; break;
+      case 3u: if (apCount < (int)PANEL_MAX_GEAR) aps[apCount++].gear = i; break;
+      case 4u: if (!haveWan) { wan.gear = i; haveWan = 1; } break;
+      default: break;
+    }
+  }
 
   if (!gA1Ready) {
     PanelRng r;
     panelRngSeed(&r, 77u);                     /* prototype rng(77) */
     for (int i = 0; i < A1_PARTICLES; i++) {
-      gA1[i].x    = panelRngNext(&r) * 30.0f;
-      gA1[i].lane = (uint8_t)(i % 4);
+      gA1[i].progress = panelRngNext(&r);
+      gA1[i].source = (uint8_t)i;
       gA1[i].v    = 0.25f + panelRngNext(&r) * 0.5f;
-      gA1[i].out  = 0;
     }
     gA1Ready = 1;
   }
 
-  for (int i = 0; i < 4; i++) {
-    int y = laneY[i];
-    for (int x = 0; x < gateX; x++) panelFbSet(x, y, cQuiet, 0.045f);
-    const PanelPoolView *p = panelPoolLane(env, laneWant[i]);
-    PanelColor *col = p->down ? &cCrit : p->degraded ? &cWarn : &cAzure;
-    float b = p->down ? 0.9f : p->degraded ? 0.55f : 0.2f;
-    panelFbSet(0, y, *col, b);
-    panelFbSet(1, y, *col, b * 0.4f);
+  /* CONTRACT-AW §9 A-1: exact AP -> hub -> switch -> router geometry. */
+  for (i = 0; i < apCount; ++i) {
+    aps[i].x = a1BandX(2, 16, apCount, i);
+    aps[i].y0 = apCount == 1 ? 4 : (i * (PANEL_H - 3) + (apCount - 1) / 2) / (apCount - 1);
+    aps[i].height = 3;
+    a1Gate(aps[i].x, aps[i].y0, aps[i].height,
+           env->snap.gear[aps[i].gear].state, 0.75f);
   }
-  for (int y = 0; y < PANEL_H; y++)
-    panelFbSet(gateX, y, cAzure, y == 5 ? 0.4f : 0.09f + (float)(y % 2) * 0.05f);
+  for (i = 0; i < hubCount; ++i) {
+    hubs[i].x = a1BandX(20, 34, hubCount, i);
+    hubs[i].height = (i & 1) == 0 ? 6 : 5;
+    hubs[i].y0 = (i & 1) == 0 ? 0 : PANEL_H - hubs[i].height;
+    a1Gate(hubs[i].x, hubs[i].y0, hubs[i].height,
+           env->snap.gear[hubs[i].gear].state, 0.75f);
+  }
+  for (i = 0; i < switchCount; ++i) {
+    switches[i].x = a1BandX(38, 44, switchCount, i);
+    switches[i].y0 = 1; switches[i].height = 8;
+    a1Gate(switches[i].x, 1, 8, env->snap.gear[switches[i].gear].state, 0.75f);
+  }
+  if (haveRouter) a1Gate(router.x, router.y0, router.height,
+                          env->snap.gear[router.gear].state, 0.80f);
+  /* CONTRACT-AW §9 A-3: the internet column is only reachable THROUGH the
+   * router, so it inherits the router's state treatment — never a healthy
+   * marker over a dead gateway. No router in the payload -> fail dark. */
+  a1Gate(internet.x, internet.y0, internet.height,
+         haveRouter ? env->snap.gear[router.gear].state : 0u, 0.60f);
+  if (haveWan) a1Gate(wan.x, wan.y0, wan.height,
+                       env->snap.gear[wan.gear].state, 0.60f);
+
+  for (i = 0; i < apCount && hubCount > 0; ++i)
+    a1Leg(&aps[i], &hubs[i % hubCount], env->snap.gear[aps[i].gear].rxLevel);
+  for (i = 0; i < hubCount && switchCount > 0; ++i)
+    a1Leg(&hubs[i], &switches[i % switchCount], env->snap.gear[hubs[i].gear].rxLevel);
+  for (i = 0; i < switchCount && haveRouter; ++i)
+    a1Leg(&switches[i], &router, env->snap.gear[switches[i].gear].rxLevel);
+  if (haveRouter) a1Leg(&router, &internet, env->snap.gear[router.gear].rxLevel);
 
   for (int i = 0; i < A1_PARTICLES; i++) {
     A1Particle *pt = &gA1[i];
-    const PanelPoolView *p = panelPoolLane(env, laneWant[pt->lane]);
-    float speed = pt->v * (0.5f + env->meanLoad)
-                  * (p->down ? 0.1f : p->degraded ? 0.5f : 1.0f) * 14.0f;
-    pt->x += speed * dt;
-    if (!pt->out && pt->x >= (float)gateX) pt->out = 1;
-    if (pt->x > (float)(PANEL_W + 2)) { pt->x = 0.0f; pt->out = 0; }
-    int y = pt->out ? 5 : laneY[pt->lane];
-    PanelColor *col = p->down ? &cCrit : p->degraded ? &cWarn : &cAzure;
-    float b = pt->out ? 0.5f : 0.4f;
-    int px = (int)(pt->x + 0.5f);
+    int sourceCount = apCount + hubCount + switchCount + (haveRouter ? 1 : 0);
+    const A1Gate *source, *destination;
+    int ordinal, gearIndex, px, y;
+    if (sourceCount == 0) break;
+    ordinal = (int)(pt->source % (uint8_t)sourceCount);
+    /* Review M3: validate the band BEFORE subtracting — the old chain let
+     * `ordinal` go negative when a band was empty (hubs aging out of the
+     * 60 s freshness window is routine) and indexed hubs[-2]: ASAN-proven
+     * stack overflow, a bus fault on the RP2350. Empty next band drops the
+     * particle instead. */
+    if (ordinal < apCount) {
+      if (hubCount == 0) continue;
+      source = &aps[ordinal]; destination = &hubs[ordinal % hubCount];
+    } else if ((ordinal -= apCount) < hubCount) {
+      if (switchCount == 0) continue;
+      source = &hubs[ordinal]; destination = &switches[ordinal % switchCount];
+    } else if ((ordinal -= hubCount) < switchCount) {
+      if (!haveRouter) continue;
+      source = &switches[ordinal]; destination = &router;
+    } else if ((ordinal -= switchCount) == 0 && haveRouter) {
+      source = &router; destination = &internet;
+    } else {
+      continue;
+    }
+    gearIndex = source->gear;
+    uint8_t level = env->snap.gear[gearIndex].txLevel;
+    float speed = pt->v * (float)level * 0.18f;
+    pt->progress += speed * dt;
+    if (pt->progress >= 1.0f) pt->progress = 0.0f;
+    if (level == 0u) continue;
+    px = source->x + (int)((destination->x - source->x) * pt->progress + 0.5f);
+    y = source->y0 + source->height / 2 +
+        (int)(((destination->y0 + destination->height / 2 -
+               (source->y0 + source->height / 2)) * pt->progress) + 0.5f);
+    PanelColor *col = a1GateColor(env->snap.gear[gearIndex].state);
+    float b = 0.16f + (float)level * 0.09f;
     panelFbAdd(px, y, *col, b);
     panelFbAdd(px - 1, y, *col, b * 0.3f);
-  }
-
-  /* WAN ramps. DEVIATION (see panelHist.c): the prototype's fixed gbps/25 and
-   * gbps/18 divisors become fractions of the adaptive observed peak, upload
-   * from txKbps and download from rxKbps — the wire splits the directions the
-   * mockup could only approximate with a 0.6 factor.
-   *
-   * These read the newest sample of the already-normalised egress/thru rings
-   * rather than recomputing anything locally. An earlier revision used each
-   * direction's SHARE of the current total (tx/(rx+tx)), which is a ratio, not
-   * a magnitude: a 1 Kbps one-way flow painted a full-scale ramp. Both ramps
-   * must be fractions of the same adaptive peak that B1 and the ribbons use,
-   * or the three screens disagree about what "full" means. */
-  float up = panelHistAt(env, env->egress, PANEL_HIST_LEN - 1);
-  float dn = panelHistAt(env, env->thru,   PANEL_HIST_LEN - 1);
-  for (int x = wanX; x < PANEL_W; x++) {
-    float k = (float)(x - wanX) / (float)(PANEL_W - wanX);
-    panelFbSet(x, 3, k < up ? cAzure : cQuiet, k < up ? 0.45f : 0.05f);
-    panelFbSet(x, 7, k < dn ? cAzure : cQuiet, k < dn ? 0.3f : 0.05f);
-    panelFbSet(x, 9,
-               env->loss > 1.0f ? cCrit : env->rtt > 30.0f ? cWarn : cOk,
-               env->loss > 1.0f ? 0.7f : 0.22f);
   }
 }
 

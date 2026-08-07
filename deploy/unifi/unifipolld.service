@@ -1,0 +1,18 @@
+[Unit]
+Description=SolariNet UniFi Integration API poller
+After=network-online.target mariadb.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/unifi
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && source /home/jason/Code/Solarinet/run/unifi.env && exec /home/jason/Code/Solarinet/deploy/unifi/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/unifi/unifipolld.py'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

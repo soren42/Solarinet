@@ -1173,9 +1173,40 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
   color: var(--crit); font-size: 12.5px; line-height: 1.5;
 }
 
+/* --- per-screen rotation + dwell weight (CONTRACT-AW §3.2) -------------
+   These live inside the tile of the screen they govern. A skipped screen is
+   dimmed rather than hidden: the operator turned it off, so it should still be
+   previewable and still be one click from coming back. The tile keeps its
+   normal look when the panel has not reported a config at all — an unknown
+   setting must not be dressed up as a known one. */
+.vp-tile--skipped .vp-tile__screen { opacity: .38; }
+.vp-tile--skipped .vp-tile__id,
+.vp-tile--skipped .vp-tile__title { color: var(--ink-faint); }
+.vp-tile__badge--off { background: var(--panel-3); color: var(--ink-faint); }
+.vp-tile__badge--wt { background: var(--panel-3); color: var(--ink-dim); }
+
+.vp-cfg { padding: 8px 12px 10px; border-top: 1px solid var(--line); }
+.vp-cfg__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vp-cfg__row + .vp-cfg__row { margin-top: 6px; }
+.vp-cfg__label {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-faint); width: 56px; flex: none;
+}
+.vp-cfg__note { margin-top: 7px; font-size: 11.5px; line-height: 1.5; color: var(--ink-faint); }
+/* Compact chip for the six weights: still a 30px hit target, which is the
+   floor the grid can carry without the tile becoming taller than its screen. */
+.chip--mini {
+  min-height: 30px; padding: 0 9px; font-size: 11.5px; gap: 5px;
+  font-family: var(--mono); letter-spacing: .02em;
+}
+.vp-cfg .chip:disabled { opacity: .4; cursor: not-allowed; }
+.vp-cfg .vp-cmd { margin-left: auto; }
+
 @media (max-width: 720px) {
   .vp-grid, .vp-strip { grid-template-columns: 1fr; }
   .vp-controls .panel__head .right { text-align: left; max-width: none; }
+  .vp-cfg__label { width: 100%; }
+  .vp-cfg .vp-cmd { margin-left: 0; }
 }
 
 /* ===================== LIFECYCLE + CRITICALITY (CONTRACT-LC) =====================

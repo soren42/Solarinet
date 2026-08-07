@@ -566,6 +566,26 @@ static void caseShortControlRejected(void) {
         "case 14: the full-length payload still decodes");
 }
 
+/* Case 15 — CONTRACT-AW kinds 8/9 preserve packed indices and terminally
+ * consume invalid indices/weight codes just like every prior CONTROL kind. */
+static void caseScreenConfigControls(void) {
+  PanelCtl ctl;
+  uint8_t arg = 0u;
+  panelCtlInit(&ctl, 0u);
+  check(panelCtlConsume(&ctl, 1u, PANEL_CTL_SCREENEN, (uint8_t)((11u << 1) | 1u), &arg) ==
+            PANEL_CTLACT_SCREENEN && arg == 23u,
+        "case 15: SCREENEN accepts flattened screen 11");
+  check(panelCtlConsume(&ctl, 2u, PANEL_CTL_SCREENWT, (uint8_t)((11u << 3) | 5u), &arg) ==
+            PANEL_CTLACT_SCREENWT && arg == 93u,
+        "case 15: SCREENWT accepts flattened screen 11 weight 5");
+  check(panelCtlConsume(&ctl, 3u, PANEL_CTL_SCREENEN, 24u, NULL) == PANEL_CTLACT_NONE &&
+            panelCtlLastCmdId(&ctl) == 3u,
+        "case 15: SCREENEN index 12 is rejected and consumed");
+  check(panelCtlConsume(&ctl, 4u, PANEL_CTL_SCREENWT, 6u, NULL) == PANEL_CTLACT_NONE &&
+            panelCtlLastCmdId(&ctl) == 4u,
+        "case 15: SCREENWT weight 6 is rejected and consumed");
+}
+
 int main(void) {
   caseValidKinds();
   caseRejectedStillConsumes();
@@ -584,6 +604,7 @@ int main(void) {
   caseStateThroughRealParser();
   caseStateRoundTrip();
   caseShortControlRejected();
+  caseScreenConfigControls();
 
   if (gFailures) {
     printf("\n%d FAILURE(S)\n", gFailures);

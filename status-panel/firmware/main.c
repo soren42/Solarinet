@@ -28,9 +28,13 @@
 
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
+#ifdef SOLARI_PANEL_PICO_FLASH
+#include "pico/flash.h"
+#endif
 
 #include "protocol.h"
 #include "panelCtl.h"
+#include "panelScreenCfg.h"
 #include "panelHw.h"
 #include "panelLink.h"
 #include "panelFb.h"
@@ -93,6 +97,8 @@ static PanelLink gLink;
 /* CONTROL dedupe + STATE cadence. See panelCtl.c; the ascending-cmdId rule and
  * the change/heartbeat decision live there so the host suite can drive them.  */
 static PanelCtl gCtl;
+static PanelScreenCfg gScreenCfg;
+static PanelScreenCfgFlash gScreenCfgFlash;
 
 /* Alarm state — CONTRACT §9. ack is firmware-local and scoped to episodeId;
  * a NEW episodeId re-arms the tone even if the previous one was acked. */
@@ -140,6 +146,17 @@ static void sendHello(void) {
   if (n > 32) n = 32;
   memcpy(p + 3, SOLARI_BUILD_STRING, n);
   sendFrame(PANEL_FT_HELLO, p, 3 + n);
+}
+
+/* sendConfig — report the panel-authoritative twelve screen settings.
+ * CONTRACT-AW.md §3.3: CONFIG is emitted on every accepted setting change and
+ * on HELLOREQ. bit0 says the current image is known to match persistent flash. */
+static void sendConfig(void) {
+  uint8_t payload[PANEL_CONFIG_SIZE];
+  uint8_t flags = gScreenCfg.persisted ? 1u : 0u;
+  size_t n = panelEncodeConfig(gScreenCfg.screenCfg, flags, payload,
+                               sizeof(payload));
+  if (n) sendFrame(PANEL_FT_CONFIG, payload, n);
 }
 
 /* sendLog — PANEL_FT_LOG: ASCII text (<=128), diagnostics only. Used for the
@@ -198,6 +215,7 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
     }
     case PANEL_FT_HELLOREQ:
       sendHello();
+      sendConfig();
       /* The daemon asks for HELLO on every link-up, and CONTRACT-CP §10 makes
        * a STATE frame the proof that this firmware speaks CONTROL at all —
        * until it arrives, the daemon withholds the queue. Answer both now
@@ -245,8 +263,16 @@ static void pumpSerial(void) {
  * pressing a different theme's button switches to it at screen 0.           */
 static void pressTheme(int theme) {
   gScreenT = 0.0f;
-  if (gTheme == theme) gScreen = (gScreen + 1) % 3;
-  else { gTheme = theme; gScreen = 0; sendEvent(PANEL_EV_THEMECHANGE, (uint8_t)theme); }
+  if (gTheme == theme)
+    gScreen = (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)gTheme,
+                                      (uint8_t)gScreen);
+  else {
+    gTheme = theme;
+    /* CONTRACT-AW.md §4: choosing a theme may not land on a disabled tile. */
+    gScreen = panelScreenCfgEnabled(&gScreenCfg, (uint8_t)theme, 0u) ? 0 :
+              (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)theme, 2u);
+    sendEvent(PANEL_EV_THEMECHANGE, (uint8_t)theme);
+  }
 }
 
 /* ackAlarm — acknowledge the CURRENT episode. The single acknowledge path:
@@ -343,6 +369,38 @@ static void applyControl(PanelCtlAction act, uint8_t arg) {
     case PANEL_CTLACT_SLEEP:
       gSleeping = (arg != 0u);
       break;
+    case PANEL_CTLACT_SCREENEN: {
+      uint8_t index = (uint8_t)(arg >> 1);
+      uint8_t value = (uint8_t)((gScreenCfg.screenCfg[index] & 0x0eu) |
+                                (arg & 1u));
+      if (panelScreenCfgSet(&gScreenCfg, index, value, nowMs())) sendConfig();
+      break;
+    }
+    case PANEL_CTLACT_SCREENWT: {
+      uint8_t index = (uint8_t)(arg >> 3);
+      uint8_t value = (uint8_t)((gScreenCfg.screenCfg[index] & 1u) |
+                                ((arg & 0x07u) << 1));
+      uint8_t active = (uint8_t)(gTheme * 3 + gScreen);
+      float oldDwell = panelScreenCfgDwellSec(&gScreenCfg, active, gDwellSec);
+      if (panelScreenCfgSet(&gScreenCfg, index, value, nowMs())) {
+        /* CONTRACT-AW §10.5: preserve the fraction already waited, then
+         * advance immediately if the rescaled dwell has expired. */
+        if (index == active && oldDwell > 0.0f) {
+          float newDwell = panelScreenCfgDwellSec(&gScreenCfg, index, gDwellSec);
+          int advanced = 0;
+          /* Shared shipped implementation (review: main.c previously carried
+           * an untested copy while the suite asserted a reimplementation). */
+          gScreenT = panelScreenCfgRescaleDwell(gScreenT, oldDwell, newDwell,
+                                                &advanced);
+          if (advanced) {
+            gScreen = (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)gTheme,
+                                              (uint8_t)gScreen);
+          }
+        }
+        sendConfig();
+      }
+      break;
+    }
     case PANEL_CTLACT_NONE:
     default:
       break;
@@ -498,6 +556,15 @@ int main(void) {
   panelParserInit(&gParser);
   panelLinkInit(&gLink, nowMs());
   panelCtlInit(&gCtl, nowMs());
+#ifdef SOLARI_PANEL_PICO_FLASH
+  /* Review S3: flash_safe_execute_core_init() initialises the CALLING core
+   * as a lockout VICTIM — it belongs on the core that is NOT flashing.
+   * This firmware never launches core 1, so no victim init is required at
+   * all; the SDK's other-core check passes trivially. If a core-1 task is
+   * ever added, call flash_safe_execute_core_init() FROM CORE 1, not here. */
+#endif
+  gScreenCfgFlash = panelScreenCfgDeviceFlash();
+  panelScreenCfgLoad(&gScreenCfg, &gScreenCfgFlash, nowMs());
 
   sendHello();
 
@@ -532,7 +599,14 @@ int main(void) {
     runAutoBrightness();
 
     if (!gLink.lost) gScreenT += dt;
-    if (gScreenT >= gDwellSec) { gScreenT = 0.0f; gScreen = (gScreen + 1) % 3; }
+    if (gScreenT >= panelScreenCfgDwellSec(&gScreenCfg,
+                                            (uint8_t)(gTheme * 3 + gScreen),
+                                            gDwellSec)) {
+      gScreenT = 0.0f;
+      gScreen = (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)gTheme,
+                                        (uint8_t)gScreen);
+    }
+    if (panelScreenCfgSaveDue(&gScreenCfg, &gScreenCfgFlash, ms)) sendConfig();
 
     /* After every state-moving step of the tick and before the paint, so a
      * command applied this tick is reported this tick — and so the sleeping

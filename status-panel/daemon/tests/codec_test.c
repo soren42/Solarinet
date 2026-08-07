@@ -7,7 +7,7 @@ int panelParseSnapshotForTest(const char *text, PanelSnapshot *snapshot);
 int panelForwardCommandsForTest(int fd, const char *text, int stateSeen);
 
 static int frames;
-static int controlFrames, stateFrames;
+static int controlFrames, stateFrames, configFrames;
 static PanelSnapshot received;
 
 static void receive(uint8_t type, const uint8_t *payload, size_t len, void *user) {
@@ -15,6 +15,7 @@ static void receive(uint8_t type, const uint8_t *payload, size_t len, void *user
   if (type == PANEL_FT_SNAPSHOT && panelDecodeSnapshot(payload, len, &received) == 0) ++frames;
   if (type == PANEL_FT_CONTROL) ++controlFrames;
   if (type == PANEL_FT_STATE) ++stateFrames;
+  if (type == PANEL_FT_CONFIG) ++configFrames;
 }
 
 static int require(int condition, const char *message) {
@@ -42,6 +43,8 @@ static size_t snapshotFrame(uint16_t seq, uint8_t *frame) {
   strcpy(sent.pools[0].name,"core"); sent.pools[0].total=2u;
   sent.systems[0].pool=0u; strcpy(sent.systems[0].name,"xenon");
   sent.topAlert.alertId=3u; strcpy(sent.topAlert.subject,"bind down");
+  sent.gearCount=9u;
+  for (int i=0;i<9;++i) { sent.gear[i].role=(uint8_t)(i%5); sent.gear[i].state=(uint8_t)(i%3); sent.gear[i].rxLevel=(uint8_t)i; sent.gear[i].txLevel=(uint8_t)(i%8); }
   payloadLen=panelEncodeSnapshot(&sent,payload,sizeof(payload));
   return panelEncodeFrame(PANEL_FT_SNAPSHOT,payload,payloadLen,frame,PANEL_HDR_SIZE+PANEL_MAX_PAYLOAD+PANEL_CRC_SIZE);
 }
@@ -50,7 +53,7 @@ int main(void) {
   PanelParser parser;
   PanelSnapshot lastGood;
   uint8_t frame[PANEL_HDR_SIZE+PANEL_MAX_PAYLOAD+PANEL_CRC_SIZE];
-  uint8_t control[PANEL_CONTROL_SIZE], state[PANEL_STATE_SIZE];
+  uint8_t control[PANEL_CONTROL_SIZE], state[PANEL_STATE_SIZE], config[PANEL_CONFIG_SIZE], screenCfg[12], configFlags;
   uint8_t stream[4u*(PANEL_HDR_SIZE+PANEL_MAX_PAYLOAD+PANEL_CRC_SIZE)+16u];
   size_t frameLen, offset, i;
   uint32_t cmdId, ackedEpisodeId, lastCmdId;
@@ -60,7 +63,7 @@ int main(void) {
 
   frameLen=snapshotFrame(7u,frame); panelParserInit(&parser); frames=0;
   for(i=0;i<frameLen;++i) panelParserFeed(&parser,frame+i,1u,(uint32_t)i,receive,NULL);
-  if(require(frames==1,"round trip frame missing")||require(received.seq==7u&&received.score==140u&&!strcmp(received.pools[0].name,"CORE"),"round trip mismatch")) return 1;
+  if(require(frames==1,"round trip frame missing")||require(received.seq==7u&&received.score==140u&&received.gearCount==9u&&received.gear[8].txLevel==0u&&!strcmp(received.pools[0].name,"CORE"),"v1 additive SNAPSHOT+gear round trip mismatch")) return 1;
 
   memcpy(stream,frame,frameLen); stream[8]^=1u; panelParserFeed(&parser,stream,frameLen,1000u,receive,NULL);
   if(require(frames==1&&parser.crcErrors==1u,"CRC corruption accepted")) return 1;
@@ -84,6 +87,12 @@ int main(void) {
   stateFrames=0; panelParserInit(&parser); frameLen=panelEncodeFrame(PANEL_FT_STATE,state,sizeof(state),frame,sizeof(frame));
   for(i=0;i<frameLen;++i) panelParserFeed(&parser,frame+i,1u,(uint32_t)i,receive,NULL);
   if(require(stateFrames==1,"STATE parser dispatch missing")) return 1;
+  for(i=0u;i<12u;++i) screenCfg[i]=(uint8_t)(i == 11u ? 0x0bu : 0x05u);
+  if(require(panelEncodeConfig(screenCfg,1u,config,sizeof(config))==PANEL_CONFIG_SIZE,"CONFIG encode failed")||require(panelDecodeConfig(config,sizeof(config),screenCfg,&configFlags)==0&&configFlags==1u&&screenCfg[11]==0x0bu,"CONFIG round trip failed")) return 1;
+  configFrames=0; panelParserInit(&parser); frameLen=panelEncodeFrame(PANEL_FT_CONFIG,config,sizeof(config),frame,sizeof(frame));
+  for(i=0;i<frameLen;++i) panelParserFeed(&parser,frame+i,1u,(uint32_t)i,receive,NULL);
+  if(require(configFrames==1,"CONFIG parser dispatch missing")) return 1;
+  if(require(panelEncodeControl(31u,PANEL_CTL_SCREENEN,(uint8_t)((11u<<1)|1u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENEN&&arg==23u,"SCREENEN round trip failed")||require(panelEncodeControl(32u,PANEL_CTL_SCREENWT,(uint8_t)((11u<<3)|5u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENWT&&arg==93u,"SCREENWT round trip failed")) return 1;
   memset(stream,0,sizeof(stream)); memcpy(stream,control,sizeof(control));
   if(require(panelDecodeControl(stream,PANEL_CONTROL_SIZE+1u,&cmdId,&kind,&arg)==0,"CONTROL trailing bytes rejected")) return 1;
   memset(stream,0,sizeof(stream)); memcpy(stream,state,sizeof(state));
@@ -91,6 +100,26 @@ int main(void) {
 
   memset(&lastGood,0x5a,sizeof(lastGood));
   if(require(panelParseSnapshotForTest(goodJson,&lastGood)==0&&lastGood.rxKbps==340u&&lastGood.txKbps==70000u&&lastGood.rttTenthMs==300u&&lastGood.lossPermille==500u,"valid snapshot parse failed")) return 1;
+
+  /* Review M1: the daemon must INGEST the gear array or A1 is dead
+   * end-to-end (PHP emits, firmware renders, this hop dropped it). Also
+   * pins the fail-dark clamps: unknown role drops the entry; state>2 -> 0;
+   * levels clamp to 7. */
+  {
+    const char *gearJson="{\"ok\":true,\"data\":{\"ts\":42,\"score\":0,"
+      "\"stateRoll\":{\"up\":1,\"degraded\":0,\"down\":0,\"unknown\":0,\"maint\":0},"
+      "\"alerts\":{\"info\":0,\"warn\":0,\"crit\":0},\"meanLoadPct\":0,"
+      "\"rxKbps\":0,\"txKbps\":0,\"rttTenthMs\":0,\"lossPermille\":0,"
+      "\"pools\":[],\"systems\":[],\"topAlert\":null,"
+      "\"gear\":[{\"role\":0,\"state\":1,\"rxLevel\":3,\"txLevel\":9},"
+      "{\"role\":7,\"state\":1,\"rxLevel\":1,\"txLevel\":1},"
+      "{\"role\":2,\"state\":5,\"rxLevel\":2,\"txLevel\":2}]}}";
+    PanelSnapshot gearSnap; memset(&gearSnap,0,sizeof(gearSnap));
+    if(require(panelParseSnapshotForTest(gearJson,&gearSnap)==0,"gear snapshot parse failed")) return 1;
+    if(require(gearSnap.gearCount==2u,"gear ingest count wrong (unknown role must drop)")) return 1;
+    if(require(gearSnap.gear[0].role==0u&&gearSnap.gear[0].txLevel==7u,"gear level clamp failed")) return 1;
+    if(require(gearSnap.gear[1].role==2u&&gearSnap.gear[1].state==0u,"gear fail-dark state clamp failed")) return 1;
+  }
   if(require(panelParseSnapshotForTest(badJson,&lastGood)==-1&&lastGood.ts==42u&&lastGood.score==140u,"malformed snapshot clobbered last good state")) return 1;
 
   /* forwardCommands must navigate the real API envelope: commands lives at

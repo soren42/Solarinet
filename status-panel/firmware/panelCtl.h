@@ -51,7 +51,9 @@ typedef enum {
   PANEL_CTLACT_AUTOBRIGHT,  /* arg 0     — re-enable the light sensor         */
   PANEL_CTLACT_ACKALARM,    /* arg 0     — the any-button ack path            */
   PANEL_CTLACT_DWELL,       /* arg 3|6|30 seconds                             */
-  PANEL_CTLACT_SLEEP        /* arg 0 wake / 1 sleep                           */
+  PANEL_CTLACT_SLEEP,       /* arg 0 wake / 1 sleep                           */
+  PANEL_CTLACT_SCREENEN,    /* packed arg: (index << 1) | enabled             */
+  PANEL_CTLACT_SCREENWT     /* packed arg: (index << 3) | weightCode          */
 } PanelCtlAction;
 
 /* The reportable panel state — the STATE payload's fields minus lastCmdId,

@@ -59,6 +59,16 @@
   // protocol.h PanelState enum
   const ST_OK = 0, ST_DEGRADED = 1, ST_DOWN = 2, ST_UNKNOWN = 3, ST_MAINT = 4;
 
+  /* Network gear — CONTRACT-AW §3.1, the v2 SNAPSHOT gear section. Two enums
+     arrive on the wire and they are NOT the two above: role is its own
+     namespace, and gear STATE is 0=down 1=up 2=degraded, which is neither the
+     PanelState order nor its membership. stateEnum() must never be pointed at
+     a gear row — hence the separate gearState() below. */
+  const GR_ROUTER = 0, GR_SWITCH = 1, GR_HUB = 2, GR_AP = 3, GR_WANBK = 4;
+  const GS_DOWN = 0, GS_UP = 1, GS_DEGRADED = 2;
+  const MAX_GEAR = 12;                 // §3.1 gearCount 0..12
+  const MAX_LEVEL = 7;                 // §3.1 rx/txLevel 0..7
+
   const PANEL_SEP = "   ";             // panelHist.h:33
   const PANEL_TAIL = "       ";        // panelHist.h:34
 
@@ -216,6 +226,36 @@
     if (typeof s === "number") return (s >= 0 && s <= 4) ? s : ST_UNKNOWN;
     const v = STATE_ENUM[String(s || "").toLowerCase()];
     return v === undefined ? ST_UNKNOWN : v;
+  }
+
+  /* gearRole / gearState / gearLevel — CONTRACT-AW §3.1 arrives as plain u8s,
+     so the numeric path is the real one. The string branches exist because the
+     server maps these from `networkGear.kind` text (§2) and a mapper that
+     forgets to numify would otherwise render every device as a router at
+     index 0 — silently, and plausibly. Anything unrecognised is REJECTED
+     (null / down / 0), never coerced to a flattering default. */
+  const GEAR_ROLE_ENUM = {
+    router: GR_ROUTER, gateway: GR_ROUTER, udm: GR_ROUTER,
+    switch: GR_SWITCH, usw: GR_SWITCH,
+    hub: GR_HUB,
+    ap: GR_AP, accesspoint: GR_AP,
+    wanbackup: GR_WANBK, backup: GR_WANBK, wan: GR_WANBK,
+  };
+  const GEAR_STATE_ENUM = { down: GS_DOWN, up: GS_UP, ok: GS_UP, degraded: GS_DEGRADED };
+  function gearRole(v) {
+    if (typeof v === "number") return (v >= 0 && v <= GR_WANBK) ? v : null;
+    const r = GEAR_ROLE_ENUM[String(v || "").toLowerCase().replace(/[^a-z]/g, "")];
+    return r === undefined ? null : r;
+  }
+  function gearState(v) {
+    if (typeof v === "number") return (v >= 0 && v <= GS_DEGRADED) ? v : GS_DOWN;
+    const s = GEAR_STATE_ENUM[String(v || "").toLowerCase()];
+    return s === undefined ? GS_DOWN : s;
+  }
+  function gearLevel(v) {
+    let n = Math.round(num(v));
+    if (!(n > 0)) return 0;
+    return n > MAX_LEVEL ? MAX_LEVEL : n;
   }
 
   /* panelFormatRate — panelHist.c:65-74. */
@@ -424,7 +464,29 @@
     env.detail = ta ? String(ta.detail || "") : "NO FINDINGS";
     env.ticker = env.subject + PANEL_SEP + env.detail + PANEL_TAIL;
 
-    env.poolLane = function (wanted) {                     // panelScreensA.c:20-25
+    /* Gear — CONTRACT-AW §3.1. A row whose role does not decode is DROPPED
+       rather than defaulted, because a mis-roled device does not just look
+       wrong, it moves gates into the wrong band and changes what the picture
+       claims about the network. Order is preserved exactly as the server sent
+       it (§3.1: router, switch(es), hubs, aps, wanBackup; stable by gearId
+       within a role) — the layout re-groups by role but keeps wire order
+       inside each band, so gate identity is stable poll to poll. */
+    const rawGear = Array.isArray(d.gear) ? d.gear.slice(0, MAX_GEAR) : [];
+    env.gear = [];
+    for (let i = 0; i < rawGear.length; i++) {
+      const g = rawGear[i] || {};
+      const role = gearRole(g.role);
+      if (role === null) continue;
+      env.gear.push({
+        role: role,
+        state: gearState(g.state),
+        rx: gearLevel(g.rxLevel),
+        tx: gearLevel(g.txLevel),
+      });
+    }
+    env.gearCount = env.gear.length;
+
+    env.poolLane = function (wanted) {                   // panelScreensA.c:20-25
       if (env.poolCount <= 0) return EMPTY_POOL;
       if (wanted >= env.poolCount) wanted = env.poolCount - 1;
       if (wanted < 0) wanted = 0;
@@ -516,67 +578,231 @@
     }
   }
 
-  /* A1 · Flow gates.
-     mockup: sA1() Themes.dc.html:436 · firmware: panelScreensA.c:88-156.
-     90 particles seeded rng(77); trunk, gate bar at x=34, WAN ramps x=44..52.
-     DEVIATION (A.c:135-155): the ramps read the newest sample of the already
-     normalised egress/thru rings, not the mockup's fixed 25/18 Gbps divisors.
-     DEVIATION (page-only): the firmware holds the particle array in a file
-     static because only one screen is ever live; twelve are live here, so the
-     state is per-tile — see mkState() below. */
-  const A1_PARTICLES = 90;                                        // A.c:83
-  const A1_LANE_Y = [1, 3, 5, 7];                                 // A.c:90
-  const A1_LANE_WANT = [0, 1, 2, 5];                              // A.c:93
-  function a1Init() {
-    const r = rngNew(77);                                         // A.c:97
+  /* A1 · Flow gates — CONTRACT-AW §1 + §4 (task #11).
+     This REPLACES the pool-lane A1 that shipped under CONTRACT-CP. That screen
+     drew four synthetic pool lanes through one bar at x=34; A1 is now a picture
+     of the actual Ubiquiti path, one vertical gate per device, traffic flowing
+     left→right along the direction packets really travel:
+
+         APs  →  hubs  →  switch  →  router  →  internet (+ wanBackup)
+
+     §1's two placement bullets cannot both be read literally (the first puts
+     every hub on the left, the second puts a hub on the right, and "the router
+     line" is never placed). §4 IS unambiguous — "Internet: rightmost column
+     treatment right of the router gate" — so §4 governs and §1's "switch + hub"
+     is read as "switch + router". Flagged to Lead 2026-08-07; if that
+     adjudication comes back differently, only the band table below moves.
+
+     §1/§4 fix the HEIGHTS (router 11, switch 8, hubs 5-6 staggered, APs 3) and
+     the stagger, but not the columns. The band table is therefore this lane's
+     proposal, sent to Lead for ratification so the firmware (AW2) and this
+     renderer agree on the same fixture bytes — acceptance A1 is a PARITY test,
+     so a private choice here is a divergence there.
+
+     DEVIATION (page-only, inherited from the old A1): the firmware holds its
+     particle array in a file static because only one screen is ever live;
+     twelve are live here, so the state is per-tile in `st`. */
+
+  // Band table — [lo, hi] columns on the 53-wide grid. n gates spread evenly
+  // inside the band; a single gate sits at the band's centre.
+  const A1_BAND = {};
+  A1_BAND[GR_AP] = [2, 16];
+  A1_BAND[GR_HUB] = [20, 34];
+  A1_BAND[GR_SWITCH] = [38, 44];
+  A1_BAND[GR_ROUTER] = [46, 48];
+  const A1_INET_X = 51;                 // §4 "rightmost column treatment"
+  const A1_WAN_X = 52;                  // §4 wanBackup, "dimmer beside it"
+  // Left-to-right band order. wanBackup is NOT a band: §1 draws it with the
+  // internet connection, not as a gate in the chain.
+  const A1_BANDS = [GR_AP, GR_HUB, GR_SWITCH, GR_ROUTER];
+
+  function a1Spread(n, lo, hi) {
+    if (n <= 0) return [];
+    if (n === 1) return [ri((lo + hi) / 2)];
+    const out = new Array(n);
+    const step = (hi - lo) / (n - 1);
+    for (let i = 0; i < n; i++) out[i] = ri(lo + i * step);
+    return out;
+  }
+
+  /* a1GateGeom — §1 heights and §4 stagger, by role and index-within-role. */
+  function a1GateGeom(role, i, n) {
+    if (role === GR_ROUTER) return { h: PH, y0: 0 };                    // 100%
+    if (role === GR_SWITCH) {
+      const h = 8;                                                      // 75%
+      return { h: h, y0: Math.floor((PH - h) / 2) };
+    }
+    if (role === GR_HUB) {
+      // 50% of 11 is 5.5, so §1's "5-6 rows" alternates with the stagger:
+      // even gates are 6 rows aligned TOP, odd are 5 rows aligned BOTTOM.
+      const h = (i % 2 === 0) ? 6 : 5;
+      return { h: h, y0: (i % 2 === 0) ? 0 : (PH - h) };
+    }
+    /* APs, §9 A-1 verbatim: h=3, y0 = round(i*(11-3)/(n-1)), centred at 4 when
+       n==1. The band is DISTRIBUTED down the height, not parked on shared
+       rows. (AW2's firmware briefly fixed these at y0=4 and this lane matched
+       it; A-1 then ratified the distribution and pointed AW2 here. The
+       contract is the parity oracle, not either implementation.) */
+    if (n <= 1) return { h: 3, y0: 4 };
+    return { h: 3, y0: ri(i * (PH - 3) / (n - 1)) };
+  }
+
+  /* a1Layout — pure: gear rows in, gates + legs out. Exported to the harness
+     so the geometry can be asserted without a canvas. */
+  function a1Layout(gear) {
+    const bands = [];
+    for (let b = 0; b < A1_BANDS.length; b++) {
+      const role = A1_BANDS[b];
+      const members = [];
+      for (let i = 0; i < gear.length; i++) if (gear[i].role === role) members.push(gear[i]);
+      if (!members.length) { bands.push([]); continue; }
+      const xs = a1Spread(members.length, A1_BAND[role][0], A1_BAND[role][1]);
+      const row = [];
+      for (let i = 0; i < members.length; i++) {
+        const g = a1GateGeom(role, i, members.length);
+        row.push({
+          role: role, state: members[i].state, rx: members[i].rx, tx: members[i].tx,
+          x: xs[i], y0: g.y0, h: g.h, cy: g.y0 + Math.floor(g.h / 2),
+        });
+      }
+      bands.push(row);
+    }
+    const gates = [];
+    for (let b = 0; b < bands.length; b++)
+      for (let i = 0; i < bands[b].length; i++) gates.push(bands[b][i]);
+
+    /* Legs. Each gate feeds the gate at (i mod n) in the next NON-EMPTY band,
+       so a fleet missing a whole tier still draws a connected path instead of
+       a floating column. The last band's gates run on to the internet. */
+    const legs = [];
+    const nonEmpty = [];
+    for (let b = 0; b < bands.length; b++) if (bands[b].length) nonEmpty.push(bands[b]);
+    for (let b = 0; b + 1 < nonEmpty.length; b++) {
+      const src = nonEmpty[b], dst = nonEmpty[b + 1];
+      for (let i = 0; i < src.length; i++) {
+        const d = dst[i % dst.length];
+        legs.push({ x0: src[i].x, y0: src[i].cy, x1: d.x, y1: d.cy, src: src[i] });
+      }
+    }
+    if (nonEmpty.length) {
+      const last = nonEmpty[nonEmpty.length - 1];
+      for (let i = 0; i < last.length; i++)
+        legs.push({ x0: last[i].x, y0: last[i].cy, x1: A1_INET_X, y1: 5, src: last[i] });
+    }
+    let wan = null;
+    for (let i = 0; i < gear.length; i++) if (gear[i].role === GR_WANBK) { wan = gear[i]; break; }
+    let router = null;
+    for (let i = 0; i < gear.length; i++) if (gear[i].role === GR_ROUTER) { router = gear[i]; break; }
+    return { bands: bands, gates: gates, legs: legs, wan: wan, router: router };
+  }
+
+  function a1Col(state) {
+    return state === GS_DOWN ? cCrit : state === GS_DEGRADED ? cWarn : cAzure;
+  }
+
+  /* One vertical flow gate. A line-for-line port of
+     firmware/panelScreensA.c:95 a1Gate() — same signature, same broken-when-
+     down rule (every other row dropped, so a dead link reads as severed and
+     not merely as a red one from across the room), same lack of an endcap
+     boost. Both sides must paint identical pixels from identical gear bytes;
+     keep this function and that one in step. */
+  function a1Gate(x, y0, h, state, brightness) {
+    const col = a1Col(state);
+    for (let k = 0; k < h; k++) {
+      if (state === GS_DOWN && (k % 2) === 1) continue;
+      fbSet(x, y0 + k, col, brightness);
+    }
+  }
+
+  const A1_PARTICLES = 72;
+  function a1Init(nLegs) {
+    const r = rngNew(77);              // same seed as the old A1 (A.c:97)
     const out = new Array(A1_PARTICLES);
     for (let i = 0; i < A1_PARTICLES; i++) {
-      out[i] = { x: rngNext(r) * 30.0, lane: i % 4, v: 0.25 + rngNext(r) * 0.5, out: 0 };
+      out[i] = {
+        leg: nLegs > 0 ? (i % nLegs) : 0,
+        u: rngNext(r),                 // progress along the leg, 0..1
+        v: 0.55 + rngNext(r) * 0.6,    // per-particle speed jitter
+      };
     }
     return out;
   }
+
   function sA1(env, t, dt, st) {
-    const gateX = 34, wanX = 44;
-    if (!st.a1) st.a1 = a1Init();
-    const parts = st.a1;
+    /* §4: "No gear data (gearCount 0 or v1 server) → A1's existing no-data
+       treatment." A v1 server, an empty inventory and a poller that has been
+       down past the 60 s freshness window (§E7) all land here, and all three
+       mean the same thing to a viewer: this screen has nothing to say. */
+    if (!env.gearCount) { screenNoData(t); return; }
 
-    for (let i = 0; i < 4; i++) {
-      const y = A1_LANE_Y[i];
-      for (let x = 0; x < gateX; x++) fbSet(x, y, cQuiet, 0.045);
-      const p = env.poolLane(A1_LANE_WANT[i]);
-      const col = p.down ? cCrit : p.degraded ? cWarn : cAzure;
-      const b = p.down ? 0.9 : p.degraded ? 0.55 : 0.2;
-      fbSet(0, y, col, b);
-      fbSet(1, y, col, b * 0.4);
+    const L = a1Layout(env.gear);
+    if (!st.a1 || st.a1.n !== L.legs.length) {
+      st.a1 = { n: L.legs.length, p: a1Init(L.legs.length) };
     }
-    for (let y = 0; y < PH; y++)
-      fbSet(gateX, y, cAzure, y === 5 ? 0.4 : 0.09 + (y % 2) * 0.05);
+    const parts = st.a1.p;
 
+    /* Legs first, dimmest: the wire is lit by the SOURCE's rxLevel, so a link
+       carrying nothing still shows its shape rather than vanishing. */
+    for (let i = 0; i < L.legs.length; i++) {
+      const lg = L.legs[i];
+      const b = 0.035 + (lg.src.rx / MAX_LEVEL) * 0.05;
+      const span = lg.x1 - lg.x0;
+      for (let x = lg.x0 + 1; x < lg.x1; x++) {
+        const k = span > 0 ? (x - lg.x0) / span : 0;
+        fbAdd(x, ri(lg.y0 + (lg.y1 - lg.y0) * k), cQuiet, b);
+      }
+    }
+
+    /* Gates. §4: colour by state, and a DOWN gate is "rendered broken" — every
+       other pixel dropped, so it reads as a severed line at a glance and not
+       merely as a red one, which matters on a panel seen from across a room. */
+    for (let i = 0; i < L.gates.length; i++) {
+      const g = L.gates[i];
+      const lvl = (g.rx > g.tx ? g.rx : g.tx) / MAX_LEVEL;
+      const base = g.state === GS_DOWN ? 0.8
+        : g.state === GS_DEGRADED ? 0.5 * (0.8 + 0.2 * Math.abs(Math.sin(t * 2.2)))
+          : 0.20 + lvl * 0.30;
+      a1Gate(g.x, g.y0, g.h, g.state, base);
+    }
+
+    /* Particles. §4: spawn rate and brightness scale by rx/txLevel — here the
+       UPSTREAM direction, so a leg is driven by its source's txLevel. Level 0
+       is idle by §3.1 and draws nothing at all: a creeping particle would be a
+       claim of traffic the panel was told there is none of. */
     for (let i = 0; i < A1_PARTICLES; i++) {
       const pt = parts[i];
-      const p = env.poolLane(A1_LANE_WANT[pt.lane]);
-      const speed = pt.v * (0.5 + env.meanLoad)
-        * (p.down ? 0.1 : p.degraded ? 0.5 : 1.0) * 14.0;
-      pt.x += speed * dt;
-      if (!pt.out && pt.x >= gateX) pt.out = 1;
-      if (pt.x > PW + 2) { pt.x = 0; pt.out = 0; }
-      const y = pt.out ? 5 : A1_LANE_Y[pt.lane];
-      const col = p.down ? cCrit : p.degraded ? cWarn : cAzure;
-      const b = pt.out ? 0.5 : 0.4;
-      const px = ri(pt.x);
-      fbAdd(px, y, col, b);
-      fbAdd(px - 1, y, col, b * 0.3);
+      const lg = L.legs[pt.leg];
+      if (!lg) continue;
+      const lvl = lg.src.tx / MAX_LEVEL;
+      const gate = lg.src.state;
+      const rate = gate === GS_DOWN ? 0 : gate === GS_DEGRADED ? 0.45 : 1.0;
+      pt.u += pt.v * (0.25 + lvl * 1.15) * rate * dt;
+      while (pt.u >= 1) pt.u -= 1;
+      if (lg.src.tx <= 0 || rate === 0) continue;
+      const px = ri(lg.x0 + (lg.x1 - lg.x0) * pt.u);
+      const py = ri(lg.y0 + (lg.y1 - lg.y0) * pt.u);
+      const col = a1Col(gate);
+      const b = 0.22 + lvl * 0.38;
+      fbAdd(px, py, col, b);
+      fbAdd(px - 1, py, col, b * 0.3);
     }
 
-    const up = histAt(env, env.egress, HIST_LEN - 1);
-    const dn = histAt(env, env.thru, HIST_LEN - 1);
-    for (let x = wanX; x < PW; x++) {
-      const k = (x - wanX) / (PW - wanX);
-      fbSet(x, 3, k < up ? cAzure : cQuiet, k < up ? 0.45 : 0.05);
-      fbSet(x, 7, k < dn ? cAzure : cQuiet, k < dn ? 0.3 : 0.05);
-      fbSet(x, 9, env.loss > 1.0 ? cCrit : env.rtt > 30.0 ? cWarn : cOk,
-        env.loss > 1.0 ? 0.7 : 0.22);
-    }
+    /* Internet, §4: the rightmost column, right of the router gate, with the
+       backup WAN dimmer beside it.
+
+       §10 A-3, the ruling on this lane's flag: the internet is only meaningful
+       THROUGH the router, so the marker column renders in the ROUTER's state
+       treatment — warn when the router is degraded, crit and broken when it is
+       down. Never a healthy full-height marker over a dead router. A missing
+       router row is treated as down for the same reason: nothing is reaching
+       the internet through a gateway we have no word on. */
+    a1Gate(A1_INET_X, 0, PH, L.router ? L.router.state : GS_DOWN, 0.50);
+
+    /* wanBackup keeps its OWN device state (§10 A-3), which is the point: when
+       the router goes down this column stays lit beside a broken internet
+       marker and reads as the only live path left. Rows 3..7, dimmer —
+       firmware/panelScreensA.c:154, a1Gate(52, 3, 5, state, 0.28f). */
+    if (L.wan) a1Gate(A1_WAN_X, 3, 5, L.wan.state, 0.28);
   }
 
   /* A2 · MQ and SNMP.
@@ -1175,11 +1401,137 @@
   // 13. Data plumbing — live poll, fixture load, role gate
   // =====================================================================
   const POLL_MS = 5000;
-  const CMD_KIND = { theme: 1, screen: 2, brightness: 3, autoBright: 4, ack: 5, dwell: 6, sleep: 7 };
+  const CMD_KIND = {
+    theme: 1, screen: 2, brightness: 3, autoBright: 4, ack: 5, dwell: 6, sleep: 7,
+    screenEn: 8, screenWt: 9,            // CONTRACT-AW §3.2
+  };
   const CMD_GROUP = { 1: "theme", 2: "screen", 3: "brightness", 4: "brightness", 5: "ack", 6: "dwell", 7: "sleep" };
   const CMD_LABEL = { 1: "theme", 2: "screen", 3: "brightness", 4: "auto-brightness", 5: "acknowledge", 6: "dwell", 7: "sleep/wake" };
   const CMD_EXPIRY_MS = 120000;          // CONTRACT-CP §10
   const CMD_GIVEUP_MS = 130000;          // expiry + one poll of slack
+
+  // =====================================================================
+  // 13a. Per-screen enable + dwell weight — CONTRACT-AW §3.2/§3.3 (task #12)
+  // =====================================================================
+  const N_SCREENS = 12;                  // §3.2 screenIdx 0..11
+  /* §3.2 weightCode 0..5. The multiplier column is the operator's mental
+     model (30 s base × 5 = 150 s, §1) and is shown as such — the code is a
+     wire detail and never appears in the UI. */
+  const WEIGHTS = [
+    { code: 0, label: "¼×", mul: 0.25 },
+    { code: 1, label: "½×", mul: 0.5 },
+    { code: 2, label: "1×", mul: 1 },
+    { code: 3, label: "2×", mul: 2 },
+    { code: 4, label: "5×", mul: 5 },
+    { code: 5, label: "10×", mul: 10 },
+  ];
+  function weightLabel(code) {
+    for (let i = 0; i < WEIGHTS.length; i++) if (WEIGHTS[i].code === code) return WEIGHTS[i].label;
+    return null;
+  }
+
+  /* Argument packing — §3.2, exactly:
+       kind 8  arg = (screenIdx << 1) | enabled
+       kind 9  arg = (screenIdx << 3) | weightCode
+     Note the two use DIFFERENT shifts, which is easy to get quietly wrong;
+     the harness asserts both against hand-computed values. */
+  function packScreenEn(idx, enabled) { return (idx << 1) | (enabled ? 1 : 0); }
+  function packScreenWt(idx, code) { return (idx << 3) | (code & 7); }
+
+  /* cmdGroup — the pend map is keyed per CONTROL, and kinds 8/9 address one of
+     twelve screens each, so they cannot share a key the way the global
+     controls do: toggling A1 must not paint B2 as pending. */
+  function cmdGroup(kind, arg) {
+    if (kind === CMD_KIND.screenEn) return "screenEn:" + (arg >> 1);
+    if (kind === CMD_KIND.screenWt) return "screenWt:" + (arg >> 3);
+    return CMD_GROUP[kind];
+  }
+  function cmdLabel(kind, arg) {
+    if (kind === CMD_KIND.screenEn) {
+      const s = SCREENS[arg >> 1];
+      return (s ? s.id : "screen " + (arg >> 1)) + " enable";
+    }
+    if (kind === CMD_KIND.screenWt) {
+      const s = SCREENS[arg >> 3];
+      return (s ? s.id : "screen " + (arg >> 3)) + " weight";
+    }
+    return CMD_LABEL[kind] || "command";
+  }
+
+  /* readScreenCfg — decode whatever GET /api/panel puts in panelScreenConfig
+     into 12 entries of { enabled, weightCode } or null.
+     STATE AUTHORITY (CONTRACT-AW §3.3): this is the PANEL's report of its own
+     persisted config, relayed by the daemon. A null entry means the panel has
+     not told us, and the UI must render that as unknown — NEVER as the §3.4
+     factory default (enabled, 1×), because "we have not heard" and "the panel
+     says all-on at 1×" are different facts and only one of them is ours to
+     assert. Returning null for the whole thing is a valid outcome.
+
+     AW1's exact packet shape is not landed yet, so the shapes below are all
+     accepted and a mismatch is reported to Lead rather than guessed at:
+       - [12] u8 bytes            bit0 enabled, bits1..3 weightCode  (§3.3)
+       - [12] objects             { enabled, weightCode | weight }
+       - { screenCfg: <above> }   the §3.3 field name, wrapped
+       - 24-char hex string       the 12 bytes, as the daemon might relay them
+     Anything else decodes to null: unknown, not assumed. */
+  /* §10 D3: screenCfg bits 4..7 are RESERVED, transmitted zero, and receivers
+     must IGNORE them — so they are masked off rather than treated as a
+     malformed byte. weightCode values 6 and 7 are also reserved, but those are
+     a different case: the field is in range yet carries no meaning we can
+     render, so the entry reads as unknown rather than being clamped to a real
+     weight the panel never claimed. */
+  function decodeScreenByte(b) {
+    const v = Number(b);
+    if (!isFinite(v) || v < 0 || v > 255 || Math.floor(v) !== v) return null;
+    const code = (v >> 1) & 7;
+    if (code > 5) return null;                // reserved, not a weight
+    return { enabled: (v & 1) === 1, weightCode: code };
+  }
+  function decodeScreenEntry(e) {
+    if (e == null) return null;
+    if (typeof e === "number") return decodeScreenByte(e);
+    if (typeof e === "object") {
+      const raw = (e.weightCode != null) ? e.weightCode : e.weight;
+      const code = Number(raw);
+      if (!isFinite(code) || code < 0 || code > 5 || Math.floor(code) !== code) return null;
+      if (typeof e.enabled !== "boolean" && typeof e.enabled !== "number") return null;
+      return { enabled: !!e.enabled, weightCode: code };
+    }
+    return null;
+  }
+  function readScreenCfg(raw) {
+    let src = raw;
+    if (src && !Array.isArray(src) && typeof src === "object") src = src.screenCfg;
+    if (typeof src === "string") {
+      const hex = src.trim();
+      if (!/^[0-9a-fA-F]{24}$/.test(hex)) return null;
+      const out = new Array(N_SCREENS);
+      for (let i = 0; i < N_SCREENS; i++) out[i] = decodeScreenByte(parseInt(hex.substr(i * 2, 2), 16));
+      return out;
+    }
+    if (!Array.isArray(src) || src.length !== N_SCREENS) return null;
+    const out = new Array(N_SCREENS);
+    for (let i = 0; i < N_SCREENS; i++) out[i] = decodeScreenEntry(src[i]);
+    return out;
+  }
+
+  /* §10 D3: CONFIG flags bit0 is `cfgPersisted`, set only after the firmware
+     has successfully written the config to flash. Reporting a setting and
+     having survived a power cycle are different claims, and the page should not
+     conflate them.
+
+     Returns true only on a positive report. Everything else — no flags field,
+     bit clear, unparseable — returns false, which the UI renders as SILENCE
+     rather than as "not saved": D4 allows persistence to ship deferred and
+     session-volatile, and in that world a standing "unsaved" warning would be
+     noise about a feature that was never coming. All other flag bits are
+     reserved; they are masked off and ignored. */
+  function readCfgPersisted(raw) {
+    if (!raw || Array.isArray(raw) || typeof raw !== "object") return false;
+    const f = Number(raw.flags);
+    if (!isFinite(f) || f < 0 || f > 255) return false;
+    return (f & 1) === 1;
+  }
 
   // Where the parity fixture may live once deployed. The repo path is
   // status-panel/fixtures/panel-snapshot.json; deployment copies it under the
@@ -1228,7 +1580,73 @@
   const FIXTURE_DT = 0.04;    // 25 Hz, the firmware's frame budget
   const FRAME_MS = 40;
 
-  function VirtualPanel({ env, armed, gain, currentIdx, sleeping, still }) {
+  /* ScreenTileCfg — the §3.2 per-screen controls, rendered inside the tile of
+     the screen they govern so "this one, off" needs no cross-reference.
+
+     Every selected state here means THE PANEL SAID SO (§3.3). Three distinct
+     situations must stay distinguishable, and the failure mode to avoid is
+     collapsing them into a cheerful default:
+       - the panel has not reported a config at all → nothing selected, said so
+         in words. This is the §3.4 factory default's shape, but it is NOT the
+         factory default and must not be drawn as one.
+       - a command is in flight → nothing selected, spinner. The OLD value is
+         withheld rather than left standing, so it cannot be misread as the new
+         one having landed.
+       - the panel reported → that one chip, and only that one, is pressed. */
+  function ScreenTileCfg({ idx, cfg, pend, send, disabled }) {
+    const enP = pend["screenEn:" + idx];
+    const wtP = pend["screenWt:" + idx];
+    const busy = function (p) { return !!p && (p.status === "sending" || p.status === "pending"); };
+    const enBusy = busy(enP), wtBusy = busy(wtP);
+    const known = !!cfg;
+    const off = !!disabled;
+
+    return (
+      <div className="vp-cfg">
+        <div className="vp-cfg__row">
+          <span className="vp-cfg__label">Rotation</span>
+          {[["On", true], ["Off", false]].map(function (o) {
+            const on = known && !enBusy && cfg.enabled === o[1];
+            return (
+              <button key={o[0]} type="button"
+                className={"chip chip--mini" + (on ? " on" : "")}
+                aria-pressed={on}
+                aria-label={SCREENS[idx].id + " rotation " + o[0]}
+                disabled={off || enBusy}
+                onClick={function () { send(CMD_KIND.screenEn, packScreenEn(idx, o[1])); }}>
+                {o[0]}
+              </button>
+            );
+          })}
+          <CmdState p={enP} />
+        </div>
+        <div className="vp-cfg__row">
+          <span className="vp-cfg__label">Dwell</span>
+          {WEIGHTS.map(function (w) {
+            const on = known && !wtBusy && cfg.weightCode === w.code;
+            return (
+              <button key={w.code} type="button"
+                className={"chip chip--mini" + (on ? " on" : "")}
+                aria-pressed={on}
+                aria-label={SCREENS[idx].id + " dwell weight " + w.label + " of base"}
+                disabled={off || wtBusy}
+                onClick={function () { send(CMD_KIND.screenWt, packScreenWt(idx, w.code)); }}>
+                {w.label}
+              </button>
+            );
+          })}
+          <CmdState p={wtP} />
+        </div>
+        {!known && (
+          <div className="vp-cfg__note">
+            The panel has not reported its screen configuration, so nothing is shown as in force.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function VirtualPanel({ env, armed, gain, currentIdx, sleeping, still, screenCfg, pend, send, ctlDisabled }) {
     const canvasRefs = useRef([]);
     const stRef = useRef(null);
     const fbRef = useRef(null);
@@ -1320,12 +1738,22 @@
       <div className="vp-grid">
         {SCREENS.map(function (s, i) {
           const isCurrent = i === currentIdx;
+          const cfg = screenCfg ? screenCfg[i] : null;
+          /* Only a REPORTED disable greys the tile. An unknown config leaves it
+             looking normal, because the panel may well be showing it. */
+          const skipped = !!cfg && !cfg.enabled;
+          const wl = cfg ? weightLabel(cfg.weightCode) : null;
           return (
-            <figure key={s.id} className={"vp-tile" + (isCurrent ? " vp-tile--live" : "")}>
+            <figure key={s.id} className={"vp-tile" + (isCurrent ? " vp-tile--live" : "")
+              + (skipped ? " vp-tile--skipped" : "")}>
               <figcaption className="vp-tile__head">
                 <span className="vp-tile__id">{s.id}</span>
                 <span className="vp-tile__title">{s.title}</span>
                 <span className="vp-tile__theme">{THEMES[s.theme].name}</span>
+                {cfg && cfg.enabled && wl && wl !== "1×" && (
+                  <span className="vp-tile__badge vp-tile__badge--wt" title="Dwell weight the panel reports">{wl}</span>
+                )}
+                {skipped && <span className="vp-tile__badge vp-tile__badge--off">SKIPPED</span>}
                 {isCurrent && <span className="vp-tile__badge">ON PANEL</span>}
               </figcaption>
               <div className="vp-tile__screen">
@@ -1340,6 +1768,9 @@
                   <div className="vp-tile__sleep"><span>ASLEEP</span></div>
                 )}
               </div>
+              {send && (
+                <ScreenTileCfg idx={i} cfg={cfg} pend={pend || {}} send={send} disabled={ctlDisabled} />
+              )}
             </figure>
           );
         })}
@@ -1551,7 +1982,7 @@
             return (
               <div key={k} className="vp-fail">
                 <Icon name="alerts" size={14} />
-                <span><strong>{CMD_LABEL[p.kind] || k}</strong> did not apply — {p.reason}</span>
+                <span><strong>{cmdLabel(p.kind, p.arg)}</strong> did not apply — {p.reason}</span>
               </div>
             );
           })}
@@ -1759,7 +2190,7 @@
     }, [fixtureMode]);
 
     const send = useCallback(function (kind, arg) {
-      const key = CMD_GROUP[kind];
+      const key = cmdGroup(kind, arg);
       const A = api();
       /* `stamp` identifies THIS attempt: the timeout and both settle paths
          only touch the pend entry if it is still this attempt's (a newer
@@ -1835,6 +2266,23 @@
     }, [working, cadenceMs]);
 
     const pstate = head ? head.panelState : null;
+    /* §3.3 serves panelScreenConfig read-only at the top of the GET payload.
+       panelState is also checked because AW1's packet is not landed yet and a
+       singleton is as likely to be nested there; both resolve through the same
+       decoder, and anything unrecognised stays null — unknown, not defaulted. */
+    const screenCfg = useMemo(function () {
+      if (!head) return null;
+      return readScreenCfg(head.panelScreenConfig)
+        || readScreenCfg(pstate && pstate.panelScreenConfig)
+        || readScreenCfg(pstate && pstate.screenCfg);
+    }, [head, pstate]);
+    /* §10 D3 cfgPersisted — reported and survives-a-power-cycle are separate
+       claims. Shown only on a positive report; see readCfgPersisted. */
+    const cfgSaved = useMemo(function () {
+      if (!head) return false;
+      return readCfgPersisted(head.panelScreenConfig)
+        || readCfgPersisted(pstate && pstate.panelScreenConfig);
+    }, [head, pstate]);
     const armed = !!(env && env.alarmActive && !(pstate && pstate.alarmAcked
       && Number(pstate.ackedEpisodeId) === Number(env.episodeId)));
     const currentIdx = pstate ? (num(pstate.theme) * 3 + num(pstate.screen)) : -1;
@@ -1843,6 +2291,24 @@
     const reportedAt = pstate ? parseReportedAt(pstate.reportedAt) : null;
     const refAge = fixtureMode && head ? (sampleMs(head) - (reportedAt || 0)) : (reportedAt ? now - reportedAt : null);
     const stale = refAge != null && refAge > 90000;
+
+    /* A one-line read of the rotation the panel reports: how many screens it is
+       skipping and how far the dwell weights spread the cycle. `unknown` is
+       counted separately and never folded into "on". */
+    const cfgSummary = useMemo(function () {
+      if (!screenCfg) return null;
+      let on = 0, offN = 0, unknown = 0, weighted = 0;
+      for (let i = 0; i < N_SCREENS; i++) {
+        const c = screenCfg[i];
+        if (!c) { unknown++; continue; }
+        if (c.enabled) { on++; if (c.weightCode !== 2) weighted++; } else offN++;
+      }
+      const bits = [on + " of " + N_SCREENS + " screens in rotation"];
+      if (offN) bits.push(offN + " skipped");
+      if (weighted) bits.push(weighted + " weighted");
+      if (unknown) bits.push(unknown + " unreported");
+      return bits.join(" · ");
+    }, [screenCfg]);
 
     const canControl = !fixtureMode && (role === "operator" || role === "admin");
     const disabledNote = fixtureMode
@@ -1910,6 +2376,18 @@
           {env && env.dataStale && <span className="vp-chip vp-chip--warn">Upstream data stale</span>}
           {env && env.gaps > 0 && <span className="vp-chip vp-chip--muted">{env.gaps} history gap{env.gaps === 1 ? "" : "s"}</span>}
           {env && <span className="vp-chip vp-chip--muted">{env.histFill}/{HIST_LEN} history slots</span>}
+          {env && (
+            <span className={"vp-chip" + (env.gearCount ? " vp-chip--muted" : " vp-chip--warn")}>
+              {env.gearCount
+                ? env.gearCount + " network device" + (env.gearCount === 1 ? "" : "s") + " on A1"
+                : "No gear data — A1 shows NO DATA"}
+            </span>
+          )}
+          {pstate && !screenCfg && (
+            <span className="vp-chip vp-chip--muted">Screen config not reported</span>
+          )}
+          {screenCfg && cfgSummary && <span className="vp-chip vp-chip--muted">{cfgSummary}</span>}
+          {cfgSaved && <span className="vp-chip vp-chip--muted">Saved to panel flash</span>}
         </div>
 
         {!env && !err && <div className="empty">Waiting for the first /api/panel sample…</div>}
@@ -1922,6 +2400,10 @@
             currentIdx={currentIdx}
             sleeping={!!(pstate && pstate.sleeping)}
             still={fixtureMode}
+            screenCfg={screenCfg}
+            pend={pend}
+            send={send}
+            ctlDisabled={!canControl}
           />
         )}
 
@@ -1934,6 +2416,18 @@
           differ in detail from the physical panel even when the fleet data is identical. The sleep state is
           shown as an overlay on the on-panel tile rather than blanking every screen, so the other eleven stay
           previewable. Colours reproduce the panel and are exempt from the Interface Guide palette.
+        </p>
+
+        <p className="vp-footnote">
+          <strong>Rotation and dwell</strong> are set per screen on the tile itself. A weight multiplies the
+          theme&rsquo;s base dwell, so at a 30&nbsp;s base ½× is 15&nbsp;s and 5× is 150&nbsp;s. The panel stores
+          this in its own flash and keeps it across resets, which is why a control here shows a setting as in
+          force <em>only</em> once the panel has reported it back &mdash; before that, and while a change is in
+          flight, no option is marked. Turning every screen of a theme off is not a way to blank the panel: the
+          firmware treats an all-disabled theme as all-enabled rather than showing a black wall.
+          <strong> A1</strong> draws the live Ubiquiti path &mdash; access points and hubs on the left feeding
+          the switch and router, the internet in the rightmost column &mdash; from the gear section of the
+          snapshot; with no gear data it shows NO DATA rather than an invented topology.
         </p>
 
         <PanelControls

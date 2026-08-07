@@ -103,6 +103,69 @@ function panelTier(?string $role, ?string $class): int
 }
 
 /**
+ * Map a networkGear.kind value to the CONTRACT-AW §3.1 gear role byte.
+ *
+ * Input: the gear row's kind enum value.
+ * Output: 0=router 1=switch 2=hub 3=ap 4=wanBackup; null for kinds A1 has no
+ * gate for ('other') — those rows are dropped from the gear section entirely
+ * rather than mis-rendered as a phantom router/switch.
+ */
+function panelGearRole(string $kind): ?int
+{
+    return match ($kind) {
+        'gateway', 'router' => 0,
+        'switch' => 1,
+        'hub' => 2,
+        'ap' => 3,
+        'wanBackup' => 4,
+        default => null,
+    };
+}
+
+/**
+ * Log-scale a Kbps rate into the wire's 0..7 brightness/particle-rate level.
+ *
+ * Input: a non-negative Kbps rate.
+ * Output: 0 (idle) through 7 (>=20 Mbps); doubling roughly every level so a
+ * home LAN's realistic 0..~20 Mbps aggregate range uses the whole scale
+ * instead of pinning at the top or bottom.
+ */
+function panelGearLogScale(int $kbps): int
+{
+    if ($kbps < 1) {
+        return 0;
+    }
+    $thresholds = [1, 10, 50, 200, 1000, 5000, 20000];
+    $level = 1;
+    foreach ($thresholds as $threshold) {
+        if ($kbps >= $threshold) {
+            $level++;
+        }
+    }
+    return min(7, $level - 1);
+}
+
+/**
+ * Map gearInterfaceCurrent.operStatus (IF-MIB) to the §3.1 wire gear state.
+ *
+ * Input: the raw IF-MIB operStatus value (1=up..7=lowerLayerDown, nullable).
+ * Output: 0=down 1=up 2=degraded, per CONTRACT-AW §9 A-4 (NORMATIVE).
+ * FAIL DARK: any unrecognised or null value maps to down, never degraded —
+ * an unmapped/unknown status must never render healthier than a known-down
+ * device. Passing operStatus through unmapped previously made every down
+ * device render DEGRADED (amber-solid) and wire state 0 unreachable,
+ * defeating the A-3 internet-column ruling for a downed router.
+ */
+function panelGearState(?int $operStatus): int
+{
+    return match ($operStatus) {
+        1 => 1,
+        3, 5 => 2,
+        default => 0,
+    };
+}
+
+/**
  * Identify the local, read-only account reserved for the panel daemon.
  *
  * Input: current authenticated session principal.
@@ -143,7 +206,7 @@ function panelCommandInput(array $body): array
     if (!is_int($kind) || !is_int($arg)) {
         Response::error('bad_request', 'kind and arg must be integers.', 400);
     }
-    if ($kind < 1 || $kind > 7 || $arg < 0 || $arg > 255) {
+    if ($kind < 1 || $kind > 9 || $arg < 0 || $arg > 255) {
         Response::error('bad_request', 'Unsupported command kind or argument.', 400);
     }
     $valid = match ($kind) {
@@ -153,6 +216,12 @@ function panelCommandInput(array $body): array
         4, 5 => true, // Protocol reserves but deliberately ignores this byte.
         6 => in_array($arg, [3, 6, 30], true),
         7 => $arg <= 1,
+        // CONTRACT-AW §3.2 + D2: PANEL_CTL_SCREENEN arg = (screenIdx<<1)|enabled,
+        // screenIdx = theme*3+slot in 0..11 -> arg <= 23 covers the whole range.
+        8 => $arg <= 23,
+        // PANEL_CTL_SCREENWT arg = (screenIdx<<3)|weightCode; D2: screenIdx <= 11
+        // AND weightCode <= 5, checked as the two decomposed fields.
+        9 => ($arg >> 3) <= 11 && ($arg & 0x7) <= 5,
     };
     if (!$valid) {
         Response::error('bad_request', 'Argument is invalid for this command kind.', 400);
@@ -185,6 +254,38 @@ function panelStateInput(array $body): array
         $state[$field] = $value;
     }
     return $state;
+}
+
+/**
+ * Validate a decoded CONFIG report frame (CONTRACT-AW §3.3) before upsert.
+ *
+ * Input: decoded JSON body {screenCfg:[{enabled,weightCode} x12], flags}.
+ * Output: [screenCfgJson, flags] or a 400 JSON response for malformed input.
+ *
+ * @return array{0:string,1:int}
+ */
+function panelConfigInput(array $body): array
+{
+    $screenCfg = $body['screenCfg'] ?? null;
+    $flags = $body['flags'] ?? null;
+    if (!is_array($screenCfg) || count($screenCfg) !== 12 || !is_int($flags) || $flags < 0 || $flags > 255) {
+        Response::error('bad_request', 'screenCfg (12 entries) and flags are required.', 400);
+    }
+    $normalised = [];
+    foreach (array_values($screenCfg) as $entry) {
+        $enabled = is_array($entry) ? ($entry['enabled'] ?? null) : null;
+        $weightCode = is_array($entry) ? ($entry['weightCode'] ?? null) : null;
+        if (!is_int($enabled) || $enabled < 0 || $enabled > 1
+            || !is_int($weightCode) || $weightCode < 0 || $weightCode > 5) {
+            Response::error('bad_request', 'Each screenCfg entry needs enabled (0/1) and weightCode (0-5).', 400);
+        }
+        $normalised[] = ['enabled' => $enabled, 'weightCode' => $weightCode];
+    }
+    $json = json_encode($normalised);
+    if ($json === false) {
+        Response::error('bad_request', 'screenCfg could not be encoded.', 400);
+    }
+    return [$json, $flags];
 }
 
 return static function (Router $router): void {
@@ -328,6 +429,27 @@ return static function (Router $router): void {
                 "SELECT cmdId, kind, arg FROM panelCommand
                   WHERE status = 'pending' ORDER BY cmdId ASC"
             ) : [];
+            /* A1 gear section (CONTRACT-AW §3.1). networkGear/gearInterfaceCurrent
+             * are live from migrations 002/006 already — no feature-detect needed
+             * for these two. Freshness matches the daemon's 15s poll cadence with
+             * headroom; ifIndex=0 is the poller's aggregate-per-device row. */
+            $gearRows = Db::rows(
+                "SELECT g.gearId, g.kind, i.inRateKbps, i.outRateKbps, i.operStatus
+                   FROM networkGear g
+                   JOIN gearInterfaceCurrent i
+                     ON i.gearId = g.gearId AND i.ifIndex = 0
+                  WHERE i.sampledAt > DATE_SUB(NOW(6), INTERVAL 60 SECOND)
+                  ORDER BY g.gearId"
+            );
+            /* panelScreenConfig is new in migration 019, not yet applied live:
+             * feature-detect per the live-file discipline (see $lcCols above). */
+            $hasScreenCfg = ((int) (Db::row(
+                "SELECT COUNT(*) AS n FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'panelScreenConfig'"
+            )['n'] ?? 0)) === 1;
+            $panelScreenConfigRow = $hasScreenCfg ? Db::row(
+                'SELECT screenCfg, flags, reportedAt FROM panelScreenConfig WHERE configId = 1'
+            ) : null;
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -546,6 +668,44 @@ return static function (Router $router): void {
         foreach ($systemsAll as $system) {
             $loadSum += $system['loadPct'];
         }
+
+        /* A1 gear section: role-priority order (router/switch/hub/ap/wanBackup),
+         * then gearId for determinism; 'other'-kind rows are dropped by
+         * panelGearRole() returning null (stale SNMP test gear, e.g.). */
+        $gearAll = [];
+        foreach ($gearRows as $row) {
+            $role = panelGearRole((string) $row['kind']);
+            if ($role === null) {
+                continue;
+            }
+            $gearAll[] = [
+                'gearId' => (string) $row['gearId'], 'role' => $role,
+                'state' => panelGearState($row['operStatus'] === null ? null : (int) $row['operStatus']),
+                'rxLevel' => panelGearLogScale((int) $row['inRateKbps']),
+                'txLevel' => panelGearLogScale((int) $row['outRateKbps']),
+            ];
+        }
+        usort($gearAll, static fn (array $a, array $b): int => [$a['role'], $a['gearId']] <=> [$b['role'], $b['gearId']]);
+        $gearCount = count($gearAll);
+        if ($gearCount > 12) {
+            /* E3 (review S7): the panel polls every 5 s, so per-request logging
+             * is ~17k identical lines/day. APCu-gate to one line per hour;
+             * without APCu, fall back to one per worker per size change. */
+            static $lastLoggedCount = null;
+            $logIt = function_exists('apcu_add')
+                ? apcu_add('panelGearTruncLogged', 1, 3600)
+                : ($lastLoggedCount !== $gearCount);
+            if ($logIt) {
+                $lastLoggedCount = $gearCount;
+                error_log("[panel] gear section truncated from $gearCount to 12 entries");
+            }
+        }
+        $gear = array_map(
+            static fn (array $g): array => ['role' => $g['role'], 'state' => $g['state'],
+                'rxLevel' => $g['rxLevel'], 'txLevel' => $g['txLevel']],
+            array_slice($gearAll, 0, 12)
+        );
+
         $payload = [
             'ts' => (int) ($nowRow['ts'] ?? time()), 'score' => $score,
             'stateRoll' => $stateRoll, 'alerts' => $alerts,
@@ -568,6 +728,12 @@ return static function (Router $router): void {
                 'ackedEpisodeId' => (int) $panelStateRow['ackedEpisodeId'],
                 'lastCmdId' => (int) $panelStateRow['lastCmdId'],
                 'reportedAt' => $panelStateRow['reportedAt'],
+            ],
+            'gear' => $gear, 'gearCount' => min($gearCount, 12),
+            'panelScreenConfig' => $panelScreenConfigRow === null ? null : [
+                'screenCfg' => json_decode((string) $panelScreenConfigRow['screenCfg'], true),
+                'flags' => (int) $panelScreenConfigRow['flags'],
+                'reportedAt' => $panelScreenConfigRow['reportedAt'],
             ],
         ];
         if ($isOperator) {
@@ -707,5 +873,48 @@ return static function (Router $router): void {
                FROM panelState WHERE stateId = 1'
         );
         Response::ok(['panelState' => $stored]);
+    });
+
+    /**
+     * Upsert the panel's per-screen enable/weight CONFIG report (CONTRACT-AW §3.3).
+     *
+     * Input: authenticated panel service principal JSON
+     *   {screenCfg:[{enabled,weightCode} x12], flags:int}.
+     * Output: {panelScreenConfig} on success; 403 for any other principal.
+     *
+     * Migration 019 (panelScreenConfig) may not be applied live yet: this
+     * route feature-detects the table and returns a soft no-op 200 rather
+     * than a 500 when it is absent, matching the GET side's discipline.
+     */
+    $router->post('/api/panel/config', static function (): void {
+        $principal = Auth::current();
+        if (!panelIsServicePrincipal($principal ?? [])) {
+            panelLogRejectedWrite('config', $principal);
+            Response::error('forbidden', 'Only the local panel service principal may report config.', 403);
+        }
+        [$screenCfgJson, $flags] = panelConfigInput(solari_json_body());
+        $hasScreenCfg = ((int) (Db::row(
+            "SELECT COUNT(*) AS n FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'panelScreenConfig'"
+        )['n'] ?? 0)) === 1;
+        if (!$hasScreenCfg) {
+            // Soft no-op: migration 019 not yet applied. Not a client error.
+            Response::ok(['panelScreenConfig' => null]);
+        }
+        Db::exec(
+            'INSERT INTO panelScreenConfig (configId, screenCfg, flags, reportedAt)
+             VALUES (1, :screenCfg, :flags, NOW(6))
+             ON DUPLICATE KEY UPDATE
+                screenCfg = VALUES(screenCfg), flags = VALUES(flags), reportedAt = VALUES(reportedAt)',
+            [':screenCfg' => $screenCfgJson, ':flags' => $flags]
+        );
+        $stored = Db::row(
+            'SELECT screenCfg, flags, reportedAt FROM panelScreenConfig WHERE configId = 1'
+        );
+        Response::ok(['panelScreenConfig' => $stored === null ? null : [
+            'screenCfg' => json_decode((string) $stored['screenCfg'], true),
+            'flags' => (int) $stored['flags'],
+            'reportedAt' => $stored['reportedAt'],
+        ]]);
     });
 };

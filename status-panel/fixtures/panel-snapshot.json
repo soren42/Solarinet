@@ -1,7 +1,9 @@
 {
   "_": "SolariNet status panel — committed parity fixture (CONTRACT-CP.md v1.1 §10).",
-  "_usage": "The dashboard Panel page renders this deterministically at /?fixture=1 (no network). Each scenario's `history` is a chronological list of GET /api/panel `data` payloads, CADENCE seconds apart; the page resamples them into the 53-deep client history rings exactly as it does live.",
-  "version": 1,
+  "_usage": "The dashboard Panel page renders this deterministically at /?fixture=1 (no network). Each scenario's `history` is a chronological list of GET /api/panel `data` payloads, CADENCE seconds apart; the page resamples them into the 53-deep client history rings exactly as it does live. v2 adds the CONTRACT-AW §3.1 `gear` array (screen A1's flow gates) and the §3.3 `panelScreenConfig` on the newest sample of each scenario.",
+  "_gearInventory": "`gear` is in §3.1 wire order — router, switch, hubs, aps, wanBackup — and stands for the real 9-device inventory verified 2026-08-07: chemistry (UDM Pro Max, router), laboratory (USW Pro Max 16, switch), Test Tube / pipette / slide (USW Ultra, hubs), beaker / flask (U7 Pro) + cyclotron (U7 Pro XGS) (aps), covalent (U5G Backup, wanBackup). role 0=router 1=switch 2=hub 3=ap 4=wanBackup; state 0=down 1=up 2=degraded (NOT the PanelState enum); rx/txLevel 0..7, 0 = idle.",
+  "_screenConfig": "`panelScreenConfig` is the panel's own report of its persisted rotation config (§3.3): 12 entries, bit0 enabled and bits1..3 weightCode (0=1/4x 1=1/2x 2=1x 3=2x 4=5x 5=10x). A DIFFERENT accepted wire shape is used per scenario on purpose — normal: packed bytes; alarm: objects; stale: 24-char hex; emptyHistory: absent (panel has not reported); noData: malformed, which must read as unknown and never as the factory default.",
+  "version": 2,
   "cadenceSec": 5,
   "defaultScenario": "normal",
   "scenarios": [
@@ -199,7 +201,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:03"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815950,
@@ -390,7 +448,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:08"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815955,
@@ -581,7 +695,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:13"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 3
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815960,
@@ -772,7 +942,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:18"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815965,
@@ -963,7 +1189,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:23"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815970,
@@ -1154,7 +1436,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:28"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 3
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815975,
@@ -1345,7 +1683,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:33"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815980,
@@ -1536,7 +1930,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:38"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815985,
@@ -1727,7 +2177,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:43"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 3
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815990,
@@ -1918,7 +2424,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:48"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815995,
@@ -2109,7 +2671,63 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:53"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785816000,
@@ -2300,7 +2918,77 @@
             "lastCmdId": 0,
             "dwellSec": 6,
             "reportedAt": "2026-08-04 03:59:58"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 3
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ],
+          "panelScreenConfig": [
+            5,
+            9,
+            5,
+            5,
+            5,
+            4,
+            5,
+            7,
+            5,
+            5,
+            5,
+            1
+          ]
         }
       ]
     },
@@ -2535,6 +3223,62 @@
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:55:45"
             }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 3,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            }
           ]
         },
         {
@@ -2762,6 +3506,62 @@
               "expiredAt": null,
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:55:50"
+            }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 6
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 4,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
             }
           ]
         },
@@ -2991,6 +3791,62 @@
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:55:55"
             }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 7,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
+            }
           ]
         },
         {
@@ -3218,6 +4074,62 @@
               "expiredAt": null,
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:00"
+            }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 3,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
             }
           ]
         },
@@ -3447,6 +4359,62 @@
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:05"
             }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 6
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 4,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            }
           ]
         },
         {
@@ -3674,6 +4642,62 @@
               "expiredAt": null,
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:10"
+            }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 7,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
             }
           ]
         },
@@ -3903,6 +4927,62 @@
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:15"
             }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 3,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
+            }
           ]
         },
         {
@@ -4130,6 +5210,62 @@
               "expiredAt": null,
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:20"
+            }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 6
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 4,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
             }
           ]
         },
@@ -4359,6 +5495,62 @@
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:25"
             }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 7,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
+            }
           ]
         },
         {
@@ -4586,6 +5778,62 @@
               "expiredAt": null,
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:30"
+            }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 5
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 3,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 5,
+              "txLevel": 4
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 2
             }
           ]
         },
@@ -4815,6 +6063,62 @@
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:35"
             }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 6
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 4,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 0,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 4
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 6,
+              "txLevel": 5
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 3
+            }
           ]
         },
         {
@@ -5043,6 +6347,112 @@
               "failureReason": "expired",
               "createdAt": "2026-08-04 03:56:40"
             }
+          ],
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 7,
+              "txLevel": 4
+            },
+            {
+              "role": 1,
+              "state": 2,
+              "rxLevel": 2,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 3
+            },
+            {
+              "role": 2,
+              "state": 2,
+              "rxLevel": 1,
+              "txLevel": 2
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 2
+            },
+            {
+              "role": 3,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 4,
+              "txLevel": 6
+            },
+            {
+              "role": 4,
+              "state": 1,
+              "rxLevel": 3,
+              "txLevel": 1
+            }
+          ],
+          "panelScreenConfig": [
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 4
+            },
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": false,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 3
+            },
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 2
+            },
+            {
+              "enabled": true,
+              "weightCode": 0
+            }
           ]
         }
       ]
@@ -5241,7 +6651,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:01"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815950,
@@ -5432,7 +6898,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:06"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815955,
@@ -5623,7 +7145,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:11"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815960,
@@ -5814,7 +7392,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:16"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815965,
@@ -6005,7 +7639,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:21"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815970,
@@ -6196,7 +7886,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:26"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815975,
@@ -6387,7 +8133,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:31"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815980,
@@ -6578,7 +8380,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:36"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815985,
@@ -6769,7 +8627,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:41"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815990,
@@ -6960,7 +8874,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:46"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785815995,
@@ -7151,7 +9121,63 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:51"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ]
         },
         {
           "ts": 1785816000,
@@ -7342,7 +9368,64 @@
             "lastCmdId": 7,
             "dwellSec": 0,
             "reportedAt": "2026-08-04 03:55:56"
-          }
+          },
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 0
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 3,
+              "state": 1,
+              "rxLevel": 0,
+              "txLevel": 0
+            },
+            {
+              "role": 4,
+              "state": 0,
+              "rxLevel": 0,
+              "txLevel": 0
+            }
+          ],
+          "panelScreenConfig": "050905050504050705050501"
         }
       ]
     },
@@ -7528,7 +9611,27 @@
           "alarmActive": false,
           "episodeId": 0,
           "dataStale": false,
-          "panelState": null
+          "panelState": null,
+          "gear": [
+            {
+              "role": 0,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 2
+            },
+            {
+              "role": 1,
+              "state": 1,
+              "rxLevel": 2,
+              "txLevel": 1
+            },
+            {
+              "role": 2,
+              "state": 1,
+              "rxLevel": 1,
+              "txLevel": 1
+            }
+          ]
         }
       ]
     },
@@ -7575,7 +9678,12 @@
             "lastCmdId": 0,
             "dwellSec": 12,
             "reportedAt": "2026-08-04 03:59:58"
-          }
+          },
+          "panelScreenConfig": [
+            5,
+            5,
+            5
+          ]
         }
       ]
     }

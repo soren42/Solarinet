@@ -127,6 +127,17 @@ PanelCtlAction panelCtlConsume(PanelCtl *ctl, uint32_t cmdId, uint8_t kind,
     case PANEL_CTL_SLEEP:
       if (arg <= 1u) { act = PANEL_CTLACT_SLEEP; out = arg; }
       break;
+    case PANEL_CTL_SCREENEN:
+      /* CONTRACT-AW.md §3.2: bit 0 is the value; every other bit names the
+       * flattened theme*3+screen entry. Invalid commands still consume. */
+      if ((arg >> 1) < 12u) { act = PANEL_CTLACT_SCREENEN; out = arg; }
+      break;
+    case PANEL_CTL_SCREENWT:
+      /* CONTRACT-AW.md §3.2: low three bits are a six-value weight code. */
+      if ((arg >> 3) < 12u && (arg & 0x07u) <= 5u) {
+        act = PANEL_CTLACT_SCREENWT; out = arg;
+      }
+      break;
     default:
       break;   /* unknown kind: consumed, not applied (protocol.h) */
   }
