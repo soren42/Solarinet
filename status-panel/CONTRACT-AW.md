@@ -259,3 +259,13 @@ unsafe write path.
 A2 (weights timing) gains the rescale case; A5 gains the 0x85 knownType
 mutation check; A6 is restated as: v1 decoder (old firmware) fed a
 gear-extended payload accepts and ignores it — same version byte.
+
+**A-3 (internet column state — design ruling from AW3's flag).** The
+internet marker column (x=51) is only meaningful THROUGH the router: when
+the router gate's state is not `up`, the internet column renders in the
+router's state treatment (degraded=warn hue; down=crit + broken/every-other
+pixel), never a healthy full-height marker over a dead router. wanBackup
+(x=52) keeps its own device state — during a router outage it visibly
+becomes the only live path, which is exactly the at-a-glance story the
+screen exists to tell. Firmware implements first; virtual conforms; harness
+pins both states.
