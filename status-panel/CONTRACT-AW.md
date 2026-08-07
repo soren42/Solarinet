@@ -215,3 +215,47 @@ fixture is the parity oracle.
 **A-2 (page pend keys).** Kinds 8/9 pend per-screen in the dashboard page
 ("screenEn:<idx>" / "screenWt:<idx>"), page-local; the one-key-per-kind
 CMD_GROUP does not apply to per-screen commands.
+
+## 10. Design-consult dispositions (BINDING — override §3/§4/§6 where they conflict)
+
+**D1 (§3.1 — NO version bump).** protocol.c dispatches on strict version
+equality; bumping would make old firmware drop every v2 frame (rollout
+outage). The gear section ships as a V1-ADDITIVE trailing extension:
+PANEL_PROTO_VERSION stays 1; new decoders parse gear ONLY when
+`baseEnd + 1 + 4*gearCount <= len` and `gearCount <= 12`; absent/short/
+oversized → gearCount 0 (no-data), never a decode error. Old firmware
+ignores trailing bytes (S6). Rollout: server/daemon first, firmware after —
+no flag day, no dropped frames.
+
+**D2 (§3.2 — screenIdx mapping).** NORMATIVE: `screenIdx = theme*3 + slot`
+(themes 0..3 × slots 0..2 → 0..11). Validation: kind 8 arg ≤ 23, kind 9
+screenIdx ≤ 11 ∧ weightCode ≤ 5. SETSCREEN targeting a DISABLED slot:
+accepted and displayed (operator intent wins), rotation resumes per config
+on the next advance.
+
+**D3 (§3.3).** knownType() MUST admit 0x85 — with a parser-path dispatch
+test and a knownType mutation check (the CP lesson, mandatory). Flag bit0
+renamed `cfgPersisted` (1 only after a successful flash write). All reserved
+bits (screenCfg bits 4-7, weightCode 6-7, reserved bytes) transmitted as
+zero; receivers ignore, senders never set.
+
+**D4 (§3.4 — flash discipline).** The config sector is RESERVED IN THE
+LINKER/BUILD LAYOUT (image end capped a sector short; assert at build time
+that the binary does not reach it). Record is page-padded (256 B multiple)
+at a 4 KB-aligned erase offset. Writes go through flash_safe_execute with
+the full dual-core protocol: SRAM-resident callback, core-1 safe-state
+(lockout) initialized at boot, deterministic behavior for USB/DMA during
+the window. Power-loss mid-write → CRC fails → defaults (A4 gains this
+case). If pico-sdk's flash_safe_execute setup proves heavier than the cycle
+allows, the fallback is DEFERRING persistence to a follow-up and shipping
+config as session-volatile — flag in the packet rather than shipping an
+unsafe write path.
+
+**D5 (§4/E4 — dwell rescale).** Weight change mid-dwell RESCALES elapsed:
+`elapsed = elapsed / oldDwell * newDwell`, advancing immediately if elapsed
+≥ newDwell. Never a reset (a 10×→¼× change at 299 s must not hold another
+7.5 s). Manual advance always selects the NEXT ENABLED screen.
+
+A2 (weights timing) gains the rescale case; A5 gains the 0x85 knownType
+mutation check; A6 is restated as: v1 decoder (old firmware) fed a
+gear-extended payload accepts and ignores it — same version byte.
