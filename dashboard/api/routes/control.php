@@ -112,6 +112,22 @@ return static function (Router $router): void {
         Response::ok(['nodeId' => $nodeId, 'status' => 'retired', 'decidedBy' => $op]);
     });
 
+    $router->post('/api/nodes/{nodeId}/criticality', static function (array $p): void {
+        $nodeId = ctrl_pos_int($p['nodeId'] ?? null, 'nodeId');
+        if (Db::row('SELECT nodeId FROM node WHERE nodeId = :id', [':id' => $nodeId]) === null) {
+            Response::error('not_found', "No node $nodeId", 404);
+        }
+        $body = solari_json_body();
+        $op = Operator::requireOperator();
+        $tier = $body['tier'] ?? null;
+        if (!is_int($tier) || $tier < 0 || $tier > 4) {
+            Response::error('bad_request', 'tier must be an integer from 0 to 4.', 400);
+        }
+        /* CONTRACT-LC §9 J1: verb keys frozen as asset=/node= (C side's shape). */
+        SolariCtl::call('CRIT_SET', ['node' => $nodeId, 'tier' => $tier, 'op' => $op]);
+        Response::ok(['nodeId' => $nodeId, 'criticality' => $tier]);
+    });
+
     // --- POST /api/control/survey ----------------------------------------
     // body: { scope?: "all" }   (the bridge broadcasts SCP_MSG_SURVEY)
     $router->post('/api/control/survey', static function (): void {

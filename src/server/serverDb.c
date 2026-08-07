@@ -181,6 +181,33 @@ static int dbProbeTargetId(const solariProbeResult *p, char *out, size_t cap)
     return snprintf(out, cap, "%s:%s:%u", dbProtoStr(p->proto), host, p->dstPort);
 }
 
+/* Retained for the deferred F4 SCP effective-tier wire work.  Lifecycle
+ * cascades use alertEvent.assetId/nodeId/targetId directly instead. */
+static bool __attribute__((unused)) dbNumericAlertIdToProbeId(const char *in, char *out, size_t cap)
+{
+    const char *first, *last, *proto; unsigned long p; char *end = NULL;
+    if (!in || !out || cap == 0 || !(first = strchr(in, ':'))) return false;
+    p = strtoul(in, &end, 10); if (end != first || p < 1 || p > 3) return false;
+    proto = dbProtoStr((uint8_t)p); last = strrchr(first + 1, ':');
+    if (p == 1) { if (!first[1]) return false; return snprintf(out,cap,"%s:%s",proto,first+1) < (int)cap; }
+    if (!last || !last[1] || last == first + 1) return false;
+    return snprintf(out,cap,"%s:%.*s:%s",proto,(int)(last-first-1),first+1,last+1) < (int)cap;
+}
+
+static bool __attribute__((unused)) dbProbeIdToNumericAlertId(const char *in, char *out, size_t cap)
+{
+    const char *first, *last; int p;
+    if (!in || !out || cap == 0 || !(first=strchr(in,':'))) return false;
+    if ((size_t)(first-in)==4 && strncmp(in,"icmp",4)==0) p=1;
+    else if ((size_t)(first-in)==3 && strncmp(in,"tcp",3)==0) p=2;
+    else if ((size_t)(first-in)==3 && strncmp(in,"udp",3)==0) p=3;
+    else return false;
+    last=strrchr(first+1,':');
+    if (p==1) { if (!first[1]) return false; return snprintf(out,cap,"1:%s",first+1)<(int)cap; }
+    if (!last || !last[1] || last==first+1) return false;
+    return snprintf(out,cap,"%d:%.*s:%s",p,(int)(last-first-1),first+1,last+1)<(int)cap;
+}
+
 /* ===================================================================== */
 /* Prepared-statement execution helpers                                   */
 /* ===================================================================== */
@@ -235,6 +262,14 @@ static void dbBindOutU64(MYSQL_BIND *b, unsigned long long *val, my_bool *isNull
     b->buffer      = val;
     b->is_unsigned = 1;
     b->is_null     = isNull;
+}
+
+static void dbBindOutI32(MYSQL_BIND *b, int *val, my_bool *isNull)
+{
+    memset(b, 0, sizeof *b);
+    b->buffer_type = MYSQL_TYPE_LONG;
+    b->buffer = val;
+    b->is_null = isNull;
 }
 
 /* Initialise an output MYSQL_BIND for a fixed string result column. cap is the
@@ -514,14 +549,16 @@ solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
     static const char *SQL =
         "INSERT INTO probeTarget "
         "  (targetId, host, port, proto, replFactor, label, segId, assetId, probeType, checkArg) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? "
+        "WHERE (? = 0 OR EXISTS (SELECT 1 FROM asset WHERE assetId = ? AND lifecycle = 'active')) "
+        "AND NOT EXISTS (SELECT 1 FROM probeTargetTombstone WHERE targetId = ?) "
         "ON DUPLICATE KEY UPDATE host=VALUES(host), port=VALUES(port), "
         "  proto=VALUES(proto), replFactor=VALUES(replFactor), "
         "  label=VALUES(label), segId=VALUES(segId), assetId=VALUES(assetId), "
         "  probeType=VALUES(probeType), checkArg=VALUES(checkArg)";
     MYSQL      *conn = dbConn(db);
     MYSQL_STMT *st;
-    MYSQL_BIND  b[10];
+    MYSQL_BIND  b[13];
     int          vPort = port, vRepl = replFactor;
     unsigned long long vAsset = assetId;
     const char  *vProbeType = (probeType && probeType[0]) ? probeType : "tcp";
@@ -541,7 +578,10 @@ solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *targetId,
     if (assetId) dbBindU64(&b[7], &vAsset); else dbBindStr(&b[7], NULL, &lSeg);
     dbBindStr(&b[8], vProbeType, &lProbe);
     dbBindStr(&b[9], (checkArg && checkArg[0]) ? checkArg : NULL, &lArg);
-    rc = dbStmtRunWrite(st, b, 10);
+    dbBindU64(&b[10], &vAsset);
+    dbBindU64(&b[11], &vAsset);
+    dbBindStr(&b[12], targetId, &lTid);
+    rc = dbStmtRunWrite(st, b, 13);
     mysql_stmt_close(st);
     return rc;
 }
@@ -615,6 +655,77 @@ solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *asse
     return SOLARI_OK;
 }
 
+/* serverDbGetAssetHeartbeatInfo - ip + monitorHost flag for one asset.
+ * Input: assetId. Output: ip (caller buffer) and monitorHost (0/1).
+ * Used by the lifecycle-restore heartbeat resync. */
+solariStatus serverDbGetAssetHeartbeatInfo(serverDb *db, uint64_t assetId,
+                                           char *ip, size_t ipCap, int *monitorHost)
+{
+    char       sql[160];
+    MYSQL     *conn;
+    MYSQL_RES *res;
+    MYSQL_ROW  row;
+
+    if (!db || !assetId || !ip || !ipCap || !monitorHost) return ERR_INVALID_ARG;
+    conn = dbConn(db);
+    if (!conn) return ERR_DB;
+    snprintf(sql, sizeof sql,
+             "SELECT ip, monitorHost FROM asset WHERE assetId=%llu",
+             (unsigned long long)assetId);
+    if (mysql_query(conn, sql) != 0) return ERR_DB;
+    res = mysql_store_result(conn);
+    if (!res) return ERR_DB;
+    row = mysql_fetch_row(res);
+    if (!row || !row[0]) { mysql_free_result(res); return ERR_DB; }  /* no such asset */
+    snprintf(ip, ipCap, "%s", row[0]);
+    *monitorHost = row[1] ? atoi(row[1]) : 0;
+    mysql_free_result(res);
+    return SOLARI_OK;
+}
+
+solariStatus serverDbGetAssetConfirmValues(serverDb *db, uint64_t assetId,
+                                           char *displayName, size_t displayCap,
+                                           char *host, size_t hostCap,
+                                           char *ip, size_t ipCap)
+{
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND in[1], out[3];
+    unsigned long ld = 0, lh = 0, li = 0;
+    unsigned long long id = assetId;
+    my_bool nd = 0, nh = 0, ni = 0;
+    solariStatus rc;
+    static const char *SQL = "SELECT displayName,host,ip FROM asset WHERE assetId=?";
+
+    if (!conn || !assetId || !displayName || !displayCap || !host || !hostCap || !ip || !ipCap)
+        return ERR_INVALID_ARG;
+    displayName[0] = host[0] = ip[0] = '\0';
+    rc = dbStmtPrepare(conn, SQL, &st); if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &id);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    dbBindOutStr(&out[0], displayName, displayCap, &ld, &nd);
+    dbBindOutStr(&out[1], host, hostCap, &lh, &nh);
+    dbBindOutStr(&out[2], ip, ipCap, &li, &ni);
+    if (mysql_stmt_bind_result(st, out) != 0) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    {
+        int fetch = mysql_stmt_fetch(st);
+        if (fetch != 0 && fetch != MYSQL_NO_DATA) {
+            mysql_stmt_close(st); return ERR_DB;
+        }
+        if (fetch == 0) {
+            if (!nd) displayName[ld < displayCap ? ld : displayCap - 1] = '\0';
+            if (!nh) host[lh < hostCap ? lh : hostCap - 1] = '\0';
+            if (!ni) ip[li < ipCap ? li : ipCap - 1] = '\0';
+        }
+    }
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
 solariStatus serverDbListAssetTargets(serverDb *db, uint64_t assetId,
                                       char out[][SERVER_TARGETID_MAX],
                                       size_t cap, size_t *count)
@@ -667,6 +778,221 @@ solariStatus serverDbDeleteAsset(serverDb *db, uint64_t assetId)
     rc = dbStmtRunWrite(st, b, 1);
     mysql_stmt_close(st);
     return rc;
+}
+
+/* Lifecycle reads deliberately hit the database on every caller path: a
+ * transition must win over an in-flight report, so these values are never
+ * cached in the alert or reconciliation loops. */
+static solariStatus dbLifecycleQuery(serverDb *db, const char *sql, bool *active,
+                                     int *tier, uint64_t *assetId)
+{
+    MYSQL *conn = dbConn(db);
+    MYSQL_RES *res;
+    MYSQL_ROW row;
+    if (active) *active = false;
+    if (tier) *tier = 2;
+    if (assetId) *assetId = 0;
+    if (!conn || mysql_query(conn, sql) != 0) return ERR_DB;
+    res = mysql_store_result(conn);
+    if (!res) return ERR_DB;
+    row = mysql_fetch_row(res);
+    if (row) {
+        if (active) *active = row[0] && strcmp(row[0], "active") == 0;
+        if (tier && row[1]) *tier = atoi(row[1]);
+        if (assetId && row[2]) *assetId = strtoull(row[2], NULL, 10);
+    }
+    mysql_free_result(res);
+    return SOLARI_OK;
+}
+
+solariStatus serverDbAssetIsActive(serverDb *db, uint64_t assetId, bool *active)
+{
+    char sql[160];
+    if (!active || assetId == 0) return ERR_INVALID_ARG;
+    snprintf(sql, sizeof sql, "SELECT lifecycle,criticality,assetId FROM asset WHERE assetId=%llu",
+             (unsigned long long)assetId);
+    return dbLifecycleQuery(db, sql, active, NULL, NULL);
+}
+
+solariStatus serverDbNodeAlertTier(serverDb *db, uint64_t nodeId, int *tier, bool *active)
+{
+    char sql[160];
+    if (!tier || !active || nodeId == 0) return ERR_INVALID_ARG;
+    snprintf(sql, sizeof sql, "SELECT IF(state='retired','retired','active'),criticality,0 FROM node WHERE nodeId=%llu",
+             (unsigned long long)nodeId);
+    return dbLifecycleQuery(db, sql, active, tier, NULL);
+}
+
+solariStatus serverDbProbeAlertTier(serverDb *db, const char *targetId, uint64_t *assetId,
+                                    int *tier, bool *active)
+{
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND in[1], out[3];
+    unsigned long lTarget, lLife = 0;
+    char life[16]; int vTier = 2; unsigned long long vAsset = 0; my_bool nLife=0,nTier=0,nAsset=0;
+    static const char *SQL = "SELECT COALESCE(a.lifecycle,'active'),COALESCE(a.criticality,2),p.assetId FROM probeTarget p LEFT JOIN asset a ON a.assetId=p.assetId WHERE p.targetId=?";
+    solariStatus rc;
+    if (assetId) *assetId = 0;
+    if (tier) *tier = 2;
+    if (active) *active = false;
+    if (!conn || !targetId || !assetId || !tier || !active) return ERR_INVALID_ARG;
+    rc=dbStmtPrepare(conn,SQL,&st); if(rc!=SOLARI_OK) return rc;
+    dbBindStr(&in[0],targetId,&lTarget);
+    if(mysql_stmt_bind_param(st,in)!=0 || mysql_stmt_execute(st)!=0){mysql_stmt_close(st);return ERR_DB;}
+    dbBindOutStr(&out[0],life,sizeof life,&lLife,&nLife); dbBindOutI32(&out[1],&vTier,&nTier); dbBindOutU64(&out[2],&vAsset,&nAsset);
+    if(mysql_stmt_bind_result(st,out)!=0){mysql_stmt_close(st);return ERR_DB;}
+    if(mysql_stmt_fetch(st)==0){*active=!nLife && strcmp(life,"active")==0; if(!nTier)*tier=vTier; if(!nAsset)*assetId=vAsset;}
+    mysql_stmt_close(st); return SOLARI_OK;
+}
+
+solariStatus serverDbAlertEventDisposition(serverDb *db, uint64_t eventId,
+                                           char *disposition, size_t dispositionCap,
+                                           int *effectiveTier)
+{
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND in[1], out[2];
+    unsigned long ld = 0;
+    unsigned long long id = eventId;
+    int tier = 0;
+    my_bool nd = 0, nt = 0;
+    solariStatus rc;
+    static const char *SQL = "SELECT disposition,effectiveTier FROM alertEvent WHERE eventId=? AND eventKind='fired'";
+
+    if (!conn || !eventId || !disposition || !dispositionCap || !effectiveTier)
+        return ERR_INVALID_ARG;
+    disposition[0] = '\0'; *effectiveTier = 0;
+    rc = dbStmtPrepare(conn, SQL, &st); if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &id);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    dbBindOutStr(&out[0], disposition, dispositionCap, &ld, &nd);
+    dbBindOutI32(&out[1], &tier, &nt);
+    if (mysql_stmt_bind_result(st, out) != 0 || mysql_stmt_fetch(st) != 0 || nd || nt) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    *effectiveTier = tier;
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+solariStatus serverDbSetAssetLifecycle(serverDb *db, uint64_t assetId, const char *to)
+{
+    MYSQL *conn=dbConn(db); MYSQL_STMT *st; MYSQL_BIND b[2]; unsigned long l; unsigned long long id=assetId; solariStatus rc;
+    static const char *SQL="UPDATE asset SET lifecycle=?,updatedAt=UTC_TIMESTAMP() WHERE assetId=?";
+    if (!conn || !to || assetId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0],to,&l);dbBindU64(&b[1],&id);rc=dbStmtRunWrite(st,b,2);mysql_stmt_close(st);return rc;
+}
+
+solariStatus serverDbLifecycleTransition(serverDb *db, uint64_t assetId, const char *to,
+                                         char targets[][SERVER_TARGETID_MAX], size_t count)
+{
+    MYSQL *conn=dbConn(db); solariStatus rc; size_t i;
+    if(!conn||!to||assetId==0||(strcmp(to,"active")&&(!targets&&count)))return ERR_INVALID_ARG;
+    if(mysql_autocommit(conn,0)!=0)return ERR_DB;
+    if(strcmp(to,"active")!=0){
+        rc=serverDbClearOpenAssetAlerts(db,assetId);
+        if(rc!=SOLARI_OK)goto fail_nostmt;
+        for(i=0;i<count;i++){rc=serverDbDeleteProbeTarget(db,targets[i]);if(rc!=SOLARI_OK)goto fail_nostmt;}
+    } else {
+        rc=serverDbClearAssetTombstones(db,assetId);
+        if(rc!=SOLARI_OK)goto fail_nostmt;
+    }
+    rc=serverDbSetAssetLifecycle(db,assetId,to);
+    if(rc!=SOLARI_OK)goto fail_nostmt;
+    if(mysql_commit(conn)!=0){solariLogf(SOLARI_LOG_ERROR,"serverDb: lifecycle commit failed: %s",mysql_error(conn));mysql_rollback(conn);mysql_autocommit(conn,1);return ERR_DB;}
+    mysql_autocommit(conn,1);return SOLARI_OK;
+fail_nostmt:
+    mysql_rollback(conn);mysql_autocommit(conn,1);return ERR_DB;
+}
+
+solariStatus serverDbPurgeAsset(serverDb *db, uint64_t assetId,
+                                 char targets[][SERVER_TARGETID_MAX], size_t count)
+{
+    MYSQL *conn=dbConn(db); solariStatus rc; size_t i;
+    if(!conn||assetId==0||(!targets&&count))return ERR_INVALID_ARG;
+    if(mysql_autocommit(conn,0)!=0)return ERR_DB;
+    rc=serverDbClearOpenAssetAlerts(db,assetId);
+    if(rc!=SOLARI_OK)goto fail_nostmt;
+    for(i=0;i<count;i++){rc=serverDbPurgeProbeState(db,targets[i]);if(rc!=SOLARI_OK)goto fail_nostmt;rc=serverDbDeleteProbeTarget(db,targets[i]);if(rc!=SOLARI_OK)goto fail_nostmt;}
+    rc=serverDbDeleteAsset(db,assetId);
+    if(rc!=SOLARI_OK)goto fail_nostmt;
+    if(mysql_commit(conn)!=0){solariLogf(SOLARI_LOG_ERROR,"serverDb: asset purge commit failed: %s",mysql_error(conn));mysql_rollback(conn);mysql_autocommit(conn,1);return ERR_DB;}
+    mysql_autocommit(conn,1);return SOLARI_OK;
+fail_nostmt:
+    mysql_rollback(conn);mysql_autocommit(conn,1);return ERR_DB;
+}
+
+solariStatus serverDbSetCriticality(serverDb *db, uint64_t assetId, uint64_t nodeId, int tier)
+{
+    char sql[160]; MYSQL *conn=dbConn(db);
+    if(!conn || tier<0 || tier>4 || ((assetId==0)==(nodeId==0))) return ERR_INVALID_ARG;
+    snprintf(sql,sizeof sql,"UPDATE %s SET criticality=%d WHERE %s=%llu",assetId?"asset":"node",tier,assetId?"assetId":"nodeId",(unsigned long long)(assetId?assetId:nodeId));
+    return mysql_query(conn,sql)==0 ? SOLARI_OK : ERR_DB;
+}
+
+solariStatus serverDbTombstoneProbeTarget(serverDb *db, const char *targetId, const char *operator_)
+{
+    MYSQL *conn=dbConn(db); MYSQL_STMT *st; MYSQL_BIND b[2]; unsigned long lt,lo; solariStatus rc;
+    static const char *SQL="INSERT INTO probeTargetTombstone(targetId,removedAt,removedBy,assetId) SELECT targetId,UTC_TIMESTAMP(),?,assetId FROM probeTarget WHERE targetId=? ON DUPLICATE KEY UPDATE removedAt=VALUES(removedAt),removedBy=VALUES(removedBy),assetId=VALUES(assetId)";
+    if (!conn || !targetId || !operator_) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0],operator_,&lo);dbBindStr(&b[1],targetId,&lt);rc=dbStmtRunWrite(st,b,2);mysql_stmt_close(st);return rc;
+}
+
+solariStatus serverDbClearAssetTombstones(serverDb *db, uint64_t assetId)
+{
+    char sql[256]; MYSQL *conn=dbConn(db); if(!conn||assetId==0)return ERR_INVALID_ARG;
+    snprintf(sql,sizeof sql,"DELETE FROM probeTargetTombstone WHERE assetId=%llu",(unsigned long long)assetId);
+    return mysql_query(conn,sql)==0?SOLARI_OK:ERR_DB;
+}
+
+static solariStatus dbClearOpenAlerts(serverDb *db, const char *predicate)
+{
+    char sql[2048]; MYSQL *conn=dbConn(db); if(!conn)return ERR_INVALID_ARG;
+    snprintf(sql,sizeof sql,
+        "INSERT INTO alertEvent(ruleId,nodeId,targetId,firedAt,clearedAt,severity,detail,eventKind,openedEventId,assetId,effectiveTier,disposition) "
+        "SELECT f.ruleId,f.nodeId,f.targetId,UTC_TIMESTAMP(),UTC_TIMESTAMP(),f.severity,CONCAT('CLEARED lifecycle ',f.detail),'cleared',f.eventId,f.assetId,f.effectiveTier,f.disposition FROM alertEvent f "
+        "WHERE (%s) AND f.eventKind='fired' AND f.clearedAt IS NULL AND NOT EXISTS (SELECT 1 FROM alertEvent c WHERE c.openedEventId=f.eventId AND c.eventKind='cleared')",predicate);
+    if (mysql_query(conn,sql) != 0) return ERR_DB;
+    snprintf(sql,sizeof sql,
+        "UPDATE alertEvent f SET f.clearedAt=UTC_TIMESTAMP() "
+        "WHERE (%s) AND f.eventKind='fired' AND f.clearedAt IS NULL", predicate);
+    return mysql_query(conn,sql)==0 ? SOLARI_OK : ERR_DB;
+}
+solariStatus serverDbClearOpenAssetAlerts(serverDb *db,uint64_t assetId)
+{
+    char predicate[1024];
+    if (!assetId) return ERR_INVALID_ARG;
+    /* Four arms (review R2-M1). Arms 1-3 cover new-engine rows (assetId /
+     * nodeId linkage / exact targetId). Arm 4 bridges the two targetId
+     * id-spaces for LEGACY rows: alertEvent uses the numeric-proto form
+     * ("2:ip:port", icmp port 0) while probeTarget uses the name form
+     * ("tcp:ip:port", icmp without port) — exact equality between them
+     * matches nothing, which left every pre-018 open alert uncleared. */
+    snprintf(predicate, sizeof predicate,
+             "f.assetId=%llu"
+             " OR f.nodeId=(SELECT nodeId FROM asset WHERE assetId=%llu)"
+             " OR f.targetId IN (SELECT targetId FROM probeTarget WHERE assetId=%llu)"
+             " OR EXISTS (SELECT 1 FROM probeTarget p WHERE p.assetId=%llu"
+             " AND f.targetId = CONCAT("
+             "CASE p.proto WHEN 'icmp' THEN '1' WHEN 'tcp' THEN '2' ELSE '3' END,"
+             "':', p.host, ':', COALESCE(p.port,0)))",
+             (unsigned long long)assetId, (unsigned long long)assetId,
+             (unsigned long long)assetId, (unsigned long long)assetId);
+    return dbClearOpenAlerts(db, predicate);
+}
+solariStatus serverDbClearOpenNodeAlerts(serverDb *db,uint64_t nodeId)
+{
+    char predicate[64];
+    if (!nodeId) return ERR_INVALID_ARG;
+    snprintf(predicate, sizeof predicate, "f.nodeId=%llu", (unsigned long long)nodeId);
+    return dbClearOpenAlerts(db, predicate);
 }
 
 solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
@@ -1268,23 +1594,32 @@ fail_nostmt:
 
 solariStatus serverDbWriteAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
                                      const char *targetId, const char *severity,
-                                     const char *detail, uint64_t firedUnixMs)
+                                     const char *detail, uint64_t firedUnixMs,
+                                     const char *eventKind, uint64_t openedEventId,
+                                     uint64_t assetId, int effectiveTier,
+                                     const char *disposition, uint64_t *eventId)
 {
     static const char *SQL =
         "INSERT INTO alertEvent "
-        "  (ruleId, nodeId, targetId, firedAt, severity, detail) "
-        "VALUES (?, ?, ?, FROM_UNIXTIME(? / 1000), ?, ?)";
+        "  (ruleId, nodeId, targetId, firedAt, severity, detail, eventKind, openedEventId, assetId, effectiveTier, disposition) "
+        "VALUES (?, ?, ?, FROM_UNIXTIME(? / 1000), ?, ?, ?, ?, ?, ?, ?)";
+    static const char *SQL_CLEARED =
+        "INSERT INTO alertEvent "
+        "  (ruleId, nodeId, targetId, firedAt, clearedAt, severity, detail, eventKind, openedEventId, assetId, effectiveTier, disposition) "
+        "VALUES (?, ?, ?, FROM_UNIXTIME(? / 1000), UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?)";
     MYSQL      *conn = dbConn(db);
     MYSQL_STMT *st;
-    MYSQL_BIND  b[6];
+    MYSQL_BIND  b[11];
     int                vRule = ruleId;
     unsigned long long vNode = nodeId;
     unsigned long long vWhen = firedUnixMs ? firedUnixMs : solariNowUnixMs();
-    unsigned long tLen, sLen, dLen;
+    unsigned long long vOpened = openedEventId, vAsset = assetId;
+    unsigned long tLen, sLen, dLen, kLen, pLen;
     solariStatus rc;
 
-    if (!conn) return ERR_INVALID_ARG;
-    rc = dbStmtPrepare(conn, SQL, &st);
+    if (eventId) *eventId = 0;
+    if (!conn || !eventKind || !disposition) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, strcmp(eventKind, "cleared") == 0 ? SQL_CLEARED : SQL, &st);
     if (rc != SOLARI_OK) return rc;
 
     /* ruleId 0 = synthetic/audit row -> store SQL NULL so it is not a dangling
@@ -1300,8 +1635,14 @@ solariStatus serverDbWriteAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
     dbBindU64(&b[3], &vWhen);
     dbBindStr(&b[4], (severity && severity[0]) ? severity : NULL, &sLen);
     dbBindStr(&b[5], (detail && detail[0]) ? detail : NULL, &dLen);
+    dbBindStr(&b[6], eventKind, &kLen);
+    if (openedEventId) dbBindU64(&b[7], &vOpened); else dbBindStr(&b[7], NULL, &pLen);
+    if (assetId) dbBindU64(&b[8], &vAsset); else dbBindStr(&b[8], NULL, &pLen);
+    dbBindI32(&b[9], &effectiveTier);
+    dbBindStr(&b[10], disposition, &pLen);
 
-    rc = dbStmtRunWrite(st, b, 6);
+    rc = dbStmtRunWrite(st, b, 11);
+    if (rc == SOLARI_OK && eventId) *eventId = (uint64_t)mysql_insert_id(conn);
     mysql_stmt_close(st);
     return rc;
 }

@@ -61,4 +61,15 @@ final class Operator
         }
         return $name;
     }
+
+    /** Gate an admin-only endpoint and return the admin login for auditing. */
+    public static function requireAdmin(): string
+    {
+        $name = self::name();
+        if ($name === '' || self::role() !== 'admin') {
+            Response::error('forbidden',
+                'This action requires an authenticated admin role.', 403);
+        }
+        return $name;
+    }
 }

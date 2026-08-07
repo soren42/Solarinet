@@ -211,6 +211,28 @@ return static function (Router $router): void {
         $pdo = Db::pdo();
         $pdo->exec('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
         try {
+            /* CONTRACT-LC §3.2: criticality tiers weight the panel feed.
+             * Feature-detected (migration 018 may not be applied): every
+             * snippet interpolates with a LEADING comma so the SELECT lists
+             * stay syntactically closed either way — the trailing-comma
+             * variant of this exact code took /api/panel down for 5 hours
+             * on 2026-08-06. Pre-migration, every entity reads as tier 2. */
+            $lcCols = Db::row(
+                "SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE()
+                    AND ((TABLE_NAME = 'asset' AND COLUMN_NAME = 'criticality')
+                      OR (TABLE_NAME = 'node'  AND COLUMN_NAME = 'criticality'))"
+            );
+            $hasCrit = ((int) ($lcCols['n'] ?? 0)) === 2;
+            $selSysCrit   = $hasCrit ? ', n.criticality AS nodeCriticality, a.criticality AS assetCriticality'
+                                     : ', 2 AS nodeCriticality, 2 AS assetCriticality';
+            /* MAX() form: used inside a GROUP BY query, and MariaDB does not
+             * infer functional dependency from the PK under
+             * ONLY_FULL_GROUP_BY. Value is constant per group (PK-grouped). */
+            $selAssetCrit = $hasCrit ? ', MAX(a.criticality) AS assetCriticality'
+                                     : ', 2 AS assetCriticality';
+            $selAlertCrit = $hasCrit ? ', COALESCE(n.criticality, a.criticality, 2) AS entityCrit'
+                                     : ', 2 AS entityCrit';
             /* Roster is NODE-driven (Lead fix, review round 2 regression):
              * asset.nodeId is unpopulated today, so linkage to pool metadata
              * goes by short-hostname match. stateRoll equivalence with
@@ -218,7 +240,7 @@ return static function (Router $router): void {
             $systemRows = Db::rows(
                 "SELECT n.nodeId, n.hostFqdn, n.role, n.state,
                         hc.cpuLoadMilli, hc.ifaces,
-                        a.assetId, a.poolId, a.displayName, a.host, a.class
+                        a.assetId, a.poolId, a.displayName, a.host, a.class{$selSysCrit}
                    FROM node n
               LEFT JOIN asset a
                      ON a.nodeId = n.nodeId
@@ -237,7 +259,7 @@ return static function (Router $router): void {
             $adoptedRows = Db::rows(
                 "SELECT a.assetId, a.poolId, a.displayName, a.host, a.class,
                         COUNT(pc.targetId) AS probeCount,
-                        MAX(pc.outcome = 'ok') AS anyOk
+                        MAX(pc.outcome = 'ok') AS anyOk{$selAssetCrit}
                    FROM asset a
               LEFT JOIN probeTarget pt ON pt.assetId = a.assetId
               LEFT JOIN probeCurrent pc ON pc.targetId = pt.targetId
@@ -266,7 +288,7 @@ return static function (Router $router): void {
             $topAlertRow = Db::row(
                 "SELECT e.eventId, e.nodeId, e.targetId, e.severity, e.firedAt,
                         r.metric, n.hostFqdn, pt.label AS targetLabel,
-                        a.displayName AS targetAsset
+                        a.displayName AS targetAsset{$selAlertCrit}
                    FROM alertEvent e
               LEFT JOIN alertRule r ON r.ruleId = e.ruleId
               LEFT JOIN node n ON n.nodeId = e.nodeId
@@ -280,7 +302,10 @@ return static function (Router $router): void {
               LEFT JOIN asset a ON a.assetId = pt.assetId
                   /* Copied from summary.php: dashboard-active alert predicate. */
                   WHERE e.clearedAt IS NULL AND e.severity IN ('crit', 'warn')
-                  ORDER BY CASE e.severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
+                  /* CONTRACT-LC §3.2: tier outranks severity for the panel's
+                   * one visible alert slot (vital-but-warn beats junk-crit). */
+                  ORDER BY entityCrit DESC,
+                           CASE e.severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
                            e.firedAt DESC, e.eventId DESC, pt.targetId ASC
                   LIMIT 1"
             );
@@ -344,6 +369,8 @@ return static function (Router $router): void {
                 'name' => panelText($row['displayName'] ?? $host, 12),
                 'poolId' => $row['poolId'] === null ? 0 : (int) $row['poolId'],
                 'tier' => panelTier($row['role'] ?? null, $row['class'] ?? null),
+                /* CONTRACT-LC §3.2: node tier wins over the linked asset's. */
+                'criticality' => (int) ($row['nodeCriticality'] ?? $row['assetCriticality'] ?? 2),
                 'state' => $state,
                 'loadPct' => panelLoadPct($row['cpuLoadMilli'] ?? null),
             ];
@@ -355,6 +382,7 @@ return static function (Router $router): void {
                 'name' => panelText($row['displayName'] ?? $row['host'] ?? 'SYSTEM', 12),
                 'poolId' => $row['poolId'] === null ? 0 : (int) $row['poolId'],
                 'tier' => panelTier(null, $row['class'] ?? null),
+                'criticality' => (int) ($row['assetCriticality'] ?? 2),
                 'state' => $probed ? (((int) ($row['anyOk'] ?? 0)) === 1 ? 'up' : 'down')
                                    : 'unknown',
                 'loadPct' => 0,
@@ -367,28 +395,42 @@ return static function (Router $router): void {
             if (!isset($poolAgg[$poolId])) {
                 $poolAgg[$poolId] = ['name' => $poolNames[$poolId] ?? 'UNASSIGNED', 'tier' => 3,
                     'up' => 0, 'degraded' => 0, 'down' => 0, 'unknown' => 0, 'retired' => 0, 'maint' => 0,
-                    'loadSum' => 0, 'total' => 0];
+                    'loadSum' => 0, 'total' => 0, 'scoreDown' => 0,
+                    'scoreDegraded' => 0, 'scoreTotal' => 0];
             }
             $poolAgg[$poolId]['tier'] = min($poolAgg[$poolId]['tier'], $system['tier']);
             $state = array_key_exists($system['state'], $poolAgg[$poolId]) ? $system['state'] : 'unknown';
             $poolAgg[$poolId][$state]++;
             $poolAgg[$poolId]['loadSum'] += $system['loadPct'];
             $poolAgg[$poolId]['total']++;
+            /* CONTRACT-LC §3.2: tier 0/1 entities stay VISIBLE in the counts
+             * (stateRoll/totals stay honest) but are excluded from the alarm
+             * score — the score* counters are the score's denominator. */
+            if ($system['criticality'] <= 1) {
+                continue;
+            }
+            if ($state === 'down') {
+                $poolAgg[$poolId]['scoreDown']++;
+            } elseif ($state === 'degraded') {
+                $poolAgg[$poolId]['scoreDegraded']++;
+            }
+            $poolAgg[$poolId]['scoreTotal']++;
         }
         uasort($poolAgg, static fn (array $a, array $b): int => [$a['tier'], $a['name']] <=> [$b['tier'], $b['name']]);
 
         $score = 0;
         $breachingPools = [];
         foreach ($poolAgg as $poolId => &$pool) {
-            $total = $pool['total'];
-            $downFraction = $total === 0 ? 0.0 : $pool['down'] / $total;
-            $degradedFraction = $total === 0 ? 0.0 : $pool['degraded'] / $total;
+            /* Score denominators exclude tier 0/1 (see aggregation above). */
+            $total = $pool['scoreTotal'];
+            $downFraction = $total === 0 ? 0.0 : $pool['scoreDown'] / $total;
+            $degradedFraction = $total === 0 ? 0.0 : $pool['scoreDegraded'] / $total;
             if ($pool['tier'] <= 1) {
-                $poolScore = $pool['down'] > 0
+                $poolScore = $pool['scoreDown'] > 0
                     ? 100 + (int) round(40 * $downFraction)
                     : min(80, (int) round(60 * $degradedFraction / 0.1));
             } else {
-                $poolScore = ($downFraction >= 0.2 && $pool['down'] >= 5)
+                $poolScore = ($downFraction >= 0.2 && $pool['scoreDown'] >= 5)
                     ? 100 + (int) round(40 * $downFraction)
                     : min(85, (int) round(85 * $downFraction / 0.2 + 30 * $degradedFraction / 0.4));
             }
@@ -424,7 +466,18 @@ return static function (Router $router): void {
         sort($breachingPools, SORT_NUMERIC);
         $poolSet = implode(',', $breachingPools);
         $poolEpisodeId = 0x80000000 | (crc32($poolSet) & 0x7fffffff);
-        $alarmActive = $critEpisodeId > 0 || $score >= 100;
+        /* CONTRACT-LC §3.2 tier 4: any vital entity down forces the alarm,
+         * independent of alert rows and score smoothing ("Paul Revere"). */
+        $vitalDown = [];
+        foreach ($systemsAll as $system) {
+            if ($system['criticality'] === 4 && $system['state'] === 'down') {
+                $vitalDown[] = $system['name'];
+            }
+        }
+        sort($vitalDown, SORT_STRING);
+        $vitalSet = implode(',', $vitalDown);
+        $vitalEpisodeId = 0x80000000 | (crc32('vital:' . $vitalSet) & 0x7fffffff);
+        $alarmActive = $critEpisodeId > 0 || $score >= 100 || $vitalDown !== [];
         if ($alarmActive && $topAlert === null && $breachingPools !== []) {
             // High-bit namespace cannot collide with normal auto-increment IDs.
             $episodeId = $poolEpisodeId;
@@ -440,6 +493,18 @@ return static function (Router $router): void {
         } elseif ($breachingPools !== []) {
             // A warn event may be displayable while the pool breach owns alarm state.
             $episodeId = $poolEpisodeId;
+        } elseif ($vitalDown !== []) {
+            // A vital entity down is alarm-worthy even without an alert row
+            // (the engine may not have fired yet — the panel must not wait).
+            $episodeId = $vitalEpisodeId;
+            if ($topAlert === null) {
+                $topAlert = [
+                    'id' => $episodeId,
+                    'severity' => 'crit',
+                    'subject' => panelText('VITAL DOWN', 24),
+                    'detail' => panelText('CHECK ' . $vitalSet, 48),
+                ];
+            }
         } else {
             $episodeId = 0;
         }

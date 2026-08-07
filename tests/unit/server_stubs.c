@@ -45,11 +45,30 @@ WEAK solariStatus serverDbWriteClientReport(serverContext *c, uint64_t n,
 WEAK solariStatus serverDbWriteMonitorReport(serverContext *c, uint64_t n,
     const solariMonitorReport *r) { (void)c;(void)n;(void)r; return ERR_DB; }
 WEAK solariStatus serverDbWriteAlertEvent(serverDb *db, int rid, uint64_t n,
-    const char *t, const char *sev, const char *d, uint64_t f)
-{ (void)db;(void)rid;(void)n;(void)t;(void)sev;(void)d;(void)f; return ERR_DB; }
+    const char *t, const char *sev, const char *d, uint64_t f, const char *k,
+    uint64_t opened, uint64_t asset, int tier, const char *disp, uint64_t *event)
+{ (void)db;(void)rid;(void)n;(void)t;(void)sev;(void)d;(void)f;(void)k;(void)opened;(void)asset;(void)tier;(void)disp;if(event)*event=0; return ERR_DB; }
 WEAK solariStatus serverDbLoadAlertRules(serverDb *db, const char *s,
     serverAlertRule *o, size_t *c)
 { (void)db;(void)s;(void)o; if (c) *c = 0; return ERR_DB; }
+WEAK solariStatus serverDbAssetIsActive(serverDb *db, uint64_t id, bool *active)
+{ (void)db;(void)id; if(active)*active=false; return ERR_DB; }
+WEAK solariStatus serverDbNodeAlertTier(serverDb *db, uint64_t id, int *tier, bool *active)
+{ (void)db;(void)id; if(tier)*tier=2; if(active)*active=false; return ERR_DB; }
+WEAK solariStatus serverDbProbeAlertTier(serverDb *db, const char *target, uint64_t *asset, int *tier, bool *active)
+{ (void)db;(void)target; if(asset)*asset=0; if(tier)*tier=2; if(active)*active=false; return ERR_DB; }
+WEAK solariStatus serverDbAlertEventDisposition(serverDb *db, uint64_t eventId,
+    char *disposition, size_t cap, int *tier)
+{ (void)db;(void)eventId; if(disposition&&cap)disposition[0]='\0'; if(tier)*tier=0; return ERR_DB; }
+WEAK solariStatus serverDbTombstoneProbeTarget(serverDb *db,const char *t,const char *o){(void)db;(void)t;(void)o;return ERR_DB;}
+WEAK solariStatus serverDbClearOpenAssetAlerts(serverDb *db,uint64_t a){(void)db;(void)a;return ERR_DB;}
+WEAK solariStatus serverDbClearOpenNodeAlerts(serverDb *db,uint64_t n){(void)db;(void)n;return ERR_DB;}
+WEAK solariStatus serverDbClearAssetTombstones(serverDb *db,uint64_t a){(void)db;(void)a;return ERR_DB;}
+WEAK solariStatus serverDbSetAssetLifecycle(serverDb *db,uint64_t a,const char *t){(void)db;(void)a;(void)t;return ERR_DB;}
+WEAK solariStatus serverDbLifecycleTransition(serverDb *db,uint64_t a,const char *t,char targets[][SERVER_TARGETID_MAX],size_t n){(void)db;(void)a;(void)t;(void)targets;(void)n;return ERR_DB;}
+WEAK solariStatus serverDbPurgeAsset(serverDb *db,uint64_t a,char targets[][SERVER_TARGETID_MAX],size_t n){(void)db;(void)a;(void)targets;(void)n;return ERR_DB;}
+WEAK solariStatus serverDbSetCriticality(serverDb *db,uint64_t a,uint64_t n,int t){(void)db;(void)a;(void)n;(void)t;return ERR_DB;}
+WEAK void serverAlertDropTargetState(const char *t){(void)t;}
 WEAK solariStatus serverDbSetNodeTargetEpoch(serverDb *db, uint64_t n,
     uint64_t e, const char *j) { (void)db;(void)n;(void)e;(void)j; return ERR_DB; }
 WEAK solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t n, uint64_t e,
@@ -147,6 +166,9 @@ WEAK solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *
 { (void)db;(void)ip;(void)host;(void)dn;(void)cls;(void)pool;(void)tags;(void)notes;(void)mon; if(aid)*aid=0; return SOLARI_OK; }
 WEAK solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *aid)
 { (void)db;(void)ip; if(aid)*aid=0; return SOLARI_OK; }
+WEAK solariStatus serverDbGetAssetConfirmValues(serverDb *db, uint64_t aid,
+    char *display, size_t displayCap, char *host, size_t hostCap, char *ip, size_t ipCap)
+{ (void)db;(void)aid; if(display&&displayCap)display[0]='\0'; if(host&&hostCap)host[0]='\0'; if(ip&&ipCap)ip[0]='\0'; return ERR_DB; }
 WEAK solariStatus serverDbListAssetTargets(serverDb *db, uint64_t aid,
     char out[][SERVER_TARGETID_MAX], size_t cap, size_t *count)
 { (void)db;(void)aid;(void)out;(void)cap; if(count)*count=0; return SOLARI_OK; }
@@ -182,3 +204,9 @@ WEAK solariStatus serverAssetsRemove(serverContext *c, const char *key, bool byI
 { (void)c;(void)key;(void)byIp;(void)op; if(removed)*removed=0; return SOLARI_OK; }
 WEAK solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csr, char *b, size_t c)
 { (void)ctl;(void)csr; if(b&&c)b[0]='\0'; return ERR_TLS; }
+
+solariStatus serverAssetsResyncHeartbeat(serverContext *ctx, uint64_t assetId)
+{
+    (void)ctx; (void)assetId;
+    return SOLARI_OK;
+}

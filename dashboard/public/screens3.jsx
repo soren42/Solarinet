@@ -11,6 +11,12 @@
   const dotStyle = (state, sz) => ({ background: STATE_DOT[state] || "var(--unknown)", width: sz || 9, height: sz || 9, display: "inline-block", borderRadius: "50%" });
 
   function toast(msg, icon) { if (window.__solariToast) window.__solariToast(msg, icon); }
+  // One fail-closed predicate for every mutating affordance on these screens
+  // (screens.jsx canOperate — confirmed operator or admin, nothing else).
+  // Read-only is the default an unresolved identity gets: a viewer who never
+  // sees a Delete button cannot be surprised by one, and the server refusing
+  // the write afterwards is a worse way to learn the same thing.
+  function canOp() { return !!(window.solariCanOperate && window.solariCanOperate()); }
   // adapter handle (live mutations); null/offline-safe
   function api() { return (window.SOLARI && window.SOLARI.api) || null; }
   function refresh() { const a = api(); if (a && a.refresh) a.refresh().catch(function () {}); }
@@ -41,6 +47,28 @@
       || !!d.mdnsName
       || (Array.isArray(d.mdnsServices) && d.mdnsServices.length > 0)
       || (typeof d.host === "string" && /\.local$/i.test(d.host));
+  }
+
+  // CONTRACT-LC §3.1/E5: a scan turned up a host that maps to a tombstoned
+  // asset. The server records the candidate as 'ignored' and hangs a
+  // tombstone {assetId,lifecycle,displayName} off the row rather than
+  // re-adopting it, and the operator decides — restore the old system, or
+  // purge it and adopt fresh. The field is absent on a pre-migration server
+  // and on every ordinary row, so no tombstone means no notice.
+  function lcNotice(d) {
+    if (!d) return null;
+    const n = d.tombstone;
+    return n && typeof n === "object" ? n : null;
+  }
+  // A-3 applies to partial tombstones too: name the state only when the server
+  // actually said which one. A tombstone that arrives as {assetId} alone is
+  // still a real notice — this host did match something removed — but calling
+  // it "deleted" when the server never said so is the same wrong-default the
+  // tier chips avoid.
+  function lcNoticeText(n) {
+    const known = n.lifecycle === "decommissioned" || n.lifecycle === "deleted";
+    const what = known ? "a " + n.lifecycle + " system" : "a system that was removed";
+    return "matches " + what + (n.displayName ? " (" + n.displayName + ")" : "") + " — not re-adopted";
   }
 
   // Normalise seenCount + mac + mdns into small render helpers used by the table.
@@ -216,6 +244,8 @@
       </th>;
     }
 
+    const reappeared = rows.filter(function (d) { return !!lcNotice(d); });
+
     const STATUS_CHIPS = [
       { k: "new", label: "New" },
       { k: "adopted", label: "Adopted" },
@@ -268,6 +298,36 @@
           </div>
         </div>
 
+        {/* §3.1/E5 — tombstoned systems seen on the network again. Surfaced from
+            ALL rows, not the filtered view: these arrive as 'ignored', so the
+            default "New" filter would otherwise bury them. */}
+        {reappeared.length > 0 && (
+          <div className="lc-notice">
+            <Icon name="alerts" size={16} className="lc-notice__ico" />
+            <div className="lc-notice__body">
+              <div className="lc-notice__t">
+                {reappeared.length === 1 ? "A removed system is back on the network" : `${reappeared.length} removed systems are back on the network`}
+              </div>
+              <ul className="lc-notice__list">
+                {reappeared.slice(0, 5).map((d) => (
+                  <li key={d.discId != null ? "n" + d.discId : d.host}>
+                    <span className="td-mono">{d.host}</span>
+                    <span className="muted"> {d.ip} — {lcNoticeText(lcNotice(d))}</span>
+                  </li>
+                ))}
+                {reappeared.length > 5 && <li className="muted">+{reappeared.length - 5} more</li>}
+              </ul>
+              <div className="lc-notice__sub">
+                Nothing was adopted. Restore the original system to resume monitoring it, or purge
+                it first if this is genuinely a different machine on the same address.
+              </div>
+            </div>
+            {statusFilter !== "ignored" && (
+              <button className="btn-ghost" onClick={() => setStatusFilter("ignored")}>Show them</button>
+            )}
+          </div>
+        )}
+
         {view.length === 0 && <div className="empty">No assets match these filters.</div>}
         {view.length > 0 && (
           <div className="tablewrap" style={{ overflowX: "auto" }}>
@@ -296,6 +356,7 @@
                           <Icon name={d.kind === "service" ? "link" : "host"} size={15} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
                           <span className="td-mono" style={{ fontWeight: 600 }}>{d.host}</span>
                           {mdns && <span className="svc-chip" style={{ borderColor: "var(--violet)", color: "var(--violet)" }}>mDNS</span>}
+                          {lcNotice(d) && <span className="svc-chip lc-reap" title={lcNoticeText(lcNotice(d))}>reappeared</span>}
                         </div>
                         <div className="td-mono muted" style={{ fontSize: 11, marginTop: 2, marginLeft: 22 }}>{d.ip}{d.kind ? " · " + d.kind : ""}</div>
                       </td>
@@ -1265,7 +1326,7 @@
                  style={{ cursor: onOpen ? "pointer" : "default", borderLeft: accent ? "3px solid " + accent : "1px solid var(--line)" }}
                  onClick={() => onOpen && onOpen(p)}>
               <div className="kpi__k">{p.name}</div>
-              {deletable(p) && (
+              {deletable(p) && canOp() && (
                 <button className="rowx kpi__x" title={`Delete pool ${p.name}`} aria-label={`Delete pool ${p.name}`}
                   onClick={(e) => { e.stopPropagation(); setDel(p); }}>
                   <Icon name="close" size={13} />
@@ -1320,6 +1381,13 @@
     const [assets, setAssets] = useState(S.assets || []);
     const [, force] = useState(0);
     const pools = S.pools || [];
+    // CONTRACT-LC §3.1: decommissioned systems stay in the list (greyed);
+    // deleted ones are hidden until asked for, because the row only survives so
+    // discovery can't silently re-adopt the host.
+    const [showDeleted, setShowDeleted] = useState(false);
+    const lcOf = (as) => as.lifecycle || "active";
+    const deletedCount = assets.filter((as) => lcOf(as) === "deleted").length;
+    const view = assets.filter((as) => showDeleted || lcOf(as) !== "deleted");
 
     function newPool() {
       const name = window.prompt("New pool name (e.g. DNS, Core infra):", "");
@@ -1356,30 +1424,47 @@
         <div className="page-head">
           <div><h1 className="page-title">Systems</h1><div className="page-sub">{S.summary.systems} systems · {assets.length} adopted · {pools.length} pool(s)</div></div>
           <div className="page-head__right">
-            <button className="btn-primary" onClick={newPool}><Icon name="plus" size={14} />New pool</button>
+            {canOp() && <button className="btn-primary" onClick={newPool}><Icon name="plus" size={14} />New pool</button>}
           </div>
         </div>
         <PoolCards />
         {assets.length === 0 && (
           <div className="muted" style={{ padding: "24px 4px" }}>No systems yet. Adopt hosts from <b>Discovery</b> to monitor them.</div>
         )}
-        {assets.length > 0 && (
+        {deletedCount > 0 && (
+          <div className="filters">
+            <button className={"chip" + (showDeleted ? " on" : "")} onClick={() => setShowDeleted((v) => !v)}
+              title={showDeleted ? "Hide deleted systems" : "Show deleted systems"}>
+              <span className="dot unknown" />Deleted<span className="chip__n">{deletedCount}</span>
+            </button>
+          </div>
+        )}
+        {assets.length > 0 && view.length === 0 && (
+          <div className="muted" style={{ padding: "24px 4px" }}>Every system here is deleted — switch on the <b>Deleted</b> filter to see them.</div>
+        )}
+        {view.length > 0 && (
           <div className="tablewrap"><table className="grid">
             <thead><tr>
               <th>System</th><th>IP</th><th>Class</th><th>State</th><th>Targets</th><th>Pool</th><th>Heartbeat</th>
             </tr></thead>
             <tbody>
-              {assets.map(function (as) {
+              {view.map(function (as) {
                 return (
-                  <tr key={as.assetId}>
-                    <td><span style={{ cursor: "pointer" }} onClick={() => rename(as)} title="Rename">{as.displayName} <Icon name="settings" size={11} style={{ opacity: 0.4, verticalAlign: "-1px" }} /></span></td>
+                  <tr key={as.assetId} className={lcOf(as) !== "active" ? "lc-dormant" : undefined}>
+                    <td>
+                      {canOp()
+                        ? <span style={{ cursor: "pointer" }} onClick={() => rename(as)} title="Rename">{as.displayName} <Icon name="settings" size={11} style={{ opacity: 0.4, verticalAlign: "-1px" }} /></span>
+                        : <span>{as.displayName}</span>}
+                      <window.TierChip tier={as.criticality != null ? Number(as.criticality) : null} />
+                      <window.LifecycleChip lifecycle={lcOf(as)} />
+                    </td>
                     <td className="td-mono muted">{as.ip}</td>
                     <td>{as.class}</td>
                     {/* Rev2 §05: dot + word in every state cell */}
                     <td><span style={dotStyle(as.state)} /> {as.state}</td>
                     <td className="td-mono">{as.targetCount}</td>
                     <td>
-                      <select value={String(as.poolId || "")} onChange={(e) => reassign(as, e.target.value)}
+                      <select value={String(as.poolId || "")} disabled={!canOp()} onChange={(e) => reassign(as, e.target.value)}
                               style={{ background: "rgba(255,255,255,0.04)", color: "inherit", border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", borderRadius: 6, padding: "3px 6px", fontFamily: "inherit", fontSize: 12 }}>
                         {pools.map((p) => <option key={p.poolId} value={String(p.poolId)}>{p.name}</option>)}
                       </select>
@@ -1423,27 +1508,38 @@
     function rename() { const v = window.prompt("Rename system", data.displayName); if (v != null && v.trim() !== "") patch({ displayName: v.trim() }, "Renamed"); }
 
     // ---- removal (danger, typed-name confirm; confirm:true on the wire) ----
-    const [confirmRemove, setConfirmRemove] = useState(false);
+    // System-level removal now goes through the lifecycle ladder
+    // (decommission → delete → purge, CONTRACT-LC §3.1); LifecycleActions owns
+    // those buttons and their confirms. Per-target removal stays here.
     const [rmTarget, setRmTarget] = useState(null);   // target row pending removal
-    function removeSystem() {
+    // A tombstone transition changes what the whole page should say, and a purge
+    // leaves nothing to show — so restore/decommission/delete reload, purge exits.
+    function afterLifecycle(action) {
       const a = api();
-      if (!a || !a.removeAsset) { toast && toast("Removal unavailable (offline)", "close"); setConfirmRemove(false); return; }
-      return a.removeAsset(assetId).then(() => {
-        toast && toast(`Removed ${data.displayName} — monitoring stopped, history purged`, "close");
-        setConfirmRemove(false);
-        if (a.refresh) a.refresh().catch(() => {});
-        onBack();
-      }).catch((e) => { toast && toast("Remove failed: " + (e && e.message || "error"), "close"); });
+      if (a && a.refresh) a.refresh().catch(() => {});
+      if (action === "purge") onBack(); else load();
     }
+    function commitTier(t) {
+      return window.SolariLC.assetCriticality(assetId, t)
+        .then(function () { setData(function (d) { return Object.assign({}, d, { criticality: t }); }); });
+    }
+    // The give-up matters more than it looks: DangerModal spins until this
+    // promise settles, and api()'s fetch has no timeout — so a request that
+    // never answers leaves the modal busy forever with no way out but a
+    // reload. Rethrowing keeps the modal open on failure, same as the
+    // lifecycle actions.
     function removeTargetGo() {
       const a = api();
-      if (!a || !a.removeTarget) { toast && toast("Removal unavailable (offline)", "close"); setRmTarget(null); return; }
+      if (!a || !a.removeTarget) { toast && toast("Removal unavailable (offline)", "close"); setRmTarget(null); return Promise.reject(new Error("offline")); }
       const t = rmTarget;
-      return a.removeTarget(assetId, t.targetId).then(() => {
+      return window.solariWithGiveUp(a.removeTarget(assetId, t.targetId)).then(() => {
         toast && toast(`Target removed: ${t.label || t.targetId}`, "close");
         setRmTarget(null); load();
         if (a.refresh) a.refresh().catch(() => {});
-      }).catch((e) => { toast && toast("Remove failed: " + (e && e.message || "error"), "close"); });
+      }).catch((e) => {
+        toast && toast("Remove failed: " + (e && e.message || "error"), "close");
+        throw e;
+      });
     }
 
     if (err) return (<div className="page"><button className="btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14} />Back</button><div className="muted" style={{ marginTop: 16 }}>Couldn't load system: {err}</div></div>);
@@ -1456,11 +1552,13 @@
         <button className="btn-ghost" onClick={onBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back</button>
         <div className="page-head">
           <div>
-            <h1 className="page-title"><span style={dotStyle(data.state, 11)} />&nbsp;{data.displayName} <Icon name="settings" size={13} style={{ opacity: 0.4, cursor: "pointer" }} onClick={rename} /></h1>
+            <h1 className="page-title"><span style={dotStyle(data.state, 11)} />&nbsp;{data.displayName}
+              {canOp() && <Icon name="settings" size={13} style={{ opacity: 0.4, cursor: "pointer" }} onClick={rename} />}
+              <window.LifecycleChip lifecycle={data.lifecycle} /></h1>
             <div className="page-sub">{data.ip}{data.host ? " · " + data.host : ""} · {data.class} · {data.poolName || "Unassigned"}</div>
           </div>
           <div className="page-head__right">
-            <button className="btn-danger" onClick={() => setConfirmRemove(true)}><Icon name="close" size={14} />Remove system</button>
+            <window.LifecycleActions asset={Object.assign({ assetId: assetId }, data)} onDone={afterLifecycle} />
           </div>
         </div>
 
@@ -1468,15 +1566,24 @@
           <div className="kpi"><div className="kpi__k">State</div><div className="kpi__v" style={{ color: STATE_DOT[data.state] }}>{data.state}</div></div>
           <div className="kpi"><div className="kpi__k">Targets</div><div className="kpi__v">{targets.length}</div></div>
           <div className="kpi"><div className="kpi__k">Class</div><div className="kpi__v" style={{ fontSize: 15 }}>
-            <select value={data.class} onChange={(e) => patch({ class: e.target.value }, "Reclassified")} style={sel}>
+            <select value={data.class} disabled={!canOp()} onChange={(e) => patch({ class: e.target.value }, "Reclassified")} style={sel}>
               {["server", "appliance", "network", "iot", "host", "other"].map((c) => <option key={c} value={c}>{c}</option>)}
             </select></div></div>
           <div className="kpi"><div className="kpi__k">Pool</div><div className="kpi__v" style={{ fontSize: 15 }}>
-            <select value={String(data.poolId || "")} onChange={(e) => patch({ poolId: Number(e.target.value) }, "Moved pool")} style={sel}>
+            <select value={String(data.poolId || "")} disabled={!canOp()} onChange={(e) => patch({ poolId: Number(e.target.value) }, "Moved pool")} style={sel}>
               {pools.map((p) => <option key={p.poolId} value={String(p.poolId)}>{p.name}</option>)}
             </select></div></div>
           <div className="kpi"><div className="kpi__k">Heartbeat</div><div className="kpi__v">
-            <button className={"switch" + (data.monitorHost ? " on" : "")} onClick={() => patch({ monitorHost: !data.monitorHost }, data.monitorHost ? "Heartbeat off" : "Heartbeat on")}><i /></button></div></div>
+            <button className={"switch" + (data.monitorHost ? " on" : "")} disabled={!canOp()}
+              title={canOp() ? undefined : "Your role can't change monitoring settings"}
+              onClick={() => patch({ monitorHost: !data.monitorHost }, data.monitorHost ? "Heartbeat off" : "Heartbeat on")}><i /></button></div></div>
+        </div>
+
+        {/* how much this system's alerts are worth (CONTRACT-LC §3.2) */}
+        <div className="lc-bar">
+          <window.CriticalityControl tier={data.criticality != null ? Number(data.criticality) : null}
+            readOnly={!window.solariCanOperate()} onCommit={commitTier}
+            hint={data.lifecycle && data.lifecycle !== "active" ? data.lifecycle + " — nothing alerts until it is restored" : null} />
         </div>
 
         <div className="page-sub" style={{ margin: "4px 0 10px" }}>Monitored targets — click for per-service detail</div>
@@ -1493,10 +1600,12 @@
                   <td><span style={dotStyle(t.state)} /> {t.state}</td>
                   <td className="td-mono">{t.vantages}</td>
                   <td style={{ width: 34, textAlign: "right" }}>
-                    <button className="rowx" title={`Stop monitoring ${t.label || t.targetId}`} aria-label={`Remove target ${t.label || t.targetId}`}
-                      onClick={(e) => { e.stopPropagation(); setRmTarget(t); }}>
-                      <Icon name="close" size={13} />
-                    </button>
+                    {canOp() && (
+                      <button className="rowx" title={`Stop monitoring ${t.label || t.targetId}`} aria-label={`Remove target ${t.label || t.targetId}`}
+                        onClick={(e) => { e.stopPropagation(); setRmTarget(t); }}>
+                        <Icon name="close" size={13} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1507,19 +1616,6 @@
           {data.nodeId ? "Agent linked — host metrics available." : "No agent deployed on this system — reachability only. Deploy a SolariNet client to collect CPU / RAM / disk metrics."}
         </div>
 
-        {confirmRemove && (
-          <DangerModal title={`Remove ${data.displayName}?`} sub={`${data.ip}${data.host ? " · " + data.host : ""} · ${targets.length} target(s)`}
-            verb="Remove system" busyVerb="Removing…" confirmName={data.displayName}
-            onConfirm={removeSystem} onClose={() => setConfirmRemove(false)}>
-            <p style={{ margin: 0 }}>
-              Monitoring stops for this system: all {targets.length} probe target(s) are deleted and
-              its reachability history is purged. <b style={{ color: "var(--crit)" }}>This cannot be undone.</b>
-            </p>
-            <p style={{ margin: "10px 0 0" }} className="muted">
-              The host itself is untouched — it may reappear under Discovery on a future scan.
-            </p>
-          </DangerModal>
-        )}
         {rmTarget && (
           <DangerModal title={`Remove target ${rmTarget.label || rmTarget.targetId}?`}
             sub={`${rmTarget.proto}${rmTarget.port ? ":" + rmTarget.port : ""} on ${data.displayName}`}
@@ -1538,8 +1634,38 @@
   /* ===================== PER-SERVICE (TARGET) DETAIL ===================== */
   function ServiceDetail({ targetId, onBack }) {
     const probe = (S.probes || []).find((p) => p.targetId === targetId);
+    // A service has no criticality of its own: probe-scope alerts resolve their
+    // tier through probeTarget.assetId (CONTRACT-LC §3.2), so this view edits the
+    // PARENT system's tier and labels it as such rather than implying otherwise.
+    const assetId = probe ? probe.assetId : null;
+    const [parent, setParent] = useState(null);
+    const [rmOpen, setRmOpen] = useState(false);
+    useEffect(function () {
+      const a = api();
+      if (!a || !a.asset || assetId == null) return undefined;
+      let live = true;
+      a.asset(assetId).then(function (d) { if (live) setParent(d); }).catch(function () {});
+      return function () { live = false; };
+    }, [assetId]);
     if (!probe) return (<div className="page"><button className="btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14} />Back</button><div className="muted" style={{ marginTop: 16 }}>Target not found.</div></div>);
     const rtt = (us) => (fmt && fmt.rtt) ? fmt.rtt(us) : (us ? (us / 1000).toFixed(1) + " ms" : "—");
+    const parentName = (parent && parent.displayName) || probe.hostName || probe.host;
+
+    function commitTier(t) {
+      return window.SolariLC.assetCriticality(assetId, t)
+        .then(function () { setParent(function (p) { return Object.assign({}, p || {}, { criticality: t }); }); });
+    }
+    // Service lifecycle is target removal (§3.3) — the server tombstones the
+    // target so the servicesJson reconcile can't resurrect it.
+    function removeGo() {
+      const a = api();
+      if (!a || !a.removeTarget || assetId == null) { toast("Removal unavailable (offline)", "close"); return Promise.reject(new Error("offline")); }
+      return window.solariWithGiveUp(a.removeTarget(assetId, targetId)).then(function () {
+        toast(`Stopped monitoring ${probe.label || probe.targetId}`, "close");
+        setRmOpen(false); refresh(); onBack();
+      }).catch(function (e) { toast("Remove failed: " + (e && e.message || "error"), "close"); throw e; });
+    }
+
     return (
       <div className="page">
         <button className="btn-ghost" onClick={onBack} style={{ marginBottom: 12 }}><Icon name="chevronLeft" size={14} />Back</button>
@@ -1548,7 +1674,21 @@
             <h1 className="page-title"><span style={dotStyle(probe.state, 11)} />&nbsp;{probe.label || probe.targetId}</h1>
             <div className="page-sub">{probe.proto}{probe.port ? ":" + probe.port : ""} · {probe.host} · state {probe.state}</div>
           </div>
+          {window.solariCanOperate() && assetId != null && (
+            <div className="page-head__right">
+              <button className="btn-danger" onClick={() => setRmOpen(true)}><Icon name="close" size={14} />Stop monitoring</button>
+            </div>
+          )}
         </div>
+
+        {/* tier is the parent system's — say so, don't fake a per-service one */}
+        {assetId != null && (
+          <div className="lc-bar">
+            <window.CriticalityControl tier={parent && parent.criticality != null ? Number(parent.criticality) : null}
+              readOnly={!window.solariCanOperate()} onCommit={commitTier}
+              label="Criticality" hint={`inherited from ${parentName} — changing it here changes it for the whole system`} />
+          </div>
+        )}
         <div className="page-sub" style={{ margin: "4px 0 10px" }}>Vantages ({probe.vantages.length})</div>
         {probe.vantages.length === 0 && <div className="muted">No monitor has probed this target yet. Deploy or assign a monitor to collect reachability, RTT, and loss.</div>}
         {probe.vantages.length > 0 && (
@@ -1567,6 +1707,21 @@
               ))}
             </tbody>
           </table></div>
+        )}
+
+        {rmOpen && (
+          <DangerModal title={`Stop monitoring ${probe.label || probe.targetId}?`}
+            sub={`${probe.proto}${probe.port ? ":" + probe.port : ""} on ${parentName}`}
+            verb="Stop monitoring" busyVerb="Removing…" onConfirm={removeGo} onClose={() => setRmOpen(false)}>
+            <p style={{ margin: 0 }}>
+              Every monitor drops this target and its reachability history is purged. The system
+              itself stays monitored through its remaining targets.
+            </p>
+            <p style={{ margin: "10px 0 0" }} className="muted">
+              The removal is remembered, so a service re-advertised by the host won't quietly
+              re-add itself.
+            </p>
+          </DangerModal>
         )}
       </div>
     );

@@ -50,6 +50,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONF = os.environ.get("ALERTBRIDGE_CONF",
                               os.path.join(SCRIPT_DIR, "alertbridge.conf"))
 _run = True
+_disposition_columns_present = None
 
 
 def log(msg):
@@ -223,6 +224,50 @@ def _suppressed(nid, target, maint):
     return False
 
 
+def resolve_outcome(row, maint):
+    """Return the durable bridge outcome for one alertEvent row.
+
+    New engine rows snapshot their notification decision at insert time. In
+    particular, a cleared row inherits its fired row's disposition via
+    openedEventId, so the bridge deliberately needs neither a tier lookup nor
+    targetId parsing. NULL remains the deploy-order compatibility path: rows
+    written before the engine starts supplying dispositions retain today's
+    maintenance-window suppression behavior exactly.
+    """
+    if row.get("eventKind") == "audit":
+        return "suppress"
+    if row.get("disposition") == "suppress":
+        return "suppress"
+    # CONTRACT-LC §9 J5 (review M6): disposition == 'publish' selects a
+    # publish CANDIDATE; the maintenance-window gate still applies. A host
+    # under maintenance is expected down regardless of its tier.
+    return "suppress" if _suppressed(row.get("nodeId"), row.get("targetId"), maint) else "publish"
+
+
+def _has_disposition_columns(db):
+    """Feature-detect the additive 018 columns once per bridge process.
+
+    The bridge is deployed before the C writer in the binding rollout order,
+    and can also briefly run against a pre-018 schema. Treat that schema as
+    entirely legacy instead of making an unknown-column SELECT kill the loop.
+    """
+    global _disposition_columns_present
+    if _disposition_columns_present is not None:
+        return _disposition_columns_present
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS count FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'alertEvent' "
+                "AND COLUMN_NAME IN ('eventKind', 'disposition')")
+            row = cur.fetchone() or {}
+        _disposition_columns_present = int(row.get("count", 0)) == 2
+    except Exception as e:  # noqa: BLE001 — old/unusual DBs must keep bridging legacy rows
+        log(f"alertEvent disposition-column lookup failed: {e!r}; using legacy rows")
+        _disposition_columns_present = False
+    return _disposition_columns_present
+
+
 def bridge_alerts(db, ch, exchange, source, state, batch, spath, maint):
     """Publish alertEvent rows past the checkpoint. For EACH row we (a) publish
     with publisher confirms + mandatory, (b) advance the checkpoint only after
@@ -241,9 +286,13 @@ def bridge_alerts(db, ch, exchange, source, state, batch, spath, maint):
         unpersisted checkpoint (unbounded replay on restart) nor silently lose
         the fact we haven't caught up. Retry next cycle."""
     persisted_cp = int(state["checkpoint"])
+    has_disposition_columns = _has_disposition_columns(db)
     with db.cursor() as cur:
+        disposition_fields = ("e.eventKind, e.disposition, "
+                              if has_disposition_columns else "")
         cur.execute(
             "SELECT e.eventId, e.nodeId, e.severity, e.detail, e.targetId, "
+            + disposition_fields +
             "       UNIX_TIMESTAMP(e.firedAt) AS firedTs, "
             "       n.hostFqdn, n.role, "
             "       r.metric, r.op, r.threshold "
@@ -257,9 +306,10 @@ def bridge_alerts(db, ch, exchange, source, state, batch, spath, maint):
     published = 0
     for r in rows:
         eid = int(r["eventId"])
-        if _suppressed(r.get("nodeId"), r.get("targetId"), maint):
-            # host under maintenance -> expected down; don't notify, but advance
-            # the checkpoint so we don't re-examine this event every cycle.
+        outcome = resolve_outcome(r, maint)
+        if outcome == "suppress":
+            # A deliberate disposition (or legacy maintenance window) is a
+            # terminal outcome too: persist it before examining a later row.
             state["checkpoint"] = eid
             if not save_state(spath, state):
                 state["checkpoint"] = persisted_cp
@@ -267,7 +317,7 @@ def bridge_alerts(db, ch, exchange, source, state, batch, spath, maint):
                     f"stopping batch, retry next cycle")
                 break
             persisted_cp = eid
-            log(f"suppressed eventId={eid} ({r.get('hostFqdn')}) — maintenance window")
+            log(f"suppressed eventId={eid} ({r.get('hostFqdn')})")
             continue
         try:
             msg = event_to_message(r, source)

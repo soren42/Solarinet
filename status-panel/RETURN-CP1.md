@@ -69,8 +69,10 @@ then post a valid STATE as local `panel` and confirm the GET round-trip.
 
 ### Implemented
 
-- Added `db/migrations/017_panel_dwell.sql` (not applied): `panelState.dwellSec`
-  is `TINYINT UNSIGNED NOT NULL DEFAULT 0`.
+- Added `db/migrations/017_panel_dwell.sql` (**applied live 2026-08-04** by Lead,
+  as root, before the referencing `panel.php` went live — see deploy-ordering
+  note in REVIEW-CP12 R0b): `panelState.dwellSec` is `TINYINT UNSIGNED NOT NULL
+  DEFAULT 0`.
 - STATE input now validates `dwellSec` and clamps `lastCmdId` to u32.
 - GET and STATE upsert/select paths store and expose `dwellSec`.
 - Expiry runs only for a service-principal GET. A qualifying STATE confirmation
@@ -84,8 +86,10 @@ php -l dashboard/api/routes/panel.php
 No syntax errors detected
 ```
 
-`017_panel_dwell.sql` was statically checked as a single valid MariaDB ALTER;
-it was not applied.
+`017_panel_dwell.sql` was statically checked as a single valid MariaDB ALTER,
+then **applied live 2026-08-04** (Lead, as root). It and the referencing
+`panel.php` landed together, migration first, per REVIEW-CP12 R0b — the same
+ordering that avoids the CP1 500 incident.
 
 ### UNVERIFIED
 

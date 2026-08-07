@@ -48,9 +48,24 @@ return static function (Router $router): void {
         // Best-effort LLDP/topology neighbor, keyed by host (the discovered table
         // has no nodeId/gearId of its own). Built once; O(1) lookup per row.
         $neighborByHost = DiscoveryReads::neighborsByHost();
+        $tombstoneByIp = [];
+        if (Db::row(
+            "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+            . "AND TABLE_NAME = 'asset' AND COLUMN_NAME = 'lifecycle' LIMIT 1"
+        ) !== null) {
+            foreach (Db::rows(
+                "SELECT assetId, ip, lifecycle, displayName FROM asset WHERE lifecycle <> 'active'"
+            ) as $asset) {
+                $tombstoneByIp[(string) $asset['ip']] = [
+                    'assetId' => Coerce::id($asset['assetId']),
+                    'lifecycle' => $asset['lifecycle'],
+                    'displayName' => $asset['displayName'],
+                ];
+            }
+        }
 
-        $out = array_map(static function (array $r) use ($neighborByHost): array {
-            return [
+        $out = array_map(static function (array $r) use ($neighborByHost, $tombstoneByIp): array {
+            $row = [
                 'discId'       => Coerce::id($r['discId']),
                 'host'         => $r['host'],
                 'ip'           => $r['ip'],
@@ -76,6 +91,10 @@ return static function (Router $router): void {
                     $neighborByHost, (string) ($r['host'] ?? '')
                 ),
             ];
+            if (isset($tombstoneByIp[(string) $r['ip']])) {
+                $row['tombstone'] = $tombstoneByIp[(string) $r['ip']];
+            }
+            return $row;
         }, $rows);
 
         Response::ok($out);

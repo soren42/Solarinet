@@ -118,6 +118,21 @@ static void test_probe_target_id(void)
     TEST_ASSERT_EQUAL_STRING("udp:8.8.8.8:53", buf);
 }
 
+static void test_alert_id_conversion(void)
+{
+    char out[SERVER_TARGETID_MAX], round[SERVER_TARGETID_MAX];
+    TEST_ASSERT_TRUE(dbNumericAlertIdToProbeId("1:2001:db8::1", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("icmp:2001:db8::1", out);
+    TEST_ASSERT_TRUE(dbProbeIdToNumericAlertId(out, round, sizeof round));
+    TEST_ASSERT_EQUAL_STRING("1:2001:db8::1", round);
+    TEST_ASSERT_TRUE(dbNumericAlertIdToProbeId("2:10.0.0.1:443", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("tcp:10.0.0.1:443", out);
+    TEST_ASSERT_TRUE(dbNumericAlertIdToProbeId("3:2001:db8::2:53", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("udp:2001:db8::2:53", out);
+    TEST_ASSERT_FALSE(dbNumericAlertIdToProbeId("x:bad", out, sizeof out));
+    TEST_ASSERT_FALSE(dbProbeIdToNumericAlertId("bogus:host", out, sizeof out));
+}
+
 /* ---- pool-size clamp ---- */
 
 static void test_pool_clamp(void)
@@ -166,6 +181,7 @@ int main(void)
     RUN_TEST(test_outcome_and_proto_str);
     RUN_TEST(test_format_probe_addr);
     RUN_TEST(test_probe_target_id);
+    RUN_TEST(test_alert_id_conversion);
     RUN_TEST(test_pool_clamp);
     RUN_TEST(test_avg_cpu_and_min_disk);
     return UNITY_END();

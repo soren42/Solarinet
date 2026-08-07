@@ -332,12 +332,14 @@ static bool ctlVerbIsDestructive(const char *verb)
            strcmp(verb, "SIGN") == 0 || strcmp(verb, "DEPLOY") == 0 ||
            strcmp(verb, "FLEET_PROVISION") == 0 || strcmp(verb, "FLEET_IMAGE") == 0 ||
            strcmp(verb, "ASSET_REMOVE") == 0 || strcmp(verb, "TARGET_REMOVE") == 0 ||
+           strcmp(verb, "LIFECYCLE_SET") == 0 || strcmp(verb, "ASSET_PURGE") == 0 ||
            strcmp(verb, "POOL_DEL") == 0 || strcmp(verb, "RULE_DEL") == 0;
 }
 
 static bool ctlVerbRequiresOperator(const char *verb)
 {
-    return ctlVerbIsDestructive(verb) || strcmp(verb, "ALERT_ACK") == 0;
+    return ctlVerbIsDestructive(verb) || strcmp(verb, "ALERT_ACK") == 0 ||
+           strcmp(verb, "CRIT_SET") == 0;
 }
 
 static bool ctlPoolCanDelete(uint64_t poolId)
@@ -704,14 +706,66 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         (void)snprintf(detail, sizeof detail, "target removed by %s target=%s",
                        operator_, target);
         st = serverDbWriteAlertEvent(ctl->ctx->db, 0, 0, target, "warn",
-                                     detail, solariNowUnixMs());
+                                     detail, solariNowUnixMs(), "audit", 0, 0, 2, "suppress", NULL);
         if (st != SOLARI_OK)
             return ctlReplyErr(replyOut, replyCap, st, "target audit failed");
+        if ((st = serverDbTombstoneProbeTarget(ctl->ctx->db, target, operator_)) != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "target tombstone failed");
         if ((st = serverDbPurgeProbeState(ctl->ctx->db, target)) != SOLARI_OK)
             return ctlReplyErr(replyOut, replyCap, st, "target purge failed");
         st = serverDbDeleteProbeTarget(ctl->ctx->db, target);
         if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
         return ctlReplyErr(replyOut, replyCap, st, "target remove failed");
+    }
+
+    /* ---- lifecycle tombstone/restore for an asset ---- */
+    if (strcmp(verb, "LIFECYCLE_SET") == 0) {
+        uint64_t assetId = 0; char to[24]; char targets[512][SERVER_TARGETID_MAX]; size_t count=0, i;
+        if (ctlArgU64(args, "asset", &assetId) != SOLARI_OK || assetId == 0 ||
+            ctlArgStr(args, "to", to, sizeof to) != SOLARI_OK ||
+            (strcmp(to,"active") && strcmp(to,"decommissioned") && strcmp(to,"deleted")))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "asset and valid to required");
+        if (strcmp(to, "active") != 0) {
+            st=serverDbListAssetTargets(ctl->ctx->db,assetId,targets,512,&count);
+            if(st!=SOLARI_OK)return ctlReplyErr(replyOut,replyCap,st,"target list failed");
+        }
+        st=serverDbLifecycleTransition(ctl->ctx->db,assetId,to,targets,count);
+        if(st==SOLARI_OK && strcmp(to,"active")!=0)for(i=0;i<count;i++)serverAlertDropTargetState(targets[i]);
+        /* Restore resumes probing immediately: the heartbeat sync is otherwise
+         * event-driven and nothing else touches the asset (A1 deploy gap). */
+        if(st==SOLARI_OK && strcmp(to,"active")==0 &&
+           serverAssetsResyncHeartbeat(ctl->ctx,assetId)!=SOLARI_OK)
+            solariLogf(SOLARI_LOG_WARN,"lifecycle: restore heartbeat resync failed asset=%llu",(unsigned long long)assetId);
+        return st==SOLARI_OK?ctlReplyOk(replyOut,replyCap,NULL):ctlReplyErr(replyOut,replyCap,st,"lifecycle update failed");
+    }
+
+    /* ---- true asset purge; alert history is retained as cleared transitions ---- */
+    if (strcmp(verb, "ASSET_PURGE") == 0) {
+        uint64_t assetId=0; char confirm[128],displayName[128],host[SOLARI_FQDN_MAX],ip[SERVER_IP_MAX],targets[512][SERVER_TARGETID_MAX]; size_t removed=0,count=0,i;
+        if(ctlArgU64(args,"asset",&assetId)!=SOLARI_OK || assetId==0 ||
+           ctlArgStr(args,"confirm",confirm,sizeof confirm)!=SOLARI_OK || !confirm[0])
+            return ctlReplyErr(replyOut,replyCap,ERR_INVALID_ARG,"asset and confirm required");
+        if((st=serverDbGetAssetConfirmValues(ctl->ctx->db,assetId,displayName,sizeof displayName,host,sizeof host,ip,sizeof ip))!=SOLARI_OK)
+            return ctlReplyErr(replyOut,replyCap,st,"asset lookup failed");
+        if((!displayName[0] || strcmp(confirm,displayName)!=0) &&
+           (!host[0] || strcmp(confirm,host)!=0) &&
+           (!ip[0] || strcmp(confirm,ip)!=0))
+            return ctlReplyErr(replyOut,replyCap,ERR_INVALID_ARG,"purge confirmation does not match asset");
+        if((st=serverDbListAssetTargets(ctl->ctx->db,assetId,targets,512,&count))!=SOLARI_OK)
+            return ctlReplyErr(replyOut,replyCap,st,"target list failed");
+        { char id[32]; snprintf(id,sizeof id,"%llu",(unsigned long long)assetId);
+          st=serverAssetsRemove(ctl->ctx,id,false,operator_,&removed); }
+        if(st==SOLARI_OK)for(i=0;i<count;i++)serverAlertDropTargetState(targets[i]);
+        return st==SOLARI_OK?ctlReplyOk(replyOut,replyCap,"purged=1"):ctlReplyErr(replyOut,replyCap,st,"asset purge failed");
+    }
+
+    if (strcmp(verb, "CRIT_SET") == 0) {
+        uint64_t assetId=0,nodeId=0,tier=0;
+        (void)ctlArgU64(args,"asset",&assetId); (void)ctlArgU64(args,"node",&nodeId);
+        if(ctlArgU64(args,"tier",&tier)!=SOLARI_OK || tier>4 || ((assetId==0)==(nodeId==0)))
+            return ctlReplyErr(replyOut,replyCap,ERR_INVALID_ARG,"one entity and tier 0..4 required");
+        st=serverDbSetCriticality(ctl->ctx->db,assetId,nodeId,(int)tier);
+        return st==SOLARI_OK?ctlReplyOk(replyOut,replyCap,NULL):ctlReplyErr(replyOut,replyCap,st,"criticality update failed");
     }
 
     /* ---- create a functional pool ---- */
@@ -755,7 +809,7 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         (void)snprintf(detail, sizeof detail, "pool deleted by %s pool=%llu",
                        operator_, (unsigned long long)poolId);
         st = serverDbWriteAlertEvent(ctl->ctx->db, 0, 0, NULL, "warn",
-                                     detail, solariNowUnixMs());
+                                     detail, solariNowUnixMs(), "audit", 0, 0, 2, "suppress", NULL);
         if (st != SOLARI_OK)
             return ctlReplyErr(replyOut, replyCap, st, "pool audit failed");
         if ((st = serverDbReassignPoolAssets(ctl->ctx->db, poolId, 1, &reassigned)) != SOLARI_OK)
@@ -816,7 +870,7 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         (void)snprintf(detail, sizeof detail, "rule deleted by %s rule=%llu",
                        operator_, (unsigned long long)ruleId);
         st = serverDbWriteAlertEvent(ctl->ctx->db, 0, 0, NULL, "warn",
-                                     detail, solariNowUnixMs());
+                                     detail, solariNowUnixMs(), "audit", 0, 0, 2, "suppress", NULL);
         if (st != SOLARI_OK)
             return ctlReplyErr(replyOut, replyCap, st, "rule audit failed");
         st = serverDbDeleteAlertRule(ctl->ctx->db, ruleId);
@@ -922,8 +976,12 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         if (ctlArgU64(args, "node", &nodeId) != SOLARI_OK || nodeId == 0)
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad node id");
         st = serverProvisionRetire(ctl->ctx, nodeId);
-        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, "retired=1");
-        return ctlReplyErr(replyOut, replyCap, st, "retire failed");
+        if (st != SOLARI_OK) return ctlReplyErr(replyOut, replyCap, st, "retire failed");
+        st = serverDbClearOpenNodeAlerts(ctl->ctx->db, nodeId);
+        if (st != SOLARI_OK)
+            solariLogf(SOLARI_LOG_WARN, "ctl: node retire alert cleanup failed node=%llu: %s",
+                       (unsigned long long)nodeId, solariStrError(st));
+        return ctlReplyOk(replyOut, replyCap, "retired=1");
     }
 
     solariLogf(SOLARI_LOG_WARN, "ctl: unknown verb '%s'", verb);

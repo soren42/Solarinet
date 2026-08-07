@@ -281,6 +281,10 @@
       segId: w.segId, segName: seg.name || w.segName || "", cidr: seg.cidr || w.cidr || "",
       osName: w.osName, arch: w.arch,
       state: w.state,
+      // CONTRACT-LC A-1/A-3: passthrough only. Absent stays absent (null) —
+      // the UI reads that as "unknown", never as tier 0 / non-active.
+      criticality: w.criticality != null ? w.criticality : null,
+      lifecycle: w.lifecycle || null,
       lastSeenMin: lastSeenMin,
       enrolledDaysAgo: w.enrolledDaysAgo != null ? w.enrolledDaysAgo : daysSince(w.enrolledAt),
       configEpoch: w.configEpoch != null ? w.configEpoch : (w.appliedEpoch || 0),
@@ -418,6 +422,9 @@
       mdnsServices: mdnsSvcs,
       // best-effort LLDP/topology neighbor {gearName,peerPort,localIf,linkType,speedMbps,rssi,viaLldp} or null
       neighbor: w.neighbor || null,
+      // CONTRACT-LC A-2: {assetId,lifecycle,displayName} when this scan matched a
+      // tombstoned system, computed by the read route's join; null (or absent) otherwise.
+      tombstone: w.tombstone || null,
     };
   }
 
@@ -561,6 +568,9 @@
       sym: "", name: a.displayName || a.ip, hostFqdn: a.host || a.ip, ip: a.ip,
       role: "system", segId: a.poolId, segName: a.poolName || "Unassigned", cidr: "",
       osName: a.class, arch: "", state: a.state || "unknown",
+      // CONTRACT-LC A-1/A-3: passthrough only; absent stays null ("unknown").
+      criticality: a.criticality != null ? a.criticality : null,
+      lifecycle: a.lifecycle || null,
       // Reachability-only rows: staleness comes from the probe payload when the
       // API provides it; otherwise null (the UI renders "—", never "just now").
       lastSeenMin: a.lastSeenAt != null ? minsSince(a.lastSeenAt)

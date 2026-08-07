@@ -181,12 +181,37 @@ solariStatus serverDbUpsertAsset(serverDb *db, const char *ip, const char *host,
                                  uint64_t *assetId);
 /* Look up an asset id by ip (*assetId = 0 if none). */
 solariStatus serverDbGetAssetIdByIp(serverDb *db, const char *ip, uint64_t *assetId);
+/* Fetch the values accepted by ASSET_PURGE's server-side confirmation check. */
+solariStatus serverDbGetAssetHeartbeatInfo(serverDb *db, uint64_t assetId,
+                                           char *ip, size_t ipCap, int *monitorHost);
+solariStatus serverDbGetAssetConfirmValues(serverDb *db, uint64_t assetId,
+                                           char *displayName, size_t displayCap,
+                                           char *host, size_t hostCap,
+                                           char *ip, size_t ipCap);
 /* List targetIds owned by an asset; out is [cap][SERVER_TARGETID_MAX]. */
 solariStatus serverDbListAssetTargets(serverDb *db, uint64_t assetId,
                                       char out[][SERVER_TARGETID_MAX],
                                       size_t cap, size_t *count);
 /* Delete an asset row. */
 solariStatus serverDbDeleteAsset(serverDb *db, uint64_t assetId);
+solariStatus serverDbSetAssetLifecycle(serverDb *db, uint64_t assetId, const char *to);
+solariStatus serverDbLifecycleTransition(serverDb *db, uint64_t assetId, const char *to,
+                                         char targets[][SERVER_TARGETID_MAX], size_t count);
+solariStatus serverDbPurgeAsset(serverDb *db, uint64_t assetId,
+                                 char targets[][SERVER_TARGETID_MAX], size_t count);
+solariStatus serverDbSetCriticality(serverDb *db, uint64_t assetId, uint64_t nodeId, int tier);
+solariStatus serverDbAssetIsActive(serverDb *db, uint64_t assetId, bool *active);
+solariStatus serverDbNodeAlertTier(serverDb *db, uint64_t nodeId, int *tier, bool *active);
+solariStatus serverDbProbeAlertTier(serverDb *db, const char *targetId, uint64_t *assetId,
+                                    int *tier, bool *active);
+/* Read the immutable publish decision from a fired alert for its recovery row. */
+solariStatus serverDbAlertEventDisposition(serverDb *db, uint64_t eventId,
+                                           char *disposition, size_t dispositionCap,
+                                           int *effectiveTier);
+solariStatus serverDbTombstoneProbeTarget(serverDb *db, const char *targetId, const char *operator_);
+solariStatus serverDbClearAssetTombstones(serverDb *db, uint64_t assetId);
+solariStatus serverDbClearOpenAssetAlerts(serverDb *db, uint64_t assetId);
+solariStatus serverDbClearOpenNodeAlerts(serverDb *db, uint64_t nodeId);
 /* Create a functional pool; *poolId returns the id. ERR_DB on a duplicate name. */
 solariStatus serverDbCreatePool(serverDb *db, const char *name, const char *desc,
                                 const char *color, uint64_t *poolId);
@@ -230,7 +255,10 @@ solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
  * may be NULL for host-scoped events; ruleId 0 for synthetic/audit rows. */
 solariStatus serverDbWriteAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
                                      const char *targetId, const char *severity,
-                                     const char *detail, uint64_t firedUnixMs);
+                                     const char *detail, uint64_t firedUnixMs,
+                                     const char *eventKind, uint64_t openedEventId,
+                                     uint64_t assetId, int effectiveTier,
+                                     const char *disposition, uint64_t *eventId);
 /* Load all enabled alert rules of the given scope ('host' or 'probe'). Writes
  * up to *count rules into out (caller-sized); updates *count to the number
  * written. */
@@ -448,6 +476,7 @@ solariStatus serverAlertEvalClient(serverContext *ctx, uint64_t nodeId,
 /* Evaluate probe-scoped rules against an incoming monitor report. */
 solariStatus serverAlertEvalMonitor(serverContext *ctx, uint64_t nodeId,
                                     const solariMonitorReport *rep, bool urgent);
+void         serverAlertDropTargetState(const char *targetId);
 
 /* ===================================================================== */
 /* serverControl.c - control-plane emit + result tracking (§9.1, §11)     */

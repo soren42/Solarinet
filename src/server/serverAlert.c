@@ -54,6 +54,7 @@ typedef struct {
     char     targetId[SERVER_TARGETID_MAX]; /* "" for host scope            */
     uint64_t breachSinceMs;                 /* first observed breach (wall)  */
     bool     fired;                         /* an open alertEvent exists     */
+    uint64_t openedEventId;                 /* immutable fired transition    */
     double   lastValue;                     /* for transition-op edge detect */
     bool     haveLast;
 } alertBreachState;
@@ -84,6 +85,20 @@ static uint16_t alertSeverityCode(const char *severity)
     if (strcmp(severity, "crit") == 0) return ALERT_CODE_CRIT;
     if (strcmp(severity, "warn") == 0) return ALERT_CODE_WARN;
     return ALERT_CODE_INFO;
+}
+
+/* Returns false for tier 0; otherwise composes the persisted severity without
+ * changing the rule itself.  The result is deliberately pure for unit tests. */
+static bool alertComposeSeverity(const char *ruleSeverity, int tier,
+                                 const char **severityOut)
+{
+    const char *s = ruleSeverity ? ruleSeverity : "info";
+    if (!severityOut || tier < 0 || tier > 4) return false;
+    if (tier == 0) return false;
+    if (tier == 1 && strcmp(s, "crit") == 0) s = "warn";
+    if (tier == 4 && strcmp(s, "crit") != 0) s = "crit";
+    *severityOut = s;
+    return true;
 }
 
 /* Mean CPU load across reported cores, in milli-units (0..1000 per core scale).
@@ -353,8 +368,26 @@ static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
     bool              breached;
     alertBreachState *s = alertStateFind(r->ruleId, nodeId, targetId, true);
     char              detail[512];
+    uint64_t          assetId = 0;
+    int               tier = 2;
+    bool              active = false;
+    const char       *severity = r->severity[0] ? r->severity : "info";
+    bool              composed;
     solariStatus      st = SOLARI_OK;
 
+    /* Fresh lifecycle/tier read for every report. Probe targets must resolve
+     * through their owning asset; an unlinked/removed target is not alertable. */
+    st = (targetId && targetId[0])
+       ? serverDbProbeAlertTier(ctx->db, targetId, &assetId, &tier, &active)
+       : serverDbNodeAlertTier(ctx->db, nodeId, &tier, &active);
+    if (st != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_WARN, "alert: lifecycle/tier lookup failed rule %d: %s",
+                   r->ruleId, solariStrError(st));
+        return SOLARI_OK;
+    }
+    if (!active)
+        return SOLARI_OK;
+    composed = alertComposeSeverity(r->severity, tier, &severity);
     if (!s) {
         solariLogf(SOLARI_LOG_WARN,
                    "alert: breach-state table full, rule %d node %llu dropped",
@@ -380,18 +413,23 @@ static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
             if (fireNow) {
                 alertBuildDetail(detail, sizeof(detail), r, targetId, value, true,
                                  extraDetail);
-                st = serverDbWriteAlertEvent(ctx->db, r->ruleId, nodeId,
-                                             (targetId && targetId[0]) ? targetId : NULL,
-                                             r->severity, detail, nowMs);
-                if (st != SOLARI_OK) {
-                    solariLogf(SOLARI_LOG_ERROR,
-                               "alert: write fired event rule %d failed: %s",
-                               r->ruleId, solariStrError(st));
-                    return st;
+                s->openedEventId = 0;
+                if (composed) {
+                    st = serverDbWriteAlertEvent(ctx->db, r->ruleId, nodeId,
+                                                 (targetId && targetId[0]) ? targetId : NULL,
+                                                 severity, detail, nowMs, "fired", 0,
+                                                 assetId, tier, tier <= 1 ? "suppress" : "publish",
+                                                 &s->openedEventId);
+                    if (st != SOLARI_OK) {
+                        solariLogf(SOLARI_LOG_ERROR,
+                                   "alert: write fired event rule %d failed: %s",
+                                   r->ruleId, solariStrError(st));
+                        return st;
+                    }
                 }
                 s->fired = true;
                 solariLogf(SOLARI_LOG_INFO, "alert: %s", detail);
-                alertPublish(ctx, r->severity, detail);
+                alertPublish(ctx, severity, detail);
             }
         }
         /* transition fires are instantaneous edges, not sustained states */
@@ -401,23 +439,46 @@ static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
         if (s->fired) {
             alertBuildDetail(detail, sizeof(detail), r, targetId, value, false,
                              extraDetail);
-            st = serverDbWriteAlertEvent(ctx->db, r->ruleId, nodeId,
-                                         (targetId && targetId[0]) ? targetId : NULL,
-                                         r->severity, detail, nowMs);
-            if (st != SOLARI_OK) {
-                solariLogf(SOLARI_LOG_ERROR,
-                           "alert: write cleared event rule %d failed: %s",
-                           r->ruleId, solariStrError(st));
-                return st;
+            if (s->openedEventId) {
+                char disposition[16];
+                int effectiveTier = 0;
+                st = serverDbAlertEventDisposition(ctx->db, s->openedEventId,
+                                                    disposition, sizeof disposition,
+                                                    &effectiveTier);
+                if (st != SOLARI_OK) {
+                    solariLogf(SOLARI_LOG_ERROR,
+                               "alert: read fired event rule %d failed: %s",
+                               r->ruleId, solariStrError(st));
+                    return st;
+                }
+                st = serverDbWriteAlertEvent(ctx->db, r->ruleId, nodeId,
+                                             (targetId && targetId[0]) ? targetId : NULL,
+                                             severity, detail, nowMs, "cleared", s->openedEventId,
+                                             assetId, effectiveTier, disposition, NULL);
+                if (st != SOLARI_OK) {
+                    solariLogf(SOLARI_LOG_ERROR,
+                               "alert: write cleared event rule %d failed: %s",
+                               r->ruleId, solariStrError(st));
+                    return st;
+                }
             }
             s->fired = false;
+            s->openedEventId = 0;
             solariLogf(SOLARI_LOG_INFO, "alert: %s", detail);
-            alertPublish(ctx, r->severity, detail);
+            alertPublish(ctx, severity, detail);
         }
         /* a non-breaching, non-firing transition slot can be released */
         if (isTransition && !s->haveLast) s->inUse = false;
     }
     return st;
+}
+
+void serverAlertDropTargetState(const char *targetId)
+{
+    if (!targetId || !targetId[0]) return;
+    for (int i = 0; i < ALERT_STATE_SLOTS; i++)
+        if (gAlertState[i].inUse && strcmp(gAlertState[i].targetId, targetId) == 0)
+            memset(&gAlertState[i], 0, sizeof gAlertState[i]);
 }
 
 /* ===================================================================== */

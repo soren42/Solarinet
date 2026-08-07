@@ -15,6 +15,9 @@ declare(strict_types=1);
 return static function (Router $router): void {
 
     $router->get('/api/assets', static function (): void {
+        $lifecycleColumns = asset_lifecycle_columns();
+        $lifecycleSelect = $lifecycleColumns['lifecycle'] ? ', lifecycle' : '';
+        $criticalitySelect = $lifecycleColumns['criticality'] ? ', criticality' : '';
         $states = Rollup::assetStates();
         $pools  = [];
         foreach (Db::rows('SELECT poolId, name FROM pool') as $p) $pools[(int) $p['poolId']] = $p['name'];
@@ -25,8 +28,8 @@ return static function (Router $router): void {
         $filter = isset($_GET['poolId']) && ctype_digit((string) $_GET['poolId']) ? (int) $_GET['poolId'] : null;
 
         $out = [];
-        foreach (Db::rows('SELECT assetId, ip, host, displayName, class, poolId, tags, notes, monitorHost
-                             FROM asset ORDER BY displayName, ip') as $a) {
+        foreach (Db::rows("SELECT assetId, ip, host, displayName, class, poolId, tags, notes, monitorHost$lifecycleSelect$criticalitySelect
+                             FROM asset ORDER BY displayName, ip") as $a) {
             $pid = $a['poolId'] !== null ? (int) $a['poolId'] : null;
             if ($filter !== null && $pid !== $filter) continue;
             $aid = (int) $a['assetId'];
@@ -37,8 +40,11 @@ return static function (Router $router): void {
 
     $router->get('/api/assets/{assetId}', static function (array $p): void {
         $aid = asset_id($p['assetId']);
-        $a = Db::row('SELECT assetId, ip, host, displayName, class, poolId, tags, notes, monitorHost
-                        FROM asset WHERE assetId = :i', [':i' => $aid]);
+        $lifecycleColumns = asset_lifecycle_columns();
+        $lifecycleSelect = $lifecycleColumns['lifecycle'] ? ', lifecycle' : '';
+        $criticalitySelect = $lifecycleColumns['criticality'] ? ', criticality' : '';
+        $a = Db::row("SELECT assetId, ip, host, displayName, class, poolId, tags, notes, monitorHost$lifecycleSelect$criticalitySelect
+                        FROM asset WHERE assetId = :i", [':i' => $aid]);
         if ($a === null) Response::error('not_found', "No asset $aid", 404);
 
         $pools = [];
@@ -134,6 +140,63 @@ return static function (Router $router): void {
         ]);
     });
 
+    $router->post('/api/assets/{assetId}/lifecycle', static function (array $p): void {
+        $aid = asset_id($p['assetId']);
+        if (Db::row('SELECT assetId FROM asset WHERE assetId = :i', [':i' => $aid]) === null) {
+            Response::error('not_found', "No asset $aid", 404);
+        }
+        $b = solari_json_body();
+        $op = Operator::requireOperator();
+        if (($b['confirm'] ?? null) !== true) {
+            Response::error('confirm_required', 'Lifecycle changes require {"confirm":true}.', 409);
+        }
+        $states = ['decommission' => 'decommissioned', 'delete' => 'deleted', 'restore' => 'active'];
+        $action = $b['action'] ?? null;
+        if (!is_string($action) || !isset($states[$action])) {
+            Response::error('bad_request', 'action must be decommission, delete, or restore.', 400);
+        }
+        SolariCtl::call('LIFECYCLE_SET', ['asset' => $aid, 'to' => $states[$action], 'op' => $op]);
+        Response::ok(['assetId' => $aid, 'status' => $states[$action]]);
+    });
+
+    $router->post('/api/assets/{assetId}/purge', static function (array $p): void {
+        $aid = asset_id($p['assetId']);
+        $cur = Db::row('SELECT assetId, displayName, host, ip FROM asset WHERE assetId = :i', [':i' => $aid]);
+        if ($cur === null) {
+            Response::error('not_found', "No asset $aid", 404);
+        }
+        $b = solari_json_body();
+        $op = Operator::requireAdmin();
+        $confirmName = $b['confirmName'] ?? null;
+        /* CONTRACT-LC §9 J4: displayName || host || ip — ip is NOT NULL
+         * UNIQUE, so every asset (including nameless) is purgeable. The C
+         * side re-verifies the same chain; this check is UX, not authority. */
+        $expectedName = ($cur['displayName'] !== null && $cur['displayName'] !== '')
+            ? (string) $cur['displayName']
+            : (($cur['host'] !== null && $cur['host'] !== '') ? (string) $cur['host'] : (string) $cur['ip']);
+        if (!is_string($confirmName) || $confirmName === '' || $confirmName !== $expectedName) {
+            Response::error('confirm_required', 'confirmName must match the current asset name.', 409);
+        }
+        SolariCtl::call('ASSET_PURGE', ['asset' => $aid, 'confirm' => $confirmName, 'op' => $op]);
+        Response::ok(['assetId' => $aid, 'status' => 'purged']);
+    });
+
+    $router->post('/api/assets/{assetId}/criticality', static function (array $p): void {
+        $aid = asset_id($p['assetId']);
+        if (Db::row('SELECT assetId FROM asset WHERE assetId = :i', [':i' => $aid]) === null) {
+            Response::error('not_found', "No asset $aid", 404);
+        }
+        $b = solari_json_body();
+        $op = Operator::requireOperator();
+        $tier = $b['tier'] ?? null;
+        if (!is_int($tier) || $tier < 0 || $tier > 4) {
+            Response::error('bad_request', 'tier must be an integer from 0 to 4.', 400);
+        }
+        /* CONTRACT-LC §9 J1: verb keys frozen as asset=/node= (C side's shape). */
+        SolariCtl::call('CRIT_SET', ['asset' => $aid, 'tier' => $tier, 'op' => $op]);
+        Response::ok(['assetId' => $aid, 'criticality' => $tier]);
+    });
+
     $router->post('/api/assets/{assetId}/targets/{targetId}/remove', static function (array $p): void {
         $aid = asset_id($p['assetId']);
         $targetId = (string) $p['targetId'];
@@ -161,7 +224,7 @@ return static function (Router $router): void {
 /** Shape one asset list/detail row. */
 function asset_row(array $a, int $aid, ?int $pid, array $pools, int $targetCount, string $state): array
 {
-    return [
+    $row = [
         'assetId'     => $aid,
         'ip'          => $a['ip'],
         'host'        => $a['host'],
@@ -175,6 +238,33 @@ function asset_row(array $a, int $aid, ?int $pid, array $pools, int $targetCount
         'targetCount' => $targetCount,
         'state'       => $state,
     ];
+    if (array_key_exists('lifecycle', $a)) {
+        $row['lifecycle'] = $a['lifecycle'];
+    }
+    if (array_key_exists('criticality', $a)) {
+        $row['criticality'] = Coerce::int($a['criticality']);
+    }
+    return $row;
+}
+
+/** Detect the additive 018 asset fields once; pre-migration responses omit them. */
+function asset_lifecycle_columns(): array
+{
+    static $columns = null;
+    if ($columns !== null) {
+        return $columns;
+    }
+    $columns = ['lifecycle' => false, 'criticality' => false];
+    foreach (Db::rows(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+        . "AND TABLE_NAME = 'asset' AND COLUMN_NAME IN ('lifecycle', 'criticality')"
+    ) as $column) {
+        $name = (string) $column['COLUMN_NAME'];
+        if (array_key_exists($name, $columns)) {
+            $columns[$name] = true;
+        }
+    }
+    return $columns;
 }
 
 /** Validate a positive asset id path segment. */

@@ -14,11 +14,12 @@ return static function (Router $router): void {
 
     // GET /api/nodes — fleet summaries (+ §5 additions: segId, uplinkGearId).
     $router->get('/api/nodes', static function (): void {
+        $criticalitySelect = node_criticality_present() ? ', criticality' : '';
         $rows = Db::rows(
-            'SELECT nodeId, role, hostFqdn, state, lastSeenAt, arch, osName,
-                    segId, uplinkGearId, enrolledAt, configEpoch
+            "SELECT nodeId, role, hostFqdn, state, lastSeenAt, arch, osName,
+                    segId, uplinkGearId, enrolledAt, configEpoch$criticalitySelect
                FROM node
-              ORDER BY role, hostFqdn'
+              ORDER BY role, hostFqdn"
         );
 
         // Recent sparkline history per node so the fleet/heat/card views render
@@ -49,7 +50,7 @@ return static function (Router $router): void {
 
         $out = array_map(static function (array $r) use ($spark): array {
             $id = Coerce::id($r['nodeId']);
-            return [
+            $row = [
                 'nodeId'       => $id,
                 'role'         => $r['role'],
                 'hostFqdn'     => $r['hostFqdn'],
@@ -63,6 +64,10 @@ return static function (Router $router): void {
                 'configEpoch'  => Coerce::id($r['configEpoch']),
                 'hist'         => $spark[$id] ?? ['cpu' => [], 'ram' => [], 'net' => [], 'disk' => []],
             ];
+            if (array_key_exists('criticality', $r)) {
+                $row['criticality'] = Coerce::int($r['criticality']);
+            }
+            return $row;
         }, $rows);
         Response::ok($out);
     });
@@ -70,11 +75,12 @@ return static function (Router $router): void {
     // GET /api/nodes/{id} — full detail for one node.
     $router->get('/api/nodes/{id}', static function (array $p): void {
         $nodeId = $p['id'];
+        $criticalitySelect = node_criticality_present() ? ', criticality' : '';
 
         $node = Db::row(
-            'SELECT nodeId, role, hostFqdn, certCn, osName, arch, segId, uplinkGearId,
-                    enrolledAt, lastSeenAt, configEpoch, state
-               FROM node WHERE nodeId = :id',
+            "SELECT nodeId, role, hostFqdn, certCn, osName, arch, segId, uplinkGearId,
+                    enrolledAt, lastSeenAt, configEpoch, state$criticalitySelect
+               FROM node WHERE nodeId = :id",
             [':id' => $nodeId]
         );
         if ($node === null) {
@@ -105,8 +111,7 @@ return static function (Router $router): void {
             [':id' => $nodeId]
         );
 
-        Response::ok([
-            'node' => [
+        $nodeOut = [
                 'nodeId'       => Coerce::id($node['nodeId']),
                 'role'         => $node['role'],
                 'hostFqdn'     => $node['hostFqdn'],
@@ -119,7 +124,13 @@ return static function (Router $router): void {
                 'lastSeenAt'   => Coerce::iso($node['lastSeenAt']),
                 'configEpoch'  => Coerce::id($node['configEpoch']),
                 'state'        => $node['state'],
-            ],
+            ];
+        if (array_key_exists('criticality', $node)) {
+            $nodeOut['criticality'] = Coerce::int($node['criticality']);
+        }
+
+        Response::ok([
+            'node' => $nodeOut,
             'host' => $host === null ? null : [
                 'sampledAt'    => Coerce::iso($host['sampledAt']),
                 'cpuLoadMilli' => Coerce::json($host['cpuLoadMilli']),
@@ -218,6 +229,19 @@ return static function (Router $router): void {
         ]);
     });
 };
+
+/** Detect the additive 018 node field once; pre-migration responses omit it. */
+function node_criticality_present(): bool
+{
+    static $present = null;
+    if ($present === null) {
+        $present = Db::row(
+            "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+            . "AND TABLE_NAME = 'node' AND COLUMN_NAME = 'criticality' LIMIT 1"
+        ) !== null;
+    }
+    return $present;
+}
 
 /**
  * Local helpers shared by the node routes. Declared as a final class so they are
