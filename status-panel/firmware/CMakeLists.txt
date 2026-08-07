@@ -117,6 +117,15 @@ target_include_directories(hershey_fonts INTERFACE
 
 include(${PIMORONI_PICO_PATH}/libraries/galactic_unicorn/galactic_unicorn.cmake)
 
+# pico_flash gating (found on hardware, A4 failure): with pico_multicore
+# linked, flash_safe_execute() REFUSES to run unless core 1 is a registered
+# lockout victim — PICO_ERROR_NOT_PERMITTED, silent in release. Nothing in
+# this firmware or the galactic_unicorn driver ever launches core 1 (grep
+# multicore_launch: none), so assert that to the SDK and take the IRQ-only
+# safe path. If a core-1 task is EVER added: delete this line and call
+# flash_safe_execute_core_init() from core 1.
+target_compile_definitions(solari-panel-fw PRIVATE PICO_FLASH_ASSUME_CORE1_SAFE=1)
+
 target_link_libraries(solari-panel-fw
   pico_stdlib
   pico_unique_id
