@@ -750,7 +750,7 @@ console.log("\n[7] conformance to §9 A-1, the parity oracle (acceptance A1)");
 
 console.log("\n[8] the fixture file");
 {
-  ok("fixture is valid JSON and declares v2", fixture.version === 2, String(fixture.version));
+  ok("fixture is valid JSON and declares fixtureVersion 2", fixture.fixtureVersion === 2, String(fixture.fixtureVersion));
   ok("every scenario is still present",
     fixture.scenarios.map((s) => s.id).join(",") === "normal,alarm,stale,emptyHistory,noData",
     fixture.scenarios.map((s) => s.id).join(","));

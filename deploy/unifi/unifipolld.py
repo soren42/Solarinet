@@ -249,8 +249,11 @@ def poll_cycle(client, database, state_path, dry_run=False):
     try:
         poll_once(client, database, state_path, dry_run)
         return True
-    except (HTTPError, URLError, OSError, ValueError, RuntimeError,
-            *((pymysql.MySQLError,) if pymysql is not None else ())):
+    except SystemExit:
+        raise                       # config errors (_die) must stop the unit
+    except Exception:  # noqa: BLE001 — review S5: an unexpected API shape
+        # raised TypeError, escaped the tuple, and wedged the unit through
+        # StartLimitBurst. ANY per-cycle failure is a skipped cycle.
         # Exception details can carry request URLs but never the API-key header.
         log("poll failed; skipping cycle")
         return False

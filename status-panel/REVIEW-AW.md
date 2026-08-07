@@ -655,3 +655,97 @@ service restarts, no writes to `solarinet` or `solarinet_stage`, no flashing.
 5. **`dashboard/public/screens-panel.jsx`** (AW3's lane) was out of scope; virtual/firmware
    A1 parity is therefore asserted only against the A-1 constants table, not against AW3's
    renderer output.
+
+---
+
+# RE-CHECK — fix round @ 72e42ed
+
+`reviewer: claude/opus-5 · same constraints (no source changes retained, no git ops, no deploys, no flashing)`
+`verdict: PASS — both blockers closed and now regression-locked. Deploy gate CLEARED for the`
+`software chain. Three non-blocking items below; one is new.`
+
+## R1. Suites
+
+```
+daemon:   codec tests passed
+firmware: 151 ok, 0 fail   (was 142)
+php:      tests/dashboard/test_panel_gear.php -> exit 0 (10 printed ok + silent role/log-scale asserts)
+```
+
+## R2. Mutation re-run — all five now caught
+
+| # | Mutation | Before | Now | Caught by |
+|---|---|---|---|---|
+| (a) | `knownType` drops 0x85 | CAUGHT | **CAUGHT** | daemon `CONFIG parser dispatch missing`; firmware ×2 FAIL |
+| (b) | gear length guard dropped | **MISSED** | **CAUGHT** | `FAIL: A6: short additive gear trailer decodes as no gear` |
+| (c) | rescale → reset semantics | **MISSED** | **CAUGHT** | `FAIL: A2: 20/30*7.5 = 5 seconds…` + `FAIL: A2: rescaled elapsed…` |
+| (d) | `panelGearState` `2 => 2` | **MISSED** | **CAUGHT** | `FAIL: down: got 2 want 0` + `FAIL: not all three wire states reachable` |
+| (e1/e2) | CONFIG reserved bits / bytes | CAUGHT | **CAUGHT** | firmware ×2 FAIL |
+| **(M3-revert)** | subtract-before-validate chain restored | n/a | **CAUGHT** | `panelScreensA.c:214:21: runtime error: index -2 out of bounds` → `AddressSanitizer: stack-buffer-overflow … :222 in panelScreenA1` |
+
+Note on (c): the naive edit tripped `-Werror` on the now-unused `oldDwell`, which is a build
+break rather than a test signal. Re-run with `(void)oldDwell;` — the honest mutant — and the
+two A2 cases fail properly. The extraction is real: `panelScreenCfgRescaleDwell`
+(`panelScreenCfg.c:186`) is the single shipped implementation, `main.c:393` calls it, and the
+test's local copy is gone in favour of `#define rescaleDwell panelScreenCfgRescaleDwell`
+(`panelScreenCfgTest.c:72`).
+
+## R3. Lead-authored hunks, reviewed adversarially
+
+- **`solariPanel.c:94-120` (gear ingest)** — correct. `memset(&staged,0,…)` at `:82` guarantees
+  `gearCount == 0` when the key is absent, so the no-data path is preserved. `g` is clamped to
+  `PANEL_MAX_GEAR` *before* the loop and `o` only advances on accepted entries, so
+  `o <= g <= 12` — no overflow of `staged.gear[]`. The clamps are genuinely fail-dark, and I
+  specifically probed the wraparound I expected to find: `byteValue` (`:61`) **saturates** at
+  255 rather than casting, so a JSON `role: 260` becomes 255 and is dropped by `role > 4u`,
+  not silently admitted as role 4. Non-object array entries `continue` rather than abort.
+- **`panelScreensA.c:211-224` (M3 chain)** — matches the sketch exactly; validate-then-subtract
+  in all three arms, empty next band drops the particle. `source->gear` is populated only from
+  in-range snapshot indices, so `:225-226` is bounded. ASAN/UBSAN clean across all 8 cases.
+- **`panelScreenCfg.c:186-195` + `main.c:389-398` (rescale)** — arithmetic unchanged from the
+  version I verified, now in the tested TU. The `advanced` out-param is NULL-guarded.
+- **`panel.php:695-700` (E3 gate)** — `apcu_add(…, 3600)` with a `function_exists` fallback.
+  Sound; hourly at worst instead of per-request.
+- **`solariPanel.c:139` (S1)** — now `panelDecodeConfig`, dispatch on `PANEL_FT_CONFIG`.
+- **`panelScreenCfg.c:94,142` (S2/S3)** — `changedMs = nowMs` on write failure gives the
+  debounce backoff; `__no_inline_not_in_flash_func` applied. `main.c:560-564` drops the
+  core-init with the honest comment. All three as specified.
+
+## R4. Non-blocking items carried forward
+
+- **NEW · SHOULD — two compiled test binaries are committed.**
+  `git ls-files -s status-panel/firmware/test/` shows `panelScreenCfgTest` (64 KB) and
+  `panelScreensATest` (628 KB) tracked as mode-100755 blobs. `.gitignore:69` ignores only
+  `panelLinkTest`. These go stale the moment anyone edits a source file, and any rebuild
+  dirties the tree — my re-check rebuild showed ` M …/panelScreensATest` and I had to
+  `git checkout --` it to restore. Worse, a stale committed binary can be *run* by someone who
+  skips `make`, reporting green for code that no longer exists.
+  **Fix:** `git rm --cached` both, and extend `.gitignore` to
+  `status-panel/firmware/test/panel*Test`.
+- **RESIDUAL · SHOULD — S5 is half-taken.** `_die()` (`unifipolld.py:19-23`) is a good fix and
+  the `SystemExit` deliberately bypasses the fail-soft catch, which is right for a config
+  error. But `poll_cycle`'s tuple (`:252-253`) still omits `TypeError`/`AttributeError`, so the
+  original half of the finding stands: `int(rx)` at `:186` on an unexpected Integration-API
+  shape (a firmware upgrade changing the stats schema) raises `TypeError`, escapes, exits,
+  and `Restart=on-failure` + `StartLimitBurst=5` wedges the unit **permanently** — A1 silently
+  degrades to no-data with no alarm. One-word fix: `except Exception:`.
+- **NIT — asymmetric coverage of the gear length guard.** The short-trailer case lives only in
+  the firmware suite; `daemon/tests/codec_test.c` still passes under mutation (b) even though
+  the daemon links the same `protocol.c`. The guard is covered, but the daemon suite would not
+  catch a regression on its own.
+
+Not re-litigated: the two items Lead declined (stats-fetch pacing, weightCode 6/7 asymmetry).
+Both reasons are sound — the poller is undeployed, and both firmware ends reject >5, so the
+decoder gap is unreachable in practice.
+
+## R5. Still UNVERIFIED after the fix round
+
+Unchanged from §8 and **not** closed by this round: real flash persistence and power-loss
+behaviour on hardware; actual UF2 size vs the reserved sector (still no build artifacts in
+this tree — the `67071de8` target build was on lithium); two-build reproducibility. The
+software chain is now verified end to end in host tests, but nothing here substitutes for the
+physical flash cycle.
+
+Working tree verified clean after all six mutations (`git status --porcelain` over
+`status-panel/ dashboard/ tests/ deploy/unifi/ db/` empty; every file restored from
+pre-mutation md5-checked copies in the scratchpad).

@@ -95,6 +95,16 @@ int main(void) {
   if(require(panelEncodeControl(31u,PANEL_CTL_SCREENEN,(uint8_t)((11u<<1)|1u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENEN&&arg==23u,"SCREENEN round trip failed")||require(panelEncodeControl(32u,PANEL_CTL_SCREENWT,(uint8_t)((11u<<3)|5u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENWT&&arg==93u,"SCREENWT round trip failed")) return 1;
   memset(stream,0,sizeof(stream)); memcpy(stream,control,sizeof(control));
   if(require(panelDecodeControl(stream,PANEL_CONTROL_SIZE+1u,&cmdId,&kind,&arg)==0,"CONTROL trailing bytes rejected")) return 1;
+  /* Review re-check NIT: the short-gear-trailer guard case, mirrored from the
+   * firmware suite — this binary links the same protocol.c and must also
+   * catch a deleted length guard. */
+  {
+    PanelSnapshot gsent, ggot; size_t glen;
+    memset(&gsent,0,sizeof(gsent)); gsent.gearCount=9u;
+    glen=panelEncodeSnapshot(&gsent,frame,sizeof(frame));
+    if(require(glen!=0u&&panelDecodeSnapshot(frame,glen-4u,&ggot)==0&&ggot.gearCount==0u,
+               "short additive gear trailer accepted")) return 1;
+  }
   memset(stream,0,sizeof(stream)); memcpy(stream,state,sizeof(state));
   if(require(panelDecodeState(stream,PANEL_STATE_SIZE+1u,&theme,&screen,&brightnessPct,&autoBright,&sleeping,&alarmArmed,&alarmAcked,&dwellSec,&ackedEpisodeId,&lastCmdId)==0,"STATE trailing bytes rejected")) return 1;
 
