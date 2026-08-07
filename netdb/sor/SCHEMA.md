@@ -262,3 +262,53 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 - `schema.sql` is idempotent (`CREATE TABLE IF NOT EXISTS`, guarded ALTER,
   `INSERT IGNORE` seeds, `CREATE OR REPLACE VIEW`); future schema changes go
   in numbered migration files alongside it.
+
+---
+
+## 7. RackWire additions (`migrations/020_rackwire.sql`)
+
+RackWire is the browser-based connection planner (`dashboard/public/rackwire/`).
+Migration 020 gives it plan storage and gives the SoR a power model, per
+CONTRACT-RW v1.0 §1. Power deliberately reuses the existing shape rather than
+opening a parallel domain: **power ports are `interfaces` rows, power cords are
+`interconnects` rows.** No new edge tables.
+
+| Table | Purpose |
+|---|---|
+| `rw_plans` | One row per named plan; `plan_json` is `RackWire.getPlan()` verbatim (`JSON_VALID` CHECK). Authoritative store; the browser keeps localStorage for `file://` and offline. |
+| `rw_plan_versions` | Append-only snapshots behind `saveVersion()`/`restoreVersion()`. No `updated_at`/`deleted_at` — same posture as `barcode_scans`. The 25-snapshot cap lives in the API, not the schema. |
+| `power_circuits` | Branch circuits and PDU/UPS rails as a self-referencing tree (`parent_circuit_id`), placed via `location_id`. Carries volts/amps/phase/breaker label; the 80% continuous-load derate is computed, not stored. |
+| `rw_model_groups` | Port geometry per `hardware_models` row: `groups_json` is the RackWire library `groups[]` array verbatim, `device_json` the device-level electrical extras (drawW, budgetW, poeBudgetW, eff, isInternet, isBattery). One **live** row per model; `library_id` lets the client merge over its static seed by id, server winning. |
+
+Changes to existing tables:
+
+- `interconnects.link_kind` gains `'power'` — a power cord is an ordinary
+  interconnect between a `power_outlet` and a `power_inlet`.
+- `interfaces.if_kind` gains `'power_inlet'` and `'power_outlet'`.
+- `interfaces` gains nullable `circuit_id` (FK → `power_circuits`, `ON DELETE
+  SET NULL`), `watts_rated`, and `poe_class`. Purely network interfaces leave
+  all three NULL.
+- `sources` gains a `rackwire` row (`kind='human'`). Everything the planner
+  commits is written with that `source_id` and `asserted_kind='human'`, so the
+  commit path can refuse to touch rows it does not own and machine
+  `lldp_adjacency` rows stay read-only context.
+
+Two conventions differ slightly from §6 and are intentional:
+
+- **Live-uniqueness uses a generated column, not `deleted_at`.** New tables carry
+  `live_flag TINYINT AS (IF(deleted_at IS NULL, 1, NULL)) PERSISTENT` and key on
+  `(…, live_flag)`. `UNIQUE(name, deleted_at)` only collapses *simultaneous*
+  deletions; `live_flag` lets a name be retired and reused any number of times.
+  Introduced in 015; 020 follows it.
+- **ENUM values are appended, never inserted or reordered**, so stored ordinals
+  of existing rows are untouched. Each ENUM `ALTER` is guarded by an
+  `information_schema.COLUMNS` probe under `PREPARE`/`EXECUTE`, so re-running the
+  migration skips the (table-rewriting) alter entirely.
+
+No CDC triggers are attached to the new tables — the sorsync bypass is intended.
+Writes to `interfaces` do still fire the existing CDC triggers; the appliers diff
+before acting.
+
+Applied on cesium only (`sudo mariadb sor < netdb/sor/migrations/020_rackwire.sql`);
+**cesium replicates to benzene**, so never apply it on benzene directly. Validate
+against a scratch schema first — never point tests at live `sor`.
