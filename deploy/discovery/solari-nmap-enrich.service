@@ -1,0 +1,40 @@
+; SolariNet active-recon (nmap) intel enricher (nmap_enrich.py, one-shot).
+;
+; Runs an authorized `nmap -sV -O` sweep (plus a quick HTTP header/title
+; probe on common web ports) against a rate-limited batch of `discovered`
+; rows -- mostly the bare-IPv4, no-other-data ones -- and UPDATEs
+; osGuess/openPorts/banners + nmapEnrichedAt, then exits -- Type=oneshot.
+; Meant to be run alongside solari-mdns-inspect.service and
+; solari-oui-enrich.service after a discovery scan (see README.md "Wiring
+; into a discovery probe"), not on a timer of its own.
+; Assumes repo at /home/jason/Code/Solarinet.
+;
+; nmap -O (OS fingerprinting) and -sV need raw-socket access (CAP_NET_RAW),
+; so ExecStart invokes nmap_enrich.py via `sudo` -- see nmap_enrich.py's
+; "Privilege" section. Configure passwordless sudo for this exact command in
+; /etc/sudoers.d/ if running unattended (not included here -- a manual `sudo
+; visudo` step, left to the operator).
+;
+; The DB password is NOT in nmap_enrich.conf: run/db.env (KEY=VALUE with an
+; `export`, mode 0600) provides SOLARI_DB_PASS, sourced here -- same
+; convention as deploy/discovery/solari-oui-enrich.service.
+[Unit]
+Description=SolariNet active-recon (nmap) intel enricher (one enrich-and-update pass)
+After=network.target mariadb.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet/deploy/discovery
+Environment=NMAP_ENRICH_CONF=/home/jason/Code/Solarinet/deploy/discovery/nmap_enrich.conf
+; Source run/db.env (exports SOLARI_DB_PASS) then run one pass and exit.
+; sudo -E preserves SOLARI_DB_PASS/NMAP_ENRICH_CONF for the child process --
+; nmap's OS-fingerprint/SYN-scan mode needs root (CAP_NET_RAW).
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec sudo -E /home/jason/Code/Solarinet/deploy/discovery/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/discovery/nmap_enrich.py'
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

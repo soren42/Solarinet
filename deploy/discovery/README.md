@@ -1,7 +1,8 @@
-# Discovery enrichment — mDNS inspector/importer + MAC->vendor OUI enricher
+# Discovery enrichment — mDNS inspector/importer + MAC->vendor OUI enricher + nmap active-recon
 
-Three tools augmenting the SolariNet Discovery asset table (`discovered`)
-with mDNS host names/services and a vendor name derived from each host's MAC:
+Four tools augmenting the SolariNet Discovery asset table (`discovered`)
+with mDNS host names/services, a vendor name derived from each host's MAC,
+and OS/port/banner intel from an active nmap sweep:
 
 - **`mdns_inspect.py`** (primary, LIVE) — actively browses mDNS/zeroconf/
   Bonjour on the wire for a bounded window and upserts whatever it resolves.
@@ -17,6 +18,11 @@ with mDNS host names/services and a vendor name derived from each host's MAC:
   where `mac` is set (populated by the ARP/portscan/SNMP enrichment path in
   `serverScan.c`, not by this repo's mDNS tools) but `vendor` is still NULL,
   and fills in `vendor` from a local OUI table. See its own section below.
+- **`nmap_enrich.py`** — active-recon intel gatherer. For `discovered` rows
+  with a private/routable IPv4 (prioritizing the bare-IPv4, no-other-data
+  rows) and no recent nmap pass, runs an authorized `nmap -sV -O` sweep plus
+  a quick HTTP header/title probe on common web ports, and fills in
+  `osGuess`, `openPorts`, and `banners`. See its own section below.
 
 Ops/infra glue — Python, not part of the C `solariServer`/`solariMonitor`
 core (accepted per `CLAUDE.md`, same convention as `deploy/sorsync/` and
@@ -117,7 +123,11 @@ without touching the C core:
    in the same hook, right alongside `solari-mdns-inspect.service`**
    (`systemctl start solari-oui-enrich.service`) — a scan freshly populates
    `discovered.mac` via ARP/portscan/SNMP, so this is the natural point to
-   also fill in `vendor` from it.
+   also fill in `vendor` from it. **`nmap_enrich.py` should run in the same
+   hook too** (`systemctl start solari-nmap-enrich.service`) — it's the
+   heaviest of the three (a real per-host `nmap -sV -O` sweep, rate-limited
+   by `--limit`), so it's fine for it to lag a scan by a few minutes; a scan
+   is exactly what turns up the bare-IPv4 rows this tool exists to flesh out.
 2. **Its own cadence.** Since `mdns_inspect.py --once` is cheap
    (`--timeout`-bounded, a handful of seconds) and idempotent, it's also fine
    to just enable a `systemd` timer (`solari-mdns-inspect.timer`, not
@@ -125,7 +135,10 @@ without touching the C core:
    minutes independent of when a portscan-style discovery sweep runs; either
    way it lands in the same `discovered` table a scan does, correlated by IP.
    `oui_enrich.py` is cheap the same way (a table lookup + one UPDATE per
-   unenriched row, no network I/O) and could share that timer.
+   unenriched row, no network I/O) and could share that timer. `nmap_enrich.py`
+   is heavier (real port scans + OS fingerprinting) — its own `--limit`/
+   `--cooldown-hours` are the rate limit, so give it a longer-period timer
+   (e.g. every 15-30 min) rather than sharing the sub-minute mDNS/OUI one.
 
 ## avahi_import.py — file importer
 
@@ -203,6 +216,72 @@ scan: the scan is what populates `discovered.mac` in the first place (via
 `serverScan.c`'s ARP/portscan/SNMP enrichment), so triggering both from the
 same post-scan hook keeps `vendor` current with `mac`.
 
+## nmap_enrich.py — active-recon (nmap) intel enricher
+
+**Authorized scanning notice:** this tool runs `nmap`/HTTP probes against
+Akoria, the operator's own homelab network. Active-recon here — port scan,
+OS fingerprint, service/banner grab — is normal network administration, not
+offensive tooling against a third party; it only ever targets private
+(RFC1918) IPv4 addresses (see `_is_private_ipv4()` in the script).
+
+For `discovered` rows with a routable private IPv4 and no recent nmap pass
+(`nmapEnrichedAt` NULL or past `--cooldown-hours`, default 24h), most-empty
+rows first, capped at `--limit` (default 25) per run, runs
+`nmap -sV -O --top-ports 200 -T4 --host-timeout 60s -oX -` against each,
+parses the XML for the best OS match, open ports (port/proto/service/
+product/version), and NSE script/version-detection banner text, then also
+does a quick HTTP HEAD/GET against any open 80/443/8080/3000 to capture the
+`Server:` header and page `<title>` (a stand-in for an issue/motd banner on
+web-managed gear). `UPDATE`s `osGuess`, `openPorts`, `banners`, and
+`nmapEnrichedAt`.
+
+Complements `oui_enrich.py`, doesn't duplicate it: `oui_enrich.py` fills
+`vendor` from `mac` via a local, offline OUI table (no network I/O) — this
+tool is the one that actually touches the wire.
+
+**Privilege:** `nmap -O`/`-sV` need raw-socket access (CAP_NET_RAW), so this
+runs as root or under `sudo` — `solari-nmap-enrich.service`'s `ExecStart`
+uses `sudo -E`. Without root, nmap degrades silently (connect-scan, no OS
+guess) rather than erroring, so the script itself does not enforce a
+privilege check.
+
+```
+python3 -m venv .venv && .venv/bin/pip install pymysql
+cp nmap_enrich.conf.example nmap_enrich.conf && $EDITOR nmap_enrich.conf
+chmod 600 nmap_enrich.conf
+
+# Preview only, no writes:
+source ../../run/db.env   # exports SOLARI_DB_PASS
+sudo .venv/bin/python3 nmap_enrich.py --dry-run
+
+# Apply (what the systemd oneshot unit runs), a small batch:
+sudo .venv/bin/python3 nmap_enrich.py --limit 10
+```
+
+Flags: `--dry-run` (report would-be updates without writing), `--conf PATH`
+(default `nmap_enrich.conf` next to the script, or `$NMAP_ENRICH_CONF`),
+`--limit N` (max hosts scanned this run, default 25), `--cooldown-hours H`
+(skip rows nmap-enriched more recently than this, default 24),
+`--host-timeout SECONDS` (nmap `--host-timeout` per host, default 60),
+`--top-ports N` (nmap `--top-ports`, default 200). DB creds come from
+`nmap_enrich.conf` (same `[db]` shape as `oui_enrich.conf`) or
+`$SOLARI_DB_PASS` — source `run/db.env` first, same convention as
+`deploy/discovery/oui_enrich.py`.
+
+Idempotent / fail-soft: one host timing out, refusing OS fingerprinting, or
+having no open ports never aborts the run — that host is logged and left
+alone (or just gets `nmapEnrichedAt` stamped so it isn't re-swept every run)
+while the rest proceed. `--limit` plus the cooldown gate make repeated runs
+a small, incremental crawl of the discovery table rather than a repeated
+bulk scan; the discovery scan's own ~/20 (4096-host) CIDR cap (`serverScan.c`
+`SCAN_MAX_HOSTS`) separately bounds how large `discovered` itself can get.
+
+`solari-nmap-enrich.service` is the matching systemd oneshot unit — same
+shape as `solari-oui-enrich.service` (sources `run/db.env`, `Type=oneshot`),
+but invoked via `sudo -E` for the CAP_NET_RAW nmap needs, and with a longer
+`TimeoutStartSec` since a real port-scan batch takes longer than a table
+lookup. See "Wiring into a discovery probe" above.
+
 ## Schema
 
 `db/migrations/013_mdns_services.sql` adds `discovered.mdnsServices
@@ -210,7 +289,10 @@ VARCHAR(512) NULL`, additive/idempotent, alongside the existing `mdnsName`
 (`009_mdns_name.sql`). `db/migrations/007_discovery_enrichment.sql` adds
 `discovered.mac VARCHAR(17)`, `vendor VARCHAR(64)`, `enrichedAt DATETIME`
 (among others) — `oui_enrich.py` only ever reads `mac` and writes
-`vendor`/`enrichedAt`. `db/schema.sql` is the baseline-only (migration 001)
+`vendor`/`enrichedAt`. `db/migrations/015_nmap_enrich.sql` adds
+`discovered.openPorts TEXT`, `osGuess VARCHAR(255)`, `banners TEXT`,
+`nmapEnrichedAt DATETIME`, additive/idempotent — `nmap_enrich.py` only ever
+writes those four columns. `db/schema.sql` is the baseline-only (migration 001)
 canonical schema and doesn't define `discovered` at all — that table (and
 every other migration since 002) already isn't mirrored there, so this
 migration follows the same, established precedent.

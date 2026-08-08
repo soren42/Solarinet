@@ -2,6 +2,7 @@
 avahi_import.conf
 mdns_inspect.conf
 oui_enrich.conf
+nmap_enrich.conf
 *.venv/
 .venv/
 __pycache__/

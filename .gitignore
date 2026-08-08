@@ -72,3 +72,16 @@ status-panel/firmware/test/panelLinkTest
 solari-auth.json.bak-*
 deploy/unifi/unifipolld.state.json
 deploy/alertbridge/alertbridge.state.json
+
+
+
+
+
+
+
+
+
+run/cursor.env
+run/unifi.env
+run/notify-apple.env
+run/vapid_private.pem

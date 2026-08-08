@@ -36,6 +36,8 @@ REGISTRY = {
     "sms": "senders.sms_tachyon",
     "push": "senders.push",
     "apple": "senders.apple",
+    "email": "senders.mail",   # file is mail.py — "email" would shadow the stdlib module
+    "webpush": "senders.webpush",
 }
 
 
