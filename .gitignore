@@ -67,3 +67,8 @@ __pycache__/
 status-panel/daemon/solariPanel
 status-panel/daemon/tests/codec_test
 status-panel/firmware/test/panelLinkTest
+
+# Secrets and runtime state — never commit (operator standard red line 2)
+solari-auth.json.bak-*
+deploy/unifi/unifipolld.state.json
+deploy/alertbridge/alertbridge.state.json
