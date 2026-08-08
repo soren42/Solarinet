@@ -112,5 +112,7 @@ void panelScreenC2(const PanelEnv *env, float t, float dt) {
   }
   for (int x = 0; x < PANEL_W; x++)
     panelFbSet(x, 0, cQuiet, (x % 4) == 0 ? 0.08f : 0.02f);
-  panelText(2, 9, "BY POOL", cAzure, 0.28f);
+  /* DOC1 review: a 5-row label at y=9 clipped to two broken rows on an
+   * 11-row panel. The pool rows themselves identify the screen; the label
+   * only ever rendered as noise. Removed. */
 }

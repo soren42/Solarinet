@@ -81,9 +81,12 @@ void panelScreenB1(const PanelEnv *env, float t, float dt) {
     panelFbSet(x0 + k, 2, on ? *col : cQuiet, on ? 0.18f : 0.03f);
   }
 
-  char line[24];
-  snprintf(line, sizeof(line), "%d%% LINK", (int)(util * 100.0f + 0.5f));
-  panelTextOver(x0, 4, line, util > 0.85f ? cWarn : cInk, 0.5f);
+  /* DOC1 review (two rounds): this screen has no room for a third text
+   * element. The y=4 "%d%% LINK" reading lost rows under the ticker; a
+   * title-row percent knocked out the bar's warn/crit cells via the
+   * panelTextOver halo (paint order). The standalone reading is DROPPED:
+   * the bar is the at-a-glance figure and the ticker's "LINK %d%%" is the
+   * authoritative absolute, per the manual's guidance. */
 
   /* Prototype ticker synthesised OUT as 0.6x and PEAK as 1.4x of a single
    * aggregate figure; the wire carries the real split, so IN/OUT are the real
@@ -94,7 +97,7 @@ void panelScreenB1(const PanelEnv *env, float t, float dt) {
   snprintf(ticker, sizeof(ticker),
            "IN %s/S" PANEL_SEP "OUT %s/S" PANEL_SEP "LINK %d%%" PANEL_TAIL,
            inLabel, outLabel, (int)(util * 100.0f + 0.5f));
-  panelScroll(t, 6, ticker, cInk, 0.45f, 11.0f);
+  panelScroll(t, 5, ticker, cInk, 0.45f, 11.0f);
 }
 
 /* ---- B2 · Load and latency ---------------------------------------------

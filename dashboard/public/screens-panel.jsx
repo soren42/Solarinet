@@ -901,13 +901,15 @@
       fbSet(x0 + k, 2, on ? col : cQuiet, on ? 0.18 : 0.03);
     }
 
-    panelTextOver(x0, 4, ri(util * 100) + "% LINK", util > 0.85 ? cWarn : cInk, 0.5);
+    /* DOC1 review parity (panelScreensB.c, two rounds): the standalone
+       percent is dropped — no third text element fits this screen; the bar
+       is the glance, the ticker the absolute figure. Ticker at y=5. */
 
     const inLabel = formatRate(env.rxGbps * 1000000);
     const outLabel = formatRate(env.txGbps * 1000000);
     const ticker = "IN " + inLabel + "/S" + PANEL_SEP + "OUT " + outLabel + "/S"
       + PANEL_SEP + "LINK " + ri(util * 100) + "%" + PANEL_TAIL;
-    panelScroll(t, 6, ticker, cInk, 0.45, 11.0);
+    panelScroll(t, 5, ticker, cInk, 0.45, 11.0);
   }
 
   /* B2 · Load and latency.
@@ -1042,7 +1044,7 @@
     }
     for (let x = 0; x < PW; x++)
       fbSet(x, 0, cQuiet, (x % 4) === 0 ? 0.08 : 0.02);
-    panelText(2, 9, "BY POOL", cAzure, 0.28);
+    /* DOC1 review parity: the y=9 label clipped to two rows; removed. */
   }
 
   // =====================================================================
@@ -1285,6 +1287,26 @@
     { id: "D1", theme: 3, screen: 1, title: "Pool bars", render: sD1 },
     { id: "D2", theme: 3, screen: 2, title: "Ambient field", render: sD2 },
   ];
+
+  /* SCREEN_BLURBS — one short operator description per screen, keyed by id.
+     Same source of truth as the screen renderers above and the panel manual
+     (docs/panel/SolariNet_Panel_Manual.html): what the regions mean, and any
+     deviation worth stating plainly. Rendered for the screen the wall is
+     showing right now, and as the hover text on every tile. */
+  const SCREEN_BLURBS = {
+    A0: "One LED per system across the whole matrix, filled row-major by tier then name, so core infrastructure occupies the first cells of row 0. Colour is the state and brightness is the tier; an unlit cell has no system behind it, not a fault. It answers how much is wrong, never what.",
+    A1: "The live Ubiquiti path drawn to scale by role — access points left, hubs staggered, switch, router, then the internet column and the backup WAN at the right edge. Leg brightness is the source device's receive level and the particles follow its transmit level. The internet column has no state of its own: it inherits the router's, so a healthy marker can never sit above a dead gateway.",
+    A2: "Four lanes of travelling packets, each with a three-cell backlog indicator at the left that goes amber under half and red over. No MQ or SNMP telemetry exists on the panel wire, so rather than animate a fiction the lanes are driven by the closest real signals: probe loss, host-data freshness, share of the fleet unknown, and share degraded.",
+    B0: "The headline counts in words. UP in green with its dim watermark numeral, then DOWN, the tier flag, and DEG/MNT below. A zero renders azure and dim while any real count takes its condition colour — hue is what distinguishes them, not the digits. TIER 0 in red means core infrastructure is down.",
+    B1: "Aggregate rate as a watermark numeral, a 24-cell utilisation bar coloured by position (azure to 70%, amber to 85%, red beyond), and a ticker spelling out IN, OUT and LINK. The bar is scaled against an adaptive peak the panel maintains, not a configured link speed, so read it as busy-relative-to-recent and take the ticker for absolute figures.",
+    B2: "Mean fleet load as the watermark, amber above 75%, with P95 latency and packet loss alternating on a five-second slot at the right rather than fighting for one row. The hot count at the bottom right prints its denominator — those systems come from the panel roster, a wider population than B0's agent-node counts.",
+    C0: "A 35-bucket histogram of where the fleet's load actually sits, left is idle and right is pinned, bar height being the share of systems in that bucket. Bucket colour comes from the bucket's own load band, so a bar standing in the amber or red zone means systems are genuinely there. The right third is a 15-sample throughput ribbon, ingress up and egress down.",
+    C1: "Three stacked 53-sample histories: throughput on top in azure, CPU in the middle in green, round-trip time at the bottom. Oldest sample at the left, now at the right edge, advancing one column per snapshot. All of it is the panel's own history and it is lost on reboot, so a partly filled trace is a recently restarted panel rather than a fleet that just came online.",
+    C2: "Up to seven pools, worst first, each with a one-pixel status key at the left edge and a 46-cell mean-load bar. The key is the pool's condition — down beats degraded beats unknown beats maintenance — and the bar is its capacity, so a pool can legitimately be slate-keyed with a red bar or red-keyed with a short one. Read the key first.",
+    D0: "A waterfall: eleven rows for the eleven worst-first systems, a new sample column every 0.42s scrolling right to left, about 22s of history across the width. Red is a lost probe, amber is slow, azure brightness carries the round-trip time. The rows are systems rather than named probe targets, so treat it as the shape of a fault over time and confirm identity elsewhere.",
+    D1: "The panel's resting face, and where it boots. Bar length is pool size against the largest pool; down, degraded, unknown and maintenance stack in from the right so the worst conditions always terminate the bar, and the healthy remainder shimmers. The ticker underneath is the only place outside an alarm where a specific alert gets named.",
+    D2: "A procedural field whose granularity grows with fleet size and whose hue is mean load — azure when quiet, warming toward amber past 35% and fully warm by 85%. Up to nine red sparks mark down systems. The centre readout cycles every five seconds through fleet size, mean load and aggregate rate, over a knockout box that keeps it legible without stopping the field.",
+  };
 
   /* paintScreen — the firmware's per-frame paint order (main.c): no-data
      treatment when the fleet is empty, else the active screen, then the inlay
@@ -1748,7 +1770,7 @@
               + (skipped ? " vp-tile--skipped" : "")}>
               <figcaption className="vp-tile__head">
                 <span className="vp-tile__id">{s.id}</span>
-                <span className="vp-tile__title">{s.title}</span>
+                <span className="vp-tile__title" title={SCREEN_BLURBS[s.id] || ""}>{s.title}</span>
                 <span className="vp-tile__theme">{THEMES[s.theme].name}</span>
                 {cfg && cfg.enabled && wl && wl !== "1×" && (
                   <span className="vp-tile__badge vp-tile__badge--wt" title="Dwell weight the panel reports">{wl}</span>
@@ -1872,6 +1894,10 @@
                 );
               })}
             </div>
+            <div className="vp-ctl__note">
+              Identical to pressing that theme&rsquo;s button on the unit: the panel jumps to the
+              theme&rsquo;s first screen that is still in rotation, and carries on from there.
+            </div>
           </div>
 
           <div className="vp-ctl">
@@ -1889,6 +1915,10 @@
                   </button>
                 );
               })}
+            </div>
+            <div className="vp-ctl__note">
+              A slot within the current theme. A screen taken out of rotation is still accepted here —
+              operator intent wins — and rotation resumes per the configuration at the next advance.
             </div>
           </div>
 
@@ -1930,6 +1960,12 @@
                     : state.alarmArmed ? "acknowledged (episode " + (state.ackedEpisodeId || 0) + ")"
                       : "not armed"}
               </span>
+            </div>
+            <div className="vp-ctl__note">
+              Acknowledging silences the tone and the beacon; it does not clear the alert, which stays
+              active in the pipeline. It is scoped to the episode the server composed, so a new episode
+              re-arms tone, inlay and beacon even if the previous one was acknowledged seconds earlier.
+              Any physical button on the unit does the same thing, by the same code path.
             </div>
           </div>
 
@@ -1973,6 +2009,11 @@
               <span className="vp-ctl__val">
                 {state ? (state.sleeping ? "asleep" : "awake") : "unknown"}
               </span>
+            </div>
+            <div className="vp-ctl__note">
+              Sleep blanks the matrix but not the firmware: snapshots keep arriving, history keeps
+              accumulating, and the alarm beacon is still painted. An arriving alarm wakes the panel once,
+              on the rising edge, and does not hold it awake. Other commands deliberately do not wake it.
             </div>
           </div>
 
@@ -2391,6 +2432,13 @@
         </div>
 
         {!env && !err && <div className="empty">Waiting for the first /api/panel sample…</div>}
+
+        {currentIdx >= 0 && SCREENS[currentIdx] && SCREEN_BLURBS[SCREENS[currentIdx].id] && (
+          <p className="vp-footnote">
+            <strong>On the wall now &mdash; {SCREENS[currentIdx].id} {SCREENS[currentIdx].title}.</strong>{" "}
+            {SCREEN_BLURBS[SCREENS[currentIdx].id]}
+          </p>
+        )}
 
         {env && (
           <VirtualPanel

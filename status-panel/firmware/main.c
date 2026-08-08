@@ -34,6 +34,8 @@
 
 #include "protocol.h"
 #include "panelCtl.h"
+#include "panelHelp.h"
+#include "panelHelpOverlay.h"
 #include "panelScreenCfg.h"
 #include "panelHw.h"
 #include "panelLink.h"
@@ -97,6 +99,7 @@ static PanelLink gLink;
 /* CONTROL dedupe + STATE cadence. See panelCtl.c; the ascending-cmdId rule and
  * the change/heartbeat decision live there so the host suite can drive them.  */
 static PanelCtl gCtl;
+static PanelHelp gHelp;
 static PanelScreenCfg gScreenCfg;
 static PanelScreenCfgFlash gScreenCfgFlash;
 
@@ -302,6 +305,8 @@ static void handlePress(PanelButton b) {
   if (gAlarmArmed) { ackAlarm(); return; }
   if (gSleeping) { gSleeping = false; return; }   /* any button wakes */
 
+  if (gHelp.active && b != PANEL_BTN_VOLUP) panelHelpDismiss(&gHelp);
+
   switch (b) {
     case PANEL_BTN_A: case PANEL_BTN_B:
     case PANEL_BTN_C: case PANEL_BTN_D:
@@ -316,7 +321,7 @@ static void handlePress(PanelButton b) {
       panelHwSetBrightness(panelHwGetBrightness() - BRIGHT_STEP);
       break;
     case PANEL_BTN_VOLUP:
-      panelHwSetVolume(panelHwGetVolume() + 0.1f);
+      (void)panelHelpToggle(&gHelp, gT, false);
       break;
     case PANEL_BTN_VOLDN:
       panelHwSetVolume(panelHwGetVolume() - 0.1f);
@@ -556,6 +561,7 @@ int main(void) {
   panelParserInit(&gParser);
   panelLinkInit(&gLink, nowMs());
   panelCtlInit(&gCtl, nowMs());
+  panelHelpInit(&gHelp);
 #ifdef SOLARI_PANEL_PICO_FLASH
   /* Review S3: flash_safe_execute_core_init() initialises the CALLING core
    * as a lockout VICTIM — it belongs on the core that is NOT flashing.
@@ -596,15 +602,18 @@ int main(void) {
 
     scanButtons();
     runAlarm();
+    panelHelpTick(&gHelp, gT, gAlarmArmed);
     runAutoBrightness();
 
-    if (!gLink.lost) gScreenT += dt;
-    if (gScreenT >= panelScreenCfgDwellSec(&gScreenCfg,
-                                            (uint8_t)(gTheme * 3 + gScreen),
-                                            gDwellSec)) {
-      gScreenT = 0.0f;
-      gScreen = (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)gTheme,
-                                        (uint8_t)gScreen);
+    if (!gHelp.active) {
+      if (!gLink.lost) gScreenT += dt;
+      if (gScreenT >= panelScreenCfgDwellSec(&gScreenCfg,
+                                              (uint8_t)(gTheme * 3 + gScreen),
+                                              gDwellSec)) {
+        gScreenT = 0.0f;
+        gScreen = (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)gTheme,
+                                          (uint8_t)gScreen);
+      }
     }
     if (panelScreenCfgSaveDue(&gScreenCfg, &gScreenCfgFlash, ms)) sendConfig();
 
@@ -622,7 +631,9 @@ int main(void) {
       continue;
     }
 
-    if (gLink.lost) {
+    if (gHelp.active) {
+      panelHelpOverlayDraw((unsigned)(gTheme * 3 + gScreen), gT);
+    } else if (gLink.lost) {
       /* Keep the last good picture underneath so the operator still sees the
        * fleet, then lay the link treatment over it. */
       kScreens[gTheme][gScreen](&gEnv, gT, dt);

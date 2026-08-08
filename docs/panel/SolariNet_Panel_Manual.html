@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet — Status Panel Operator Manual</title>
+<style>
+:root{
+  --unit:8px;
+  --font-display:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+html[data-mode="dark"]{
+  --color-bg:#070A0F; --color-surface:#0E151D; --color-raised:#16202C; --color-paper:#0E151D;
+  --color-text:#DFE8F2; --color-dim:#9DB0C4; --color-faint:#6E8399;
+  --color-divider:#22303F; --color-divider-strong:#31465C;
+  --color-accent:#22B8F0; --color-accent-700:#5FCCFA; --color-accent-deep:#0E86B8;
+  --color-ok:#3DD68C; --color-quiet:#4E6B7E; --color-warn:#F5A623; --color-crit:#FF4D5E;
+  --color-maint:#9B87FF; --color-unknown:#7C8AA0;
+  --color-on-field:#06090D; --color-neutral-700:#8299AF;
+  --desk:#03050A;
+}
+html[data-mode="light"]{
+  --color-bg:#FFFFFF; --color-surface:#F4F7FA; --color-raised:#EAEFF5; --color-paper:#FFFFFF;
+  --color-text:#0F1720; --color-dim:#47596C; --color-faint:#5C6E80;
+  --color-divider:#D3DCE6; --color-divider-strong:#B3C1D0;
+  --color-accent:#0A7FB0; --color-accent-700:#065C81; --color-accent-deep:#054B6B;
+  --color-ok:#0B7F53; --color-quiet:#5A6E80; --color-warn:#94590A; --color-crit:#C4172C;
+  --color-maint:#5B41C8; --color-unknown:#5A6B7D;
+  --color-on-field:#FFFFFF; --color-neutral-700:#54687C;
+  --desk:#B9C3CE;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--desk);color:var(--color-text);font-family:var(--font-body);-webkit-font-smoothing:antialiased}
+.chrome{position:fixed;top:12px;right:12px;z-index:99;display:flex;gap:6px;background:var(--color-surface);border:1px solid var(--color-divider);border-radius:8px;padding:6px}
+.chrome button{font:600 11px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-dim);background:var(--color-raised);border:1px solid var(--color-divider);border-radius:5px;padding:7px 10px;cursor:pointer}
+.chrome button:hover{color:var(--color-accent);border-color:var(--color-accent)}
+.stack{display:flex;flex-direction:column;align-items:center;gap:22px;padding:26px 12px 60px}
+.page{width:816px;height:1056px;padding:44px 60px 36px;background:var(--color-bg);color:var(--color-text);display:flex;flex-direction:column;gap:12px;position:relative;overflow:hidden;box-shadow:0 6px 26px rgba(0,0,0,.42)}
+.ph{display:flex;gap:14px;align-items:flex-start}
+.bar{width:4px;align-self:stretch;background:var(--color-accent);flex:0 0 4px;border-radius:2px}
+.eyebrow{font:700 12px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--color-accent-700)}
+h1.t{font:600 29px/1.12 var(--font-display);letter-spacing:-.015em;margin:5px 0 0}
+.sub{font:400 13px/1.45 var(--font-body);color:var(--color-dim);margin-top:5px;max-width:62ch}
+.rule{height:2px;background:var(--color-text);opacity:.9}
+.body{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0}
+h2{font:600 17px/1.2 var(--font-display);margin:0;letter-spacing:-.01em}
+h3{font:700 12px/1.1 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--color-faint);margin:0}
+p{font:400 13px/1.45 var(--font-body);margin:0;color:var(--color-text)}
+p.d{color:var(--color-dim)}
+.foot{margin-top:auto;border-top:1px solid var(--color-divider);padding-top:8px;display:flex;justify-content:space-between;font:400 12px/1 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--color-faint)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.card{border:1px solid var(--color-divider);border-radius:8px;background:var(--color-surface);padding:12px 13px}
+.card h4{font:600 13px/1.25 var(--font-display);margin:0 0 5px}
+.card p{font-size:12px;line-height:1.4;color:var(--color-dim)}
+.tbl{display:grid;width:100%;font-size:12px}
+.tbl .hd{font:700 12px/1.1 var(--font-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--color-faint);padding:7px 9px;border-bottom:2px solid var(--color-divider-strong)}
+.tbl .cl{padding:7px 9px;border-bottom:1px solid var(--color-divider);font:400 12px/1.35 var(--font-body);display:flex;align-items:center;gap:7px}
+.tbl.tight .cl{padding:4px 9px}
+.tbl.tight .hd{padding:5px 9px}
+.tbl .cl.m{font-family:var(--font-mono);font-size:12px;color:var(--color-dim)}
+.dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px;display:inline-block}
+.mono{font-family:var(--font-mono)}
+.hl{background:var(--color-raised);border-left:3px solid var(--color-accent);border-radius:0 6px 6px 0;padding:10px 12px}
+.hl.crit{border-left-color:var(--color-crit)}
+.hl.warn{border-left-color:var(--color-warn)}
+.spec .r{display:flex;justify-content:space-between;gap:10px;border-top:1px solid var(--color-divider);padding:5px 0;font:400 12px/1.3 var(--font-body)}
+.spec .r span:first-child{color:var(--color-faint);font-family:var(--font-mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase}
+.spec .r span:last-child{font-family:var(--font-mono);text-align:right;color:var(--color-text)}
+ul.cl2{margin:0;padding-left:16px}
+ul.cl2 li{font:400 12px/1.5 var(--font-body);color:var(--color-dim);margin-bottom:3px}
+ul.cl2 li b{color:var(--color-text);font-weight:600}
+
+/* ---- screen figure with numbered callouts -------------------------------
+   The pre-generated renders are 742x154 for a 53x11 matrix at a 14 px pitch,
+   so LED (x,y) occupies the box (14x, 14y, 14, 14) and its centre is
+   (7+14x, 7+14y). Every marker, leader and region outline below is placed on
+   those coordinates, not by eye. The overlay carries the SAME viewBox as the
+   image and inherits its box, so the two scale together. */
+.fig{margin:0;padding:34px 0 34px}
+.fig .frame{position:relative}
+.fig img{display:block;width:100%;height:auto;border-radius:6px;background:#05070b}
+.fig svg.cal{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.cal circle.mk{fill:var(--color-accent)}
+.cal text{font:700 13px var(--font-mono);fill:var(--color-on-field);text-anchor:middle;dominant-baseline:central}
+.cal line{stroke:var(--color-accent);stroke-width:1.5;opacity:.85}
+.cal rect.hi{fill:none;stroke:var(--color-accent);stroke-width:1.6;opacity:.9}
+.calist{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+.calist .ci{display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--color-divider);padding:5px 0}
+.calist .ci .n{flex:0 0 18px;height:18px;border-radius:50%;background:var(--color-accent);color:var(--color-on-field);
+  font:700 11px/18px var(--font-mono);text-align:center}
+.calist .ci .tx{font:400 12px/1.4 var(--font-body);color:var(--color-dim)}
+.calist .ci .tx b{color:var(--color-text);font-weight:600}
+.calist.one{grid-template-columns:1fr}
+.figcap{font:400 12px/1.4 var(--font-mono);color:var(--color-faint);margin-top:2px}
+@media print{
+  @page{size:letter;margin:0}
+  body{background:#fff}
+  .chrome{display:none}
+  .stack{padding:0;gap:0}
+  .page{box-shadow:none;break-after:page}
+}
+</style>
+</head>
+<body data-type-floor="12">
+
+<div class="chrome">
+  <button data-theme-toggle>Light</button>
+  <button onclick="window.print()">Print</button>
+</div>
+
+<div class="stack">
+
+<!-- ============ P01 COVER ============ -->
+<section class="page" data-label="P01 Cover" style="padding:0;gap:0">
+  <div style="height:352px;background:var(--color-surface);border-bottom:2px solid var(--color-accent);padding:44px 60px;display:flex;flex-direction:column">
+    <div class="eyebrow">Instrument documentation</div>
+    <div style="margin-top:auto;display:flex;align-items:flex-end;gap:20px">
+      <svg width="104" height="104" viewBox="0 0 24 24" aria-label="SolariNet mark">
+        <g fill="none" stroke="var(--color-accent)" stroke-width="1.1" opacity=".55">
+          <path d="M12 12V4M12 12l6.9 4M12 12L5.1 16"/>
+        </g>
+        <rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-accent)"/>
+        <g fill="var(--color-text)">
+          <rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/>
+          <rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/>
+          <rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/>
+        </g>
+      </svg>
+      <div>
+        <div style="font:300 50px/1 var(--font-display);letter-spacing:-.03em">Status&nbsp;<span style="font-weight:600">Panel</span></div>
+        <div style="font:400 14px/1.4 var(--font-mono);color:var(--color-dim);margin-top:10px;letter-spacing:.02em">Operator manual &middot; Galactic Unicorn 53&times;11</div>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1;padding:36px 60px 36px;display:flex;flex-direction:column">
+    <div style="font:600 19px/1.35 var(--font-display);max-width:48ch">Twelve screens, four buttons that matter, one alarm, and the rule for every colour on the wall.</div>
+    <p class="d" style="margin-top:14px;max-width:64ch">The panel is a monitoring instrument, not a decoration. It renders fleet state that xenon computed, over a link it does not control, on a matrix with 583 pixels and no room for a second reading of anything. This manual states what each region means, so that a glance from across the room is a measurement rather than an impression.</p>
+    <p class="d" style="margin-top:10px;max-width:64ch">Every layout, threshold and colour here was read out of the shipped firmware renderers and the build contracts. Where the firmware deviates from the design brief &mdash; and it does, in several places, for stated reasons &mdash; this manual documents the firmware, because the firmware is what is on the wall.</p>
+    <div style="margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      <div class="spec"><div class="r"><span>Version</span><span>1.0.0</span></div><div class="r"><span>Date</span><span>2026-08-08</span></div></div>
+      <div class="spec"><div class="r"><span>Hardware</span><span>Pimoroni GU / RP2350</span></div><div class="r"><span>Host</span><span>lithium (UNO Q)</span></div></div>
+      <div class="spec"><div class="r"><span>Format</span><span>Letter &middot; 816&times;1056</span></div><div class="r"><span>Themes</span><span>Dark &middot; Light</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ P02 CONTENTS ============ -->
+<section class="page" data-label="P02 Contents">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 00</div><h1 class="t">Contents</h1><div class="sub">Read sections 01&ndash;03 once. After that the manual is a lookup table: find the screen on the wall, read its page.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl tight" style="grid-template-columns:46px 1fr 1.35fr">
+      <div class="hd">&sect;</div><div class="hd">Section</div><div class="hd">What it settles</div>
+      <div class="cl m">01</div><div class="cl">The instrument</div><div class="cl" style="color:var(--color-dim)">What is computing what, and where a wrong reading comes from</div>
+      <div class="cl m">02</div><div class="cl">The physical panel</div><div class="cl" style="color:var(--color-dim)">Nine buttons, brightness, sleep, and the one that acknowledges</div>
+      <div class="cl m">03</div><div class="cl">Reading the matrix</div><div class="cl" style="color:var(--color-dim)">Colour vocabulary, the two populations, quiet&ndash;healthy</div>
+      <div class="cl m">04</div><div class="cl">A0 &middot; State lattice</div><div class="cl" style="color:var(--color-dim)">One LED per system, whole fleet, no glyphs</div>
+      <div class="cl m">05</div><div class="cl">A1 &middot; Flow gates</div><div class="cl" style="color:var(--color-dim)">The live Ubiquiti path and the internet-inherits-router rule</div>
+      <div class="cl m">06</div><div class="cl">A2 &middot; MQ and SNMP</div><div class="cl" style="color:var(--color-dim)">Four lanes, and what they actually carry</div>
+      <div class="cl m">07</div><div class="cl">B0 &middot; Condition counts</div><div class="cl" style="color:var(--color-dim)">UP / DOWN / DEG / MNT and the tier flag word</div>
+      <div class="cl m">08</div><div class="cl">B1 &middot; Throughput</div><div class="cl" style="color:var(--color-dim)">Utilisation bar, link percent, IN/OUT ticker</div>
+      <div class="cl m">09</div><div class="cl">B2 &middot; Load and latency</div><div class="cl" style="color:var(--color-dim)">Mean load, the alternating P95/LOSS reading, the &gt;85 count</div>
+      <div class="cl m">10</div><div class="cl">C0 &middot; Load distribution</div><div class="cl" style="color:var(--color-dim)">35-bucket histogram plus the throughput ribbon</div>
+      <div class="cl m">11</div><div class="cl">C1 &middot; Live traces</div><div class="cl" style="color:var(--color-dim)">Three stacked 53-sample histories</div>
+      <div class="cl m">12</div><div class="cl">C2 &middot; Pool load</div><div class="cl" style="color:var(--color-dim)">Seven pools worst-first with a status key column</div>
+      <div class="cl m">13</div><div class="cl">D0 &middot; Reachability</div><div class="cl" style="color:var(--color-dim)">The waterfall, one row per worst-first system</div>
+      <div class="cl m">14</div><div class="cl">D1 &middot; Pool bars</div><div class="cl" style="color:var(--color-dim)">Proportional stacked pools and the alert ticker</div>
+      <div class="cl m">15</div><div class="cl">D2 &middot; Ambient field</div><div class="cl" style="color:var(--color-dim)">The resting face, its sparks and its cycling readout</div>
+      <div class="cl m">16</div><div class="cl">Alarms</div><div class="cl" style="color:var(--color-dim)">Inlay, beacon, tone cadence, and what acknowledge does</div>
+      <div class="cl m">17</div><div class="cl">The control page</div><div class="cl" style="color:var(--color-dim)">Theme, screen, brightness, dwell, acknowledge, sleep</div>
+      <div class="cl m">18</div><div class="cl">Rotation &amp; weights</div><div class="cl" style="color:var(--color-dim)">Per-screen enable, &frac14;&times;&ndash;10&times;, and who confirms a setting</div>
+      <div class="cl m">19</div><div class="cl">The glance matrix</div><div class="cl" style="color:var(--color-dim)">The UNO Q's own 13&times;8 summary of the panel</div>
+      <div class="cl m">20</div><div class="cl">Troubleshooting</div><div class="cl" style="color:var(--color-dim)">LINK LOST, NO DATA, stale, and nothing on the wall</div>
+    </div>
+    <div class="hl"><p><b>A convention used throughout.</b> Screens are named <span class="mono">&lt;theme&gt;&lt;slot&gt;</span> &mdash; A0 is theme A, slot 0. Matrix coordinates are given as <span class="mono">x</span> (column, 0&ndash;52, left to right) and <span class="mono">y</span> (row, 0&ndash;10, top to bottom). "Row&nbsp;6" always means the seventh row down.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>02</span></div>
+</section>
+
+<!-- ============ P03 THE INSTRUMENT ============ -->
+<section class="page" data-label="P03 The instrument">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 01</div><h1 class="t">The instrument</h1><div class="sub">Three machines, one direction of travel. Knowing which link is which is how you tell a fleet fault from a panel fault without leaving the room.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="card" style="padding:16px">
+      <div style="display:grid;grid-template-columns:1fr 22px 1fr 22px 1fr;align-items:center;gap:0">
+        <div>
+          <div style="font:700 12px/1.1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-700)">xenon</div>
+          <p style="font-size:12px;line-height:1.4;color:var(--color-dim);margin-top:5px">Dashboard API. Computes the score, the alarm condition and the episode id. Serves <span class="mono">/api/panel</span>.</p>
+        </div>
+        <div style="text-align:center;color:var(--color-accent);font:700 15px var(--font-mono)">&rarr;</div>
+        <div>
+          <div style="font:700 12px/1.1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-700)">lithium</div>
+          <p style="font-size:12px;line-height:1.4;color:var(--color-dim);margin-top:5px">The <span class="mono">solariPanel</span> daemon. Polls every 5&nbsp;s, frames a snapshot to the panel every 2&nbsp;s over USB, relays commands.</p>
+        </div>
+        <div style="text-align:center;color:var(--color-accent);font:700 15px var(--font-mono)">&rarr;</div>
+        <div>
+          <div style="font:700 12px/1.1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-700)">the panel</div>
+          <p style="font-size:12px;line-height:1.4;color:var(--color-dim);margin-top:5px">RP2350 firmware. Animates at 25&nbsp;Hz from the last snapshot it received, keeps its own history, owns the alarm.</p>
+        </div>
+      </div>
+    </div>
+
+    <h2>What the panel decides for itself</h2>
+    <p class="d">The split matters, because it tells you where to look when a reading is wrong.</p>
+    <div class="g2">
+      <div class="card">
+        <h4>Computed on xenon, never on the panel</h4>
+        <ul class="cl2" style="margin-top:6px">
+          <li><b>Score</b> and <b>alarm condition</b>. The firmware never recomputes either; it renders what arrived.</li>
+          <li><b>Episode id</b> &mdash; the identity of an alarm episode, and therefore what an acknowledge is scoped to.</li>
+          <li><b>Counts, pools, per-system state</b>, throughput, RTT and loss aggregates.</li>
+          <li><b>Alert subject and detail</b>, already uppercased and truncated to the panel's charset.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Owned by the panel</h4>
+        <ul class="cl2" style="margin-top:6px">
+          <li><b>All history.</b> Ribbons, histograms and traces are accumulated from successive snapshots &mdash; history is never on the wire.</li>
+          <li><b>Rotation</b>: which screen is up, for how long, and which screens are skipped.</li>
+          <li><b>Brightness</b>, sleep, and the acknowledge state of the current episode.</li>
+          <li><b>The link verdict.</b> More than 15&nbsp;s with no valid frame is LINK&nbsp;LOST, and that is a panel fault.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Two populations, deliberately</h2>
+    <p class="d">The panel counts two different things and never pretends they are one. Reading a "3" next to a headline of "9" is not a contradiction.</p>
+    <div class="tbl tight" style="grid-template-columns:.75fr 1fr 1.5fr">
+      <div class="hd">Population</div><div class="hd">Where it appears</div><div class="hd">What it contains</div>
+      <div class="cl m">stateRoll</div><div class="cl">B0's UP/DOWN/DEG/MNT, D2's "<span class="mono">n</span>&nbsp;SYS"</div><div class="cl" style="color:var(--color-dim)">Agent nodes only &mdash; the same number the dashboard headline shows</div>
+      <div class="cl m">roster</div><div class="cl">A0's lattice, pools, C2/D1 bars, B2's <span class="mono">&gt;85</span> count</div><div class="cl" style="color:var(--color-dim)">Nodes <em>plus</em> adopted probe-only assets; pool aggregates are computed over the full fleet, even beyond the 64 systems the wire carries</div>
+    </div>
+
+    <div class="hl"><p><b>Staleness has two independent sources.</b> The endpoint marks data stale when the newest monitoring sample is more than 30&nbsp;s old; the daemon marks it stale when the payload it last fetched is more than 30&nbsp;s old. Either one is enough. A stale flag does not blank the panel and does not raise an alarm &mdash; the screens keep animating on the last good data, which is why the flag exists at all.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>03</span></div>
+</section>
+
+<!-- ============ P04 PHYSICAL PANEL ============ -->
+<section class="page" data-label="P04 The physical panel">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 02</div><h1 class="t">The physical panel</h1><div class="sub">Nine buttons. Four of them choose a theme, four adjust brightness and volume, one sleeps the display &mdash; except while an alarm is armed, when every one of them does the same thing.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl tight" style="grid-template-columns:.5fr .9fr 1.9fr">
+      <div class="hd">Button</div><div class="hd">Normal action</div><div class="hd">Detail</div>
+      <div class="cl m">A</div><div class="cl">Theme ABSTRACT</div><div class="cl" style="color:var(--color-dim)">Jumps to the theme's first <em>enabled</em> slot; rotation continues from there</div>
+      <div class="cl m">B</div><div class="cl">Theme TEXT</div><div class="cl" style="color:var(--color-dim)">As above</div>
+      <div class="cl m">C</div><div class="cl">Theme CHARTS</div><div class="cl" style="color:var(--color-dim)">As above</div>
+      <div class="cl m">D</div><div class="cl">Theme INSTRUMENTS</div><div class="cl" style="color:var(--color-dim)">As above. D1 is where the panel boots</div>
+      <div class="cl m">LUX +</div><div class="cl">Brightness +5%</div><div class="cl" style="color:var(--color-dim)">Latches <b>manual</b> &mdash; the light sensor stops driving brightness until AUTO is re-enabled from the control page</div>
+      <div class="cl m">LUX &minus;</div><div class="cl">Brightness &minus;5%</div><div class="cl" style="color:var(--color-dim)">Same latch. The driver floors at 25%, so the panel dims down but never out</div>
+      <div class="cl m">VOL +</div><div class="cl">Alarm tone louder</div><div class="cl" style="color:var(--color-dim)">Steps of 0.1. Affects the alarm triad only; the panel is otherwise silent</div>
+      <div class="cl m">VOL &minus;</div><div class="cl">Alarm tone quieter</div><div class="cl" style="color:var(--color-dim)">As above</div>
+      <div class="cl m">ZZZ</div><div class="cl">Sleep the display</div><div class="cl" style="color:var(--color-dim)">Blanks the matrix. Any button wakes it. An arriving alarm wakes it once, on the rising edge</div>
+    </div>
+
+    <div class="hl crit"><p><b>While an alarm is armed, every button is an acknowledge.</b> Press A expecting a theme change and you will silence the alarm instead &mdash; the press is <em>consumed</em>, and does not also change theme, step brightness or toggle sleep. This is deliberate: at 3 a.m. the operator's first instinct is to hit something, and the panel treats that as intent to acknowledge rather than as intent to reconfigure.</p></div>
+
+    <h2>Brightness</h2>
+    <div class="g2">
+      <div class="card">
+        <h4>Automatic</h4>
+        <p>The board's light sensor drives global brightness, smoothed, reaching full output at a raw reading of about 1600 &mdash; deliberately well below the sensor's ceiling, because the panel lives in direct daylight and that is the normal condition rather than the extreme.</p>
+      </div>
+      <div class="card">
+        <h4>Manual</h4>
+        <p>Either LUX button, or the control page's slider, latches a manual level and stops the sensor from moving it. Only the page's AUTO button re-enables the sensor. The 25% driver floor applies in both modes, which is what keeps the alarm beacon visible at any setting.</p>
+      </div>
+    </div>
+
+    <h2>Boot and sleep</h2>
+    <p class="d">The panel boots to <b>theme D, slot 1</b> &mdash; D1, Pool bars &mdash; the "resting face": a proportional read of every pool plus a scrolling alert ticker, which is the most information the matrix can hold without being read closely. Before the first snapshot arrives it shows <span class="mono">NO&nbsp;DATA</span> rather than a black board.</p>
+    <p class="d">Sleep blanks the framebuffer but does not stop the firmware. Snapshots keep arriving, history keeps accumulating, and the alarm beacon is still painted &mdash; a sleeping panel with a fault on it shows four flashing red pixels in the top-right corner and nothing else. That is the intended overnight behaviour, not a fault.</p>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>04</span></div>
+</section>
+
+<!-- ============ P05 READING THE MATRIX ============ -->
+<section class="page" data-label="P05 Reading the matrix">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 03</div><h1 class="t">Reading the matrix</h1><div class="sub">583 LEDs, six state colours, and one rule that makes the wall legible: a healthy fleet is supposed to look almost dark.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl tight" style="grid-template-columns:24px .7fr .8fr 1.7fr">
+      <div class="hd"></div><div class="hd">State</div><div class="hd">Treatment</div><div class="hd">Meaning on the panel</div>
+      <div class="cl"><span class="dot" style="background:var(--color-quiet)"></span></div><div class="cl">Operational</div><div class="cl m">slate, dim, still</div><div class="cl" style="color:var(--color-dim)">Reporting and in tolerance. Brightness carries tier and load, not health</div>
+      <div class="cl"><span class="dot" style="background:var(--color-warn)"></span></div><div class="cl">Degraded</div><div class="cl m">amber, slow pulse</div><div class="cl" style="color:var(--color-dim)">Reporting, one or more metrics over tolerance</div>
+      <div class="cl"><span class="dot" style="background:var(--color-crit)"></span></div><div class="cl">Down</div><div class="cl m">red, bright</div><div class="cl" style="color:var(--color-dim)">Unreachable. A tier-0 system pulses faster than the rest</div>
+      <div class="cl"><span class="dot" style="background:var(--color-maint)"></span></div><div class="cl">Maintenance</div><div class="cl m">violet, dashed</div><div class="cl" style="color:var(--color-dim)">Alerting suppressed by an operator. Reserved on the wire until the server grows the state</div>
+      <div class="cl"><span class="dot" style="background:var(--color-unknown)"></span></div><div class="cl">Unknown</div><div class="cl m">slate, dashed</div><div class="cl" style="color:var(--color-dim)">Enrolled but returning no telemetry. Dashed so it never reads as healthy</div>
+      <div class="cl"><span class="dot" style="background:var(--color-accent)"></span></div><div class="cl">Azure</div><div class="cl m">structure, labels</div><div class="cl" style="color:var(--color-dim)"><b>Not a condition.</b> Chrome, labels, zero counts, and traffic that is merely present</div>
+    </div>
+
+    <div class="hl"><p><b>Azure is never a status.</b> The house rule is that a hue reporting condition may not also decorate the interface, and the panel obeys it: green, amber, red, violet and slate say something about the fleet; azure says "this is structure, or this is a figure with nothing wrong with it". A zero DOWN count renders azure and dim precisely so that a non-zero one, in red, is the only thing your eye finds.</p></div>
+
+    <h2>Quiet&ndash;healthy</h2>
+    <p class="d">Nine systems in ten are fine at any moment. Painting the majority brightly is what hides the minority that is not, so the panel spends its brightness budget on faults. A wall that looks nearly dark is a wall reporting a healthy fleet &mdash; not a wall that has stopped working. Confirm the difference by watching for motion: every screen carries something that moves, and section&nbsp;20 lists what to check when nothing does.</p>
+
+    <h2>Three things brightness can mean</h2>
+    <div class="g3">
+      <div class="card"><h4>Tier</h4><p>On A0, a system's brightness is scaled by its tier &mdash; tier&nbsp;0 at full, then 0.62, 0.4 and 0.26. The core is literally brighter than the periphery.</p></div>
+      <div class="card"><h4>Magnitude</h4><p>On bars, ribbons and traces the brightest pixel is the tip &mdash; the current value. The body of the bar is dim so a row of bars reads as a profile.</p></div>
+      <div class="card"><h4>Watermark</h4><p>The big 4&times;7 numerals on theme&nbsp;B are drawn at 30% in slate. They are a background figure to be read at distance, with the small labels painted on top of them.</p></div>
+    </div>
+
+    <div class="hl warn"><p><b>Text on the matrix is 3&times;5 pixels.</b> A label drawn at row&nbsp;<span class="mono">y</span> occupies rows <span class="mono">y</span> through <span class="mono">y+4</span>; a big numeral at row <span class="mono">y</span> occupies <span class="mono">y</span> through <span class="mono">y+6</span>. Two consequences follow, and they are why the screens look sparser than they might: a label can start no lower than row&nbsp;6 without falling off the bottom, and no more than two text elements fit in eleven rows. Screens that tried for three have been cut back to two &mdash; the figure you lose was always redundant with one you keep.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>05</span></div>
+</section>
+
+<!-- ============ P06 A0 ============ -->
+<section class="page" data-label="P06 A0 State lattice">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 04 &middot; Theme A &middot; Abstract</div><h1 class="t">A0 &middot; State lattice</h1><div class="sub">The whole roster at once, one LED per system, no glyphs and no labels. The screen you use to see <em>how much</em> is wrong, not <em>what</em>.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/a0-normal.svg" alt="Screen A0, state lattice, normal fleet: a short run of dim slate cells along the top row and the rest of the matrix unlit.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="0" width="196" height="14" rx="3"/>
+          <line x1="98" y1="-4" x2="98" y2="0"/><circle class="mk" cx="98" cy="-18" r="11"/><text x="98" y="-18">1</text>
+          <rect class="hi" x="140" y="0" width="70" height="14" rx="3"/>
+          <line x1="175" y1="18" x2="175" y2="158"/><circle class="mk" cx="175" cy="172" r="11"/><text x="175" y="172">2</text>
+          <rect class="hi" x="210" y="0" width="532" height="14" rx="3"/>
+          <line x1="476" y1="-4" x2="476" y2="0"/><circle class="mk" cx="476" cy="-18" r="11"/><text x="476" y="-18">3</text>
+          <rect class="hi" x="0" y="14" width="742" height="140" rx="3"/>
+          <line x1="371" y1="158" x2="371" y2="164"/><circle class="mk" cx="371" cy="176" r="11"/><text x="371" y="176">4</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>One LED, one system.</b> Slots fill row-major from the top-left &mdash; ordered by tier, then by name &mdash; so the core infrastructure always occupies the first cells of row&nbsp;0.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>A gap is not a fault.</b> Cells with no system behind them stay unlit. On a fleet of fifteen, fourteen rows are legitimately black.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Colour is the state, brightness is the tier.</b> Slate for operational, amber pulsing for degraded, red for down, violet dashed for maintenance, slate dashed for unknown &mdash; each scaled by tier heat, tier&nbsp;0 brightest.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>The whole grid is the canvas.</b> At 583 slots the lattice holds a fleet far larger than this one; it degrades to a short bright run at small fleet sizes, which is what a healthy akoria looks like.</span></div>
+    </div>
+
+    <h2>Reading it</h2>
+    <div class="g2">
+      <div class="card"><h4>What is normal</h4><p>A short run of dim, almost-still cells at the top-left and nothing else lit. Individual cells drift in brightness by a percent or two &mdash; that flicker is the proof the screen is live.</p></div>
+      <div class="card"><h4>What to act on</h4><p>Any red, and especially any <em>fast-pulsing</em> red &mdash; that is a tier-0 system down. A cell dashing in slate is reporting nothing at all, which on a monitored host is a fault even though it is not red.</p></div>
+    </div>
+    <div class="hl"><p><b>A0 does not name anything.</b> It answers "how big is this" in under a second and then sends you to the dashboard. Use B0 for counts and C2 or D1 for which pool.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>06</span></div>
+</section>
+
+<!-- ============ P07 A1 ============ -->
+<section class="page" data-label="P07 A1 Flow gates">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 05 &middot; Theme A &middot; Abstract</div><h1 class="t">A1 &middot; Flow gates</h1><div class="sub">The live Ubiquiti path, drawn to scale by role: access points on the left, the internet on the right, traffic flowing between them as particles.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/a1-normal.svg" alt="Screen A1, flow gates, normal: three short access-point gates on the left, three staggered hub gates, a switch gate, a full-height router gate, and two marker columns at the right edge, with faint diagonal legs and travelling particles between them.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="28" y="0" width="14" height="42" rx="3"/>
+          <rect class="hi" x="126" y="56" width="14" height="42" rx="3"/>
+          <rect class="hi" x="224" y="112" width="14" height="42" rx="3"/>
+          <line x1="35" y1="-4" x2="35" y2="0"/><circle class="mk" cx="35" cy="-18" r="11"/><text x="35" y="-18">1</text>
+          <rect class="hi" x="280" y="0" width="14" height="84" rx="3"/>
+          <rect class="hi" x="378" y="70" width="14" height="70" rx="3"/>
+          <rect class="hi" x="476" y="0" width="14" height="84" rx="3"/>
+          <line x1="287" y1="-4" x2="287" y2="0"/><circle class="mk" cx="287" cy="-18" r="11"/><text x="287" y="-18">2</text>
+          <rect class="hi" x="574" y="14" width="14" height="112" rx="3"/>
+          <line x1="581" y1="-4" x2="581" y2="0"/><circle class="mk" cx="581" cy="-18" r="11"/><text x="581" y="-18">3</text>
+          <rect class="hi" x="658" y="0" width="14" height="154" rx="3"/>
+          <line x1="665" y1="158" x2="665" y2="164"/><circle class="mk" cx="665" cy="176" r="11"/><text x="665" y="176">4</text>
+          <rect class="hi" x="714" y="0" width="14" height="154" rx="3"/>
+          <line x1="721" y1="-4" x2="721" y2="0"/><circle class="mk" cx="721" cy="-18" r="11"/><text x="721" y="-18">5</text>
+          <rect class="hi" x="728" y="42" width="14" height="70" rx="3"/>
+          <line x1="735" y1="158" x2="735" y2="164"/><circle class="mk" cx="735" cy="176" r="11"/><text x="735" y="176">6</text>
+          <line x1="420" y1="80" x2="420" y2="164"/><circle class="mk" cx="420" cy="176" r="11"/><text x="420" y="176">7</text>
+          <line x1="105" y1="30" x2="105" y2="-4"/><circle class="mk" cx="105" cy="-18" r="11"/><text x="105" y="-18">8</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>Access points</b> &mdash; 3 rows tall, spread across columns 2&ndash;16 and down the height of the panel. Two U7&nbsp;Pro plus the U7&nbsp;Pro&nbsp;XGS today.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>Hubs</b> &mdash; 5&ndash;6 rows, columns 20/27/34, <em>staggered</em> top-bottom-top so three of them read as three rather than as a wall.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Switch</b> &mdash; 8 rows at column 41, inset one row top and bottom. Three quarters of the panel height, by role.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>Router</b> &mdash; full 11 rows at column 47. The gateway is the only object drawn edge to edge.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>Internet</b> &mdash; column 51, full height. It has <em>no state of its own</em>: see the rule below.</span></div>
+      <div class="ci"><span class="n">6</span><span class="tx"><b>Backup WAN</b> &mdash; column 52, dimmer and shorter. It keeps its own device state, so during a gateway outage it visibly becomes the only live path.</span></div>
+      <div class="ci"><span class="n">7</span><span class="tx"><b>Legs</b> &mdash; the faint diagonal traces between gates. Their brightness is the source device's <em>receive</em> level.</span></div>
+      <div class="ci"><span class="n">8</span><span class="tx"><b>Particles</b> &mdash; travelling left to right along a leg. Spawn rate and brightness follow the source's <em>transmit</em> level; a device at level&nbsp;0 emits none at all.</span></div>
+    </div>
+
+    <div class="hl"><p><b>The internet column inherits the router's state.</b> The internet is only reachable <em>through</em> the gateway, so when the router gate is degraded or down, column&nbsp;51 renders in the router's treatment &mdash; never a healthy full-height marker over a dead gateway. If no router appears in the payload at all, the column fails dark. The backup WAN beside it is the exception, and that contrast is the story the screen exists to tell.</p></div>
+    <div class="hl warn"><p><b>A down gate is drawn broken.</b> Colour alone does not carry the distinction: a gate in the down state is painted with every other pixel skipped, so it reads as a discontinuity from across the room. Up is azure, degraded is amber, down is red and broken. With no gear data in the snapshot the screen shows <span class="mono">NO&nbsp;DATA</span> rather than an invented topology.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>07</span></div>
+</section>
+
+<!-- ============ P08 A2 ============ -->
+<section class="page" data-label="P08 A2 MQ and SNMP">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 06 &middot; Theme A &middot; Abstract</div><h1 class="t">A2 &middot; MQ and SNMP</h1><div class="sub">Four lanes of moving packets with a backlog indicator on each. Read the name as a shape, not as a promise &mdash; what the lanes carry is listed below.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/a2-normal.svg" alt="Screen A2: four horizontal lanes of travelling packets on rows 1, 3, 6 and 8, a faint dotted centre line on row 5, and two dim markers at the bottom left.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="14" width="42" height="14" rx="3"/>
+          <line x1="21" y1="-4" x2="21" y2="14"/><circle class="mk" cx="21" cy="-18" r="11"/><text x="21" y="-18">1</text>
+          <rect class="hi" x="56" y="14" width="686" height="14" rx="3"/>
+          <line x1="399" y1="-4" x2="399" y2="14"/><circle class="mk" cx="399" cy="-18" r="11"/><text x="399" y="-18">2</text>
+          <rect class="hi" x="0" y="42" width="742" height="14" rx="3"/>
+          <line x1="196" y1="56" x2="196" y2="164"/><circle class="mk" cx="196" cy="176" r="11"/><text x="196" y="176">3</text>
+          <rect class="hi" x="0" y="70" width="742" height="14" rx="3"/>
+          <line x1="595" y1="84" x2="595" y2="164"/><circle class="mk" cx="595" cy="176" r="11"/><text x="595" y="176">4</text>
+          <rect class="hi" x="0" y="84" width="742" height="28" rx="3"/>
+          <line x1="105" y1="112" x2="105" y2="164"/><circle class="mk" cx="105" cy="176" r="11"/><text x="105" y="176">5</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>Backlog</b> &mdash; three cells at columns 0&ndash;2 per lane. Cells light from the left in proportion to the lane's figure: amber below half, <b>red above half</b>.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>Trunk and packets</b> &mdash; a dim quiet line from column 4 with five packets travelling it. Packet rate is fixed per lane; it is a liveness animation, not a rate reading.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Row 5</b> &mdash; the dotted divider between the two azure lanes above and the two green lanes below. Structure only.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>Packets turn amber</b> when their lane's backlog passes half, so a loaded lane is legible from the flow as well as from its indicator.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>Two azure markers</b> at the bottom-left corner. Fixed decoration carried over from the design mockup; they carry no reading.</span></div>
+    </div>
+
+    <div class="hl warn"><p><b>The lanes are not MQ and SNMP.</b> No MQ or SNMP telemetry exists anywhere on the panel's wire protocol. Rather than animate a fiction, the shipped firmware drives the four lanes from the closest real signals the wire does carry. The geometry, rates, colours and thresholds are the original design's; only the inputs are substituted.</p></div>
+    <div class="tbl tight" style="grid-template-columns:.4fr .7fr 1fr 1.4fr">
+      <div class="hd">Lane</div><div class="hd">Row</div><div class="hd">Labelled</div><div class="hd">Actually driven by</div>
+      <div class="cl m">0</div><div class="cl m">1</div><div class="cl">MQ in</div><div class="cl" style="color:var(--color-dim)">Aggregate probe loss</div>
+      <div class="cl m">1</div><div class="cl m">3</div><div class="cl">MQ out</div><div class="cl" style="color:var(--color-dim)">Host-data freshness &mdash; the stale flag, near-empty or near-full</div>
+      <div class="cl m">2</div><div class="cl m">6</div><div class="cl">SNMP poll</div><div class="cl" style="color:var(--color-dim)">Share of the fleet in <b>unknown</b> &mdash; enrolled, returning nothing</div>
+      <div class="cl m">3</div><div class="cl m">8</div><div class="cl">SNMP trap</div><div class="cl" style="color:var(--color-dim)">Share of the fleet <b>degraded</b></div>
+    </div>
+    <div class="hl"><p><b>How to use it.</b> Lane&nbsp;0 backlog in red means probes are losing packets; lane&nbsp;1 red means monitoring data has gone stale; lanes&nbsp;2 and&nbsp;3 red mean a large fraction of the fleet is unknown or degraded. All four clear is the normal condition, and normal looks like four dark indicator blocks with packets sliding past.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>08</span></div>
+</section>
+
+<!-- ============ P09 B0 ============ -->
+<section class="page" data-label="P09 B0 Condition counts">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 07 &middot; Theme B &middot; Text</div><h1 class="t">B0 &middot; Condition counts</h1><div class="sub">The headline numbers, in words. The one screen that answers "how many, of what" without interpretation.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/b0-normal.svg" alt="Screen B0: the word UP in green at the top left over a dim watermark numeral, then 0 DOWN and OK across the top row, and 0 DEG 0 MNT on the lower row.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="14" y="0" width="98" height="70" rx="3"/>
+          <line x1="63" y1="-4" x2="63" y2="0"/><circle class="mk" cx="63" cy="-18" r="11"/><text x="63" y="-18">1</text>
+          <rect class="hi" x="14" y="28" width="140" height="98" rx="3"/>
+          <line x1="84" y1="130" x2="84" y2="164"/><circle class="mk" cx="84" cy="176" r="11"/><text x="84" y="176">2</text>
+          <rect class="hi" x="308" y="0" width="182" height="70" rx="3"/>
+          <line x1="399" y1="-4" x2="399" y2="0"/><circle class="mk" cx="399" cy="-18" r="11"/><text x="399" y="-18">3</text>
+          <rect class="hi" x="644" y="0" width="98" height="70" rx="3"/>
+          <line x1="693" y1="-4" x2="693" y2="0"/><circle class="mk" cx="693" cy="-18" r="11"/><text x="693" y="-18">4</text>
+          <rect class="hi" x="308" y="84" width="434" height="70" rx="3"/>
+          <line x1="525" y1="158" x2="525" y2="164"/><circle class="mk" cx="525" cy="176" r="11"/><text x="525" y="176">5</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>UP</b>, in green, at the top-left. The count of agent nodes reporting healthy &mdash; the same population as the dashboard headline.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>The watermark numeral.</b> The UP count is also drawn as a large 4&times;7 figure in dim slate underneath the label. It is faint by design; read it at distance, not up close.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>DOWN.</b> A zero renders azure and very dim; any non-zero count renders <b>red and bright</b>. The hue is what distinguishes them, not the digits.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>The tier flag word.</b> <span class="mono">OK</span> when nothing is down; <span class="mono">TIER&nbsp;3</span> when something is down but no tier-0 pool is affected; <span class="mono">TIER&nbsp;0</span> in red when it is.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>DEG and MNT</b> on the lower row &mdash; degraded and maintenance counts, in amber and violet respectively when non-zero, azure and dim at zero.</span></div>
+    </div>
+
+    <h2>Reading it</h2>
+    <div class="g2">
+      <div class="card"><h4>What is normal</h4><p>A green <span class="mono">UP</span> with its watermark, and three azure zeroes. If every figure on the screen is azure, nothing is wrong with the fleet.</p></div>
+      <div class="card"><h4>What to act on</h4><p><span class="mono">TIER&nbsp;0</span> in red is the panel's strongest single statement: core infrastructure is down. It is derived from the server-side pool aggregates over the full fleet, so it cannot be missed by the 64-system wire cap.</p></div>
+    </div>
+    <div class="hl"><p><b>The tier flag reads pools, not systems.</b> That is deliberate: the systems array on the wire is capped, and the flag exists precisely to announce the host that a cap might have hidden.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>09</span></div>
+</section>
+
+<!-- ============ P10 B1 ============ -->
+<section class="page" data-label="P10 B1 Throughput">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 08 &middot; Theme B &middot; Text</div><h1 class="t">B1 &middot; Throughput</h1><div class="sub">Aggregate rate as a watermark, link utilisation as a 24-cell bar, and a ticker carrying the real ingress/egress split.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/b1-normal.svg" alt="Screen B1: the word AGGREGATE across the top left, a two-row utilisation bar to its right ending in amber cells, and a scrolling ticker filling the lower half.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="14" y="0" width="336" height="70" rx="3"/>
+          <line x1="182" y1="-4" x2="182" y2="0"/><circle class="mk" cx="182" cy="-18" r="11"/><text x="182" y="-18">1</text>
+          <rect class="hi" x="364" y="14" width="336" height="14" rx="3"/>
+          <line x1="532" y1="-4" x2="532" y2="14"/><circle class="mk" cx="532" cy="-18" r="11"/><text x="532" y="-18">2</text>
+          <rect class="hi" x="364" y="28" width="336" height="14" rx="3"/>
+          <line x1="672" y1="42" x2="672" y2="164"/><circle class="mk" cx="672" cy="176" r="11"/><text x="672" y="176">3</text>
+          <rect class="hi" x="0" y="70" width="742" height="70" rx="3"/>
+          <line x1="140" y1="144" x2="140" y2="164"/><circle class="mk" cx="140" cy="176" r="11"/><text x="140" y="176">4</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>AGGREGATE</b> with the current combined rate as a dim watermark numeral beneath it &mdash; the same figure the ticker spells out.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>The utilisation bar</b> &mdash; 24 cells, filled left to right by ingress plus egress against the adaptive peak. Cell colour is by <em>position</em>: azure below 70%, amber 70&ndash;85%, red above.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>The echo row</b> beneath it repeats the bar at a third of the brightness, giving the bar visual weight without doubling its ink.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>The ticker</b>, occupying rows 5&ndash;9 and scrolling right to left at 11&nbsp;px/s: <span class="mono">IN &hellip;/S</span>, <span class="mono">OUT &hellip;/S</span>, <span class="mono">LINK n%</span>. IN and OUT are the real directions from the wire, not a synthesised split.</span></div>
+    </div>
+
+    <div class="hl warn"><p><b>The peak is adaptive.</b> The bar is scaled against a running peak the firmware maintains and decays, not against a configured link speed. A quiet period therefore <em>raises</em> the apparent utilisation of the next burst. Read the bar as "busy relative to recent history"; read the ticker for absolute figures.</p></div>
+    <div class="hl"><p><b>Two readings, at two distances.</b> The <b>bar</b> is the at-a-glance figure &mdash; you read its length and the colour it has reached from across the room, without reading anything. The <b>ticker</b> is the authoritative one, and the only place the absolute rates appear: it carries <span class="mono">LINK n%</span> alongside the IN and OUT figures that percentage was derived from. There is deliberately no third element. The screen has eleven rows, a five-row label and a five-row ticker already claim ten of them, and every attempt to fit a standalone percent has cost more than it added.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>10</span></div>
+</section>
+
+<!-- ============ P11 B2 ============ -->
+<section class="page" data-label="P11 B2 Load and latency">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 09 &middot; Theme B &middot; Text</div><h1 class="t">B2 &middot; Load and latency</h1><div class="sub">Mean fleet load as the headline, with latency and loss alternating on a five-second slot rather than fighting for the same row.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/b2-normal.svg" alt="Screen B2: the word LOAD at the top left, a reading right-aligned on the top row, a dim watermark percentage below, and an amber count at the lower right.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="14" y="0" width="70" height="70" rx="3"/>
+          <line x1="49" y1="-4" x2="49" y2="0"/><circle class="mk" cx="49" cy="-18" r="11"/><text x="49" y="-18">1</text>
+          <rect class="hi" x="14" y="28" width="238" height="98" rx="3"/>
+          <line x1="133" y1="130" x2="133" y2="164"/><circle class="mk" cx="133" cy="176" r="11"/><text x="133" y="176">2</text>
+          <rect class="hi" x="294" y="0" width="448" height="70" rx="3"/>
+          <line x1="518" y1="-4" x2="518" y2="0"/><circle class="mk" cx="518" cy="-18" r="11"/><text x="518" y="-18">3</text>
+          <rect class="hi" x="350" y="84" width="392" height="70" rx="3"/>
+          <line x1="546" y1="158" x2="546" y2="164"/><circle class="mk" cx="546" cy="176" r="11"/><text x="546" y="176">4</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>LOAD</b> &mdash; the label. It contracts from "MEAN LOAD" because a percent numeral sits directly beneath it and "MEAN" was carrying no information the panel could not spare.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>Mean fleet load</b> as the watermark numeral, in slate &mdash; and in <b>amber above 75%</b>, which is the only colour change this figure makes.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>The alternating reading</b>, right-aligned to the panel edge, swapping every 5&nbsp;s: <span class="mono">P95 n MS</span> (amber above 35&nbsp;ms) and <span class="mono">LOSS n%</span> (red above 1%). Both labels stay intact rather than being abbreviated to symbols.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>The hot count</b> &mdash; <span class="mono">hot/total&gt;85</span>: how many systems are running over 85% load, out of how many are on the wire. Amber when non-zero.</span></div>
+    </div>
+
+    <div class="hl"><p><b>The denominator is printed for a reason.</b> The hot count is taken over the panel <em>roster</em> &mdash; the systems the wire carries, capped at 64 and including adopted probe-only assets &mdash; while B0's UP/DOWN are agent-node counts. Printing "3/15" instead of "3" makes it self-evident that this is a different population, so it can never be misread as impossible next to a headline of 9.</p></div>
+
+    <h2>Reading it</h2>
+    <div class="g2">
+      <div class="card"><h4>What is normal</h4><p>A slate percentage, a white P95 alternating with a white LOSS, and an azure hot count. Watch one full alternation before concluding anything &mdash; half the reading is off-screen at any instant.</p></div>
+      <div class="card"><h4>What to act on</h4><p>Red <span class="mono">LOSS</span> is packet loss on the probes and warrants attention before load does. An amber mean load with an azure hot count means the fleet is evenly busy; an azure mean with an amber hot count means a few hosts are pinned.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>11</span></div>
+</section>
+
+<!-- ============ P12 C0 ============ -->
+<section class="page" data-label="P12 C0 Load distribution">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 10 &middot; Theme C &middot; Charts</div><h1 class="t">C0 &middot; Load distribution</h1><div class="sub">Where the fleet's CPU load actually sits, as a 35-bucket histogram, with a short throughput ribbon in the remaining space.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/c0-normal.svg" alt="Screen C0: a histogram of short bars across the left two thirds with one amber and one red bar near its right end, a dashed vertical divider, and a throughput ribbon on the right.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="14" width="378" height="98" rx="3"/>
+          <line x1="189" y1="-4" x2="189" y2="14"/><circle class="mk" cx="189" cy="-18" r="11"/><text x="189" y="-18">1</text>
+          <rect class="hi" x="378" y="14" width="98" height="98" rx="3"/>
+          <line x1="427" y1="-4" x2="427" y2="14"/><circle class="mk" cx="427" cy="-18" r="11"/><text x="427" y="-18">2</text>
+          <rect class="hi" x="0" y="112" width="490" height="14" rx="3"/>
+          <line x1="245" y1="126" x2="245" y2="164"/><circle class="mk" cx="245" cy="176" r="11"/><text x="245" y="176">3</text>
+          <rect class="hi" x="504" y="0" width="14" height="154" rx="3"/>
+          <line x1="511" y1="158" x2="511" y2="164"/><circle class="mk" cx="511" cy="176" r="11"/><text x="511" y="176">4</text>
+          <rect class="hi" x="532" y="0" width="210" height="70" rx="3"/>
+          <line x1="637" y1="-4" x2="637" y2="0"/><circle class="mk" cx="637" cy="-18" r="11"/><text x="637" y="-18">5</text>
+          <rect class="hi" x="532" y="84" width="210" height="70" rx="3"/>
+          <line x1="637" y1="158" x2="637" y2="164"/><circle class="mk" cx="637" cy="176" r="11"/><text x="637" y="176">6</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>The histogram</b> &mdash; 35 buckets across columns 0&ndash;34, left is 0% load and right is 100%. Bar height is the <em>share</em> of the fleet in that bucket, rising from row&nbsp;7, with a brighter tip pixel.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>The hot end.</b> Bucket colour is fixed by the bucket's own load band, not by its height: slate below 75%, <b>amber 75&ndash;90%</b>, <b>red above 90%</b>. A bar in the red zone means systems are actually there.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>The axis</b> &mdash; a faint tick every seventh column, i.e. every 20% of load. It is the only scale the screen gives you.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>The divider</b> at column 36, dashed, separating the histogram from the ribbon. Structure only.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>Ingress ribbon</b> &mdash; the 15 newest throughput samples, oldest at the left, growing <em>upward</em> from row&nbsp;4. Amber when a sample is above 85% of the adaptive peak.</span></div>
+      <div class="ci"><span class="n">6</span><span class="tx"><b>Egress ribbon</b> &mdash; the same 15 samples growing <em>downward</em> from row&nbsp;6. Always azure; direction is what distinguishes it.</span></div>
+    </div>
+
+    <h2>Reading it</h2>
+    <div class="g2">
+      <div class="card"><h4>What is normal</h4><p>A dense clump of short slate bars at the left of the histogram and nothing in the amber or red bands. The ribbon breathes as traffic moves.</p></div>
+      <div class="card"><h4>What to act on</h4><p>Any bar standing in the red band. C0 tells you the shape of the load &mdash; a broad clump is an evenly busy fleet, a spike at the right is a small number of pinned hosts. B2's hot count gives you how many; C2 and D1 give you which pool.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>12</span></div>
+</section>
+
+<!-- ============ P13 C1 ============ -->
+<section class="page" data-label="P13 C1 Live traces">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 11 &middot; Theme C &middot; Charts</div><h1 class="t">C1 &middot; Live traces</h1><div class="sub">Three stacked histories across the full width of the matrix. The only screen that shows you a trend rather than a moment.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/c1-normal.svg" alt="Screen C1: three horizontal bands of low bars across the full width, azure at the top, green in the middle and azure at the bottom, separated by faint dotted rows.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="0" width="742" height="42" rx="3"/>
+          <line x1="98" y1="-4" x2="98" y2="0"/><circle class="mk" cx="98" cy="-18" r="11"/><text x="98" y="-18">1</text>
+          <rect class="hi" x="0" y="56" width="742" height="42" rx="3"/>
+          <line x1="98" y1="98" x2="98" y2="164"/><circle class="mk" cx="98" cy="176" r="11"/><text x="98" y="176">2</text>
+          <rect class="hi" x="0" y="112" width="742" height="42" rx="3"/>
+          <line x1="322" y1="158" x2="322" y2="164"/><circle class="mk" cx="322" cy="176" r="11"/><text x="322" y="176">3</text>
+          <rect class="hi" x="0" y="42" width="742" height="14" rx="3"/>
+          <line x1="602" y1="-4" x2="602" y2="42"/><circle class="mk" cx="602" cy="-18" r="11"/><text x="602" y="-18">4</text>
+          <rect class="hi" x="700" y="0" width="42" height="154" rx="3"/>
+          <line x1="721" y1="158" x2="721" y2="164"/><circle class="mk" cx="721" cy="176" r="11"/><text x="721" y="176">5</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>Throughput</b>, rows 0&ndash;2, azure &mdash; turning <b>amber</b> for any sample above 85% of the adaptive peak.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>CPU</b>, rows 4&ndash;6, green &mdash; amber above 80%. Green here is a trace colour for a healthy metric, and the only green band on the screen.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Round-trip time</b>, rows 8&ndash;10, azure &mdash; amber above 70% of full scale. Latency and throughput share a hue; their position is what tells them apart.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>Separator dots</b> on rows 3 and 7, every third column. Structure only &mdash; they keep three 3-row traces from reading as one 11-row texture.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>Now is the right edge.</b> Each trace is 53 samples, oldest at column 0. The traces advance one column per snapshot; they do not scroll continuously.</span></div>
+    </div>
+
+    <div class="hl"><p><b>Every trace has a floor of one pixel.</b> A row of single dim pixels is a real zero reading, not a dead screen. The tip pixel of each bar is painted brighter than its body, so the profile of a trace is legible even when every bar is one or two pixels tall.</p></div>
+    <div class="hl warn"><p><b>History is the panel's, and it is lost on reboot.</b> Nothing on this screen comes from the server. After a firmware restart the traces refill from the left over about two minutes at the 2&nbsp;s snapshot rate. A partially filled trace is a recently restarted panel, not a fleet that just came online.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>13</span></div>
+</section>
+
+<!-- ============ P14 C2 ============ -->
+<section class="page" data-label="P14 C2 Pool load">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 12 &middot; Theme C &middot; Charts</div><h1 class="t">C2 &middot; Pool load</h1><div class="sub">Up to seven pools, worst first, each with a status key and a wide load bar. The screen that answers "which pool".</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/c2-normal.svg" alt="Screen C2: four horizontal load bars stacked from the third row, each preceded by a single key pixel at the left edge, and a faint tick row along the top.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="28" width="14" height="56" rx="3"/>
+          <line x1="7" y1="-4" x2="7" y2="28"/><circle class="mk" cx="7" cy="-18" r="11"/><text x="7" y="-18">1</text>
+          <rect class="hi" x="28" y="28" width="644" height="14" rx="3"/>
+          <line x1="350" y1="-4" x2="350" y2="28"/><circle class="mk" cx="350" cy="-18" r="11"/><text x="350" y="-18">2</text>
+          <rect class="hi" x="28" y="42" width="644" height="42" rx="3"/>
+          <line x1="602" y1="84" x2="602" y2="164"/><circle class="mk" cx="602" cy="176" r="11"/><text x="602" y="176">3</text>
+          <rect class="hi" x="686" y="28" width="14" height="56" rx="3"/>
+          <line x1="693" y1="-4" x2="693" y2="28"/><circle class="mk" cx="693" cy="-18" r="11"/><text x="693" y="-18">4</text>
+          <rect class="hi" x="0" y="0" width="742" height="14" rx="3"/>
+          <line x1="98" y1="-4" x2="98" y2="0"/><circle class="mk" cx="98" cy="-18" r="11"/><text x="98" y="-18">5</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>The status key</b>, column 0 &mdash; one pixel per pool, coloured by its <em>worst</em> member: down beats degraded beats unknown beats maintenance beats healthy.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>The load bar</b> &mdash; 46 cells across columns 2&ndash;47, the pool's mean load. Cell colour is by position: azure to 70%, amber to 85%, red beyond.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Worst-first ordering.</b> Row&nbsp;2 is the pool in the most trouble, not the first pool alphabetically. With only seven rows visible, this is what keeps a failing pool on the screen.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>Tier-0 marker</b> at column 49 &mdash; a dim red pixel beside any tier-0 pool, whether or not it is in trouble. It marks importance, not condition.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>Row 0 ticks</b>, every fourth column, very faint. A scale for the bars beneath, and the only thing on the screen that is not a pool.</span></div>
+    </div>
+    <p class="d" style="font-size:12px">The screen carries no title. Pool rows occupy rows&nbsp;2&ndash;8, and the shape &mdash; a key pixel, a wide bar, repeated &mdash; identifies it without one.</p>
+
+    <div class="hl"><p><b>The key and the bar answer different questions.</b> A pool can be entirely healthy and heavily loaded (slate key, long red bar) or idle and broken (red key, short azure bar). Read the key column first &mdash; it is the condition &mdash; then the bar for capacity.</p></div>
+    <div class="hl warn"><p><b>Severity order is fixed at down &gt; degraded &gt; unknown &gt; maintenance.</b> Unknown outranks maintenance deliberately: a pool nobody can reach is a worse situation than one that is down for planned work. D1 uses the same order, so the two pool screens can never disagree.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>14</span></div>
+</section>
+
+<!-- ============ P15 D0 ============ -->
+<section class="page" data-label="P15 D0 Reachability">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 13 &middot; Theme D &middot; Instruments</div><h1 class="t">D0 &middot; Reachability</h1><div class="sub">A waterfall: eleven rows of probe history scrolling right to left, one new column every 0.42&nbsp;s. The screen that shows you a fault's <em>shape over time</em>.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/d0-normal.svg" alt="Screen D0: the full matrix filled with dim azure cells of slightly varying brightness, a healthy waterfall.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="0" width="742" height="14" rx="3"/>
+          <line x1="63" y1="-4" x2="63" y2="0"/><circle class="mk" cx="63" cy="-18" r="11"/><text x="63" y="-18">1</text>
+          <rect class="hi" x="700" y="0" width="42" height="154" rx="3"/>
+          <line x1="721" y1="-4" x2="721" y2="0"/><circle class="mk" cx="721" cy="-18" r="11"/><text x="721" y="-18">2</text>
+          <rect class="hi" x="0" y="0" width="42" height="154" rx="3"/>
+          <line x1="21" y1="158" x2="21" y2="164"/><circle class="mk" cx="21" cy="176" r="11"/><text x="21" y="176">3</text>
+          <rect class="hi" x="280" y="42" width="182" height="70" rx="3"/>
+          <line x1="371" y1="158" x2="371" y2="164"/><circle class="mk" cx="371" cy="176" r="11"/><text x="371" y="176">4</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>One row per system</b> &mdash; the eleven worst-first systems on the roster. Row&nbsp;0 is the one in the most trouble. The rows are not named; use C2 or the dashboard for identity.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>Now is the right edge.</b> A new sample column is pushed every 0.42&nbsp;s and everything shifts left, so the full width is about 22&nbsp;s of history.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Oldest is the left edge.</b> A fault that has just started is a red block hugging the right; one that is recovering is a red block drifting left with clean cells behind it.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>Cell colour is the verdict.</b> <b>Red</b> at full brightness for a lost probe, <b>amber</b> for slow, otherwise azure whose brightness carries the round-trip time &mdash; brighter is slower, on a 100&nbsp;ms full scale.</span></div>
+    </div>
+
+    <h2>Reading it</h2>
+    <div class="g2">
+      <div class="card"><h4>What is normal</h4><p>A uniform dim azure field with visible texture &mdash; the per-cell jitter is intentional, and it is how you tell a live waterfall from a frozen one. Brightening rows mean latency is rising fleet-wide.</p></div>
+      <div class="card"><h4>What to act on</h4><p>Solid red rows: that system is down. Speckled red across many rows: probe loss is affecting everything, which points at the network rather than at a host. Amber-dominant rows are degraded or unknown systems.</p></div>
+    </div>
+    <div class="hl warn"><p><b>The rows are systems, not named probe targets.</b> The wire carries fleet-aggregate latency and loss only, so each row samples one worst-first system against those aggregates: a down system samples mostly as loss, a degraded or unknown one mostly as slow, and everything else samples healthy with the aggregate RTT jittered per column. The texture is real; the per-row precision is not. Treat D0 as a shape, and confirm identity elsewhere.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>15</span></div>
+</section>
+
+<!-- ============ P16 D1 ============ -->
+<section class="page" data-label="P16 D1 Pool bars">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 14 &middot; Theme D &middot; Instruments</div><h1 class="t">D1 &middot; Pool bars</h1><div class="sub">The resting face. Every pool drawn proportional to its size, broken down by condition, with the live alert ticker underneath.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/d1-normal.svg" alt="Screen D1: four horizontal bars of differing lengths in the top half, each with a two-pixel key at the left edge, and a scrolling text ticker filling the lower half.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="0" width="28" height="56" rx="3"/>
+          <line x1="14" y1="-4" x2="14" y2="0"/><circle class="mk" cx="14" cy="-18" r="11"/><text x="14" y="-18">1</text>
+          <rect class="hi" x="42" y="0" width="196" height="14" rx="3"/>
+          <line x1="140" y1="-4" x2="140" y2="0"/><circle class="mk" cx="140" cy="-18" r="11"/><text x="140" y="-18">2</text>
+          <rect class="hi" x="42" y="28" width="700" height="14" rx="3"/>
+          <line x1="602" y1="42" x2="602" y2="164"/><circle class="mk" cx="602" cy="176" r="11"/><text x="602" y="176">3</text>
+          <rect class="hi" x="42" y="42" width="322" height="14" rx="3"/>
+          <line x1="203" y1="56" x2="203" y2="164"/><circle class="mk" cx="203" cy="176" r="11"/><text x="203" y="176">4</text>
+          <rect class="hi" x="0" y="84" width="742" height="70" rx="3"/>
+          <line x1="42" y1="158" x2="42" y2="164"/><circle class="mk" cx="42" cy="176" r="11"/><text x="42" y="176">5</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>The status key</b>, columns 0&ndash;1 &mdash; two pixels per pool, coloured by its worst member on the same severity order C2 uses.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>Bar length is pool size</b>, scaled against the largest pool, with a six-pixel minimum so a two-host pool is still visible. It is <em>not</em> load &mdash; that is C2's bar.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Stacked from the right edge</b>: down, then degraded, then unknown, then maintenance, each at least one pixel if the pool has any. Worst conditions therefore always terminate the bar.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>The idle shimmer</b> fills the rest &mdash; the healthy remainder of the pool, breathing slowly. Motion here is the screen's liveness signal.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>The alert ticker</b>, scrolling at 13&nbsp;px/s over a dotted line on row&nbsp;6. This is where a fault gets named &mdash; the only place on the panel, outside an alarm, that carries text about a specific alert.</span></div>
+    </div>
+
+    <h2>Reading it</h2>
+    <div class="g2">
+      <div class="card"><h4>What is normal</h4><p>Slate keys, bars that are entirely shimmer, and a ticker with nothing urgent in it. Up to six pools fit; worst-first ordering means the ones you cannot see are the ones that are fine.</p></div>
+      <div class="card"><h4>What to act on</h4><p>Any coloured segment at the right end of a bar, and its length relative to the bar: a two-pixel red tail on a long bar is one host in a large pool; a bar that is half red is a pool in serious trouble.</p></div>
+    </div>
+    <div class="hl"><p><b>Why the unknown band exists.</b> Hosts returning no telemetry used to fall into the idle shimmer and read as healthy. They now have their own slate band in the stack, between degraded and maintenance, so a pool full of silent hosts cannot look like a pool full of well ones.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>16</span></div>
+</section>
+
+<!-- ============ P17 D2 ============ -->
+<section class="page" data-label="P17 D2 Ambient field">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 15 &middot; Theme D &middot; Instruments</div><h1 class="t">D2 &middot; Ambient field</h1><div class="sub">A procedural field whose colour is the fleet's mean load and whose sparks are its failures, with a three-slot readout in the middle.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig">
+      <div class="frame">
+        <img src="img/d2-normal.svg" alt="Screen D2: a soft cloud-like azure field across the whole matrix with a darkened rectangle in the centre carrying the text 13 SYS.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="0" width="742" height="154" rx="3"/>
+          <line x1="98" y1="-4" x2="98" y2="0"/><circle class="mk" cx="98" cy="-18" r="11"/><text x="98" y="-18">1</text>
+          <rect class="hi" x="210" y="28" width="322" height="98" rx="3"/>
+          <line x1="371" y1="126" x2="371" y2="164"/><circle class="mk" cx="371" cy="176" r="11"/><text x="371" y="176">2</text>
+          <rect class="hi" x="224" y="42" width="294" height="70" rx="3"/>
+          <line x1="238" y1="-4" x2="238" y2="42"/><circle class="mk" cx="238" cy="-18" r="11"/><text x="238" y="-18">3</text>
+          <rect class="hi" x="560" y="0" width="182" height="154" rx="3"/>
+          <line x1="651" y1="158" x2="651" y2="164"/><circle class="mk" cx="651" cy="176" r="11"/><text x="651" y="176">4</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>The field</b> &mdash; layered noise across the whole matrix. Its <em>granularity</em> grows with fleet size and its <b>hue is mean load</b>: azure when the fleet is quiet, warming toward amber from 35% load and fully warm by 85%.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>The knockout box</b> &mdash; a dimmed rectangle behind the readout, so text stays legible over a moving field without stopping the field.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>The readout</b>, cycling every 5&nbsp;s through three slots: <span class="mono">n SYS</span> (fleet size), <span class="mono">n% LOAD</span> (amber when the field is hot), and the aggregate rate per second.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>Sparks</b> &mdash; up to nine red pixels with a soft horizontal bloom, one per down system, pulsing at a rate set by the tier of the first down system found. On a healthy fleet there are none.</span></div>
+    </div>
+
+    <h2>Reading it</h2>
+    <div class="g2">
+      <div class="card"><h4>What is normal</h4><p>A cool, slowly drifting azure field with a readout in the middle and no red anywhere. This is the screen the panel is most often left on; it is meant to be pleasant and to change colour before you consciously notice.</p></div>
+      <div class="card"><h4>What to act on</h4><p>Red sparks &mdash; each one is a system down &mdash; and a field that has gone amber, which means fleet-wide load has climbed past the two-thirds mark. Nine sparks means "nine or more"; go to B0 for the true count.</p></div>
+    </div>
+    <div class="hl"><p><b>The readout counts agent nodes.</b> <span class="mono">n SYS</span> is the same population as B0's UP/DOWN &mdash; the dashboard headline &mdash; not the wider roster that A0's lattice and the pool screens draw from.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>17</span></div>
+</section>
+
+<!-- ============ P18 ALARMS ============ -->
+<section class="page" data-label="P18 Alarms">
+  <div class="ph"><div class="bar" style="background:var(--color-crit)"></div><div><div class="eyebrow" style="color:var(--color-crit)">Section 16</div><h1 class="t">Alarms</h1><div class="sub">One overlay, one beacon, one tone, and an acknowledge that silences without clearing. Everything on this page overrides whatever screen is beneath it.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <figure class="fig" style="padding:34px 0 26px">
+      <div class="frame">
+        <img src="img/b0-alarm.svg" alt="Screen B0 during an alarm: the underlying screen dimmed almost to black, both edge columns lit red, a red subject line across the upper half and a scrolling detail line across the lower half.">
+        <svg class="cal" viewBox="0 0 742 154" role="presentation">
+          <rect class="hi" x="0" y="0" width="14" height="154" rx="3"/>
+          <rect class="hi" x="728" y="0" width="14" height="154" rx="3"/>
+          <line x1="7" y1="158" x2="7" y2="164"/><circle class="mk" cx="7" cy="176" r="11"/><text x="7" y="176">1</text>
+          <rect class="hi" x="126" y="14" width="490" height="70" rx="3"/>
+          <line x1="371" y1="-4" x2="371" y2="14"/><circle class="mk" cx="371" cy="-18" r="11"/><text x="371" y="-18">2</text>
+          <rect class="hi" x="280" y="84" width="462" height="70" rx="3"/>
+          <line x1="511" y1="158" x2="511" y2="164"/><circle class="mk" cx="511" cy="176" r="11"/><text x="511" y="176">3</text>
+          <rect class="hi" x="714" y="0" width="28" height="28" rx="3"/>
+          <line x1="728" y1="-4" x2="728" y2="0"/><circle class="mk" cx="728" cy="-18" r="11"/><text x="728" y="-18">4</text>
+          <rect class="hi" x="14" y="0" width="112" height="70" rx="3"/>
+          <line x1="70" y1="-4" x2="70" y2="0"/><circle class="mk" cx="70" cy="-18" r="11"/><text x="70" y="-18">5</text>
+        </svg>
+      </div>
+    </figure>
+    <div class="calist">
+      <div class="ci"><span class="n">1</span><span class="tx"><b>Edge rails</b> &mdash; columns 0 and 52, full height, red, pulsing about three times a second. The unmistakable part.</span></div>
+      <div class="ci"><span class="n">2</span><span class="tx"><b>Subject</b>, centred on row&nbsp;1, red and bright. Truncated to twelve characters &mdash; it names the fault class, not the whole story.</span></div>
+      <div class="ci"><span class="n">3</span><span class="tx"><b>Detail</b>, scrolling on row&nbsp;6 at 11&nbsp;px/s in white. Composed server-side, e.g. <span class="mono">RESTART BIND ON MOLYBDENUM</span>.</span></div>
+      <div class="ci"><span class="n">4</span><span class="tx"><b>The beacon</b> &mdash; four pixels at the top-right corner, flashing red at 1&nbsp;Hz. Painted last, over everything, including the rail.</span></div>
+      <div class="ci"><span class="n">5</span><span class="tx"><b>The screen beneath</b> is dimmed to 10%, not replaced. Rotation continues underneath; the inlay follows it.</span></div>
+    </div>
+
+    <div class="g2">
+      <div class="card">
+        <h4>The tone</h4>
+        <p>A three-note square triad &mdash; 990&nbsp;Hz, 660&nbsp;Hz, 990&nbsp;Hz, 200&nbsp;ms each, at 0, 0.22 and 0.44&nbsp;s &mdash; sounded immediately on the rising edge and then <b>every 60&nbsp;s</b> until acknowledged. VOL&nbsp;&plusmn; sets its level.</p>
+      </div>
+      <div class="card">
+        <h4>Auto-silence</h4>
+        <p>An episode left unacknowledged for <b>5 minutes</b> stops re-sounding, permanently, for that episode. Auto-silence is <em>not</em> an acknowledge: the inlay stays, the beacon keeps flashing, and a new episode re-arms the tone as normal.</p>
+      </div>
+    </div>
+
+    <div class="hl crit"><p><b>Acknowledge silences; it never clears.</b> The alert remains active on the dashboard and in the alerting pipeline. Acknowledging is a statement that a human has seen the panel, nothing more.</p></div>
+    <div class="hl"><p><b>Ack is scoped to the episode.</b> The server composes an episode id for each alarm episode; acknowledging records that id on the panel. A <em>new</em> episode id re-arms everything &mdash; inlay, tone and beacon &mdash; even if the previous one was acknowledged seconds earlier. There are exactly two ways to acknowledge: any physical button while the alarm is armed, or the control page's ACK button. Both run the same code path, so they cannot drift apart.</p></div>
+    <div class="hl warn"><p><b>The rising edge wakes a sleeping panel once</b> &mdash; and only once. It does not hold the panel awake. If nobody acknowledges, the display sleeps again on its own schedule and the beacon is what carries the fault through the night. That is the design, and it is why the beacon is exempt from dimming.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>18</span></div>
+</section>
+
+<!-- ============ P19 ALARM GALLERY ============ -->
+<section class="page" data-label="P19 The alarm over each theme">
+  <div class="ph"><div class="bar" style="background:var(--color-crit)"></div><div><div class="eyebrow" style="color:var(--color-crit)">Section 16 &middot; continued</div><h1 class="t">The alarm over each theme</h1><div class="sub">The inlay is the same on all twelve screens. What differs is what survives underneath it at 10% &mdash; which is the point: you can still tell what the panel was showing when the alarm arrived.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="g2" style="gap:12px 16px">
+      <figure class="fig" style="padding:0;margin:0">
+        <div class="frame"><img src="img/a1-alarm.svg" alt="The alarm inlay over screen A1, flow gates."></div>
+        <figcaption class="figcap" style="margin-top:5px">A1 &middot; the gate columns remain faintly visible through the inlay.</figcaption>
+      </figure>
+      <figure class="fig" style="padding:0;margin:0">
+        <div class="frame"><img src="img/b2-alarm.svg" alt="The alarm inlay over screen B2, load and latency."></div>
+        <figcaption class="figcap" style="margin-top:5px">B2 &middot; theme B's watermark numerals dim to nearly nothing.</figcaption>
+      </figure>
+      <figure class="fig" style="padding:0;margin:0">
+        <div class="frame"><img src="img/c1-alarm.svg" alt="The alarm inlay over screen C1, live traces."></div>
+        <figcaption class="figcap" style="margin-top:5px">C1 &middot; the three trace bands stay readable as texture.</figcaption>
+      </figure>
+      <figure class="fig" style="padding:0;margin:0">
+        <div class="frame"><img src="img/d2-alarm.svg" alt="The alarm inlay over screen D2, ambient field."></div>
+        <figcaption class="figcap" style="margin-top:5px">D2 &middot; the field survives dimming better than any other screen.</figcaption>
+      </figure>
+    </div>
+
+    <div class="g2">
+      <div class="card">
+        <h4>What is constant</h4>
+        <ul class="cl2" style="margin-top:6px">
+          <li><b>Both edge rails</b>, full height, pulsing red.</li>
+          <li><b>The subject</b> on row 1, twelve characters, centred.</li>
+          <li><b>The detail</b> scrolling on row 6.</li>
+          <li><b>The beacon</b>, four pixels top-right, 1&nbsp;Hz, painted over everything including the rail.</li>
+          <li><b>The 10% dim</b> applied to whatever screen is beneath.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>What acknowledging changes</h4>
+        <ul class="cl2" style="margin-top:6px">
+          <li>The <b>tone stops</b>, permanently, for this episode.</li>
+          <li>The <b>beacon stops</b> flashing.</li>
+          <li>The <b>inlay remains</b> &mdash; rails, subject and detail &mdash; because the fault has not gone anywhere.</li>
+          <li>A <b>new episode id</b> re-arms all three from scratch.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="hl crit"><p><b>An acknowledged alarm still looks like an alarm.</b> That is intentional. The quiet, unblinking version of this overlay means "a human has seen this and it is still broken" &mdash; not "handled". It clears when the underlying alert clears, and by no other route.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>19</span></div>
+</section>
+
+<!-- ============ P19 CONTROL PAGE ============ -->
+<section class="page" data-label="P19 The control page">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 17</div><h1 class="t">The control page</h1><div class="sub">The dashboard's <b>Panel</b> page: all twelve screens simulated live, plus every control the physical buttons offer and several they do not.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl tight" style="grid-template-columns:.65fr .8fr 1.75fr">
+      <div class="hd">Control</div><div class="hd">Effect</div><div class="hd">Notes</div>
+      <div class="cl">Theme A&ndash;D</div><div class="cl">Jump to a theme</div><div class="cl" style="color:var(--color-dim)">Identical to pressing that theme's button on the panel</div>
+      <div class="cl">Screen 0&ndash;2</div><div class="cl">Jump to a slot</div><div class="cl" style="color:var(--color-dim)">Accepted even if the slot is disabled &mdash; operator intent wins; rotation resumes per configuration at the next advance</div>
+      <div class="cl">Brightness</div><div class="cl">Set a manual level</div><div class="cl" style="color:var(--color-dim)">Latches manual exactly like LUX&nbsp;&plusmn;. <b>AUTO</b> is the only way back to sensor control. Floors at 25%</div>
+      <div class="cl">Acknowledge</div><div class="cl">Silence the alarm</div><div class="cl" style="color:var(--color-dim)">Disabled unless an episode is armed. Does not clear the alert</div>
+      <div class="cl">Dwell</div><div class="cl">3 / 6 / 30&nbsp;s</div><div class="cl" style="color:var(--color-dim)">The <em>base</em> interval each screen's weight multiplies. 6&nbsp;s is the boot default</div>
+      <div class="cl">Sleep / Wake</div><div class="cl">Blank or restore</div><div class="cl" style="color:var(--color-dim)">Explicit. Other commands deliberately do <em>not</em> wake a sleeping panel</div>
+      <div class="cl">Rotation On/Off</div><div class="cl">Per screen</div><div class="cl" style="color:var(--color-dim)">On the screen's own tile. A skipped screen is greyed and badged</div>
+      <div class="cl">Dwell weight</div><div class="cl">&frac14;&times; &hellip; 10&times;</div><div class="cl" style="color:var(--color-dim)">Also per tile. See section&nbsp;18</div>
+    </div>
+
+    <h2>Pending, applied, failed</h2>
+    <p class="d">A control on the page is not a switch that sets a value; it is a request that the panel may confirm. Understanding the three states is the difference between trusting the page and second-guessing it.</p>
+    <div class="g3">
+      <div class="card"><h4 style="color:var(--color-warn)">Pending</h4><p>The command is queued and being re-served to the panel every poll. <b>Nothing is shown as selected</b> while a change is in flight &mdash; the old value is withheld rather than left standing, so it cannot be misread as the new one having landed.</p></div>
+      <div class="card"><h4 style="color:var(--color-ok)">Applied</h4><p>The panel reported back that it consumed the command. Only now does the page mark an option as in force.</p></div>
+      <div class="card"><h4 style="color:var(--color-crit)">Failed</h4><p>Two minutes elapsed with no confirmation, so the command expired. The page says so, with a reason. It is never silently dropped.</p></div>
+    </div>
+
+    <div class="hl"><p><b>The panel is the authority, always.</b> A selected chip on the control page means <em>the panel said so</em> &mdash; never that the page sent something. Before the panel has reported at all, nothing is selected and the page says so in words rather than showing a cheerful default. This is why a control can appear to "do nothing" for a few seconds: latency is one poll cycle plus a snapshot interval, roughly 5&ndash;7&nbsp;s, and the page will not pretend otherwise.</p></div>
+
+    <div class="g2">
+      <div class="card"><h4>Read-only by default</h4><p>Controls require the operator or admin role. A viewer, an unconfirmed role, or a failed role lookup all render the page read-only &mdash; it fails closed, and the server enforces this independently of what the page shows.</p></div>
+      <div class="card"><h4>The simulation is an approximation</h4><p>The twelve virtual screens resample the 5&nbsp;s dashboard poll onto the same 53-sample rings the firmware fills at 2&nbsp;s. Ribbons, histograms and traces will differ in detail from the wall even when the fleet data is identical.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>20</span></div>
+</section>
+
+<!-- ============ P20 ROTATION AND WEIGHTS ============ -->
+<section class="page" data-label="P20 Rotation and weights">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 18</div><h1 class="t">Rotation &amp; weights</h1><div class="sub">Which screens the panel cycles through, and for how long each. Set per screen, stored on the panel itself, and confirmed only by the panel.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h2>How long a screen stays up</h2>
+    <p class="d">Every screen has a weight that multiplies the base dwell. The base is a single global setting &mdash; 3, 6 or 30&nbsp;s &mdash; and the weight is per screen.</p>
+    <div class="tbl tight" style="grid-template-columns:repeat(6,1fr)">
+      <div class="hd">&frac14;&times;</div><div class="hd">&frac12;&times;</div><div class="hd">1&times;</div><div class="hd">2&times;</div><div class="hd">5&times;</div><div class="hd">10&times;</div>
+      <div class="cl m">7.5&nbsp;s</div><div class="cl m">15&nbsp;s</div><div class="cl m">30&nbsp;s</div><div class="cl m">60&nbsp;s</div><div class="cl m">150&nbsp;s</div><div class="cl m">300&nbsp;s</div>
+    </div>
+    <p class="d" style="margin-top:-4px">Dwell at a 30&nbsp;s base. So with the base at 30&nbsp;s, a screen at 5&times; holds for 150&nbsp;s, one at &frac12;&times; for 15&nbsp;s, and one at 1&times; for the base 30&nbsp;s &mdash; which is the usual way to build a rotation that lingers on the screen you care about and passes quickly over the rest.</p>
+
+    <div class="g2">
+      <div class="card">
+        <h4>Turning a screen off</h4>
+        <p>A disabled screen is skipped by the rotation and by manual advance. Its tile on the control page greys out and is badged <span class="mono">SKIPPED</span>. Disabling is not deletion &mdash; the screen still renders in the simulation, and re-enabling takes effect at the next advance.</p>
+      </div>
+      <div class="card">
+        <h4>Changing a weight mid-dwell</h4>
+        <p>Elapsed time is <em>rescaled</em>, not reset: a screen 299&nbsp;s into a 10&times; dwell that is changed to &frac14;&times; advances immediately rather than holding for another seven seconds. Shortening a weight always shortens the wait.</p>
+      </div>
+    </div>
+
+    <div class="hl"><p><b>You cannot blank the panel this way.</b> If every screen of the active theme is disabled, the firmware treats the theme as fully enabled rather than showing a black wall. The same guard applies to a jump command targeting a disabled slot: it is accepted and displayed, and rotation resumes per the configuration at the next advance.</p></div>
+
+    <h2>Where the configuration lives</h2>
+    <p class="d">On the panel &mdash; written into the last sector of the RP2350's flash, and reloaded at boot. It survives resets, power cuts and a change of network, and it is not a dashboard setting that gets pushed down at startup. A corrupt or absent record falls back to the factory default (every screen enabled at 1&times;) rather than failing.</p>
+    <div class="spec" style="max-width:none">
+      <div class="r"><span>Write policy</span><span>on change only, debounced 2 s</span></div>
+      <div class="r"><span>Factory default</span><span>all 12 enabled &middot; weight 1&times;</span></div>
+      <div class="r"><span>Confirmation</span><span>page shows &ldquo;Saved to panel flash&rdquo; on a positive report</span></div>
+    </div>
+
+    <div class="hl warn"><p><b>Read the page's chips, not your memory.</b> The panel reports its own configuration back, and the page renders <em>that</em>. A summary chip near the top reads, for example, <span class="mono">10 of 12 screens in rotation &middot; 2 skipped &middot; 3 weighted</span>, and screens the panel has not reported are counted separately as unreported rather than folded into "on". If the chip says <span class="mono">Screen config not reported</span>, the panel has not told the dashboard anything yet &mdash; the settings you last chose may well be in force, but nothing on the page is evidence of it.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>21</span></div>
+</section>
+
+<!-- ============ P21 GLANCE MATRIX ============ -->
+<section class="page" data-label="P21 The glance matrix">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 19</div><h1 class="t">The glance matrix</h1><div class="sub">lithium &mdash; the UNO Q hosting the panel &mdash; has a 13&times;8 monochrome matrix of its own. It watches the panel's own chain, which the panel cannot do for itself.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="card" style="padding:16px">
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:center">
+        <svg width="234" height="144" viewBox="0 0 234 144" role="img" aria-label="Diagram of the 13 by 8 glance matrix layout">
+          <rect width="234" height="144" rx="6" fill="#05070b"/>
+          <g>
+            <!-- unlit grid -->
+            <g fill="#0e1014">
+              <!-- 13 x 8 dots at 18px pitch, centre 9+18c / 9+18r -->
+              <circle cx="9" cy="9" r="6"/><circle cx="27" cy="9" r="6"/><circle cx="45" cy="9" r="6"/><circle cx="63" cy="9" r="6"/><circle cx="81" cy="9" r="6"/><circle cx="99" cy="9" r="6"/><circle cx="117" cy="9" r="6"/><circle cx="135" cy="9" r="6"/><circle cx="153" cy="9" r="6"/><circle cx="171" cy="9" r="6"/><circle cx="189" cy="9" r="6"/><circle cx="207" cy="9" r="6"/><circle cx="225" cy="9" r="6"/>
+              <circle cx="9" cy="27" r="6"/><circle cx="27" cy="27" r="6"/><circle cx="45" cy="27" r="6"/><circle cx="63" cy="27" r="6"/><circle cx="81" cy="27" r="6"/><circle cx="99" cy="27" r="6"/><circle cx="117" cy="27" r="6"/><circle cx="135" cy="27" r="6"/><circle cx="153" cy="27" r="6"/><circle cx="171" cy="27" r="6"/><circle cx="189" cy="27" r="6"/><circle cx="207" cy="27" r="6"/><circle cx="225" cy="27" r="6"/>
+              <circle cx="9" cy="45" r="6"/><circle cx="27" cy="45" r="6"/><circle cx="45" cy="45" r="6"/><circle cx="63" cy="45" r="6"/><circle cx="81" cy="45" r="6"/><circle cx="99" cy="45" r="6"/><circle cx="117" cy="45" r="6"/><circle cx="135" cy="45" r="6"/><circle cx="153" cy="45" r="6"/><circle cx="171" cy="45" r="6"/><circle cx="189" cy="45" r="6"/><circle cx="207" cy="45" r="6"/><circle cx="225" cy="45" r="6"/>
+              <circle cx="9" cy="63" r="6"/><circle cx="27" cy="63" r="6"/><circle cx="45" cy="63" r="6"/><circle cx="63" cy="63" r="6"/><circle cx="81" cy="63" r="6"/><circle cx="99" cy="63" r="6"/><circle cx="117" cy="63" r="6"/><circle cx="135" cy="63" r="6"/><circle cx="153" cy="63" r="6"/><circle cx="171" cy="63" r="6"/><circle cx="189" cy="63" r="6"/><circle cx="207" cy="63" r="6"/><circle cx="225" cy="63" r="6"/>
+              <circle cx="9" cy="81" r="6"/><circle cx="27" cy="81" r="6"/><circle cx="45" cy="81" r="6"/><circle cx="63" cy="81" r="6"/><circle cx="81" cy="81" r="6"/><circle cx="99" cy="81" r="6"/><circle cx="117" cy="81" r="6"/><circle cx="135" cy="81" r="6"/><circle cx="153" cy="81" r="6"/><circle cx="171" cy="81" r="6"/><circle cx="189" cy="81" r="6"/><circle cx="207" cy="81" r="6"/><circle cx="225" cy="81" r="6"/>
+              <circle cx="9" cy="99" r="6"/><circle cx="27" cy="99" r="6"/><circle cx="45" cy="99" r="6"/><circle cx="63" cy="99" r="6"/><circle cx="81" cy="99" r="6"/><circle cx="99" cy="99" r="6"/><circle cx="117" cy="99" r="6"/><circle cx="135" cy="99" r="6"/><circle cx="153" cy="99" r="6"/><circle cx="171" cy="99" r="6"/><circle cx="189" cy="99" r="6"/><circle cx="207" cy="99" r="6"/><circle cx="225" cy="99" r="6"/>
+              <circle cx="9" cy="117" r="6"/><circle cx="27" cy="117" r="6"/><circle cx="45" cy="117" r="6"/><circle cx="63" cy="117" r="6"/><circle cx="81" cy="117" r="6"/><circle cx="99" cy="117" r="6"/><circle cx="117" cy="117" r="6"/><circle cx="135" cy="117" r="6"/><circle cx="153" cy="117" r="6"/><circle cx="171" cy="117" r="6"/><circle cx="189" cy="117" r="6"/><circle cx="207" cy="117" r="6"/><circle cx="225" cy="117" r="6"/>
+              <circle cx="9" cy="135" r="6"/><circle cx="27" cy="135" r="6"/><circle cx="45" cy="135" r="6"/><circle cx="63" cy="135" r="6"/><circle cx="81" cy="135" r="6"/><circle cx="99" cy="135" r="6"/><circle cx="117" cy="135" r="6"/><circle cx="135" cy="135" r="6"/><circle cx="153" cy="135" r="6"/><circle cx="171" cy="135" r="6"/><circle cx="189" cy="135" r="6"/><circle cx="207" cy="135" r="6"/><circle cx="225" cy="135" r="6"/>
+            </g>
+            <!-- lit example: link dots, score bar, fleet strips -->
+            <g fill="var(--color-accent)">
+              <circle cx="9" cy="9" r="6"/><circle cx="45" cy="9" r="6"/><circle cx="81" cy="9" r="6"/>
+              <circle cx="9" cy="45" r="6"/><circle cx="27" cy="45" r="6"/><circle cx="45" cy="45" r="6"/><circle cx="63" cy="45" r="6"/>
+              <circle cx="9" cy="63" r="6"/><circle cx="27" cy="63" r="6"/><circle cx="45" cy="63" r="6"/><circle cx="63" cy="63" r="6"/>
+              <circle cx="9" cy="99" r="6"/><circle cx="27" cy="99" r="6"/><circle cx="45" cy="99" r="6"/><circle cx="63" cy="99" r="6"/><circle cx="81" cy="99" r="6"/><circle cx="99" cy="99" r="6"/><circle cx="117" cy="99" r="6"/><circle cx="135" cy="99" r="6"/><circle cx="153" cy="99" r="6"/>
+            </g>
+            <circle cx="225" cy="9" r="6" fill="var(--color-crit)"/>
+          </g>
+        </svg>
+        <div>
+          <p class="d" style="margin-bottom:8px">The glance is a grayscale frame, redrawn four times a second from facts the panel daemon publishes every two seconds. It is a health readout for the <em>panel chain</em>, not a second fleet display &mdash; it is what tells you whether the wall is telling the truth.</p>
+          <div class="spec" style="max-width:none">
+            <div class="r"><span>Matrix</span><span>13 &times; 8 &middot; 8 grey levels</span></div>
+            <div class="r"><span>Fact refresh</span><span>1 Hz read &middot; 15 s staleness</span></div>
+            <div class="r"><span>Animation</span><span>0.25 s tick</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tbl tight" style="grid-template-columns:.7fr .8fr 1.7fr">
+      <div class="hd">Region</div><div class="hd">Where</div><div class="hd">Meaning</div>
+      <div class="cl">Poll dot</div><div class="cl m">row 0, col 0</div><div class="cl" style="color:var(--color-dim)">Steady: the daemon is reaching the API. <b>Blinking bright: it is not.</b></div>
+      <div class="cl">Serial dot</div><div class="cl m">row 0, col 2</div><div class="cl" style="color:var(--color-dim)">Steady: the USB link to the panel is up. Blinking: it is down</div>
+      <div class="cl">STATE dot</div><div class="cl m">row 0, col 4</div><div class="cl" style="color:var(--color-dim)">Bright once the panel has reported state &mdash; i.e. the firmware speaks the control protocol. Dim means commands are being withheld</div>
+      <div class="cl">Alarm dot</div><div class="cl m">row 0, col 12</div><div class="cl" style="color:var(--color-dim)">Flashing: armed and unacknowledged. Steady mid-grey: acknowledged</div>
+      <div class="cl">Score bar</div><div class="cl m">rows 2&ndash;3</div><div class="cl" style="color:var(--color-dim)">The fleet score, 0&ndash;200 mapped across the full width. Longer is worse</div>
+      <div class="cl">Heartbeat</div><div class="cl m">rows 2&ndash;3, centre</div><div class="cl" style="color:var(--color-dim)">A single pixel breathing on a ~3&nbsp;s cycle when the score is zero &mdash; a calm fleet still has to read as alive</div>
+      <div class="cl">Fleet strips</div><div class="cl m">rows 5, 6, 7</div><div class="cl" style="color:var(--color-dim)">Up (bright), degraded (mid), down (blinking) &mdash; one pixel per system, capped at 13</div>
+    </div>
+
+    <div class="hl"><p><b>Two whole-matrix behaviours.</b> An armed, unacknowledged alarm pulses the entire glance, mirroring the wall beacon. A sleeping panel halves every level, so the glance visibly dims with the panel it reports on. And if the facts file is missing or older than 15&nbsp;s, everything else goes dark and a <b>single pixel blinks at the top centre</b> &mdash; the feed is alive but the daemon is not publishing.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>22</span></div>
+</section>
+
+<!-- ============ P22 TROUBLESHOOTING ============ -->
+<section class="page" data-label="P22 Troubleshooting">
+  <div class="ph"><div class="bar" style="background:var(--color-warn)"></div><div><div class="eyebrow" style="color:var(--color-warn)">Section 20</div><h1 class="t">Troubleshooting</h1><div class="sub">Four things the panel shows when the problem is the panel, and how to tell them from a fleet fault.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="g2">
+      <figure class="fig" style="padding:0;margin:0">
+        <div class="frame"><img src="img/a0-normal.svg" alt="Reference: a normal, quiet screen." style="opacity:.35"></div>
+        <figcaption class="figcap" style="margin-top:6px">Reference &mdash; a healthy panel is mostly dark, but never still.</figcaption>
+      </figure>
+      <div class="card">
+        <h4>Nothing is lit at all</h4>
+        <p>Check in this order: the panel may be <b>asleep</b> (any button wakes it &mdash; but look for the beacon first, four flashing red pixels top-right, which means it is asleep <em>with a fault on it</em>); brightness may be at its floor; or the firmware may not be running. The glance matrix on lithium settles this in one look: if its serial dot is blinking, the panel is not being spoken to.</p>
+      </div>
+    </div>
+
+    <div class="tbl tight" style="grid-template-columns:.65fr .85fr 1.6fr">
+      <div class="hd">What you see</div><div class="hd">What it means</div><div class="hd">What to do</div>
+      <div class="cl" style="color:var(--color-warn)"><b>LINK LOST</b></div>
+      <div class="cl">No valid frame from the daemon for over 15&nbsp;s</div>
+      <div class="cl" style="color:var(--color-dim)">A <b>panel</b> fault, not a fleet fault &mdash; hence amber, no rails and no tone. Check <span class="mono">solari-panel</span> on lithium and the USB cable. A single pixel sweeps a row underneath the message, so a frozen render is distinguishable from a live one</div>
+      <div class="cl" style="color:var(--color-accent)"><b>NO DATA</b></div>
+      <div class="cl">A zero-node fleet, or no snapshot has arrived yet</div>
+      <div class="cl" style="color:var(--color-dim)">Normal for a few seconds after a panel restart. Persisting means the API is returning an empty fleet &mdash; check the dashboard, not the panel. Azure, because it is a valid reading rather than an error</div>
+      <div class="cl" style="color:var(--color-accent)"><b>NO DATA on A1 only</b></div>
+      <div class="cl">No network-gear section in the snapshot</div>
+      <div class="cl" style="color:var(--color-dim)">The UniFi poller is not delivering, or its rows have aged past 60&nbsp;s. Every other screen stays correct. A1 shows nothing rather than an invented topology</div>
+      <div class="cl">Screens look right but <b>stale</b></div>
+      <div class="cl">Monitoring data older than 30&nbsp;s</div>
+      <div class="cl" style="color:var(--color-dim)">The panel keeps rendering the last good state on purpose. The control page shows an <span class="mono">Upstream data stale</span> chip; A2's lane&nbsp;1 backlog also lights. Look upstream of the panel entirely</div>
+    </div>
+
+    <h2>When the wall and the page disagree</h2>
+    <div class="g2">
+      <div class="card"><h4>Detail differs</h4><p>Expected. The simulation resamples a 5&nbsp;s poll onto rings the firmware fills every 2&nbsp;s, so traces, ribbons and histograms will not match pixel for pixel even on identical data. Counts, states and pool bars should match.</p></div>
+      <div class="card"><h4>State differs</h4><p>Check the page's <span class="mono">Panel state &hellip; old</span> chip. Beyond about 90&nbsp;s the page is showing a stale report, not the current panel. The panel is the authority; the page is its most recent account of itself.</p></div>
+    </div>
+
+    <div class="hl"><p><b>A last cross-check.</b> Three things must agree before you trust a reading: the panel, the control page, and the dashboard's own alert count. All three are derived from the same dashboard-active alert definition, so a genuine disagreement between them is a bug worth reporting rather than a number worth averaging.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>23</span></div>
+</section>
+
+</div>
+
+<script>
+document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
+  var h = document.documentElement;
+  var dark = h.getAttribute('data-mode') === 'dark';
+  h.setAttribute('data-mode', dark ? 'light' : 'dark');
+  this.textContent = dark ? 'Dark' : 'Light';
+});
+</script>
+</body>
+</html>

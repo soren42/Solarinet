@@ -1,0 +1,170 @@
+[
+ {
+  "file": "a0-normal.svg",
+  "id": "A0",
+  "title": "State lattice",
+  "theme": "ABSTRACT",
+  "scenario": "normal"
+ },
+ {
+  "file": "a1-normal.svg",
+  "id": "A1",
+  "title": "Flow gates",
+  "theme": "ABSTRACT",
+  "scenario": "normal"
+ },
+ {
+  "file": "a2-normal.svg",
+  "id": "A2",
+  "title": "MQ and SNMP",
+  "theme": "ABSTRACT",
+  "scenario": "normal"
+ },
+ {
+  "file": "b0-normal.svg",
+  "id": "B0",
+  "title": "Condition counts",
+  "theme": "TEXT",
+  "scenario": "normal"
+ },
+ {
+  "file": "b1-normal.svg",
+  "id": "B1",
+  "title": "Throughput",
+  "theme": "TEXT",
+  "scenario": "normal"
+ },
+ {
+  "file": "b2-normal.svg",
+  "id": "B2",
+  "title": "Load and latency",
+  "theme": "TEXT",
+  "scenario": "normal"
+ },
+ {
+  "file": "c0-normal.svg",
+  "id": "C0",
+  "title": "Load distribution",
+  "theme": "CHARTS",
+  "scenario": "normal"
+ },
+ {
+  "file": "c1-normal.svg",
+  "id": "C1",
+  "title": "Live traces",
+  "theme": "CHARTS",
+  "scenario": "normal"
+ },
+ {
+  "file": "c2-normal.svg",
+  "id": "C2",
+  "title": "Pool load",
+  "theme": "CHARTS",
+  "scenario": "normal"
+ },
+ {
+  "file": "d0-normal.svg",
+  "id": "D0",
+  "title": "Reachability",
+  "theme": "INSTRUMENTS",
+  "scenario": "normal"
+ },
+ {
+  "file": "d1-normal.svg",
+  "id": "D1",
+  "title": "Pool bars",
+  "theme": "INSTRUMENTS",
+  "scenario": "normal"
+ },
+ {
+  "file": "d2-normal.svg",
+  "id": "D2",
+  "title": "Ambient field",
+  "theme": "INSTRUMENTS",
+  "scenario": "normal"
+ },
+ {
+  "file": "a0-alarm.svg",
+  "id": "A0",
+  "title": "State lattice",
+  "theme": "ABSTRACT",
+  "scenario": "alarm"
+ },
+ {
+  "file": "a1-alarm.svg",
+  "id": "A1",
+  "title": "Flow gates",
+  "theme": "ABSTRACT",
+  "scenario": "alarm"
+ },
+ {
+  "file": "a2-alarm.svg",
+  "id": "A2",
+  "title": "MQ and SNMP",
+  "theme": "ABSTRACT",
+  "scenario": "alarm"
+ },
+ {
+  "file": "b0-alarm.svg",
+  "id": "B0",
+  "title": "Condition counts",
+  "theme": "TEXT",
+  "scenario": "alarm"
+ },
+ {
+  "file": "b1-alarm.svg",
+  "id": "B1",
+  "title": "Throughput",
+  "theme": "TEXT",
+  "scenario": "alarm"
+ },
+ {
+  "file": "b2-alarm.svg",
+  "id": "B2",
+  "title": "Load and latency",
+  "theme": "TEXT",
+  "scenario": "alarm"
+ },
+ {
+  "file": "c0-alarm.svg",
+  "id": "C0",
+  "title": "Load distribution",
+  "theme": "CHARTS",
+  "scenario": "alarm"
+ },
+ {
+  "file": "c1-alarm.svg",
+  "id": "C1",
+  "title": "Live traces",
+  "theme": "CHARTS",
+  "scenario": "alarm"
+ },
+ {
+  "file": "c2-alarm.svg",
+  "id": "C2",
+  "title": "Pool load",
+  "theme": "CHARTS",
+  "scenario": "alarm"
+ },
+ {
+  "file": "d0-alarm.svg",
+  "id": "D0",
+  "title": "Reachability",
+  "theme": "INSTRUMENTS",
+  "scenario": "alarm"
+ },
+ {
+  "file": "d1-alarm.svg",
+  "id": "D1",
+  "title": "Pool bars",
+  "theme": "INSTRUMENTS",
+  "scenario": "alarm"
+ },
+ {
+  "file": "d2-alarm.svg",
+  "id": "D2",
+  "title": "Ambient field",
+  "theme": "INSTRUMENTS",
+  "scenario": "alarm"
+ }
+]

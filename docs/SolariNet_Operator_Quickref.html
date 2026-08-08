@@ -183,6 +183,78 @@
 </table>
 </div>
 
+<!-- ============ THE STATUS PANEL ============ -->
+<h2>The status panel</h2>
+<div class="card">
+  <div style="font-size:14px;line-height:2">
+    <b>xenon</b> <code>/api/panel</code> <span class="arrow">→</span> <b>lithium</b> (<code>solariPanel</code>, polls 5s)
+    <span class="arrow">→</span> USB-CDC <span class="arrow">→</span> <b>the wall</b> (Galactic Unicorn, 53×11)
+  </div>
+  <p class="dim" style="margin:10px 0 0">A 583-LED matrix that cycles 12 screens across 4 themes.
+  It renders what xenon computed — score, alarm, counts — and owns everything else itself:
+  rotation, brightness, its own history, and the acknowledge state of the current alarm.
+  Drive it from <b>Panel</b> on the dashboard, or from the nine buttons on the unit.</p>
+</div>
+<div class="grid two" style="margin-top:14px">
+  <div class="card">
+    <h3>Reading it at a glance</h3>
+    <table>
+      <tr><td class="dim">slate, dim, still</td><td>operational</td></tr>
+      <tr><td><span class="warn">amber, pulsing</span></td><td>degraded</td></tr>
+      <tr><td><span class="crit">red</span></td><td>down (faster pulse = tier 0)</td></tr>
+      <tr><td class="dim">slate, dashed</td><td>unknown — enrolled, reporting nothing</td></tr>
+      <tr><td style="color:#7aa2f7">azure</td><td><b>never a status</b> — chrome, labels, zero counts</td></tr>
+    </table>
+    <p class="dim" style="margin:6px 0 0">A nearly-dark panel is a healthy fleet, not a dead one.
+    Every screen carries something that moves; that motion is the liveness check.</p>
+  </div>
+  <div class="card">
+    <h3>The four themes</h3>
+    <table>
+      <tr><td><b>A</b> Abstract</td><td class="dim">state lattice · flow gates · MQ/SNMP lanes</td></tr>
+      <tr><td><b>B</b> Text</td><td class="dim">condition counts · throughput · load &amp; latency</td></tr>
+      <tr><td><b>C</b> Charts</td><td class="dim">load histogram · live traces · pool load</td></tr>
+      <tr><td><b>D</b> Instruments</td><td class="dim">reachability · pool bars · ambient field</td></tr>
+    </table>
+    <p class="dim" style="margin:6px 0 0">Boots to <b>D1, Pool bars</b>. Each screen can be taken out
+    of rotation, or weighted <code>¼×</code>–<code>10×</code> against the 3/6/30s base dwell —
+    at a 30s base, 5× holds for 150s and ½× for 15s.</p>
+  </div>
+</div>
+<div class="grid two" style="margin-top:14px">
+  <div class="card">
+    <h3>When it alarms</h3>
+    <ol class="flow">
+      <li>Both edge columns go <span class="crit">red</span>, the subject prints on row 1, the detail scrolls on row 6.</li>
+      <li>A three-note tone sounds, and <b>repeats every 60s</b> until acknowledged. Auto-silences after 5 minutes — tone only.</li>
+      <li>Four pixels flash top-right: the <b>beacon</b>. It survives sleep and dimming.</li>
+      <li>Acknowledge: <b>any button on the unit</b>, or <b>ACK</b> on the dashboard. Same code path.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Panel-side faults</h3>
+    <table>
+      <tr><td><span class="warn">LINK LOST</span></td><td class="dim">&gt;15s with no frame — a <b>panel</b> fault. Check <code>solari-panel</code> on lithium and the USB cable</td></tr>
+      <tr><td style="color:#7aa2f7">NO DATA</td><td class="dim">No snapshot yet, or an empty fleet. Normal for a few seconds after a restart</td></tr>
+      <tr><td class="dim">stale</td><td class="dim">Data older than 30s. The panel keeps rendering last-good on purpose; look upstream</td></tr>
+      <tr><td class="dim">dark</td><td class="dim">Asleep (any button wakes it) or at the 25% brightness floor. Look for the beacon first</td></tr>
+    </table>
+  </div>
+</div>
+<div class="note warnb" style="margin-top:14px">
+  <b>Acknowledging silences; it never clears.</b> The alert stays active in the pipeline — ack only
+  records that a human saw the panel, and it is scoped to that alarm episode: a new episode re-arms
+  tone, inlay and beacon from scratch. Note also that <b>while an alarm is armed every physical
+  button is an acknowledge</b>, so pressing <kbd>A</kbd> for a theme change will silence the alarm instead.
+</div>
+<div class="note" style="margin-top:10px">
+  <b>The panel is the authority on its own state.</b> A control on the dashboard is a request, not a
+  switch: it shows <span class="warn">pending</span> until the panel reports back that it applied,
+  then <span class="ok">applied</span>, or <span class="crit">failed</span> after 2 minutes with no
+  confirmation. Nothing is shown as selected while a change is in flight, so a selected chip always
+  means the panel said so. Expect 5–7s of latency, and don't re-click through it.
+</div>
+
 <!-- ============ IF SOMETHING LOOKS WRONG ============ -->
 <h2>If something looks off</h2>
 <div class="grid two">
@@ -220,7 +292,8 @@
   Deeper reading: <code>docs/SolariNet_RC_Handoff.md</code> (release-candidate handoff),
   <code>docs/SolariNet_Overnight_Build.md</code>, <code>docs/design/HOST_HEALTH_CONTRACT.md</code>
   (host-health + HTTP probe contract), <code>docs/SolariNet_Incident_2026-07-07_cesium.md</code>
-  (the cesium post-mortem), and per-component READMEs under
+  (the cesium post-mortem), <code>docs/panel/SolariNet_Panel_Manual.html</code> (the full status-panel
+  manual — every screen, region by region), and per-component READMEs under
   <code>deploy/notify/</code>, <code>deploy/sorsync/</code>, <code>netdb/sor/</code>.
   &nbsp;·&nbsp; Repo: github.com/soren42/Solarinet
 </div>
