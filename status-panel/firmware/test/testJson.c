@@ -65,8 +65,13 @@ static void pushUtf8(char **buf, size_t *len, size_t *cap, unsigned cp) {
   } else if (cp < 0x800u) {
     push(buf, len, cap, (char)(0xC0u | (cp >> 6)));
     push(buf, len, cap, (char)(0x80u | (cp & 0x3Fu)));
-  } else {
+  } else if (cp < 0x10000u) {
     push(buf, len, cap, (char)(0xE0u | (cp >> 12)));
+    push(buf, len, cap, (char)(0x80u | ((cp >> 6) & 0x3Fu)));
+    push(buf, len, cap, (char)(0x80u | (cp & 0x3Fu)));
+  } else {
+    push(buf, len, cap, (char)(0xF0u | (cp >> 18)));
+    push(buf, len, cap, (char)(0x80u | ((cp >> 12) & 0x3Fu)));
     push(buf, len, cap, (char)(0x80u | ((cp >> 6) & 0x3Fu)));
     push(buf, len, cap, (char)(0x80u | (cp & 0x3Fu)));
   }
@@ -101,6 +106,15 @@ static char *parseString(JParse *P) {
   while (P->p < P->end) {
     char c = *P->p++;
     if (c == '"') return buf;
+    /* RFC 8259 §7: U+0000..U+001F MUST be escaped inside a string. Accepting
+     * them raw lets a stray newline or NUL inside a fixture value parse as
+     * "valid" and silently reshape the data the goldens are derived from, so
+     * reject them here rather than downstream. */
+    if ((unsigned char)c < 0x20u) {
+      free(buf);
+      fail(P, "unescaped control byte in string");
+      return NULL;
+    }
     if (c != '\\') { push(&buf, &len, &cap, c); continue; }
     if (P->p >= P->end) break;
     c = *P->p++;
@@ -116,7 +130,24 @@ static char *parseString(JParse *P) {
       case 'u': {
         int cp = hex4(P);
         if (cp < 0) { free(buf); fail(P, "bad \\u escape"); return NULL; }
-        /* Surrogate pairs: the fixture has none, so pass the unit through. */
+        /* A high surrogate must be followed by its low half; a bare surrogate
+         * of either kind is not a character and would push WTF-8 into the DOM.
+         * The fixture has none, but silently minting invalid UTF-8 is not a
+         * failure mode a test harness should have. */
+        if (cp >= 0xD800 && cp <= 0xDBFF) {
+          int lo;
+          if (P->end - P->p < 2 || P->p[0] != '\\' || P->p[1] != 'u') {
+            free(buf); fail(P, "lone high surrogate"); return NULL;
+          }
+          P->p += 2;
+          lo = hex4(P);
+          if (lo < 0xDC00 || lo > 0xDFFF) {
+            free(buf); fail(P, "bad low surrogate"); return NULL;
+          }
+          cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+        } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+          free(buf); fail(P, "lone low surrogate"); return NULL;
+        }
         pushUtf8(&buf, &len, &cap, (unsigned)cp);
         break;
       }
@@ -242,12 +273,34 @@ static JVal *parseValue(JParse *P) {
   }
 }
 
+JVal *jsonParseMem(const char *text, size_t len, char *err, size_t errCap) {
+  JParse P;
+  JVal *root;
+
+  if (err && errCap) err[0] = '\0';
+  P.start = text;
+  P.p = text;
+  P.end = text + len;
+  P.err = err;
+  P.errCap = errCap;
+  P.failed = 0;
+  root = parseValue(&P);
+  if (root) {
+    skipWs(&P);
+    if (P.p != P.end) {
+      jsonFree(root);
+      root = NULL;
+      if (err && errCap) snprintf(err, errCap, "trailing bytes after root value");
+    }
+  }
+  return root;
+}
+
 JVal *jsonParseFile(const char *path, char *err, size_t errCap) {
   FILE *f = fopen(path, "rb");
   char *buf;
   long size;
   size_t got;
-  JParse P;
   JVal *root;
 
   if (err && errCap) err[0] = '\0';
@@ -265,21 +318,7 @@ JVal *jsonParseFile(const char *path, char *err, size_t errCap) {
   fclose(f);
   buf[got] = '\0';
 
-  P.start = buf;
-  P.p = buf;
-  P.end = buf + got;
-  P.err = err;
-  P.errCap = errCap;
-  P.failed = 0;
-  root = parseValue(&P);
-  if (root) {
-    skipWs(&P);
-    if (P.p != P.end) {
-      jsonFree(root);
-      root = NULL;
-      if (err && errCap) snprintf(err, errCap, "trailing bytes after root value");
-    }
-  }
+  root = jsonParseMem(buf, got, err, errCap);
   free(buf);
   return root;
 }

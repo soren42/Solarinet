@@ -36,6 +36,11 @@ struct JVal {
  * Input: path; err buffer for a message. Output: root, or NULL on failure. */
 JVal *jsonParseFile(const char *path, char *err, size_t errCap);
 
+/* Purpose: parse a JSON document already in memory. Mainly so the malformed-
+ * input corpus can be asserted without scattering temp files.
+ * Input: text and its length; err buffer. Output: root, or NULL on failure. */
+JVal *jsonParseMem(const char *text, size_t len, char *err, size_t errCap);
+
 /* Purpose: release a DOM. Input: root (NULL ok). Output: none. */
 void jsonFree(JVal *v);
 

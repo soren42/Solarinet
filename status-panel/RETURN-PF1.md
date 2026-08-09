@@ -227,3 +227,134 @@ This closes RETURN-AW3 UNVERIFIED #3 for the gate, internet and wanBackup layers
 10. **No push, no deploy.** The commit sits on the worktree branch only. The firmware fix has
     not been built for the RP2350 target — only under the host gcc — so the Pico SDK build
     is unverified against this change.
+
+---
+
+# Fix round — Codex cross-lab review of 792aedc (BLOCK)
+
+Three items addressed. No golden framebuffer changed as a result: a full `PARITY_REGEN=1`
+pass after the round produced byte-identical files, which is also a second, unplanned piece
+of evidence for the determinism UNVERIFIED #2 worries about.
+
+| Suite | After the fix round |
+|---|---|
+| `make -C status-panel/firmware/test` | green — new suite **107 passed / 0 failed** (was 90) |
+| `node tests/dashboard/test_panel_parity.js` | **59 passed / 0 failed** (was 55) |
+| `node tests/dashboard/test_panel_aw.js` | **150 passed / 0 failed** (unchanged) |
+
+## 1 (MUST) — golden regeneration is now CI-unsafe by design
+
+`panelParityTest` refused nothing before: `PARITY_REGEN=1` rewrote every committed golden
+wherever it ran. In CI that is a hole rather than a convenience — a real rendering
+regression would rewrite its own expectation and report success, and the diff nobody reads
+would land in the branch.
+
+`regenRefusedInCI()` now runs as the first statement of `main()`, before the fixture is even
+loaded. If `PARITY_REGEN` **and** `CI` are both truthy the binary prints a plain explanation
+to stderr and **exits 2** without touching `fixtures/golden/`. Truthiness is
+`envTrue()`: set, non-empty, and not `0` / `false` / `FALSE` / `no` / `off`, so GitHub
+Actions' `CI=true`, a runner's `CI=1`, and a developer's deliberate local `CI=false` all
+behave as intended.
+
+Test-visible note, and how it was checked:
+
+```
+$ CI=true PARITY_REGEN=1 ./panelParityTest ; echo $?
+panelParityTest: REFUSING to regenerate goldens.
+  PARITY_REGEN and CI are both set. ...
+2
+```
+
+`md5sum` of `panel-A1.txt` was taken before and after — unchanged. `CI=false PARITY_REGEN=1`
+still regenerates, also confirmed. This is a *refusal path*, not an assertion, so it does not
+appear in the pass count; the exit-2 invocation above is the check, and it is written into
+the `main()` comment so the next reader can rerun it. CI wiring itself is the coordinator's
+in `ci.yml`.
+
+## 2 (SHOULD) — `testJson` rejects malformed input, with a corpus
+
+Three parser changes:
+
+- **Unescaped control bytes are now a parse error.** RFC 8259 §7 requires U+0000–U+001F to be
+  escaped inside a string; accepting them raw let a stray newline or NUL reshape a fixture
+  value while still "parsing fine".
+- **Lone surrogates are rejected** (this was the optional item; it was cheap). A high
+  surrogate must be followed by its low half, which is now decoded into a real code point,
+  and a bare surrogate of either kind fails. `pushUtf8()` gained the 4-byte branch it needed
+  to encode the result — previously any astral code point would have been mis-encoded.
+- **`jsonParseMem()`** was factored out of `jsonParseFile()` (which now delegates) so the
+  corpus can be asserted in-memory without scattering temp files. Trailing-garbage rejection
+  already existed and is now covered by a test rather than assumed.
+
+`runJsonCorpus()` in `panelParityTest.c` runs before anything renders: **10 reject cases**
+(raw control byte, embedded NUL, truncated object, truncated array, unterminated string,
+trailing garbage, lone high surrogate, lone low surrogate, bad escape, missing colon) and
+**3 accept cases** (escaped control byte, valid surrogate pair, trailing whitespace). Every
+case runs under the existing ASAN/UBSAN build and frees its result, so a leak or an
+overread on the error paths fails the suite.
+
+## 3 (SHOULD) — the leg exemption is now by coordinate, not by hue
+
+The reviewer was right that "any firmware-only `cQuiet` pixel is a leg" could swallow a new
+non-leg quiet divergence anywhere on the panel. **It turned out to be tractable without
+reimplementing `a1Leg` geometry**, via palette identity:
+
+Inside an A1 render `cQuiet` has exactly one source. `a1Leg()` is the only thing that uses
+it; gates and particles take their colour from `a1GateColor()`, which returns
+`cCrit`/`cWarn`/`cAzure` and never `cQuiet`. CONTRACT-AW §4 is what keeps that true —
+`cQuiet` is connective texture and never a state carrier. So the existing `panelFbSet`
+wrapper now records, for the two A1 cases only, every coordinate painted in `cQuiet`, and
+dumps it to a sidecar beside the golden:
+
+```
+status-panel/fixtures/golden/panel-A1.legs.txt            96 coordinates
+status-panel/fixtures/golden/panel-A1-routerdown.legs.txt 96 coordinates
+```
+
+These are a **dump of what the real renderer painted**, not a recomputation — no leg
+geometry is derived on either side. They are treated exactly like goldens: `PARITY_REGEN=1`
+writes them, a normal run compares them (`A1: leg path matches the sidecar`), and a
+non-empty check keeps the JS exemption from going vacuous.
+
+`test_panel_parity.js` block [4] now asserts four things instead of two:
+
+1. no pixel is lit on the page but dark in the firmware (unchanged);
+2. **every firmware-only lit pixel sits on a coordinate `a1Leg()` actually painted**;
+3. every exempted leg pixel is still `cQuiet`-hued (the old hue check, kept, now applied
+   *on top of* the coordinate check rather than instead of it);
+4. the exemption count cannot exceed the painted leg path (73 ≤ 96 in both variants).
+
+**Both detectors were verified by negative test.** Deleting a single real coordinate
+(`7 2`) from the sidecar produced, from the two sides independently:
+
+```
+FAIL - primary gear: every firmware-only lit pixel sits on a real a1Leg() coordinate  [7,2=quiet]
+FAIL: A1: leg path matches the sidecar — leg path drifted: 1 newly painted, 0 no longer painted
+```
+
+**Residual weakness, stated precisely** (and written into both the test header and the
+block [4] comment): this proves *position*, not *brightness*. A leg whose brightness changed,
+or a non-leg element that moved onto a leg coordinate and lit it, is still forgiven by block
+[4]. What pins leg brightness is the committed C golden, which is a full RGB frame — block
+[4]'s job is only to bound the C-vs-page divergence. A second, narrower gap: the palette-
+identity trick is sound only while `cQuiet` has a single user inside A1. If a future A1
+element adopts `cQuiet` the sidecar over-collects, which is why assertion 4's count cap is
+there as a backstop rather than being redundant.
+
+## Additional UNVERIFIED from this round
+
+11. **The CI refusal is verified by hand, not by a test.** It is a process-exit path, so
+    asserting it from inside the same process is not possible; a shell-level check in the
+    Makefile was considered and skipped as more machinery than it earns. If someone
+    refactors `main()` and drops the call, nothing fails — the comment above the function
+    is the only guard.
+12. **`envTrue()` interprets `CI` heuristically.** GitHub Actions and the common runners set
+    `CI=true`/`CI=1`, but a CI system that sets some other spelling, or none, gets no
+    protection. The refusal is a safety net, not a guarantee.
+13. **The corpus is small and hand-picked.** Ten malformed inputs are not a fuzzer. Deeply
+    nested input, numeric edge cases (huge exponents, `-0`, leading zeros) and duplicate
+    keys are still untested, and `testJson` remains a harness convenience that should not be
+    reused elsewhere.
+14. **The leg sidecar is only as good as its regeneration discipline.** Like the goldens, a
+    regen that is committed without reading the diff launders a real change into the
+    expectation. The count cap and the golden bound the damage; they do not prevent it.

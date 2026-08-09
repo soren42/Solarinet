@@ -33,10 +33,14 @@
                firmware 0.04 + rx*0.06 (up to 0.40), page 0.035 + (rx/7)*0.05
                (up to 0.085), roughly 5x dimmer — so at any fixed threshold the
                firmware's connective wires read as lit and the page's do not.
-               Test [5] pins that divergence down precisely instead of waving at
-               it: every pixel lit in the firmware but not on the page must be
-               cQuiet-hued, i.e. a leg, and there must be NO pixel lit on the
-               page but dark in the firmware. See RETURN-PF1.md.
+               Block [4] pins that divergence down by COORDINATE instead of
+               waving at it: every pixel lit in the firmware but not on the page
+               must appear in panel-*.legs.txt — the set the C harness dumps out
+               of the real a1Leg() — and must still be cQuiet-hued, the count
+               may not exceed that leg path, and there must be NO pixel lit on
+               the page but dark in the firmware. Residual weakness, stated in
+               full at block [4] and in RETURN-PF1.md: this proves position, not
+               brightness. The committed C golden is what pins leg brightness.
                (c) PARTICLES. The two integrators differ by design (90 particles
                keyed to a source gate vs 72 keyed to a leg) and reconciling them
                is out of scope. The fixture sets txLevel 0 on every gear row, so
@@ -152,6 +156,26 @@ function readGolden(id) {
     }));
   }
   return rows;
+}
+
+/* Purpose: read the committed leg-path sidecar the C harness emits.
+   Input: golden id. Output: a Set of "x,y" strings.
+
+   The C harness records these by watching the REAL a1Leg() paint, identifying
+   the leg layer by palette identity (cQuiet is the only colour a1Leg uses, and
+   gates take theirs from a1GateColor(), which never returns cQuiet). Nothing
+   about the leg geometry is recomputed here or there — this file is a dump of
+   what the firmware actually painted, which is what lets block [4] excuse
+   *named* pixels rather than any quiet pixel anywhere. */
+function readLegs(id) {
+  const file = path.join(GOLDEN, "panel-" + id + ".legs.txt");
+  const set = new Set();
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    if (!line || line[0] === "#") continue;
+    const m = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (m) set.add(m[1] + "," + m[2]);
+  }
+  return set;
 }
 
 /* ---------- pixel probes ---------- */
@@ -270,25 +294,46 @@ function compare(label, variantKey, goldenId) {
      the page does not must be a leg — the one layer whose brightness curves are
      known to differ — and the page must never light a pixel the firmware leaves
      dark. If either half of that ever fails, the two A1s have drifted in
-     something that is NOT the documented leg-brightness gap. */
+     something that is NOT the documented leg-brightness gap.
+
+     The exemption is by COORDINATE, from the sidecar the C harness dumps out of
+     the real a1Leg(): a firmware-only lit pixel is forgiven only if a1Leg
+     actually painted at that (x,y). "It happens to be quiet-hued" is not
+     enough — that earlier, looser test would have swallowed any new quiet
+     divergence anywhere on the panel. Hue is still checked on top, so a leg
+     coordinate that stops being quiet also fails.
+
+     RESIDUAL WEAKNESS, stated precisely: this proves a firmware-only pixel sits
+     on a leg path, not that its BRIGHTNESS is right. A leg that changed
+     brightness — or a non-leg element that moved onto a leg coordinate and lit
+     it — is still forgiven here. The committed C golden is what pins leg
+     brightness; block [4] only bounds the C-vs-page divergence. */
   console.log("\n[4] " + label + " — the divergence is confined to the leg layer");
-  const onlyC = [], onlyJ = [], onlyCnonQuiet = [];
+  const legs = readLegs(goldenId);
+  const onlyC = [], onlyJ = [], notOnLeg = [], onLegNotQuiet = [];
   for (let y = 0; y < M.PH; y++) {
     for (let x = 0; x < M.PW; x++) {
       const j = lit(jsAt(x, y)), c = lit(cAt(x, y));
       if (c && !j) {
-        onlyC.push(x + "," + y);
-        if (hue(cAt(x, y)) !== "quiet") onlyCnonQuiet.push(x + "," + y + "=" + hue(cAt(x, y)));
+        const key = x + "," + y;
+        onlyC.push(key);
+        if (!legs.has(key)) notOnLeg.push(key + "=" + hue(cAt(x, y)));
+        else if (hue(cAt(x, y)) !== "quiet") onLegNotQuiet.push(key + "=" + hue(cAt(x, y)));
       }
       if (j && !c) onlyJ.push(x + "," + y);
     }
   }
   ok(label + ": no pixel is lit on the page but dark in the firmware",
      onlyJ.length === 0, onlyJ.slice(0, 8).join(" "));
-  ok(label + ": every firmware-only lit pixel is a cQuiet leg pixel",
-     onlyCnonQuiet.length === 0, onlyCnonQuiet.slice(0, 8).join(" "));
-  console.log("       (" + onlyC.length + " firmware-only lit pixels, all leg layer; " +
-              "see the header's exclusion (b))");
+  ok(label + ": every firmware-only lit pixel sits on a real a1Leg() coordinate",
+     notOnLeg.length === 0, notOnLeg.slice(0, 8).join(" "));
+  ok(label + ": every exempted leg pixel is still cQuiet-hued",
+     onLegNotQuiet.length === 0, onLegNotQuiet.slice(0, 8).join(" "));
+  ok(label + ": the exemption cannot exceed the painted leg path (" +
+     onlyC.length + " <= " + legs.size + ")",
+     onlyC.length <= legs.size, "exempted more pixels than a1Leg() painted");
+  console.log("       (" + onlyC.length + " firmware-only lit pixels, all on the " +
+              legs.size + "-pixel leg path; see the header's exclusion (b))");
   return { onlyC: onlyC.length, gates: L.gates.length };
 }
 

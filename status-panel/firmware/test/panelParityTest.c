@@ -45,6 +45,9 @@
  * ---------------
  * G   per-screen golden framebuffers, committed under fixtures/golden/.
  *     Regenerate with PARITY_REGEN=1 — and read the diff before you commit it.
+ *     Regeneration is a DEVELOPER action and stays one: if CI is also set in
+ *     the environment the binary refuses and exits 2 rather than rewriting the
+ *     evidence a CI run exists to check. See regenRefusedInCI().
  * T1  no small-font glyph shares a row with the scrolling ticker (the B1
  *     clipped-reading defect). BIG is exempt: the ticker crossing the BIG
  *     watermark is the design's own watermark technique.
@@ -130,6 +133,10 @@ static int  gOverflow = 0;
 static char gOverflowNote[160];
 
 /* T3 guard: pixels last painted structurally in a conditional palette colour. */
+/* Leg-path capture, armed only for the A1 cases. See __wrap_panelFbSet. */
+static int           gCollectQuiet;
+static unsigned char gLegPix[PANEL_H][PANEL_W];
+
 static unsigned char gGuard[PANEL_H][PANEL_W];
 static const float  *gGuardCol[PANEL_H][PANEL_W];
 static float         gGuardB[PANEL_H][PANEL_W];
@@ -193,6 +200,18 @@ static int inPanel(int x, int y) {
 
 void __wrap_panelFbSet(int x, int y, PanelColor c, float b) {
   if (isTextTag(gTag)) noteGlyphRow(y);
+  /* Leg-path capture. Inside an A1 render cQuiet has exactly one source —
+   * a1Leg() — because gates take their colour from a1GateColor(), which returns
+   * cCrit/cWarn/cAzure and never cQuiet, and the particles reuse a1GateColor()
+   * too. CONTRACT-AW §4 is what guarantees that stays true: cQuiet is
+   * connective texture and never a state carrier. So this records the leg layer
+   * by PALETTE IDENTITY, deriving no geometry — the coordinates come from the
+   * real a1Leg(). The dump lets tests/dashboard/test_panel_parity.js exempt
+   * *these specific pixels* from its diff instead of exempting any quiet pixel
+   * anywhere. If cQuiet ever gains a second use inside A1 this over-collects,
+   * which is why the JS side also caps the exemption by count. */
+  if (gCollectQuiet && !isTextTag(gTag) && c == cQuiet && inPanel(x, y))
+    gLegPix[y][x] = 1u;
   if (inPanel(x, y)) {
     /* A structural write in a conditional colour arms the T3 guard; any other
      * write replaces the pixel outright and disarms it. */
@@ -446,6 +465,16 @@ static void shotPush(float t) {
   gShot.count++;
 }
 
+/* Purpose: read a truthy environment flag. Input: name. Output: 0/1.
+ * Set, non-empty and not an explicit negation. GitHub Actions sets CI=true;
+ * some runners set CI=1; a developer who exported CI=false locally means it. */
+static int envTrue(const char *name) {
+  const char *v = getenv(name);
+  if (!v || !*v) return 0;
+  return strcmp(v, "0") && strcmp(v, "false") && strcmp(v, "FALSE") &&
+         strcmp(v, "no") && strcmp(v, "off");
+}
+
 /* Purpose: build the golden file path. Input: id, buffer. Output: buffer. */
 static const char *goldenPath(const char *id, char *buf, size_t cap) {
   snprintf(buf, cap, "%s/panel-%s.txt", GOLDEN_DIR, id);
@@ -472,6 +501,65 @@ static int goldenWrite(const char *id, const char *note) {
     }
   }
   fclose(f);
+  return 1;
+}
+
+/* Purpose: build the leg-path sidecar path. Input: id, buffer. Output: buffer. */
+static const char *legsPath(const char *id, char *buf, size_t cap) {
+  snprintf(buf, cap, "%s/panel-%s.legs.txt", GOLDEN_DIR, id);
+  return buf;
+}
+
+/* Purpose: emit the leg-path coordinate set collected during an A1 render.
+ * Input: id. Output: 1 on success.
+ *
+ * This exists purely so the JS parity diff can name the pixels it excuses.
+ * Format: a "# " header, then one "x y" pair per line, ascending. */
+static int legsWrite(const char *id) {
+  char path[256];
+  FILE *f = fopen(legsPath(id, path, sizeof path), "w");
+  if (!f) return 0;
+  fprintf(f, "# leg-path coordinates for %s, captured from the real a1Leg() by\n"
+             "# palette identity (cQuiet) — see panelParityTest.c. One \"x y\" per\n"
+             "# line. Consumed by tests/dashboard/test_panel_parity.js.\n", id);
+  for (int y = 0; y < PANEL_H; y++)
+    for (int x = 0; x < PANEL_W; x++)
+      if (gLegPix[y][x]) fprintf(f, "%d %d\n", x, y);
+  fclose(f);
+  return 1;
+}
+
+/* Purpose: check the committed leg-path sidecar still matches what a1Leg()
+ * paints. Input: id, message buffer. Output: 1 when identical. */
+static int legsCompare(const char *id, char *msg, size_t cap) {
+  char path[256];
+  FILE *f = fopen(legsPath(id, path, sizeof path), "r");
+  unsigned char seen[PANEL_H][PANEL_W];
+  char line[128];
+  int x, y, extra = 0, missing = 0;
+
+  if (!f) {
+    snprintf(msg, cap, "no leg sidecar at %.160s — run with PARITY_REGEN=1", path);
+    return 0;
+  }
+  memset(seen, 0, sizeof seen);
+  while (fgets(line, sizeof line, f)) {
+    if (line[0] == '#' || line[0] == '\n') continue;
+    if (sscanf(line, "%d %d", &x, &y) != 2) continue;
+    if (x < 0 || x >= PANEL_W || y < 0 || y >= PANEL_H) { ++extra; continue; }
+    seen[y][x] = 1u;
+  }
+  fclose(f);
+  for (y = 0; y < PANEL_H; y++)
+    for (x = 0; x < PANEL_W; x++) {
+      if (gLegPix[y][x] && !seen[y][x]) ++missing;
+      if (!gLegPix[y][x] && seen[y][x]) ++extra;
+    }
+  if (missing || extra) {
+    snprintf(msg, cap, "leg path drifted: %d newly painted, %d no longer painted",
+             missing, extra);
+    return 0;
+  }
   return 1;
 }
 
@@ -558,6 +646,8 @@ typedef struct {
   int wantArmed;          /* T3 must be armed here: the fixture drives this
                              screen's bar into the warn/crit bands          */
   int wantScroll;         /* T1 must have a ticker band here                */
+  int dumpLegs;           /* also emit the cQuiet leg-path sidecar for the JS
+                             parity diff (A1 only)                           */
 } Case;
 
 static const PanelScreenFn kScreens[12] = {
@@ -574,28 +664,28 @@ static const char *kScreenIds[12] = {
  * fixture, this screen is supposed to paint a conditional cell / a ticker".
  * They fail if a future fixture edit makes T1 or T3 vacuous here. */
 static const Case kCases[] = {
-  { "A0", "state lattice",            K_SCREEN,   0, NULL, 1, 0 },
-  { "A1", "flow gates",               K_SCREEN,   1, NULL, 0, 0 },
-  { "A2", "MQ and SNMP",              K_SCREEN,   2, NULL, 0, 0 },
-  { "B0", "condition counts",         K_SCREEN,   3, NULL, 0, 0 },
-  { "B1", "throughput",               K_SCREEN,   4, NULL, 1, 1 },
-  { "B2", "load and latency",         K_SCREEN,   5, NULL, 0, 0 },
-  { "C0", "load distribution",        K_SCREEN,   6, NULL, 0, 0 },
-  { "C1", "live traces",              K_SCREEN,   7, NULL, 0, 0 },
-  { "C2", "pool load",                K_SCREEN,   8, NULL, 1, 0 },
-  { "D0", "reachability waterfall",   K_SCREEN,   9, NULL, 0, 0 },
-  { "D1", "pool bars",                K_SCREEN,  10, NULL, 0, 1 },
-  { "D2", "ambient field",            K_SCREEN,  11, NULL, 0, 0 },
+  { "A0", "state lattice",            K_SCREEN,   0, NULL, 1, 0, 0 },
+  { "A1", "flow gates",               K_SCREEN,   1, NULL, 0, 0, 1 },
+  { "A2", "MQ and SNMP",              K_SCREEN,   2, NULL, 0, 0, 0 },
+  { "B0", "condition counts",         K_SCREEN,   3, NULL, 0, 0, 0 },
+  { "B1", "throughput",               K_SCREEN,   4, NULL, 1, 1, 0 },
+  { "B2", "load and latency",         K_SCREEN,   5, NULL, 0, 0, 0 },
+  { "C0", "load distribution",        K_SCREEN,   6, NULL, 0, 0, 0 },
+  { "C1", "live traces",              K_SCREEN,   7, NULL, 0, 0, 0 },
+  { "C2", "pool load",                K_SCREEN,   8, NULL, 1, 0, 0 },
+  { "D0", "reachability waterfall",   K_SCREEN,   9, NULL, 0, 0, 0 },
+  { "D1", "pool bars",                K_SCREEN,  10, NULL, 0, 1, 0 },
+  { "D2", "ambient field",            K_SCREEN,  11, NULL, 0, 0, 0 },
   { "A1-routerdown", "flow gates, router down (CONTRACT-AW §10 A-3)",
-                                      K_SCREEN,   1, "routerDown", 0, 0 },
+                                      K_SCREEN,   1, "routerDown", 0, 0, 1 },
   { "inlay",    "A0 under the universal alert inlay",
-                                      K_INLAY,    0, NULL, 1, 1 },
+                                      K_INLAY,    0, NULL, 1, 1, 0 },
   { "help",     "Vol+ help overlay, all twelve screens",
-                                      K_HELP,     0, NULL, 0, 0 },
+                                      K_HELP,     0, NULL, 0, 0, 0 },
   { "linklost", "CONTRACT §4 link-lost plate",
-                                      K_LINKLOST, 0, NULL, 0, 0 },
+                                      K_LINKLOST, 0, NULL, 0, 0, 0 },
   { "nodata",   "CONTRACT §9 zero-node fleet",
-                                      K_NODATA,   0, NULL, 0, 0 }
+                                      K_NODATA,   0, NULL, 0, 0, 0 }
 };
 #define NCASES ((int)(sizeof kCases / sizeof kCases[0]))
 
@@ -612,6 +702,10 @@ static void runCase(const Case *c) {
   char t1Note[160] = "", t2Note[160] = "", t3Note[160] = "";
 
   gShot.count = 0;
+  /* The leg path is static across frames, so the union over the run is the same
+   * set any single frame paints; taking the union just removes the assumption. */
+  gCollectQuiet = c->dumpLegs;
+  memset(gLegPix, 0, sizeof gLegPix);
   if (c->gearVariant && !useGearVariant(c->gearVariant)) {
     snprintf(name, sizeof name, "%s: gear variant '%s'", c->id, c->gearVariant);
     ok(0, name, "missing from the fixture");
@@ -713,18 +807,114 @@ static void runCase(const Case *c) {
     ok(maxScrollRows > 0, name, msg);
   }
 
-  if (getenv("PARITY_REGEN")) {
+  if (envTrue("PARITY_REGEN")) {
     snprintf(name, sizeof name, "%s: golden regenerated", c->id);
     ok(goldenWrite(c->id, c->note), name, "could not write the golden file");
+    if (c->dumpLegs) {
+      snprintf(name, sizeof name, "%s: leg path regenerated", c->id);
+      ok(legsWrite(c->id), name, "could not write the leg sidecar");
+    }
   } else {
     msg[0] = '\0';
     snprintf(name, sizeof name, "%s: golden framebuffers match", c->id);
     ok(goldenCompare(c->id, msg, sizeof msg), name, msg);
+    if (c->dumpLegs) {
+      msg[0] = '\0';
+      snprintf(name, sizeof name, "%s: leg path matches the sidecar", c->id);
+      ok(legsCompare(c->id, msg, sizeof msg), name, msg);
+    }
+  }
+  if (c->dumpLegs) {
+    int n = 0;
+    for (int y = 0; y < PANEL_H; y++)
+      for (int x = 0; x < PANEL_W; x++) n += gLegPix[y][x] ? 1 : 0;
+    snprintf(name, sizeof name, "%s: leg path is non-empty", c->id);
+    snprintf(msg, sizeof msg, "a1Leg() painted nothing; the JS exemption would "
+                              "be vacuous");
+    ok(n > 0, name, msg);
+  }
+  gCollectQuiet = 0;
+}
+
+/* PARITY_REGEN rewrites every committed golden. In CI that is not a
+ * convenience, it is a hole: a real rendering regression would rewrite the
+ * evidence and report success, and the diff nobody reads would land in the
+ * branch. So the two flags together are an error, loudly, before anything
+ * renders. Regenerating goldens is a local action whose diff a human reviews.
+ * This is asserted by the CI-safety case in runCase()'s table only indirectly;
+ * the direct check is the exit-2 path below, exercised by:
+ *     CI=true PARITY_REGEN=1 ./panelParityTest   # must exit 2, goldens intact
+ */
+static int regenRefusedInCI(void) {
+  if (!envTrue("PARITY_REGEN") || !envTrue("CI")) return 0;
+  fprintf(stderr,
+          "panelParityTest: REFUSING to regenerate goldens.\n"
+          "  PARITY_REGEN and CI are both set. Regeneration overwrites the\n"
+          "  committed framebuffers in %s, which is exactly the evidence a CI\n"
+          "  run exists to check — a rendering regression would rewrite its own\n"
+          "  expectation and pass.\n"
+          "  Regenerate locally, read the diff, and commit it.\n",
+          GOLDEN_DIR);
+  return 1;
+}
+
+/* Purpose: assert the fixture parser rejects malformed input. Output: none.
+ * The harness's whole claim is that both renderers read the SAME BYTES, which
+ * rests on the C side parsing those bytes correctly. A parser that quietly
+ * accepts a truncated object or a raw control byte can reshape the fixture
+ * without anyone noticing, so the accept path is not the only one worth
+ * testing. Each case must fail to parse AND leave no leak for ASAN to find. */
+static void runJsonCorpus(void) {
+  static const struct { const char *why; const char *text; size_t len; } bad[] = {
+    { "raw control byte in a string",
+      "{\"a\":\"x\ny\"}", 11 },
+    { "embedded NUL in a string",
+      "{\"a\":\"x\0y\"}", 11 },
+    { "truncated object",
+      "{\"a\":1,\"b\":", 11 },
+    { "truncated array",
+      "[1,2,", 5 },
+    { "unterminated string",
+      "{\"a\":\"oops}", 11 },
+    { "trailing garbage after the root",
+      "{\"a\":1} junk", 12 },
+    { "lone high surrogate",
+      "{\"a\":\"\\ud83d\"}", 14 },
+    { "lone low surrogate",
+      "{\"a\":\"\\udc00\"}", 14 },
+    { "bad escape",
+      "{\"a\":\"\\q\"}", 10 },
+    { "missing colon",
+      "{\"a\" 1}", 7 },
+  };
+  static const struct { const char *why; const char *text; size_t len; } good[] = {
+    { "escaped control byte",   "{\"a\":\"x\\ny\"}", 12 },
+    { "valid surrogate pair",   "{\"a\":\"\\ud83d\\ude00\"}", 20 },
+    { "trailing whitespace",    "{\"a\":1}\n ", 9 },
+  };
+  char name[128], err[128];
+  size_t i;
+
+  for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    JVal *v = jsonParseMem(bad[i].text, bad[i].len, err, sizeof err);
+    snprintf(name, sizeof name, "json corpus: rejects %s", bad[i].why);
+    ok(v == NULL, name, "parsed as valid");
+    jsonFree(v);
+  }
+  for (i = 0; i < sizeof good / sizeof good[0]; i++) {
+    JVal *v = jsonParseMem(good[i].text, good[i].len, err, sizeof err);
+    snprintf(name, sizeof name, "json corpus: accepts %s", good[i].why);
+    ok(v != NULL && jGet(v, "a") != NULL, name, err);
+    jsonFree(v);
   }
 }
 
 int main(void) {
   int samples;
+
+  if (regenRefusedInCI()) return 2;
+
+  runJsonCorpus();
 
   samples = loadFixture();
   if (!samples) {
