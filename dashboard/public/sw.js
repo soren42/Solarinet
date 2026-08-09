@@ -19,7 +19,7 @@
    ============================================================ */
 "use strict";
 
-const CACHE_VERSION = "solari-v5";
+const CACHE_VERSION = "solari-v6";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
 const API_CACHE = CACHE_VERSION + "-api";
 

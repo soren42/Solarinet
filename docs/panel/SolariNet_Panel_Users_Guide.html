@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet — Status Panel User's Guide</title>
+<style>
+:root{
+  --unit:8px;
+  --font-display:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+html[data-mode="dark"]{
+  --color-bg:#070A0F; --color-surface:#0E151D; --color-raised:#16202C;
+  --color-text:#DFE8F2; --color-dim:#9DB0C4; --color-faint:#6E8399;
+  --color-divider:#22303F; --color-divider-strong:#31465C;
+  --color-accent:#22B8F0; --color-accent-700:#5FCCFA;
+  --color-ok:#3DD68C; --color-warn:#F5A623; --color-crit:#FF4D5E;
+  --color-maint:#9B87FF; --color-unknown:#7C8AA0;
+  --desk:#03050A;
+}
+html[data-mode="light"]{
+  --color-bg:#FFFFFF; --color-surface:#F4F7FA; --color-raised:#EAEFF5;
+  --color-text:#0F1720; --color-dim:#47596C; --color-faint:#5C6E80;
+  --color-divider:#D3DCE6; --color-divider-strong:#B3C1D0;
+  --color-accent:#0A7FB0; --color-accent-700:#065C81;
+  --color-ok:#0B7F53; --color-warn:#94590A; --color-crit:#C4172C;
+  --color-maint:#5B41C8; --color-unknown:#5A6B7D;
+  --desk:#B9C3CE;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--desk);color:var(--color-text);font-family:var(--font-body);-webkit-font-smoothing:antialiased}
+.chrome{position:fixed;top:12px;right:12px;z-index:99;display:flex;gap:6px;background:var(--color-surface);border:1px solid var(--color-divider);border-radius:8px;padding:6px}
+.chrome button{font:600 11px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-dim);background:var(--color-raised);border:1px solid var(--color-divider);border-radius:5px;padding:7px 10px;cursor:pointer}
+.chrome button:hover{color:var(--color-accent);border-color:var(--color-accent)}
+.stack{display:flex;flex-direction:column;align-items:center;gap:22px;padding:26px 12px 60px}
+.page{width:816px;height:1056px;padding:44px 60px 36px;background:var(--color-bg);color:var(--color-text);display:flex;flex-direction:column;gap:12px;position:relative;overflow:hidden;box-shadow:0 6px 26px rgba(0,0,0,.42)}
+.ph{display:flex;gap:14px;align-items:flex-start}
+.bar{width:4px;align-self:stretch;background:var(--color-accent);flex:0 0 4px;border-radius:2px}
+.eyebrow{font:700 12px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--color-accent-700)}
+h1.t{font:600 29px/1.12 var(--font-display);letter-spacing:-.015em;margin:5px 0 0}
+.sub{font:400 13px/1.45 var(--font-body);color:var(--color-dim);margin-top:5px;max-width:62ch}
+.rule{height:2px;background:var(--color-text);opacity:.9}
+.body{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0}
+h2{font:600 17px/1.2 var(--font-display);margin:0;letter-spacing:-.01em}
+h3{font:700 12px/1.1 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--color-faint);margin:0}
+p{font:400 13px/1.45 var(--font-body);margin:0;color:var(--color-text)}
+p.d{color:var(--color-dim)}
+code{font:500 12px/1 var(--font-mono);background:var(--color-raised);border:1px solid var(--color-divider);border-radius:4px;padding:1px 5px}
+table{border-collapse:collapse;width:100%}
+th{font:700 11px/1.2 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-faint);text-align:left;padding:6px 10px;border-bottom:2px solid var(--color-divider-strong)}
+td{font:400 12.5px/1.4 var(--font-body);padding:7px 10px;border-bottom:1px solid var(--color-divider);vertical-align:top}
+td.k{font:600 12px/1.3 var(--font-mono);white-space:nowrap;color:var(--color-accent-700)}
+.foot{margin-top:auto;border-top:1px solid var(--color-divider);padding-top:8px;display:flex;justify-content:space-between;font:400 10.5px/1 var(--font-mono);color:var(--color-faint)}
+.screengrid{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px}
+.scr{display:flex;flex-direction:column;gap:5px;border:1px solid var(--color-divider);border-radius:6px;padding:9px 10px;background:var(--color-surface)}
+.scr img{width:100%;height:auto;border-radius:3px;background:#000}
+.scr .n{font:700 11px/1 var(--font-mono);letter-spacing:.09em;color:var(--color-accent-700)}
+.scr p{font-size:11px;line-height:1.4;color:var(--color-dim)}
+.callout{border-left:3px solid var(--color-warn);background:var(--color-surface);padding:9px 12px;border-radius:0 6px 6px 0}
+.callout.crit{border-left-color:var(--color-crit)}
+.callout.ok{border-left-color:var(--color-ok)}
+.callout p{font-size:12.5px}
+ol.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:5px}
+ol.steps li{font:400 12.5px/1.45 var(--font-body)}
+a{color:var(--color-accent);text-decoration:none}
+a:hover{text-decoration:underline}
+@media print{
+  .chrome{display:none}
+  body{background:#fff}
+  .stack{padding:0;gap:0}
+  .page{width:auto;height:auto;min-height:9.6in;box-shadow:none;page-break-after:always;padding:0.45in 0.6in 0.35in}
+  .page:last-child{page-break-after:auto}
+  @page{size:letter;margin:0.35in}
+}
+</style>
+</head>
+<body>
+<div class="chrome">
+  <button onclick="document.documentElement.dataset.mode=document.documentElement.dataset.mode==='dark'?'light':'dark'">Mode</button>
+  <button onclick="window.print()">Print</button>
+</div>
+<div class="stack">
+
+<!-- ================================================== page 1 · cover -->
+<section class="page">
+  <div class="ph"><div class="bar"></div><div>
+    <div class="eyebrow">Instrument documentation · User's guide</div>
+    <h1 class="t">Status Panel — User's Guide</h1>
+    <p class="sub">The five-minute version: what the wall is telling you, which buttons do what, how to answer an alarm, and how to shape the rotation from the dashboard. For the full mechanism, colour law, and per-pixel anatomy, read the <a href="SolariNet_Panel_Manual.html">Operator Manual</a>.</p>
+  </div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h2>What you are looking at</h2>
+    <p>A Pimoroni Galactic Unicorn — 53×11 LEDs on the wall — rendering live SolariNet fleet health. <b>xenon</b> computes the state and serves it; the <b>solariPanel</b> daemon on <b>lithium</b> polls it every 5&nbsp;s and frames it to the panel over USB every 2&nbsp;s; the panel firmware animates at 25&nbsp;Hz from the last snapshot it received. The panel never computes fleet state — it renders what arrived, and it tells you loudly when nothing is arriving.</p>
+    <h3>The three ideas that explain everything</h3>
+    <table>
+      <tr><td class="k">Twelve screens</td><td>Four themes — <b>A&nbsp;Abstract</b>, <b>B&nbsp;Text</b>, <b>C&nbsp;Charts</b>, <b>D&nbsp;Instruments</b> — of three screens each, rotating on a dwell you control. The panel boots on D1, the ambient pool view.</td></tr>
+      <tr><td class="k">Colour is state</td><td>Green healthy · azure quiet/informational · amber degraded or busy · red down or critical · violet maintenance · slate unknown. Brightness carries magnitude or tier, hue carries condition — everywhere, on every screen.</td></tr>
+      <tr><td class="k">One alarm</td><td>When a critical condition arms, an inlay and a top-right beacon appear, a two-tone sounds, and <i>every button becomes an acknowledge</i>. Acknowledging silences that episode; a new episode re-arms.</td></tr>
+    </table>
+    <h3>Where the controls live</h3>
+    <p>Nine buttons on the panel itself (next page), and the <b>Panel</b> page of the dashboard at <code>dashboard.akoria.net</code> — theme, screen, brightness, dwell, per-screen rotation and weights, sleep and wake. A setting is only <i>confirmed</i> when the panel itself reports it back; the dashboard shows pending until then.</p>
+    <div class="callout ok"><p><b>If the panel looks wrong, first decide: fleet fault or panel fault?</b> A red screen full of DOWN is the fleet. <code>NO&nbsp;DATA</code> or <code>LINK&nbsp;LOST</code> printed on the matrix is the panel's own data path — see the last page.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Status Panel User's Guide</span><span>Rev 1 · 2026-08-09</span><span>1 / 6</span></div>
+</section>
+
+<!-- ================================================== page 2 · buttons -->
+<section class="page">
+  <div class="ph"><div class="bar"></div><div>
+    <div class="eyebrow">On the panel</div>
+    <h1 class="t">Buttons</h1>
+    <p class="sub">Four theme keys, two brightness, two sound-and-help, one sleep — and one overriding rule when the alarm is armed.</p>
+  </div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="callout crit"><p><b>While an alarm is armed, every button is an acknowledge.</b> Press A expecting a theme change and you will silence the alarm instead. Ack first, then press again for what you wanted.</p></div>
+    <table>
+      <tr><th>Button</th><th>Normal action</th><th>Detail</th></tr>
+      <tr><td class="k">A</td><td>Theme ABSTRACT</td><td>Jumps to the theme's first <i>enabled</i> screen; rotation continues from there.</td></tr>
+      <tr><td class="k">B</td><td>Theme TEXT</td><td>As above.</td></tr>
+      <tr><td class="k">C</td><td>Theme CHARTS</td><td>As above.</td></tr>
+      <tr><td class="k">D</td><td>Theme INSTRUMENTS</td><td>As above. D1 is where the panel boots.</td></tr>
+      <tr><td class="k">LUX +</td><td>Brightness +5%</td><td>Latches manual — the light sensor stops driving brightness until AUTO is re-enabled from the dashboard's Panel page.</td></tr>
+      <tr><td class="k">LUX −</td><td>Brightness −5%</td><td>Same latch. The driver floors at 25%, so the panel dims down but never out.</td></tr>
+      <tr><td class="k">VOL +</td><td>Help overlay</td><td>Two lines of help for the screen currently showing. Press VOL+ again to close, or wait 30&nbsp;s. Any other button closes it <i>and</i> performs its normal action. Rotation pauses while help is open. Ignored while an alarm is armed — the ack wins.</td></tr>
+      <tr><td class="k">VOL −</td><td>Alarm tone quieter</td><td>Steps of 0.1, and it is the <i>only</i> volume control — there is no louder button. A reboot restores the default level. The tone is the panel's only sound.</td></tr>
+      <tr><td class="k">ZZZ</td><td>Sleep the display</td><td>Blanks the matrix. Any button wakes it; an arriving alarm wakes it once, on its rising edge. Data and history keep flowing while asleep.</td></tr>
+    </table>
+    <h3>Sleep is a curtain, not a power switch</h3>
+    <p class="d">A sleeping panel still receives snapshots, still accumulates history, and still paints the four-pixel alarm beacon in the top-right corner. If you walk past a dark panel with four flashing red pixels, something is down and unacknowledged.</p>
+  </div>
+  <div class="foot"><span>SolariNet · Status Panel User's Guide</span><span>Buttons</span><span>2 / 6</span></div>
+</section>
+
+<!-- ================================================== page 3 · screens A/B -->
+<section class="page">
+  <div class="ph"><div class="bar"></div><div>
+    <div class="eyebrow">Reading the wall · 1 of 2</div>
+    <h1 class="t">Themes A and B</h1>
+    <p class="sub">Abstract renders shape, Text renders words. Same data, two densities. VOL+ on the panel gives you the two-line version of any of these in place.</p>
+  </div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="screengrid">
+      <div class="scr"><span class="n">A0 · STATE LATTICE</span><img src="img/a0-normal.svg" alt="A0"><p>One LED per system, whole fleet, filled by tier then name — core infrastructure first. Colour is state, brightness is tier. Answers <i>how much</i> is wrong, never <i>what</i>.</p></div>
+      <div class="scr"><span class="n">A1 · FLOW GATES</span><img src="img/a1-normal.svg" alt="A1"><p>The live Ubiquiti path: APs left, hubs, switch, router, internet column, backup WAN at the right edge. Leg brightness is receive level, particles are transmit. The internet column inherits the router's state.</p></div>
+      <div class="scr"><span class="n">A2 · MQ &amp; SIGNALS</span><img src="img/a2-normal.svg" alt="A2"><p>Four lanes of travelling packets with three-cell backlog indicators — amber under half, red over. Driven by probe loss, data freshness, unknown share, and degraded share.</p></div>
+      <div class="scr"><span class="n">B0 · HEADLINE COUNTS</span><img src="img/b0-normal.svg" alt="B0"><p>UP, DOWN, tier flag, DEG/MNT in words with watermark numerals. Zeroes render azure and dim; real counts take their condition colour. <b>TIER&nbsp;0 in red means core infrastructure is down.</b></p></div>
+      <div class="scr"><span class="n">B1 · THROUGHPUT</span><img src="img/b1-normal.svg" alt="B1"><p>Aggregate rate as a watermark, a 24-cell utilisation bar scaled to the panel's own recent peak, and a ticker with the absolute IN / OUT / LINK figures. Bar = busy-relative-to-recent; ticker = numbers.</p></div>
+      <div class="scr"><span class="n">B2 · LOAD &amp; LATENCY</span><img src="img/b2-normal.svg" alt="B2"><p>Mean fleet load as the watermark (amber above 75%), P95 latency and loss alternating on a five-second slot, and a hot count that prints its denominator — the full panel roster, wider than B0's agent counts.</p></div>
+    </div>
+    <p class="d">Every screen shows <code>NO DATA</code> rather than a black board before the first snapshot arrives, and prints <code>LINK LOST</code> when more than 15&nbsp;s pass without a valid frame — that one is a panel fault, not a fleet fault.</p>
+  </div>
+  <div class="foot"><span>SolariNet · Status Panel User's Guide</span><span>Screens · A B</span><span>3 / 6</span></div>
+</section>
+
+<!-- ================================================== page 4 · screens C/D -->
+<section class="page">
+  <div class="ph"><div class="bar"></div><div>
+    <div class="eyebrow">Reading the wall · 2 of 2</div>
+    <h1 class="t">Themes C and D</h1>
+    <p class="sub">Charts render history, Instruments render texture. All history is the panel's own and is lost on reboot — a half-filled trace means a recently restarted panel, not a fleet that just woke up.</p>
+  </div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="screengrid">
+      <div class="scr"><span class="n">C0 · LOAD HISTOGRAM</span><img src="img/c0-normal.svg" alt="C0"><p>35 buckets of where fleet load sits — left idle, right pinned, bar height is the share of systems there, bar colour is the bucket's own band. Right third: 15-sample throughput ribbon, ingress up, egress down.</p></div>
+      <div class="scr"><span class="n">C1 · TRIPLE TRACE</span><img src="img/c1-normal.svg" alt="C1"><p>Three stacked 53-sample histories: throughput (azure), CPU (green), round-trip (bottom). Oldest left, now at the right edge, one column per snapshot.</p></div>
+      <div class="scr"><span class="n">C2 · POOL BARS</span><img src="img/c2-normal.svg" alt="C2"><p>Up to seven pools, worst first: a one-pixel status key at the left edge, then a 46-cell mean-load bar. The key is condition, the bar is capacity — <b>read the key first</b>.</p></div>
+      <div class="scr"><span class="n">D0 · PROBE WATERFALL</span><img src="img/d0-normal.svg" alt="D0"><p>Eleven worst-first systems, a new column every 0.42&nbsp;s scrolling right to left — about 22&nbsp;s of history. Red is a lost probe, amber is slow, azure brightness is round-trip time.</p></div>
+      <div class="scr"><span class="n">D1 · POOL FIELD</span><img src="img/d1-normal.svg" alt="D1"><p>The resting face, and the boot screen. Bar length is pool size; down/degraded/unknown/maintenance stack in from the right so the worst always terminates the bar. The ticker underneath is the only place outside an alarm where a specific alert is named.</p></div>
+      <div class="scr"><span class="n">D2 · AMBIENT FIELD</span><img src="img/d2-normal.svg" alt="D2"><p>A procedural field: granularity grows with fleet size, hue is mean load — azure quiet, warming past 35%, fully warm by 85%. Up to nine red sparks mark down systems; the centre readout cycles size, load, and rate.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>SolariNet · Status Panel User's Guide</span><span>Screens · C D</span><span>4 / 6</span></div>
+</section>
+
+<!-- ================================================== page 5 · alarms + control -->
+<section class="page">
+  <div class="ph"><div class="bar"></div><div>
+    <div class="eyebrow">Alarms &amp; the dashboard</div>
+    <h1 class="t">Answering an alarm, shaping the wall</h1>
+    <p class="sub">The alarm is scoped to an episode; your acknowledge is scoped to the same episode. The dashboard's Panel page is the remote control, and the panel itself has the last word on every setting.</p>
+  </div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h2>When it sounds</h2>
+    <ol class="steps">
+      <li>An alarm inlay appears over the current screen, the top-right beacon flashes, and the two-tone sounds (every ~12&nbsp;s while the critical is active). At night the tone auto-silences after its profile window; the light stays.</li>
+      <li><b>Press any button on the panel to acknowledge.</b> The tone stops and the inlay drops for that episode. The alert itself is <i>not</i> cleared — fix the cause from the dashboard as usual.</li>
+      <li>If a <i>new</i> episode arms (a new critical, or the old one cleared and re-fired), the panel sounds again. That is by design.</li>
+    </ol>
+    <h2 style="margin-top:6px">The Panel page (dashboard.akoria.net → Panel)</h2>
+    <table>
+      <tr><th>Control</th><th>What it does</th></tr>
+      <tr><td class="k">Theme / Screen</td><td>Jump the wall to any screen. The live tile mirrors what the wall is showing right now, with its blurb.</td></tr>
+      <tr><td class="k">Brightness · AUTO</td><td>Manual percentage, or AUTO to let the light sensor drive it. Re-enabling AUTO releases the latch a LUX button set.</td></tr>
+      <tr><td class="k">Dwell 3 / 6 / 30 s</td><td>The base interval each screen's weight multiplies. 6&nbsp;s is the boot default.</td></tr>
+      <tr><td class="k">Rotation per screen</td><td>On/off on each screen's tile. A skipped screen is greyed and badged.</td></tr>
+      <tr><td class="k">Weight ¼× – 10×</td><td>Per-screen dwell multiplier (¼, ½, 1, 2, 5, 10). Weighted dwell = base dwell × weight.</td></tr>
+      <tr><td class="k">Acknowledge</td><td>Remote ack of the current episode — same scope as pressing a button on the wall.</td></tr>
+      <tr><td class="k">Sleep / Wake</td><td>Explicit. Other commands deliberately do not wake a sleeping panel.</td></tr>
+    </table>
+    <div class="callout"><p><b>Pending vs confirmed.</b> A command shows <i>pending</i> until the panel's own state report confirms it — the panel is the sole authority. Commands expire after 120&nbsp;s if the panel never confirms; screen enable/weight changes persist on the panel across reboots and reflashes.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet · Status Panel User's Guide</span><span>Alarms · Control</span><span>5 / 6</span></div>
+</section>
+
+<!-- ================================================== page 6 · troubleshooting -->
+<section class="page">
+  <div class="ph"><div class="bar"></div><div>
+    <div class="eyebrow">When it misbehaves</div>
+    <h1 class="t">Troubleshooting</h1>
+    <p class="sub">Three verdicts the panel prints about itself, and the ninety-second checks before anyone opens a terminal. The deep version is the Operator Manual's LINK LOST ladder.</p>
+  </div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <table>
+      <tr><th>Symptom</th><th>Meaning</th><th>Do this</th></tr>
+      <tr><td class="k">NO DATA</td><td>The panel is healthy but has never received a snapshot since power-up.</td><td>Wait ~10&nbsp;s after boot. If it persists, the daemon on lithium isn't reaching the API — check <code>solari-panel</code> service.</td></tr>
+      <tr><td class="k">LINK LOST</td><td>More than 15&nbsp;s without a valid frame. Panel fault (USB/daemon), not fleet fault.</td><td>Reseat the USB cable — the link auto-relinks on replug. Still lost: restart <code>solari-panel</code> on lithium.</td></tr>
+      <tr><td class="k">STALE flag on data</td><td>Snapshots arriving, but xenon's data is old — a monitoring-side gap.</td><td>Check the dashboard; the fleet view will show the same staleness.</td></tr>
+      <tr><td class="k">Wall ignores commands ~40 s after a daemon restart</td><td>The daemon's wire sequence restarts and the panel rejects frames until it catches up (adopts after ~30&nbsp;s).</td><td>Nothing — it heals itself. Don't power-cycle the panel for this.</td></tr>
+      <tr><td class="k">Screens look dim in daylight</td><td>Manual brightness latched low, or auto-brightness ceiling.</td><td>Re-enable AUTO from the Panel page, or LUX&nbsp;+ on the wall.</td></tr>
+      <tr><td class="k">Alarm too quiet</td><td>VOL− was pressed; there is no volume-up button.</td><td>Power-cycle the panel to restore the default level (persisted settings survive; volume resets by design).</td></tr>
+      <tr><td class="k">A screen never appears</td><td>Rotation disabled or weighted down for that screen.</td><td>Panel page → that screen's tile → enable, or raise its weight.</td></tr>
+    </table>
+    <h3>Boot defaults</h3>
+    <p class="d">Boots on D1 · dwell 6&nbsp;s · auto-brightness on · alarm volume default · per-screen enables and weights restored from the panel's own flash (they survive reboot and reflash).</p>
+    <h3>Further reading</h3>
+    <p class="d"><a href="SolariNet_Panel_Manual.html">Operator Manual</a> — every screen, pixel by pixel, plus the alarm anatomy and the full troubleshooting ladder. <a href="../SolariNet_Operator_Quickref.html">Operator Quickref</a> — the panel section alongside the rest of the fleet's runbooks. Both are served from the dashboard host and print to US&nbsp;Letter.</p>
+  </div>
+  <div class="foot"><span>SolariNet · Status Panel User's Guide</span><span>Troubleshooting</span><span>6 / 6</span></div>
+</section>
+
+</div>
+</body>
+</html>
