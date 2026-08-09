@@ -109,6 +109,16 @@ jobs:
         run: php tests/dashboard/test_rackwire_api.php
       - name: RackWire UI parse + token bridge tests
         run: node tests/dashboard/test_rackwire_ui.js
+      - name: Dashboard JSX parse + layout suites
+        run: |
+          node tests/dashboard/test_jsx_parse.js
+          node tests/dashboard/test_layout.js
+      - name: Lifecycle UI suite
+        run: node tests/dashboard/test_lifecycle_ui.js
+      - name: Panel AW UI suite
+        run: node tests/dashboard/test_panel_aw.js
+      - name: Panel gear PHP mapping tests
+        run: php tests/dashboard/test_panel_gear.php
       - name: Migration 020 against a scratch solarinet_stage DB (CONTRACT-RW §6)
         env:
           MYSQL_PWD: rwci_scratch
@@ -129,6 +139,27 @@ jobs:
             deploy/remote-deploy.sh \
             deploy/enrollment/solari-enroll.sh \
             deploy/enrollment/solari-decommission.sh
+
+  # ---- status panel: firmware host suite + daemon codec --------------------
+  # Pure-C state machines compiled with plain gcc — no pico SDK, no toolchain.
+  # The firmware suite runs its renderer tests under ASAN/UBSAN (REVIEW-AW M3).
+  panel:
+    name: panel firmware host suite + daemon codec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential libcurl4-openssl-dev
+      - name: Firmware host suite (builds and runs)
+        # panelParityTest refuses PARITY_REGEN when CI is set, so committed
+        # goldens can never be overwritten from a workflow run (REVIEW-PF1 M1).
+        run: make -C status-panel/firmware/test
+      - name: Daemon codec tests
+        run: make -C status-panel/daemon test
+      - name: Page/firmware parity suite (JS side)
+        run: node tests/dashboard/test_panel_parity.js
 
   # ---- cross matrix (§12 toolchains) + qemu-user smoke ---------------------
   cross:
