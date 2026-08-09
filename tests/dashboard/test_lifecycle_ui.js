@@ -458,7 +458,67 @@ function assetDetailBlock() {
   });
 }
 
-failureBlock().then(assetDetailBlock).then(done);
+console.log("\n[11] give-up timer — withGiveUp (LC_GIVE_UP_MS=15s) fires without a real sleep");
+/* screens.jsx's withGiveUp wraps every SolariLC call in a 15 s window.setTimeout
+   race. Nothing so far ever let that timer actually fire — every prior failure
+   test rejects the underlying post immediately. Here the post is held open
+   FOREVER (a Promise that never settles), so the only way this control's
+   promise can ever resolve is the give-up firing. window.setTimeout/clearTimeout
+   are swapped for a manual fake queue so the 15 s is virtual: advance() moves a
+   simulated clock and fires due callbacks synchronously, so this block runs in
+   milliseconds of real wall time. */
+function giveUpBlock() {
+  const env = load("operator");
+  let vclock = 0;
+  const timers = [];
+  let nextId = 1;
+  env.win.setTimeout = function (fn, ms) {
+    const id = nextId++;
+    timers.push({ id: id, fn: fn, fireAt: vclock + (ms || 0) });
+    return id;
+  };
+  env.win.clearTimeout = function (id) {
+    const t = timers.filter((t) => t.id === id)[0];
+    if (t) t.fn = null;
+  };
+  function advance(ms) {
+    vclock += ms;
+    timers.filter((t) => t.fn && t.fireAt <= vclock).forEach((t) => {
+      const fn = t.fn; t.fn = null; fn();
+    });
+  }
+
+  // Hold the wrapped promise open: the api.post stub never resolves or rejects.
+  env.win.SOLARI.api.post = function () { return new Promise(function () {}); };
+
+  const el = env.React.createElement(env.win.CriticalityControl, {
+    tier: 2, onCommit: (t) => env.win.SolariLC.assetCriticality(7, t),
+  });
+  const m = mount(env, el);
+  findAll(m.tree, (n) => n.tag === "button")[4].props.onClick();   // pick "Vital"
+
+  advance(14999);
+  ok("nothing fires 1 ms before the 15 s give-up threshold", env.toasts.length === 0, JSON.stringify(env.toasts));
+
+  advance(2);   // crosses 15000 ms total — the give-up timer's callback runs synchronously here
+
+  // The give-up's reject() resolves the promise chain via real microtasks; a
+  // short real wait (not a 15 s one) lets pick()'s .then/.catch run before we
+  // assert, same idiom failureBlock() above already uses.
+  return new Promise((r) => setTimeout(r, 20)).then(function () {
+    const t2 = m.rerender();
+    const btns = findAll(t2, (n) => n.tag === "button");
+    ok("the caller's promise rejects: the optimistic pick rolls back to the server's tier",
+      btns[2].props["aria-pressed"] === true && btns[4].props["aria-pressed"] === false,
+      btns.map((b) => b.props["aria-pressed"]).join(","));
+    ok("the give-up failure is toasted, not swallowed",
+      env.toasts.some((t) => /failed/i.test(t.msg) && /15 s/.test(t.msg)), JSON.stringify(env.toasts));
+    ok("the control shows the give-up's own reason (15 s), not a generic error",
+      textOf(t2).indexOf("15 s") >= 0, textOf(t2).slice(0, 160));
+  });
+}
+
+failureBlock().then(giveUpBlock).then(assetDetailBlock).then(done);
 
 function done() {
   console.log("\n" + pass + " passed, " + fail + " failed\n");

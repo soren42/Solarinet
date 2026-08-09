@@ -114,7 +114,7 @@ src = src.replace(EXPORT_ANCHOR,
   "module.exports = { buildEnv, SCREENS, paintScreen, fbNew, PW, PH, " +
   "a1Layout, a1Spread, a1GateGeom, A1_BAND, A1_BANDS, A1_INET_X, A1_WAN_X, " +
   "readScreenCfg, readCfgPersisted, packScreenEn, packScreenWt, cmdGroup, cmdLabel, WEIGHTS, " +
-  "weightLabel, N_SCREENS, CMD_KIND, ScreenTileCfg, VirtualPanel, " +
+  "weightLabel, N_SCREENS, CMD_KIND, ScreenTileCfg, VirtualPanel, PanelScreen, " +
   "GR_ROUTER, GR_SWITCH, GR_HUB, GR_AP, GR_WANBK, GS_DOWN, GS_UP, GS_DEGRADED };");
 const code = babel.transform(src, { presets: ["react"], filename: "screens-panel.jsx" }).code;
 
@@ -777,6 +777,90 @@ console.log("\n[8] the fixture file");
   ok("the inventory is documented in the file itself",
     /chemistry/.test(fixture._gearInventory) && /covalent/.test(fixture._gearInventory));
   ok("the config shapes are documented too", /factory default/.test(fixture._screenConfig));
+}
+
+console.log("\n[9] send() — the EXACT wire body POSTed to /api/panel/command");
+{
+  /* Block [4] proves the packing math and cmdGroup keying against a mock
+     `send` prop handed straight to ScreenTileCfg — it never runs the real
+     send() closure defined inside PanelScreen (screens-panel.jsx ~L2233),
+     which is the thing that actually calls A.post("/api/panel/command", ...).
+     This block captures that REAL closure out of PanelScreen's own render
+     tree (send is threaded to both VirtualPanel and PanelControls; env is
+     null here so only PanelControls renders, but it is the same function
+     reference either way) and calls it directly against a stubbed
+     window.SolariAPI, so the exact POST body production code sends is what
+     gets asserted, not a stand-in. */
+  win.setTimeout = setTimeout;      // send()'s 12s give-up timer needs a real one
+  win.clearTimeout = clearTimeout;  // to construct/clear without throwing
+
+  function captureSend(el) {
+    const ctx = { store: {}, effects: [] };
+    let captured = null;
+    function walkEl(e, p) {
+      if (captured) return;
+      if (e == null || e === false || e === true) return;
+      if (Array.isArray(e)) { e.forEach((c, i) => walkEl(c, p + "[" + i + "]")); return; }
+      if (typeof e !== "object" || !e.$$el) return;
+      if (typeof e.type === "function") {
+        if (e.props && typeof e.props.send === "function") { captured = e.props.send; return; }
+        const pth = p + "/" + (e.type.name || "anon");
+        const frame = { store: ctx.store, path: pth, idx: 0, effects: ctx.effects };
+        const prev = React.__enter(frame);
+        let out;
+        try { out = e.type(e.props); } finally { React.__exit(prev); }
+        walkEl(out, pth);
+        return;
+      }
+      if (e.props && e.props.children != null) walkEl(e.props.children, p + ">");
+    }
+    walkEl(el, "");
+    return captured;
+  }
+
+  const posts = [];
+  win.SolariAPI = {
+    post: function (p, b) { posts.push({ path: p, body: b }); return Promise.resolve({ cmdId: 1 }); },
+    get: function () { return Promise.resolve(null); },
+  };
+  const sendFn = captureSend(React.createElement(M.PanelScreen));
+  ok("captured the real send() callback out of PanelScreen's render tree", typeof sendFn === "function");
+
+  // A1 = theme 0, slot 1 → screenIdx 1 (§10 D2: screenIdx = theme*3 + slot).
+  posts.length = 0;
+  sendFn(M.CMD_KIND.screenEn, M.packScreenEn(1, true));
+  ok("enabling A1 (screenIdx 1) posts kind 8 arg (1<<1)|1 = 3, body exactly {kind:8,arg:3}",
+    posts.length === 1 && posts[0].path === "/api/panel/command"
+    && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 8, arg: 3 }), JSON.stringify(posts));
+
+  posts.length = 0;
+  sendFn(M.CMD_KIND.screenEn, M.packScreenEn(1, false));
+  ok("disabling A1 posts kind 8 arg (1<<1)|0 = 2, body exactly {kind:8,arg:2}",
+    posts.length === 1 && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 8, arg: 2 }), JSON.stringify(posts));
+
+  posts.length = 0;
+  sendFn(M.CMD_KIND.screenWt, M.packScreenWt(1, 4));
+  ok("setting A1 to 5x posts kind 9 arg (1<<3)|4 = 12, body exactly {kind:9,arg:12}",
+    posts.length === 1 && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 9, arg: 12 }), JSON.stringify(posts));
+
+  // D2 = theme 3, slot 2 → screenIdx 11, the far edge of both encodings.
+  posts.length = 0;
+  sendFn(M.CMD_KIND.screenEn, M.packScreenEn(11, false));
+  ok("disabling D2 (screenIdx 11) posts kind 8 arg (11<<1)|0 = 22, body exactly {kind:8,arg:22}",
+    posts.length === 1 && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 8, arg: 22 }), JSON.stringify(posts));
+
+  posts.length = 0;
+  sendFn(M.CMD_KIND.screenWt, M.packScreenWt(11, 0));
+  ok("setting D2 to 1/4x posts kind 9 arg (11<<3)|0 = 88, body exactly {kind:9,arg:88}",
+    posts.length === 1 && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 9, arg: 88 }), JSON.stringify(posts));
+
+  // cmdGroup keying — explicit per this deliverable, alongside block [4]'s coverage.
+  ok("cmdGroup keys kind 8 as screenEn:<idx>",
+    M.cmdGroup(M.CMD_KIND.screenEn, M.packScreenEn(1, true)) === "screenEn:1");
+  ok("cmdGroup keys kind 9 as screenWt:<idx>",
+    M.cmdGroup(M.CMD_KIND.screenWt, M.packScreenWt(11, 4)) === "screenWt:11");
+  ok("cmdGroup returns the CP-era key for other kinds (unaffected by kinds 8/9)",
+    M.cmdGroup(1, 0) === "theme" && M.cmdGroup(3, 50) === "brightness" && M.cmdGroup(6, 6) === "dwell");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed\n");
