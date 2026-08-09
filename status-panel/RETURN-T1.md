@@ -2,18 +2,21 @@
 
 ## STATUS
 
-complete — both deferred SHOULDs closed, no production code touched.
+complete — cross-lab review (BLOCK: 1 MUST + 2 SHOULDs) addressed in a second
+round; all four suites green; no production code touched (one temporary,
+fully-reverted mutation-test edit — see REVIEW-FIX ROUND below).
 
 ## ARTIFACTS
 
-tests/dashboard/test_lifecycle_ui.js   (block [11] added)
-tests/dashboard/test_panel_aw.js       (block [9] added, export list extended)
+tests/dashboard/test_lifecycle_ui.js   (block [11] added, then hardened per MUST)
+tests/dashboard/test_panel_aw.js       (block [9] added, export list extended, then fixed per SHOULD #2/#3)
 status-panel/RETURN-T1.md
 
 ```text
 $ git status --porcelain
  M tests/dashboard/test_lifecycle_ui.js
  M tests/dashboard/test_panel_aw.js
+ M status-panel/RETURN-T1.md
 ```
 
 ## DELIVERABLE 1 — give-up timer test (test_lifecycle_ui.js block [11])
@@ -95,7 +98,108 @@ real `send` closure that actually calls `A.post`. Block [9] closes that gap:
 
 9 new assertions, all passing. Full file: 159 passed, 0 failed (up from 150).
 
-## GATES RUN
+## REVIEW-FIX ROUND (cross-lab review of `52ce2f2` returned BLOCK: 1 MUST + 2 SHOULDs)
+
+### MUST — test_lifecycle_ui.js block [11]: pre-threshold check was vacuous
+
+The original `advance(14999)` assertion checked `env.toasts.length === 0`
+**synchronously, immediately after** the fake-clock advance — before any
+microtask from a `reject()` inside `withGiveUp` could run. The reviewer
+proved this by mutation testing: temporarily changing the production
+`ms || LC_GIVE_UP_MS` delay to a hardcoded `1` (keeping the "15 s" error
+text unchanged) left the original suite green at 84/84 — the 15 s value
+itself was never actually pinned by any assertion.
+
+Fix, two independent mechanisms:
+- **Direct timer-firing tracking.** The fake `setTimeout` stub now records
+  `{id, delay}` into a `fired` array only when `advance()` actually invokes
+  a callback. A new assertion pins `timers[0].delay === 15000` at schedule
+  time, and a second pins `fired.length === 0` after `advance(14999)` — both
+  synchronous, no flush needed, and both fail immediately under the delay
+  mutation.
+- **Flush-before-assert.** Added a real 20 ms `setTimeout`-based `flush()`
+  (same idiom already used elsewhere in the file) before every assertion
+  that depends on the promise chain having settled — the pre-threshold
+  "still nothing visible" check and the post-threshold toast/rollback
+  checks. `advance(1)` (crossing exactly to 15000 ms) is followed by
+  `flush()` before the give-up's toast and rollback are asserted.
+
+Net: 3 assertions in block [11] → now 6 (see updated counts below).
+
+**Non-vacuity proof performed, per the reviewer's instruction:**
+
+```text
+$ # temporarily edited dashboard/public/screens.jsx:
+$ #   }, ms || LC_GIVE_UP_MS);
+$ #   →
+$ #   }, 1 /* MUTATION-TEST ONLY: was `ms || LC_GIVE_UP_MS` — text still says 15s, fires at 1ms */);
+$ node tests/dashboard/test_lifecycle_ui.js 2>&1 | tail -6
+FAIL - the give-up timer fires exactly once, and only at the 15000 ms mark  [[{"id":1,"delay":1}]]
+...
+83 passed, 4 failed
+
+$ # reverted the edit
+$ git diff dashboard/public/screens.jsx
+(empty — file restored exactly to its committed state)
+```
+
+The mutation was caught (4 failures, including the new delay-pinning
+assertion showing the actual fired delay of `1` instead of `15000`), and the
+production file was confirmed byte-identical to its committed state after
+reverting.
+
+### SHOULD #2 — test_panel_aw.js block [9]: real timers made the block order-dependent
+
+Block [9] previously did `win.setTimeout = setTimeout; win.clearTimeout =
+clearTimeout;` for `send`'s internal 12 s give-up timer, relying on the
+file's final `process.exit()` to discard any leftover real OS timer —
+correct only because nothing runs after this block today.
+
+Fix: replaced with inert local stubs —
+
+```js
+win.setTimeout = function () { return 0; };   // send()'s 12s give-up: an inert
+win.clearTimeout = function () {};            // stub — no real OS timer is ever armed
+```
+
+No real timer is armed, so the block needs no cleanup and is now
+position-independent regardless of what runs after it.
+
+### SHOULD #3 — test_panel_aw.js block [9]: captured `send` was never exercised through the real component tree
+
+`captureSend()` pulled the real `send` closure out of `PanelScreen` but the
+block only ever invoked it directly with hand-picked `(kind, arg)` pairs.
+Combined with block [4]'s use of a **mocked** `send` prop for
+`ScreenTileCfg`, a break in the actual `PanelScreen → VirtualPanel →
+ScreenTileCfg` wiring (wrong prop name, disconnected reference, wrong `idx`)
+would never be caught by either test — both paths were verified in
+isolation, never connected.
+
+Fix: added assertions that mount the **real** `VirtualPanel` with the
+**captured real** `send` (not a mock), then find actual rendered
+`<figure>` tiles and click actual rendered `<button>` elements inside them:
+
+- confirms `VirtualPanel` renders twelve tiles;
+- clicks A1's (screenIdx 1) real rendered "Off" button → asserts the exact
+  POST body `{kind: 8, arg: 2}`;
+- clicks A1's real rendered "5×" button → asserts `{kind: 9, arg: 12}`;
+- clicks D2's (screenIdx 11, the top edge of both encodings) real rendered
+  "¼×" button → asserts `{kind: 9, arg: 88}`.
+
+This exercises the full production prop chain end to end — a wiring break
+anywhere between `PanelScreen` and `ScreenTileCfg`'s button `onClick` now
+fails these assertions.
+
+## UPDATED ASSERTION COUNTS
+
+- `tests/dashboard/test_lifecycle_ui.js`: **87 passed, 0 failed** (was 84/84;
+  MUST fix added 3 pinning/flush assertions to block [11]).
+- `tests/dashboard/test_panel_aw.js`: **164 passed, 0 failed** (was 159/159;
+  SHOULD #3 fix added 5 real-wiring assertions to block [9]).
+- `tests/dashboard/test_jsx_parse.js`: unchanged, 16/16 parsed.
+- `tests/dashboard/test_layout.js`: unchanged, all assertions passed.
+
+## GATES RUN (final, after review-fix round)
 
 ```text
 $ node tests/dashboard/test_jsx_parse.js
@@ -105,10 +209,10 @@ $ node tests/dashboard/test_layout.js
 all assertions passed
 
 $ node tests/dashboard/test_panel_aw.js
-159 passed, 0 failed
+164 passed, 0 failed
 
 $ node tests/dashboard/test_lifecycle_ui.js
-84 passed, 0 failed
+87 passed, 0 failed
 ```
 
 ## UNVERIFIED
@@ -119,24 +223,34 @@ $ node tests/dashboard/test_lifecycle_ui.js
   scheduled from within a firing callback (not needed here — `withGiveUp`
   schedules exactly one timer per call — but a future test reusing this
   helper for a multi-timer scenario should check that before trusting it).
-- **`captureSend()` in block [9] never renders `VirtualPanel` or
-  `PanelControls` themselves**, only intercepts the element carrying `send`
-  before either executes. It does not prove the on-screen buttons wire to
-  this exact `send` reference at click time in a live browser — that
-  wiring is asserted structurally (same JSX prop, same closure) but not
-  observed through a real click event or a real DOM.
+- **`captureSend()` in block [9] still captures `send` out-of-band before
+  invoking it** — the SHOULD #3 fix closes the biggest gap (a real
+  `VirtualPanel`/`ScreenTileCfg` render tree is now exercised with the
+  captured closure and real rendered buttons are clicked), but the harness
+  is the test file's own shim `React`/DOM model, not a real browser. It does
+  not observe an actual `click` DOM event or a real event-loop dispatch —
+  the "click" is a direct call to the button element's `onClick` prop
+  function, same as this file's other interaction assertions.
 - **No real network call was made in either deliverable.** Both stub the
   layer directly beneath the component (`window.SOLARI.api.post` /
   `window.SolariAPI.post`), consistent with every other test in both files —
   this proves what the UI sends, not what the server does with it.
 - **`send`'s own 12 s give-up timer (screens-panel.jsx, distinct from
-  screens.jsx's 15 s `withGiveUp`) is still unexercised** — block [9] gives it
-  a real `setTimeout` so the call doesn't throw, but nothing in this task
-  drives it to fire. Out of scope for T1 (the assignment named the 15 s
-  `withGiveUp` specifically); flagging in case a future SHOULD wants the same
-  treatment applied to this second timer.
-- Neither block was reviewed cross-lab before this return; per the operator
-  standard that gate belongs to whoever routes T1's review.
+  screens.jsx's 15 s `withGiveUp`) is still unexercised.** Per SHOULD #2 it is
+  now an inert stub (`win.setTimeout = function () { return 0; }`) rather than
+  a real timer, so nothing in block [9] drives it to fire or asserts its
+  delay/message. Out of scope for T1 (the assignment named the 15 s
+  `withGiveUp` specifically); flagging in case a future task wants the same
+  MUST-style pinning treatment applied to this second timer.
+- **The fake-timer `fired`-tracking added for the MUST fix only models a
+  single-timer scenario** (consistent with the existing UNVERIFIED note on
+  `advance()` above) — `withGiveUp` schedules exactly one timer per call, so
+  this was sufficient here, but the mechanism hasn't been exercised against
+  overlapping/re-entrant timers.
+- The review-fix round above closes the one MUST and both SHOULDs from the
+  cross-lab review of commit `52ce2f2`. This updated round has not itself
+  been re-reviewed cross-lab yet; that gate belongs to whoever routes the
+  next review pass.
 
 ## DECISIONS
 

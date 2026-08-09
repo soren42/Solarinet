@@ -779,7 +779,7 @@ console.log("\n[8] the fixture file");
   ok("the config shapes are documented too", /factory default/.test(fixture._screenConfig));
 }
 
-console.log("\n[9] send() — the EXACT wire body POSTed to /api/panel/command");
+console.log("\n[9] send() — the EXACT wire body POSTed to /api/panel/command, through the real wiring");
 {
   /* Block [4] proves the packing math and cmdGroup keying against a mock
      `send` prop handed straight to ScreenTileCfg — it never runs the real
@@ -790,9 +790,19 @@ console.log("\n[9] send() — the EXACT wire body POSTed to /api/panel/command")
      null here so only PanelControls renders, but it is the same function
      reference either way) and calls it directly against a stubbed
      window.SolariAPI, so the exact POST body production code sends is what
-     gets asserted, not a stand-in. */
-  win.setTimeout = setTimeout;      // send()'s 12s give-up timer needs a real one
-  win.clearTimeout = clearTimeout;  // to construct/clear without throwing
+     gets asserted, not a stand-in.
+
+     Review note (cross-lab, on 52ce2f2): calling the captured closure
+     directly proves send() itself is correct in isolation, but — combined
+     with block [4]'s mocked `send` — leaves a break in the real
+     PanelScreen → VirtualPanel → ScreenTileCfg prop chain undetected. The
+     second half of this block closes that: it mounts the REAL VirtualPanel
+     with the captured REAL send and clicks an actual rendered tile button,
+     so a broken prop hookup between them would show up as a missing/wrong
+     POST, not as green. */
+  win.setTimeout = function () { return 0; };   // send()'s 12s give-up: an inert
+  win.clearTimeout = function () {};            // stub — no real OS timer is ever armed, so
+                                                 // this block needs no cleanup and no exit-time discard.
 
   function captureSend(el) {
     const ctx = { store: {}, effects: [] };
@@ -861,6 +871,43 @@ console.log("\n[9] send() — the EXACT wire body POSTed to /api/panel/command")
     M.cmdGroup(M.CMD_KIND.screenWt, M.packScreenWt(11, 4)) === "screenWt:11");
   ok("cmdGroup returns the CP-era key for other kinds (unaffected by kinds 8/9)",
     M.cmdGroup(1, 0) === "theme" && M.cmdGroup(3, 50) === "brightness" && M.cmdGroup(6, 6) === "dwell");
+
+  // ---- close the wiring gap: mount the REAL VirtualPanel with the captured
+  // REAL send (not block [4]'s mock ScreenTileCfg send), click an actual
+  // rendered tile's actual button, and assert the same exact POST body. This
+  // exercises PanelScreen's send prop flowing through VirtualPanel into
+  // ScreenTileCfg's onClick unchanged — a wiring break (wrong prop name,
+  // wrong idx, a mislaid send reference) would show up here as a missing or
+  // wrong POST, not as a false green.
+  const envN = M.buildEnv(scenarioOf("normal").history, CADENCE);
+  const cfgN = M.readScreenCfg(scenarioOf("normal").history[11].panelScreenConfig);
+  const vp = mount(React, React.createElement(M.VirtualPanel, {
+    env: envN, armed: false, gain: 1, currentIdx: -1, sleeping: false, still: true,
+    screenCfg: cfgN, pend: {}, send: sendFn, ctlDisabled: false,
+  }));
+  const figs = findAll(vp.tree, (n) => n.tag === "figure");
+  ok("VirtualPanel renders twelve tiles wired to the captured real send()", figs.length === 12, String(figs.length));
+  const a1Tile = figs[1];   // SCREENS is A0,A1,A2,B0,... (§10 D2) → index 1 is A1, screenIdx 1
+  const a1Btns = findAll(a1Tile, (n) => n.tag === "button");
+  ok("A1's real tile offers a real Off button", a1Btns.some((b) => textOf(b) === "Off"));
+
+  posts.length = 0;
+  a1Btns.filter((b) => textOf(b) === "Off")[0].props.onClick();
+  ok("clicking A1's real Off button, through PanelScreen→VirtualPanel→ScreenTileCfg, posts kind 8 arg 2",
+    posts.length === 1 && posts[0].path === "/api/panel/command"
+    && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 8, arg: 2 }), JSON.stringify(posts));
+
+  posts.length = 0;
+  a1Btns.filter((b) => textOf(b) === "5×")[0].props.onClick();
+  ok("clicking A1's real 5× button posts kind 9 arg 12 through the same real wiring",
+    posts.length === 1 && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 9, arg: 12 }), JSON.stringify(posts));
+
+  const d2Tile = figs[11];   // index 11 is D2, screenIdx 11 — the far edge of both encodings
+  const d2Btns = findAll(d2Tile, (n) => n.tag === "button");
+  posts.length = 0;
+  d2Btns.filter((b) => textOf(b) === "¼×")[0].props.onClick();
+  ok("clicking D2's real ¼× button posts kind 9 arg 88 through the real wiring, at the top screenIdx",
+    posts.length === 1 && JSON.stringify(posts[0].body) === JSON.stringify({ kind: 9, arg: 88 }), JSON.stringify(posts));
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed\n");
