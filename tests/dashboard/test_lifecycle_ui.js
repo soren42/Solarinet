@@ -458,7 +458,98 @@ function assetDetailBlock() {
   });
 }
 
-failureBlock().then(assetDetailBlock).then(done);
+console.log("\n[11] give-up timer — withGiveUp (LC_GIVE_UP_MS=15s) fires without a real sleep");
+/* screens.jsx's withGiveUp wraps every SolariLC call in a 15 s window.setTimeout
+   race. Nothing so far ever let that timer actually fire — every prior failure
+   test rejects the underlying post immediately. Here the post is held open
+   FOREVER (a Promise that never settles), so the only way this control's
+   promise can ever resolve is the give-up firing. window.setTimeout/clearTimeout
+   are swapped for a manual fake queue so the 15 s is virtual: advance() moves a
+   simulated clock and fires due callbacks synchronously, so this block runs in
+   milliseconds of real wall time. */
+function giveUpBlock() {
+  const env = load("operator");
+  let vclock = 0;
+  const timers = [];
+  const fired = [];   // { id, delay } for every callback advance() has actually invoked, in order
+  let nextId = 1;
+  env.win.setTimeout = function (fn, ms) {
+    const id = nextId++;
+    timers.push({ id: id, fn: fn, fireAt: vclock + (ms || 0), delay: (ms || 0) });
+    return id;
+  };
+  env.win.clearTimeout = function (id) {
+    const t = timers.filter((t) => t.id === id)[0];
+    if (t) t.fn = null;
+  };
+  function advance(ms) {
+    vclock += ms;
+    timers.filter((t) => t.fn && t.fireAt <= vclock).forEach((t) => {
+      const fn = t.fn; t.fn = null;
+      fired.push({ id: t.id, delay: t.delay });
+      fn();
+    });
+  }
+  // Real (short) wait, purely to let a fired timer's .then/.catch microtasks
+  // run before the next assertion — not a 15 s sleep, the same idiom
+  // failureBlock() above already uses. Needed because advance() firing a
+  // callback synchronously does NOT make its promise chain observable
+  // synchronously: reject() inside withGiveUp still schedules a real
+  // microtask for pick()'s .catch.
+  function flush() { return new Promise((r) => setTimeout(r, 20)); }
+
+  // Hold the wrapped promise open: the api.post stub never resolves or rejects.
+  env.win.SOLARI.api.post = function () { return new Promise(function () {}); };
+
+  const el = env.React.createElement(env.win.CriticalityControl, {
+    tier: 2, onCommit: (t) => env.win.SolariLC.assetCriticality(7, t),
+  });
+  const m = mount(env, el);
+  findAll(m.tree, (n) => n.tag === "button")[4].props.onClick();   // pick "Vital"
+
+  /* Pin the delay directly, not just the eventual effect — the mutation this
+     guards against (reviewer-caught on 52ce2f2: shortening the production
+     delay to 1 ms while keeping the "15 s" error text) is invisible to an
+     assertion that only checks "nothing visible yet" at some later point,
+     because a 1 ms timer would already have fired DURING advance(14999)
+     below and this pins it before that ambiguity can even arise. */
+  ok("exactly one give-up timer was scheduled, with its delay pinned at 15000 ms",
+    timers.length === 1 && timers[0].delay === 15000, JSON.stringify(timers.map((t) => t.delay)));
+
+  advance(14999);
+  ok("no timer callback has fired 1 ms before the pinned 15000 ms delay",
+    fired.length === 0, JSON.stringify(fired));
+
+  return flush().then(function () {
+    // Flushed BEFORE asserting "nothing happened yet": if the production
+    // delay were mutated shorter (the reviewer's 1 ms case), the timer would
+    // already be in `fired` and its rejection's toast would be visible here
+    // — this is what makes the earlier "no toast yet" check non-vacuous.
+    const t1 = m.rerender();
+    ok("...and no toast or rollback is visible either, confirmed after a flush",
+      env.toasts.length === 0
+      && findAll(t1, (n) => n.tag === "button")[4].props["aria-pressed"] === true,
+      JSON.stringify(env.toasts));
+
+    advance(1);   // crosses 15000 ms total — the one give-up timer fires here, not before
+    ok("the give-up timer fires exactly once, and only at the 15000 ms mark",
+      fired.length === 1 && fired[0].delay === 15000, JSON.stringify(fired));
+
+    return flush();
+  }).then(function () {
+    const t2 = m.rerender();
+    const btns = findAll(t2, (n) => n.tag === "button");
+    ok("the caller's promise rejects: the optimistic pick rolls back to the server's tier",
+      btns[2].props["aria-pressed"] === true && btns[4].props["aria-pressed"] === false,
+      btns.map((b) => b.props["aria-pressed"]).join(","));
+    ok("the give-up failure is toasted, not swallowed",
+      env.toasts.some((t) => /failed/i.test(t.msg) && /15 s/.test(t.msg)), JSON.stringify(env.toasts));
+    ok("the control shows the give-up's own reason (15 s), not a generic error",
+      textOf(t2).indexOf("15 s") >= 0, textOf(t2).slice(0, 160));
+  });
+}
+
+failureBlock().then(giveUpBlock).then(assetDetailBlock).then(done);
 
 function done() {
   console.log("\n" + pass + " passed, " + fail + " failed\n");

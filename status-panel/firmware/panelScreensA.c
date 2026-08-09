@@ -163,21 +163,47 @@ void panelScreenA1(const PanelEnv *env, float t, float dt) {
     aps[i].x = a1BandX(2, 16, apCount, i);
     aps[i].y0 = apCount == 1 ? 4 : (i * (PANEL_H - 3) + (apCount - 1) / 2) / (apCount - 1);
     aps[i].height = 3;
-    a1Gate(aps[i].x, aps[i].y0, aps[i].height,
-           env->snap.gear[aps[i].gear].state, 0.75f);
   }
   for (i = 0; i < hubCount; ++i) {
     hubs[i].x = a1BandX(20, 34, hubCount, i);
     hubs[i].height = (i & 1) == 0 ? 6 : 5;
     hubs[i].y0 = (i & 1) == 0 ? 0 : PANEL_H - hubs[i].height;
-    a1Gate(hubs[i].x, hubs[i].y0, hubs[i].height,
-           env->snap.gear[hubs[i].gear].state, 0.75f);
   }
   for (i = 0; i < switchCount; ++i) {
     switches[i].x = a1BandX(38, 44, switchCount, i);
     switches[i].y0 = 1; switches[i].height = 8;
-    a1Gate(switches[i].x, 1, 8, env->snap.gear[switches[i].gear].state, 0.75f);
   }
+
+  /* PARITY FIX (task PF1, 2026-08-09): legs are painted FIRST, before the
+   * gates. They used to be painted last, and because a1Leg() assigns with
+   * panelFbSet a diagonal wire passing through a gate's column replaced that
+   * gate's pixel with connective cQuiet — on the real 9-device inventory it ate
+   * the top pixel of a DEGRADED hub, so a state pixel read as texture. cQuiet
+   * is connective texture and never a state carrier (CONTRACT-AW §4), so the
+   * gate has to win. The page has always had this order right
+   * (screens-panel.jsx sA1: "Legs first, dimmest"); the framebuffer diff in
+   * tests/dashboard/test_panel_parity.js is what caught the firmware.
+   * Painting legs onto a just-cleared framebuffer makes set and add equivalent,
+   * so nothing else about the leg layer changes. */
+  for (i = 0; i < apCount && hubCount > 0; ++i)
+    a1Leg(&aps[i], &hubs[i % hubCount], env->snap.gear[aps[i].gear].rxLevel);
+  for (i = 0; i < hubCount && switchCount > 0; ++i)
+    a1Leg(&hubs[i], &switches[i % switchCount], env->snap.gear[hubs[i].gear].rxLevel);
+  for (i = 0; i < switchCount && haveRouter; ++i)
+    a1Leg(&switches[i], &router, env->snap.gear[switches[i].gear].rxLevel);
+  if (haveRouter) a1Leg(&router, &internet, env->snap.gear[router.gear].rxLevel);
+
+  /* Gates over the wires. Same geometry, same brightnesses, same order within
+   * the bands as before — only the layering moved. */
+  for (i = 0; i < apCount; ++i)
+    a1Gate(aps[i].x, aps[i].y0, aps[i].height,
+           env->snap.gear[aps[i].gear].state, 0.75f);
+  for (i = 0; i < hubCount; ++i)
+    a1Gate(hubs[i].x, hubs[i].y0, hubs[i].height,
+           env->snap.gear[hubs[i].gear].state, 0.75f);
+  for (i = 0; i < switchCount; ++i)
+    a1Gate(switches[i].x, switches[i].y0, switches[i].height,
+           env->snap.gear[switches[i].gear].state, 0.75f);
   if (haveRouter) a1Gate(router.x, router.y0, router.height,
                           env->snap.gear[router.gear].state, 0.80f);
   /* CONTRACT-AW §9 A-3: the internet column is only reachable THROUGH the
@@ -187,14 +213,6 @@ void panelScreenA1(const PanelEnv *env, float t, float dt) {
          haveRouter ? env->snap.gear[router.gear].state : 0u, 0.60f);
   if (haveWan) a1Gate(wan.x, wan.y0, wan.height,
                        env->snap.gear[wan.gear].state, 0.60f);
-
-  for (i = 0; i < apCount && hubCount > 0; ++i)
-    a1Leg(&aps[i], &hubs[i % hubCount], env->snap.gear[aps[i].gear].rxLevel);
-  for (i = 0; i < hubCount && switchCount > 0; ++i)
-    a1Leg(&hubs[i], &switches[i % switchCount], env->snap.gear[hubs[i].gear].rxLevel);
-  for (i = 0; i < switchCount && haveRouter; ++i)
-    a1Leg(&switches[i], &router, env->snap.gear[switches[i].gear].rxLevel);
-  if (haveRouter) a1Leg(&router, &internet, env->snap.gear[router.gear].rxLevel);
 
   for (int i = 0; i < A1_PARTICLES; i++) {
     A1Particle *pt = &gA1[i];
