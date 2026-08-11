@@ -1,0 +1,3 @@
+[submodule "dashboard/public/rackwire"]
+	path = dashboard/public/rackwire
+	url = ssh://forgejo@cesium.akoria.net:2222/jason/RackWire.git
