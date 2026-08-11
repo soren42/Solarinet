@@ -179,7 +179,11 @@ size_t panelEncodeConfig(const uint8_t screenCfg[12], uint8_t flags,
 int panelDecodeConfig(const uint8_t *payload, size_t len,
                       uint8_t screenCfg[12], uint8_t *flags);
 /* PROVISION/PROVACK codecs are structural only: item semantics (bounds,
- * DER validity, generation matching) are the firmware handler's job.       */
+ * DER validity, generation matching) are the firmware handler's job.
+ * Encode: data must not overlap payload. Decode: PROVISION is strict
+ * (declared len must match the payload exactly, and the payload must fit
+ * PANEL_MAX_PAYLOAD); PROVACK tolerates trailing bytes, the same-version
+ * additive-extension convention CONTROL/STATE already follow.              */
 size_t panelEncodeProvision(uint8_t itemId, uint8_t generation,
                             uint16_t offset, const uint8_t *data,
                             uint16_t dataLen, uint8_t *payload, size_t cap);

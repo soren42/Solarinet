@@ -131,7 +131,7 @@ int panelDecodeConfig(const uint8_t *payload, size_t len,
   return 0;
 }
 
-/* Purpose: encode a PROVISION TLV at its fixed protocol offsets. Input: item/generation/offset/data/output buffer. Output: payload size, or zero for invalid capacity/input. */
+/* Purpose: encode a PROVISION TLV at its fixed protocol offsets. Input: item/generation/offset/data/output buffer; data must not overlap payload. Output: payload size, or zero for invalid capacity/input. */
 size_t panelEncodeProvision(uint8_t itemId, uint8_t generation,
                             uint16_t offset, const uint8_t *data,
                             uint16_t dataLen, uint8_t *payload, size_t cap) {
@@ -145,11 +145,11 @@ size_t panelEncodeProvision(uint8_t itemId, uint8_t generation,
   return total;
 }
 
-/* Purpose: decode a PROVISION TLV at its fixed protocol offsets. Input: complete payload/output fields; data aliases the payload. Output: zero success, -1 for malformed input (short header or declared len not matching the payload exactly). */
+/* Purpose: decode a PROVISION TLV at its fixed protocol offsets. Input: complete payload/output fields; data aliases the payload. Output: zero success, -1 for malformed input (short header, payload over PANEL_MAX_PAYLOAD, or declared len not matching the payload exactly). */
 int panelDecodeProvision(const uint8_t *payload, size_t len, uint8_t *itemId,
                          uint8_t *generation, uint16_t *offset,
                          const uint8_t **data, uint16_t *dataLen) {
-  if (payload == NULL || itemId == NULL || generation == NULL || offset == NULL || data == NULL || dataLen == NULL || len < PANEL_PROV_HDR_SIZE) return -1;
+  if (payload == NULL || itemId == NULL || generation == NULL || offset == NULL || data == NULL || dataLen == NULL || len < PANEL_PROV_HDR_SIZE || len > PANEL_MAX_PAYLOAD) return -1;
   if (readLe16(payload + 4) != len - PANEL_PROV_HDR_SIZE) return -1;
   *itemId = payload[0];
   *generation = payload[1];
@@ -170,7 +170,7 @@ size_t panelEncodeProvAck(uint8_t itemId, uint8_t status, uint8_t generation,
   return PANEL_PROVACK_SIZE;
 }
 
-/* Purpose: decode a PROVACK payload at its fixed protocol offsets. Input: complete payload/output fields. Output: zero success, -1 for malformed input. */
+/* Purpose: decode a PROVACK payload at its fixed protocol offsets. Input: complete payload/output fields; trailing bytes beyond PANEL_PROVACK_SIZE are tolerated (same-version additive extension, matching the CONTROL/STATE convention). Output: zero success, -1 for malformed input. */
 int panelDecodeProvAck(const uint8_t *payload, size_t len, uint8_t *itemId,
                        uint8_t *status, uint8_t *generation,
                        uint16_t *nextOffset) {

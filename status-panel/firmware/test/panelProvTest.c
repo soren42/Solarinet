@@ -29,6 +29,38 @@ static void check(int ok, const char *what) {
   }
 }
 
+/* Case 0 — every normative constant pinned to its CONTRACT-SW literal.
+ * These are wire values: a renumbered enum or resized bound is a protocol
+ * break even if every round-trip below still passes. */
+static void caseContractLiterals(void) {
+  check(PANEL_FT_PROVISION == 0x05, "case 0: PANEL_FT_PROVISION is 0x05");
+  check(PANEL_FT_PROVACK == 0x86, "case 0: PANEL_FT_PROVACK is 0x86");
+
+  check(PANEL_PROV_SSID == 1 && PANEL_PROV_PSK == 2 &&
+        PANEL_PROV_SERVERHOST == 3 && PANEL_PROV_SERVERPORT == 4 &&
+        PANEL_PROV_CACERT == 5 && PANEL_PROV_CLIENTCERT == 6 &&
+        PANEL_PROV_CLIENTKEY == 7 && PANEL_PROV_COMMIT == 8 &&
+        PANEL_PROV_WIPE == 9 && PANEL_PROV_NTPHOST == 10,
+        "case 0: item ids 1..10 per §13 D1/D3/D7");
+
+  check(PANEL_PROVST_OK == 0 && PANEL_PROVST_FORMAT_INVALID == 1 &&
+        PANEL_PROVST_STORAGE_FULL == 2 && PANEL_PROVST_REJECTED_WIFI == 3 &&
+        PANEL_PROVST_COMMIT_INVALID == 4 && PANEL_PROVST_OFFSET_MISMATCH == 5 &&
+        PANEL_PROVST_FLASH_IO == 6 && PANEL_PROVST_CRYPTO_INVALID == 7 &&
+        PANEL_PROVST_BUSY == 8,
+        "case 0: status codes 0..8 per §13 D4");
+
+  check(PANEL_PROV_HDR_SIZE == 6u && PANEL_PROVACK_SIZE == 5u,
+        "case 0: header 6 bytes, PROVACK 5 bytes per §13 D1");
+  check(PANEL_PROV_MAX_SSID == 32u && PANEL_PROV_MIN_PSK == 8u &&
+        PANEL_PROV_MAX_PSK == 63u && PANEL_PROV_MAX_HOST == 253u &&
+        PANEL_PROV_MAX_CACERT == 2048u && PANEL_PROV_MAX_CLIENTCERT == 4096u &&
+        PANEL_PROV_MAX_CLIENTKEY == 2048u,
+        "case 0: D3 item bounds");
+  check(PANEL_PROV_CHUNK == 192u && PANEL_MAX_PAYLOAD == 2048u,
+        "case 0: 192-byte chunk choice, 2048 normative frame bound (D2)");
+}
+
 /* Case 1 — PROVISION round-trip at the wire offsets, with data. */
 static void caseProvisionRoundTrip(void) {
   uint8_t payload[PANEL_MAX_PAYLOAD];
@@ -116,6 +148,9 @@ static void caseProvisionDecodeRejects(void) {
   check(panelDecodeProvision(NULL, n, &itemId, &generation, &offset,
                              &out, &dataLen) == -1,
         "case 3: NULL payload rejected");
+  check(panelDecodeProvision(payload, PANEL_MAX_PAYLOAD + 1u, &itemId,
+                             &generation, &offset, &out, &dataLen) == -1,
+        "case 3: payload over PANEL_MAX_PAYLOAD rejected");
 }
 
 /* Case 4 — PROVACK round-trip at the wire offsets, and rejects. */
@@ -143,6 +178,11 @@ static void caseProvAck(void) {
   check(panelDecodeProvAck(payload, PANEL_PROVACK_SIZE - 1u, &itemId, &status,
                            &generation, &nextOffset) == -1,
         "case 4: short payload rejected");
+  payload[PANEL_PROVACK_SIZE] = 0xEEu;
+  check(panelDecodeProvAck(payload, PANEL_PROVACK_SIZE + 1u, &itemId, &status,
+                           &generation, &nextOffset) == 0 &&
+        nextOffset == 0x0240u,
+        "case 4: trailing byte tolerated (additive-extension convention)");
   check(panelEncodeProvAck(1u, 0u, 0u, 0u, payload, PANEL_PROVACK_SIZE - 1u) == 0u,
         "case 4: short output buffer refused");
 }
@@ -207,6 +247,7 @@ static void caseParserDispatch(void) {
 }
 
 int main(void) {
+  caseContractLiterals();
   caseProvisionRoundTrip();
   caseProvisionBounds();
   caseProvisionDecodeRejects();
