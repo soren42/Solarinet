@@ -85,3 +85,6 @@ run/cursor.env
 run/unifi.env
 run/notify-apple.env
 run/vapid_private.pem
+
+# RackWire is now a standalone repo (~/Code/RackWire); this symlink is navigation convenience only
+/RackWire
