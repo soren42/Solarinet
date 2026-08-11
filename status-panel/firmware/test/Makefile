@@ -10,6 +10,7 @@ CFLAGS  ?= -std=c11 -Wall -Wextra -Werror -O1 -g
 LINK_SRC = panelLinkTest.c ../panelLink.c ../../protocol.c
 CTL_SRC  = panelCtlTest.c ../panelCtl.c ../../protocol.c
 CFG_SRC  = panelScreenCfgTest.c ../panelScreenCfg.c ../../protocol.c
+PROV_SRC = panelProvTest.c ../../protocol.c
 HELP_SRC = panelHelpTest.c ../panelHelp.c
 # A1 renderer under ASAN/UBSAN — the review-proven hubs[-2] class must crash
 # loudly here, never ship (REVIEW-AW M3/M4). Needs the fb/env/screens units.
@@ -27,13 +28,14 @@ PARITY_WRAP = -Wl,--wrap=panelFbSet -Wl,--wrap=panelFbSetRgb \
               -Wl,--wrap=panelFbDimAll -Wl,--wrap=panelText \
               -Wl,--wrap=panelTextOver -Wl,--wrap=panelBig \
               -Wl,--wrap=panelScroll
-BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelHelpTest panelScreensATest panelParityTest
+BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelHelpTest panelScreensATest panelParityTest
 
 .PHONY: all clean
 all: $(BINS)
 	./panelLinkTest
 	./panelCtlTest
 	./panelScreenCfgTest
+	./panelProvTest
 	./panelHelpTest
 	# LeakSanitizer cannot initialize when this suite runs under ptrace-based
 	# harnesses; ASAN/UBSAN bounds checks remain enabled for this renderer test.
@@ -56,6 +58,9 @@ panelParityTest: $(PARITY_SRC) testJson.h ../panelScreens.h ../panelFb.h ../pane
 
 panelScreenCfgTest: $(CFG_SRC) ../panelScreenCfg.h ../../protocol.h
 	$(CC) $(CFLAGS) -o $@ $(CFG_SRC)
+
+panelProvTest: $(PROV_SRC) ../../protocol.h
+	$(CC) $(CFLAGS) -o $@ $(PROV_SRC)
 
 panelHelpTest: $(HELP_SRC) ../panelHelp.h
 	$(CC) $(CFLAGS) -o $@ $(HELP_SRC)

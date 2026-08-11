@@ -569,6 +569,10 @@ return static function (Router $router): void {
             $severity = (string) $row['severity'];
             if (isset($alerts[$severity])) $alerts[$severity] = (int) $row['count'];
         }
+        /* eventId doubles as an episodeId, so it must stay below 0x80000000
+         * (2147483648) — the CRC-episode namespace floor (§13 D17). The
+         * alertEvent auto-increment reaching that bound is out of reach at
+         * this fleet's alert rates. */
         $critEpisodeId = 0;
         foreach ($critRows as $row) {
             $eventId = (int) $row['eventId'];
@@ -587,7 +591,11 @@ return static function (Router $router): void {
 
         sort($breachingPools, SORT_NUMERIC);
         $poolSet = implode(',', $breachingPools);
-        $poolEpisodeId = 0x80000000 | (crc32($poolSet) & 0x7fffffff);
+        /* Episode-ID namespace (CONTRACT-SW §4/§13 D17): auto-increment
+         * eventIds live below 0x80000000; server CRC episodes occupy
+         * 0x80000000-0xBFFFFFFF, so the CRC is masked to 30 bits;
+         * 0xC0000000+ is reserved for firmware-local episodes. */
+        $poolEpisodeId = 0x80000000 | (crc32($poolSet) & 0x3fffffff);
         /* CONTRACT-LC §3.2 tier 4: any vital entity down forces the alarm,
          * independent of alert rows and score smoothing ("Paul Revere"). */
         $vitalDown = [];
@@ -598,7 +606,7 @@ return static function (Router $router): void {
         }
         sort($vitalDown, SORT_STRING);
         $vitalSet = implode(',', $vitalDown);
-        $vitalEpisodeId = 0x80000000 | (crc32('vital:' . $vitalSet) & 0x7fffffff);
+        $vitalEpisodeId = 0x80000000 | (crc32('vital:' . $vitalSet) & 0x3fffffff);
         $alarmActive = $critEpisodeId > 0 || $score >= 100 || $vitalDown !== [];
         if ($alarmActive && $topAlert === null && $breachingPools !== []) {
             // High-bit namespace cannot collide with normal auto-increment IDs.
