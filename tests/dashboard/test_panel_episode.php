@@ -13,7 +13,7 @@ $fail = 0;
 
 // Golden values, computed independently of the helper. The first two have
 // CRC bit 30 SET — under the old mask they landed in the firmware-local
-// range (0xDA973186 and 0xD3D99E8B|high bit); reverting the mask fails them.
+// range (0xDA973186 and 0xD8E04C7A); reverting the mask fails them.
 $golden = [
     ['vital:',              2593599878, 'empty vital set (bit30 set; old mask spilled to 0xDA973186)'],
     ['3,7',                 2564836474, 'pool set 3,7 (bit30 set; old mask spilled)'],
