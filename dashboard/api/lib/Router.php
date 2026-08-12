@@ -111,8 +111,12 @@ final class Router
             // Authorization/CSRF chokepoint: the guard runs for the matched
             // route before its handler and terminates on denial (default-deny
             // for writes). A route with no declared policy is still gated.
+            // Pass the ACTUAL request $method, not $route['method'] — a wildcard
+            // ('*') route matches every verb, so keying the guard off the route's
+            // registered method would classify a POST/PUT/DELETE to a '*' route as
+            // a read and skip write authz + CSRF. The browser's method is authority.
             if ($this->guard !== null) {
-                ($this->guard)($route['method'], $path, $route['policy']);
+                ($this->guard)($method, $path, $route['policy']);
             }
 
             $params = [];
