@@ -28,6 +28,9 @@ final class Auth
     /** Session key holding the authenticated principal. */
     private const SESS_KEY = 'solari';
 
+    /** Session key holding the per-session CSRF synchronizer token. */
+    private const CSRF_KEY = 'solari_csrf';
+
     /** @var array<string,mixed>|null cached credential store */
     private static ?array $store = null;
 
@@ -169,7 +172,8 @@ final class Auth
             return null;
         }
         session_regenerate_id(true);          // prevent fixation
-        $_SESSION[self::SESS_KEY] = $principal;
+        $_SESSION[self::SESS_KEY]  = $principal;
+        $_SESSION[self::CSRF_KEY]  = self::newCsrfToken();   // fresh token per login
         return $principal;
     }
 
@@ -194,7 +198,8 @@ final class Auth
             'source'      => (string) ($principal['source'] ?? 'directory'),
         ];
         session_regenerate_id(true);          // prevent fixation
-        $_SESSION[self::SESS_KEY] = $principal;
+        $_SESSION[self::SESS_KEY]  = $principal;
+        $_SESSION[self::CSRF_KEY]  = self::newCsrfToken();   // fresh token per login
         return $principal;
     }
 
@@ -217,6 +222,32 @@ final class Auth
         self::bootSession();
         $p = $_SESSION[self::SESS_KEY] ?? null;
         return is_array($p) ? $p : null;
+    }
+
+    /**
+     * The CSRF synchronizer token bound to the current session, or '' when no
+     * principal is authenticated. Lazily mints one for sessions that predate
+     * this token (e.g. a session established before the CSRF layer shipped), so
+     * an already-logged-in browser is not locked out until it re-authenticates.
+     * The token is opaque, HttpOnly-session-scoped, and echoed by the SPA in the
+     * X-Solari-CSRF header on every state-changing request (see lib/Policy.php).
+     */
+    public static function csrfToken(): string
+    {
+        self::bootSession();
+        if (self::current() === null) {
+            return '';                         // no token without a principal
+        }
+        if (empty($_SESSION[self::CSRF_KEY]) || !is_string($_SESSION[self::CSRF_KEY])) {
+            $_SESSION[self::CSRF_KEY] = self::newCsrfToken();
+        }
+        return (string) $_SESSION[self::CSRF_KEY];
+    }
+
+    /** Generate a fresh high-entropy CSRF token. */
+    private static function newCsrfToken(): string
+    {
+        return bin2hex(random_bytes(32));
     }
 
     /**

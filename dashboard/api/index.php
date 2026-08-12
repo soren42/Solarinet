@@ -20,8 +20,16 @@ require_once __DIR__ . '/lib/bootstrap.php';
 require_once __DIR__ . '/lib/Auth.php';
 require_once __DIR__ . '/lib/Oidc.php';
 require_once __DIR__ . '/lib/Operator.php';
+require_once __DIR__ . '/lib/Policy.php';
 
 $router = solari_router();
+
+// Single authorization + CSRF chokepoint. DEFAULT-DENY: every state-changing
+// method requires an operator/admin role and a same-origin CSRF token unless the
+// route explicitly declares a weaker policy (e.g. ['auth'=>'public'] on login).
+// This replaces the previous per-handler requireOperator() pattern, under which
+// the audit found ~13 write routes silently ungated (findings F-02/F-03/F-05).
+$router->setGuard([Policy::class, 'enforce']);
 
 // Auth routes are the ONLY endpoints reachable without a session.
 $registerAuth = require __DIR__ . '/routes/auth.php';

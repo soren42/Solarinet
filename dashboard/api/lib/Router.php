@@ -25,17 +25,37 @@ declare(strict_types=1);
  */
 final class Router
 {
-    /** @var array<int,array{method:string,regex:string,vars:string[],handler:callable}> */
+    /** @var array<int,array{method:string,regex:string,vars:string[],handler:callable,policy:array<string,mixed>}> */
     private array $routes = [];
+
+    /**
+     * Optional authorization/CSRF guard, invoked for the matched route BEFORE
+     * its handler. Signature: fn(string $method, string $path, array $policy): void
+     * — it emits its own error envelope and exits on denial (see lib/Policy.php).
+     * Kept as an injected hook so the Router itself stays transport-only and
+     * unit-testable without the auth stack.
+     *
+     * @var callable|null
+     */
+    private $guard = null;
+
+    /** Install the authorization guard (see Policy::enforce). */
+    public function setGuard(callable $guard): void
+    {
+        $this->guard = $guard;
+    }
 
     /**
      * Register a route.
      *
-     * @param string   $method  HTTP method (GET/POST/...); "*" matches any.
-     * @param string   $pattern Path pattern with optional "{name}" segments.
-     * @param callable $handler fn(array $params, Router $self): void
+     * @param string              $method  HTTP method (GET/POST/...); "*" matches any.
+     * @param string              $pattern Path pattern with optional "{name}" segments.
+     * @param callable            $handler fn(array $params, Router $self): void
+     * @param array<string,mixed> $policy  optional route policy, e.g. ['auth'=>'public'].
+     *                                     Omitted => the guard applies its default
+     *                                     (default-deny for writes; see Policy).
      */
-    public function add(string $method, string $pattern, callable $handler): void
+    public function add(string $method, string $pattern, callable $handler, array $policy = []): void
     {
         $vars  = [];
         $regex = preg_replace_callback(
@@ -51,19 +71,20 @@ final class Router
             'regex'   => '#^' . $regex . '/?$#',
             'vars'    => $vars,
             'handler' => $handler,
+            'policy'  => $policy,
         ];
     }
 
     /** Convenience: register a GET route. */
-    public function get(string $pattern, callable $handler): void
+    public function get(string $pattern, callable $handler, array $policy = []): void
     {
-        $this->add('GET', $pattern, $handler);
+        $this->add('GET', $pattern, $handler, $policy);
     }
 
     /** Convenience: register a POST route (for the follow-up mutation layer). */
-    public function post(string $pattern, callable $handler): void
+    public function post(string $pattern, callable $handler, array $policy = []): void
     {
-        $this->add('POST', $pattern, $handler);
+        $this->add('POST', $pattern, $handler, $policy);
     }
 
     /**
@@ -85,6 +106,17 @@ final class Router
 
             if ($route['method'] !== $method && $route['method'] !== '*') {
                 continue;
+            }
+
+            // Authorization/CSRF chokepoint: the guard runs for the matched
+            // route before its handler and terminates on denial (default-deny
+            // for writes). A route with no declared policy is still gated.
+            // Pass the ACTUAL request $method, not $route['method'] — a wildcard
+            // ('*') route matches every verb, so keying the guard off the route's
+            // registered method would classify a POST/PUT/DELETE to a '*' route as
+            // a read and skip write authz + CSRF. The browser's method is authority.
+            if ($this->guard !== null) {
+                ($this->guard)($method, $path, $route['policy']);
             }
 
             $params = [];
