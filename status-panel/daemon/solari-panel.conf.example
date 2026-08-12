@@ -14,3 +14,19 @@ pollSec=5
 snapshotSec=2
 # Glob is resolved at open time, first match wins; a literal path also works.
 serialDev=/dev/serial/by-id/*
+
+# Optional raw-TLS listener. serialDev and listen may coexist. Set serialDev=
+# to run listener-only. When listenAddr is omitted, the daemon selects the
+# address used by the default IPv4 route and refuses startup if none is safe;
+# wildcard addresses (0.0.0.0 and ::) are always rejected.
+# listen=7443
+# listenAddr=10.7.0.20
+# tlsCert=/etc/solari-panel/panelgw-chain.pem
+# tlsKey=/etc/solari-panel/panelgw.key
+# clientCa=/etc/solari-panel/chlorine-root.pem
+# allowedSan=panel-01.panel.akoria.net
+# denylist=/etc/solari-panel/denied-client-serials
+#
+# tlsCert, tlsKey, and clientCa must be regular files owned by root or the
+# daemon user and mode 0600 or 0644. The denylist contains one hexadecimal
+# certificate serial per line and is loaded only at daemon startup.
