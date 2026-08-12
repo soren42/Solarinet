@@ -55,6 +55,16 @@ function solari_json_body(): array
     if ($raw === false || $raw === '') {
         return [];
     }
+    // Require an explicit application/json Content-Type on any request that
+    // carries a body. This closes the classic CSRF "simple request" vector: a
+    // cross-origin <form>/fetch can send text/plain JSON without a preflight, but
+    // cannot set application/json without CORS. Defense in depth behind the
+    // Origin + synchronizer-token checks in lib/Policy.php.
+    $ctype = (string) ($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? '');
+    if (stripos($ctype, 'application/json') === false) {
+        Response::error('unsupported_media_type',
+            'Request body must be sent as application/json.', 415);
+    }
     $decoded = json_decode($raw, true);
     if (!is_array($decoded)) {
         Response::error('bad_request', 'Request body must be a JSON object.', 400);

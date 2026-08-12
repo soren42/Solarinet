@@ -91,12 +91,21 @@
     return e;
   }
 
+  // CSRF synchronizer token. The server (lib/Policy.php) requires it in the
+  // X-Solari-CSRF header on every state-changing request; we receive it in the
+  // login / whoami response envelopes and cache it here for the session.
+  var CSRF = "";
+
   function unwrap(json) {
     // accept the stable envelope; also tolerate a bare payload defensively.
     if (json && typeof json === "object" && "ok" in json) {
       if (json.ok === false) {
         var err = json.error || {};
         throw ApiError(err.code, err.message);
+      }
+      // Capture the CSRF token from any envelope that carries one (login/whoami).
+      if (json.data && typeof json.data === "object" && json.data.csrfToken) {
+        CSRF = json.data.csrfToken;
       }
       return json.data;
     }
@@ -106,11 +115,15 @@
   function getJSON(path, opts) {
     opts = opts || {};
     var url = path.charAt(0) === "/" && path.indexOf("/api") === 0 ? path : (BASE + path);
+    var method = opts.method || "GET";
+    var isWrite = method !== "GET" && method !== "HEAD";
     return fetch(url, {
-      method: opts.method || "GET",
+      method: method,
       headers: Object.assign(
         { "Accept": "application/json" },
-        opts.body ? { "Content-Type": "application/json" } : {}
+        opts.body ? { "Content-Type": "application/json" } : {},
+        // Attach the CSRF token on state-changing requests (server-enforced).
+        (isWrite && CSRF) ? { "X-Solari-CSRF": CSRF } : {}
       ),
       credentials: "same-origin",
       body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -947,8 +960,14 @@
     uploadReceipt:    function (form) {
       // form is a FormData (vendor, purchased_on, subtotal_cents, order_ref, scan file).
       var url = EP.invReceipts.charAt(0) === "/" ? EP.invReceipts : (BASE + EP.invReceipts);
-      return fetch(url, { method: "POST", credentials: "same-origin", body: form })
-        .then(function (r) { return r.json().then(unwrap); });
+      // Multipart upload bypasses getJSON, so attach the CSRF token explicitly.
+      // Content-Type is left to the browser (it sets the multipart boundary).
+      return fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: CSRF ? { "X-Solari-CSRF": CSRF } : {},
+        body: form,
+      }).then(function (r) { return r.json().then(unwrap); });
     },
     // projects + allocations
     createProject:    function (body) { return post(EP.invProjects, body || {}); },

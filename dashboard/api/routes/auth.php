@@ -28,14 +28,16 @@ return static function (Router $router): void {
             'role'        => $principal['role'],
             'displayName' => $principal['displayName'],
             'source'      => $principal['source'],
+            // Hand the SPA its CSRF token so subsequent writes carry X-Solari-CSRF.
+            'csrfToken'   => Auth::csrfToken(),
         ]);
-    });
+    }, ['auth' => 'public']);   // pre-session: no role/token required to log in
 
-    // POST /api/auth/logout
+    // POST /api/auth/logout — authenticated session, CSRF-protected like any write.
     $router->post('/api/auth/logout', static function (): void {
         Auth::logout();
         Response::ok(['loggedOut' => true]);
-    });
+    }, ['auth' => 'session']);
 
     // GET /api/auth/config — public (unauthenticated) surface the login screen
     // reads to decide which sign-in options to show. Carries NO secrets: just
@@ -85,19 +87,19 @@ return static function (Router $router): void {
             'oidcScopes'   => (string) ($oc['scopes'] ?? ''),
             'directory'    => $dirOut,
         ]);
-    });
+    }, ['auth' => 'public']);   // login screen reads this before any session exists
 
     // GET /api/auth/oidc/login — begin the authorization-code flow (302 to IdP).
     // A browser navigation, not an XHR: emits a redirect, not a JSON envelope.
     $router->get('/api/auth/oidc/login', static function (): void {
         Oidc::beginLogin();   // redirects + exits (or fails closed with a redirect)
-    });
+    }, ['auth' => 'public']);
 
     // GET /api/auth/oidc/callback — IdP redirect target. Exchanges the code,
     // validates the ID token, establishes the session, then 302s into the app.
     $router->get('/api/auth/oidc/callback', static function (): void {
         Oidc::handleCallback($_GET);   // redirects + exits
-    });
+    }, ['auth' => 'public']);
 
     // GET /api/auth/whoami — the SPA polls this on boot to decide login vs app.
     $router->get('/api/auth/whoami', static function (): void {
@@ -112,6 +114,9 @@ return static function (Router $router): void {
             'source'      => $p['source'],
             'directoryEnabled' => (bool) (Auth::directoryConfig()['enabled'] ?? false),
             'oidcEnabled'      => Oidc::isEnabled(),
+            // The SPA re-reads its CSRF token here on boot / session resume, so a
+            // browser with an existing cookie can write without re-authenticating.
+            'csrfToken'   => Auth::csrfToken(),
         ]);
-    });
+    }, ['auth' => 'session']);
 };
