@@ -160,6 +160,8 @@ jobs:
         run: make -C status-panel/firmware/test
       - name: Daemon codec tests
         run: make -C status-panel/daemon test
+      - name: Provisioning tool + pty end-to-end smoke (CONTRACT-SW §13)
+        run: make -C status-panel/tools smoke
       - name: Page/firmware parity suite (JS side)
         run: node tests/dashboard/test_panel_parity.js
 

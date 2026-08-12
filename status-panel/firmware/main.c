@@ -37,6 +37,8 @@
 #include "panelHelp.h"
 #include "panelHelpOverlay.h"
 #include "panelScreenCfg.h"
+#include "panelProv.h"
+#include "panelProvStore.h"
 #include "panelHw.h"
 #include "panelLink.h"
 #include "panelFb.h"
@@ -102,6 +104,13 @@ static PanelCtl gCtl;
 static PanelHelp gHelp;
 static PanelScreenCfg gScreenCfg;
 static PanelScreenCfgFlash gScreenCfgFlash;
+
+/* WiFi provisioning (CONTRACT-SW §13). The store loads at boot so P3's WiFi
+ * transport can read credentials; the handler runs lockstep inside onFrame.
+ * ~13 KiB of state (staging + record) — static, never on the tick stack.  */
+static PanelProv gProv;
+static PanelProvStore gProvStore;
+static PanelProvFlash gProvFlash;
 
 /* Alarm state — CONTRACT §9. ack is firmware-local and scoped to episodeId;
  * a NEW episodeId re-arms the tone even if the previous one was acked. */
@@ -233,6 +242,20 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
       uint32_t cmdId; uint8_t kind, cmdArg, arg = 0;
       if (panelDecodeControl(payload, len, &cmdId, &kind, &cmdArg) != 0) return;
       applyControl(panelCtlConsume(&gCtl, cmdId, kind, cmdArg, &arg), arg);
+      break;
+    }
+    case PANEL_FT_PROVISION: {
+      /* Lockstep by contract: one PROVISION, one PROVACK, no queueing. The
+       * transport flag is hardwired false because this build's only host
+       * link IS USB-CDC; P3's transport arbitration must pass the real
+       * "arrived over WiFi" bit here (D2). Crypto seam is NULL until P3
+       * wires mbedTLS — commit accepts structurally-unverified DER, which
+       * only matters once something consumes it, and that something (the
+       * WiFi transport) arrives together with the validators. */
+      uint8_t ack[PANEL_PROVACK_SIZE];
+      size_t n = panelProvHandle(&gProv, payload, len, false, &gProvStore,
+                                 &gProvFlash, NULL, ack, sizeof(ack));
+      if (n) sendFrame(PANEL_FT_PROVACK, ack, n);
       break;
     }
     case PANEL_FT_PING:
@@ -571,6 +594,9 @@ int main(void) {
 #endif
   gScreenCfgFlash = panelScreenCfgDeviceFlash();
   panelScreenCfgLoad(&gScreenCfg, &gScreenCfgFlash, nowMs());
+  gProvFlash = panelProvDeviceFlash();
+  panelProvInit(&gProv);
+  panelProvStoreLoad(&gProvStore, &gProvFlash);
 
   sendHello();
 

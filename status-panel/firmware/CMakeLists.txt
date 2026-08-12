@@ -76,6 +76,8 @@ add_executable(solari-panel-fw
   panelHelpOverlay.c
   panelCtl.c
   panelScreenCfg.c
+  panelProv.c
+  panelProvStore.c
   panelLink.c
   panelHist.c
   panelScreensA.c
@@ -156,7 +158,8 @@ target_compile_options(solari-panel-fw PRIVATE
 
 pico_add_extra_outputs(solari-panel-fw)
 
-# CONTRACT-AW §10.4: protect panelScreenCfg's final reserved flash sector.
+# Protect the final FOUR reserved flash sectors: credential A/B + spare
+# (panelProvStore.c, CONTRACT-SW §13 D5) + the AW config sector (§10.4).
 # pico2_w's board definition sets PICO_FLASH_SIZE_BYTES to this same 4 MiB
 # value for the compiler; keep the build-time image guard explicit in CMake.
 set(SOLARI_PICO_FLASH_SIZE_BYTES 4194304)
