@@ -168,5 +168,6 @@ add_custom_command(TARGET solari-panel-fw POST_BUILD
     -DIMAGE=$<TARGET_FILE_DIR:solari-panel-fw>/solari-panel-fw.bin
     -DFLASH_BYTES=${SOLARI_PICO_FLASH_SIZE_BYTES}
     -DSECTOR_BYTES=4096
+    -DPROV_HEADER=${CMAKE_CURRENT_LIST_DIR}/panelProvStore.h
     -P ${CMAKE_CURRENT_LIST_DIR}/panelFlashLayoutCheck.cmake
   VERBATIM)

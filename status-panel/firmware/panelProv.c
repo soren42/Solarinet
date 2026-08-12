@@ -41,6 +41,57 @@ static void startSession(PanelProv *prov, uint8_t generation) {
   prov->active = true;
 }
 
+/* Purpose: D3 "all strings UTF-8" — structural UTF-8 validity (no overlongs,
+ * no surrogates, no >U+10FFFF). */
+static bool validUtf8(const uint8_t *s, uint16_t n) {
+  uint16_t i = 0u;
+  while (i < n) {
+    uint8_t c = s[i];
+    uint8_t follow;
+    uint32_t cp;
+    if (c < 0x80u) { ++i; continue; }
+    if (c < 0xC2u) return false;                 /* continuation / overlong */
+    else if (c < 0xE0u) { follow = 1u; cp = c & 0x1Fu; }
+    else if (c < 0xF0u) { follow = 2u; cp = c & 0x0Fu; }
+    else if (c < 0xF5u) { follow = 3u; cp = c & 0x07u; }
+    else return false;
+    if ((uint16_t)(i + follow) >= n) return false;
+    while (follow-- > 0u) {
+      uint8_t cc = s[++i];
+      if ((cc & 0xC0u) != 0x80u) return false;
+      cp = (cp << 6) | (cc & 0x3Fu);
+    }
+    if (cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu) ||
+        (cp < 0x80u) || (cp < 0x800u && c >= 0xE0u) ||
+        (cp < 0x10000u && c >= 0xF0u)) return false;
+    ++i;
+  }
+  return true;
+}
+
+/* Purpose: D3 "serverHost syntactically valid" — RFC 1035 label syntax
+ * (alnum + hyphen, 1..63 per label, no leading/trailing hyphen, 1..253
+ * total). Dotted-decimal IPv4 literals pass as digit-only labels. */
+static bool validHostname(const uint8_t *s, uint16_t n) {
+  uint16_t i, labelLen = 0u;
+  if (n == 0u || n > PANEL_PROV_MAX_HOST || s[0] == '.' || s[n - 1u] == '.')
+    return false;
+  for (i = 0u; i < n; ++i) {
+    uint8_t c = s[i];
+    if (c == '.') {
+      if (labelLen == 0u || s[i - 1u] == '-') return false;
+      labelLen = 0u;
+    } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+               (c >= '0' && c <= '9') || c == '-') {
+      if (c == '-' && labelLen == 0u) return false;
+      if (++labelLen > 63u) return false;
+    } else {
+      return false;
+    }
+  }
+  return labelLen > 0u && s[n - 1u] != '-';
+}
+
 /* Purpose: run the D4 commit validation over the staged set.
  * Input: staging + crypto seam. Output: a PanelProvStatus — _OK, _COMMIT_
  * INVALID (required item missing or semantically bad) or _CRYPTO_INVALID. */
@@ -58,19 +109,37 @@ static int validateStaged(const PanelProv *prov,
   if (((uint16_t)prov->stage[itemBase(3u)] |
        ((uint16_t)prov->stage[itemBase(3u) + 1u] << 8)) == 0u)
     return PANEL_PROVST_COMMIT_INVALID;
-  if (crypto != NULL) {
+  /* D3 string syntax: ssid UTF-8; psk printable ASCII (WPA2 passphrase);
+   * serverHost and optional ntpHost RFC 1035. */
+  if (!validUtf8(prov->stage + itemBase(0u), prov->fill[0]))
+    return PANEL_PROVST_COMMIT_INVALID;
+  {
+    const uint8_t *psk = prov->stage + itemBase(1u);
+    uint16_t i;
+    for (i = 0u; i < prov->fill[1]; ++i)
+      if (psk[i] < 32u || psk[i] > 126u) return PANEL_PROVST_COMMIT_INVALID;
+  }
+  if (!validHostname(prov->stage + itemBase(2u), prov->fill[2]))
+    return PANEL_PROVST_COMMIT_INVALID;
+  if (prov->fill[9] != 0u &&
+      !validHostname(prov->stage + itemBase(9u), prov->fill[9]))
+    return PANEL_PROVST_COMMIT_INVALID;
+  /* FAIL CLOSED on a missing crypto seam: until P3 wires mbedTLS in, the
+   * production build must refuse to persist unvalidated key material rather
+   * than accept arbitrary bytes as CA/cert/key (D3). Tests install stubs. */
+  if (crypto == NULL || crypto->validCert == NULL ||
+      crypto->validKey == NULL || crypto->keyMatchesCert == NULL)
+    return PANEL_PROVST_CRYPTO_INVALID;
+  {
     const uint8_t *ca = prov->stage + itemBase(4u);
     const uint8_t *cert = prov->stage + itemBase(5u);
     const uint8_t *key = prov->stage + itemBase(6u);
-    if (crypto->validCert != NULL &&
-        (!crypto->validCert(crypto->user, ca, prov->fill[4], 1) ||
-         !crypto->validCert(crypto->user, cert, prov->fill[5], 0)))
+    if (!crypto->validCert(crypto->user, ca, prov->fill[4], 1) ||
+        !crypto->validCert(crypto->user, cert, prov->fill[5], 0))
       return PANEL_PROVST_CRYPTO_INVALID;
-    if (crypto->validKey != NULL &&
-        !crypto->validKey(crypto->user, key, prov->fill[6]))
+    if (!crypto->validKey(crypto->user, key, prov->fill[6]))
       return PANEL_PROVST_CRYPTO_INVALID;
-    if (crypto->keyMatchesCert != NULL &&
-        !crypto->keyMatchesCert(crypto->user, key, prov->fill[6], cert,
+    if (!crypto->keyMatchesCert(crypto->user, key, prov->fill[6], cert,
                                 prov->fill[5]))
       return PANEL_PROVST_CRYPTO_INVALID;
   }
@@ -90,6 +159,14 @@ size_t panelProvHandle(PanelProv *prov, const uint8_t *payload, size_t len,
   if (prov == NULL || ackPayload == NULL || ackCap < PANEL_PROVACK_SIZE)
     return 0u;
 
+  if (onWifi) {
+    /* D2: USB transport only — checked BEFORE decoding so even a malformed
+     * PROVISION over WiFi answers rejected-on-wifi and changes no state. */
+    itemId = (payload != NULL && len >= 1u) ? payload[0] : 0u;
+    generation = (payload != NULL && len >= 2u) ? payload[1] : 0u;
+    return panelEncodeProvAck(itemId, PANEL_PROVST_REJECTED_WIFI, generation,
+                              0u, ackPayload, ackCap);
+  }
   decoded = panelDecodeProvision(payload, len, &itemId, &generation, &offset,
                                  &data, &dataLen);
   if (decoded != 0) {
@@ -99,8 +176,6 @@ size_t panelProvHandle(PanelProv *prov, const uint8_t *payload, size_t len,
     itemId = (payload != NULL && len >= 1u) ? payload[0] : 0u;
     generation = (payload != NULL && len >= 2u) ? payload[1] : 0u;
     status = PANEL_PROVST_FORMAT_INVALID;
-  } else if (onWifi) {
-    status = PANEL_PROVST_REJECTED_WIFI; /* D2: USB transport only */
   } else if (itemId == PANEL_PROV_WIPE) {
     if (dataLen != 0u || offset != 0u) {
       status = PANEL_PROVST_FORMAT_INVALID;
@@ -112,11 +187,15 @@ size_t panelProvHandle(PanelProv *prov, const uint8_t *payload, size_t len,
                                                 : PANEL_PROVST_FLASH_IO;
     }
   } else if (itemId == PANEL_PROV_COMMIT) {
+    /* D1: ANY TLV whose generation differs from the staging area's discards
+     * the staged set — commit included. A stale-generation commit therefore
+     * finds an empty session and fails, and can never land credentials that
+     * were staged under a different epoch. Wipe alone is generation-blind. */
+    if (prov->active && generation != prov->generation)
+      startSession(prov, generation);
     if (dataLen != 0u || offset != 0u) {
       status = PANEL_PROVST_FORMAT_INVALID;
-    } else if (!prov->active || generation != prov->generation) {
-      /* A commit may only land the session it names — a stale or unopened
-       * generation must never flash whatever happens to be staged. */
+    } else if (!prov->active) {
       status = PANEL_PROVST_COMMIT_INVALID;
     } else {
       status = (uint8_t)validateStaged(prov, crypto);
@@ -180,4 +259,3 @@ const uint8_t *panelProvStaged(const PanelProv *prov, uint8_t itemId,
   if (lenOut != NULL) *lenOut = prov->fill[itemId - 1u];
   return prov->stage + itemBase((uint8_t)(itemId - 1u));
 }
-

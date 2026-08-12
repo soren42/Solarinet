@@ -53,11 +53,20 @@ static bool decodeRecord(const uint8_t *raw, uint32_t *generation,
                          uint16_t len[PANEL_PROV_ITEM_COUNT],
                          uint16_t off[PANEL_PROV_ITEM_COUNT],
                          uint8_t payload[PANEL_PROV_RECORD_CAP]) {
+  /* Per-item D3 wire bounds (itemId-1 indexed; commit/wipe carry no data).
+   * A CRC-valid record with an out-of-bounds length is still refused — CRC
+   * proves integrity, not that the writer honored the contract. */
+  static const uint16_t kMax[PANEL_PROV_ITEM_COUNT] = {
+    PANEL_PROV_MAX_SSID, PANEL_PROV_MAX_PSK,        PANEL_PROV_MAX_HOST,
+    2u,                  PANEL_PROV_MAX_CACERT,     PANEL_PROV_MAX_CLIENTCERT,
+    PANEL_PROV_MAX_CLIENTKEY, 0u, 0u,               PANEL_PROV_MAX_HOST
+  };
   size_t total = 0u, i;
   if (getLe32(raw) != PANEL_PROV_RECORD_MAGIC ||
-      raw[4] != PANEL_PROV_RECORD_VERSION) return false;
+      raw[4] != PANEL_PROV_RECORD_VERSION || raw[5] != 0u) return false;
   for (i = 0u; i < PANEL_PROV_ITEM_COUNT; ++i) {
     len[i] = getLe16(raw + 10u + 2u * i);
+    if (len[i] > kMax[i]) return false;
     off[i] = (uint16_t)total;
     total += len[i];
     if (total > PANEL_PROV_RECORD_CAP) return false;
@@ -109,9 +118,12 @@ bool panelProvStoreLoad(PanelProvStore *store, const PanelProvFlash *flash) {
     static uint8_t payload[PANEL_PROV_RECORD_CAP];
     if (!flash->readSlot(flash->user, slot, raw, sizeof(raw))) continue;
     if (!decodeRecord(raw, &generation, len, off, payload)) continue;
-    /* Highest generation wins; a tie (which the commit discipline never
-     * produces) keeps the earlier slot deterministically. */
-    if (store->valid && generation <= store->generation) continue;
+    /* Highest generation wins, serial-number arithmetic so a u32 wrap (never
+     * reached in device life, but cheap to be correct about) still elects the
+     * newer record; a tie (which the commit discipline never produces) keeps
+     * the earlier slot deterministically. */
+    if (store->valid && (int32_t)(generation - store->generation) <= 0)
+      continue;
     store->valid = true;
     store->activeSlot = slot;
     store->generation = generation;
@@ -141,8 +153,10 @@ int panelProvStoreCommit(PanelProvStore *store, const PanelProvFlash *flash,
   if (!flash->writeSlot(flash->user, target, raw, n))
     return PANEL_PROVST_FLASH_IO;
   /* Read-back verify BEFORE adopting: a torn or misprogrammed write must
-   * leave the store pointing at the previous record. */
+   * leave the store pointing at the previous record. Byte-exact compare of
+   * the programmed record, not just "some CRC-valid record decoded". */
   if (!flash->readSlot(flash->user, target, verify, sizeof(verify)) ||
+      memcmp(verify, raw, n) != 0 ||
       !decodeRecord(verify, &generation, vLen, vOff, vPayload) ||
       generation != (store->valid ? store->generation + 1u : 1u))
     return PANEL_PROVST_FLASH_IO;
@@ -183,8 +197,9 @@ const uint8_t *panelProvStoreItem(const PanelProvStore *store, uint8_t itemId,
 /* Slot base offsets from the end of flash — see the map in panelProvStore.h.
  * The AW config sector (panelScreenCfg.c) stays the FINAL sector; the two
  * credential slots and the spare sit directly below it. */
-#define PANEL_PROV_FLASH_BASE(slot) \
-  (PICO_FLASH_SIZE_BYTES - 4u * FLASH_SECTOR_SIZE + (slot) * FLASH_SECTOR_SIZE)
+#define PANEL_PROV_FLASH_BASE(slot)                               \
+  (PICO_FLASH_SIZE_BYTES - PANEL_PROV_RESERVED_SECTORS * FLASH_SECTOR_SIZE + \
+   (slot) * FLASH_SECTOR_SIZE)
 
 typedef struct {
   uint32_t offset;

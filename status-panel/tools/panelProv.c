@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -110,6 +111,18 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len,
     w->got = 1;
 }
 
+/* Complete-write loop: USB-CDC/tty writes may be partial or EINTR'd. */
+static int writeAll(int fd, const uint8_t *bytes, size_t length) {
+  size_t sent = 0u;
+  while (sent < length) {
+    ssize_t n = write(fd, bytes + sent, length - sent);
+    if (n > 0) { sent += (size_t)n; continue; }
+    if (n < 0 && errno == EINTR) continue;
+    return -1;
+  }
+  return 0;
+}
+
 /* Send one PROVISION and wait for its PROVACK. Returns the status, or -1 on
  * timeout/IO error. */
 static int transact(int fd, PanelParser *parser, uint8_t itemId,
@@ -130,7 +143,7 @@ static int transact(int fd, PanelParser *parser, uint8_t itemId,
   for (attempt = 0; attempt < ACK_TRIES; ++attempt) {
     long long deadline = nowMsClock() + ACK_TIMEOUT_MS;
     memset(ack, 0, sizeof(*ack));
-    if (write(fd, frame, fn) != (ssize_t)fn) {
+    if (writeAll(fd, frame, fn) != 0) {
       fprintf(stderr, "panelProv: write: %s\n", strerror(errno));
       return -1;
     }
@@ -145,8 +158,12 @@ static int transact(int fd, PanelParser *parser, uint8_t itemId,
         panelParserFeed(parser, buf, (size_t)n, (uint32_t)nowMsClock(),
                         onFrame, ack);
       if (ack->got) {
-        if (ack->itemId != itemId)
-          continue; /* stale ack from a previous run; keep waiting */
+        if (ack->itemId != itemId || ack->generation != generation) {
+          /* Stale ack (previous run or superseded epoch): discard and keep
+           * parsing — leaving got set would drop every later PROVACK. */
+          memset(ack, 0, sizeof(*ack));
+          continue;
+        }
         return ack->status;
       }
     }
@@ -156,10 +173,14 @@ static int transact(int fd, PanelParser *parser, uint8_t itemId,
   return -1;
 }
 
-/* Send one whole item, resuming at acked watermarks. */
+/* Send one whole item, resuming at acked watermarks. Watermarks must stay
+ * inside the item and must make progress — a panel that acks without
+ * advancing, acks backwards forever, or claims a watermark past what was
+ * sent aborts the transfer instead of livelocking or skipping bytes. */
 static int sendItem(int fd, PanelParser *parser, uint8_t generation,
                     const Item *item) {
   uint16_t offset = 0u;
+  int stalls = 0;
   AckWait ack;
   do {
     uint16_t chunk = (uint16_t)(item->len - offset);
@@ -168,7 +189,12 @@ static int sendItem(int fd, PanelParser *parser, uint8_t generation,
     status = transact(fd, parser, item->itemId, generation, offset,
                       item->data + offset, chunk, &ack);
     if (status < 0) return -1;
-    if (status == PANEL_PROVST_OFFSET_MISMATCH && ack.nextOffset < item->len) {
+    if (status == PANEL_PROVST_OFFSET_MISMATCH) {
+      if (ack.nextOffset >= item->len || ++stalls > ACK_TRIES) {
+        fprintf(stderr, "panelProv: %s: unrecoverable offset state (%u)\n",
+                item->name, ack.nextOffset);
+        return -1;
+      }
       fprintf(stderr, "panelProv: %s: resuming at offset %u\n", item->name,
               ack.nextOffset);
       offset = ack.nextOffset;
@@ -179,6 +205,12 @@ static int sendItem(int fd, PanelParser *parser, uint8_t generation,
               statusName((uint8_t)status));
       return -1;
     }
+    if (ack.nextOffset <= offset || ack.nextOffset > offset + chunk) {
+      fprintf(stderr, "panelProv: %s: implausible watermark %u after %u+%u\n",
+              item->name, ack.nextOffset, offset, chunk);
+      return -1;
+    }
+    stalls = 0;
     offset = ack.nextOffset;
   } while (offset < item->len);
   printf("panelProv: %-10s %5u bytes staged\n", item->name, item->len);
@@ -188,13 +220,23 @@ static int sendItem(int fd, PanelParser *parser, uint8_t generation,
 /* ---- conf loading -------------------------------------------------------- */
 
 static uint8_t *readWholeFile(const char *path, uint16_t maxLen,
-                              uint16_t *lenOut, int trimNewline) {
+                              uint16_t *lenOut, int trimNewline, int secret) {
   FILE *f = fopen(path, "rb");
   long size;
   uint8_t *buf;
   if (f == NULL) {
     fprintf(stderr, "panelProv: %s: %s\n", path, strerror(errno));
     return NULL;
+  }
+  if (secret) {
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || (st.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+      fprintf(stderr,
+              "panelProv: %s: refusing group/other-accessible secret file — "
+              "chmod 600 it\n", path);
+      fclose(f);
+      return NULL;
+    }
   }
   if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 0 ||
       fseek(f, 0, SEEK_SET) != 0) {
@@ -250,13 +292,38 @@ typedef struct {
 
 static int confAdd(ItemSet *set, uint8_t itemId, const char *name,
                    uint8_t *data, uint16_t len) {
+  int i;
   if (data == NULL) return -1;
+  /* Duplicate keys and overflow are both conf errors, not last-one-wins:
+   * items[] holds at most the 8 distinct provisionable keys. */
+  for (i = 0; i < set->count; ++i)
+    if (set->items[i].itemId == itemId) {
+      fprintf(stderr, "panelProv: duplicate conf key '%s'\n", name);
+      free(data);
+      return -1;
+    }
+  if (set->count >= (int)(sizeof(set->items) / sizeof(set->items[0]))) {
+    free(data);
+    return -1;
+  }
   set->items[set->count].itemId = itemId;
   set->items[set->count].name = name;
   set->items[set->count].data = data;
   set->items[set->count].len = len;
   ++set->count;
   return 0;
+}
+
+/* Zeroize-then-free every staged buffer (psk and key bytes live here). */
+static void freeItems(ItemSet *set) {
+  int i;
+  for (i = 0; i < set->count; ++i) {
+    if (set->items[i].data != NULL) {
+      memset(set->items[i].data, 0, set->items[i].len);
+      free(set->items[i].data);
+    }
+  }
+  set->count = 0;
 }
 
 static int loadConf(const char *path, ItemSet *set) {
@@ -289,7 +356,7 @@ static int loadConf(const char *path, ItemSet *set) {
       haveSsid = 1;
     } else if (strcmp(key, "pskFile") == 0) {
       uint16_t len;
-      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_PSK, &len, 1);
+      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_PSK, &len, 1, 1);
       if (d != NULL && len < PANEL_PROV_MIN_PSK) {
         fprintf(stderr, "panelProv: psk shorter than %u bytes\n",
                 PANEL_PROV_MIN_PSK);
@@ -319,17 +386,17 @@ static int loadConf(const char *path, ItemSet *set) {
       havePort = 1;
     } else if (strcmp(key, "caCert") == 0) {
       uint16_t len;
-      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_CACERT, &len, 0);
+      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_CACERT, &len, 0, 0);
       if (confAdd(set, PANEL_PROV_CACERT, "caCert", d, len)) goto fail;
       haveCa = 1;
     } else if (strcmp(key, "clientCert") == 0) {
       uint16_t len;
-      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_CLIENTCERT, &len, 0);
+      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_CLIENTCERT, &len, 0, 0);
       if (confAdd(set, PANEL_PROV_CLIENTCERT, "clientCert", d, len)) goto fail;
       haveCert = 1;
     } else if (strcmp(key, "clientKey") == 0) {
       uint16_t len;
-      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_CLIENTKEY, &len, 0);
+      uint8_t *d = readWholeFile(val, PANEL_PROV_MAX_CLIENTKEY, &len, 0, 1);
       if (confAdd(set, PANEL_PROV_CLIENTKEY, "clientKey", d, len)) goto fail;
       haveKey = 1;
     } else if (strcmp(key, "ntpHost") == 0) {
@@ -386,9 +453,21 @@ int main(int argc, char **argv) {
   if (fd < 0) return 1;
   panelParserInit(&parser);
 
-  /* The generation only has to differ from whatever session the panel may
-   * have staged before; wall-clock seconds is plenty for a hand-run tool. */
-  generation = (uint8_t)(time(NULL) & 0xffu);
+  /* The generation must differ from whatever session the panel may have
+   * staged before (an interrupted earlier run could leave items — e.g. an
+   * ntpHost this conf omits — that a matching epoch would silently commit).
+   * A random byte leaves a 1/256 residual collision; wall-clock seconds
+   * would collide for any two runs in the same second. */
+  {
+    FILE *r = fopen("/dev/urandom", "rb");
+    if (r == NULL || fread(&generation, 1u, 1u, r) != 1u) {
+      fprintf(stderr, "panelProv: cannot read /dev/urandom\n");
+      if (r != NULL) fclose(r);
+      close(fd);
+      return 1;
+    }
+    fclose(r);
+  }
 
   if (wipe) {
     status = transact(fd, &parser, PANEL_PROV_WIPE, generation, 0u, NULL, 0u,
@@ -403,19 +482,23 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  set.count = 0;
   if (loadConf(conf, &set) != 0) {
+    freeItems(&set);
     close(fd);
     return 1;
   }
   printf("panelProv: provisioning via %s (generation %u)\n", dev, generation);
   for (i = 0; i < set.count; ++i) {
     if (sendItem(fd, &parser, generation, &set.items[i]) != 0) {
+      freeItems(&set);
       close(fd);
       return 1;
     }
   }
   status = transact(fd, &parser, PANEL_PROV_COMMIT, generation, 0u, NULL, 0u,
                     &ack);
+  freeItems(&set);
   close(fd);
   if (status == PANEL_PROVST_OK) {
     printf("panelProv: COMMIT ok — credentials persisted (A/B store)\n");

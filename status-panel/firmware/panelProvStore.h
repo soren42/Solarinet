@@ -34,6 +34,11 @@
 #include <stdint.h>
 
 #define PANEL_PROV_SECTOR_SIZE 4096u
+/* Total reserved tail sectors (A + B + spare + AW config). Single source of
+ * the map size: the device seam derives slot offsets from it and the CMake
+ * image guard (panelFlashLayoutCheck.cmake) greps this exact line — keep the
+ * literal on this line. */
+#define PANEL_PROV_RESERVED_SECTORS 4u
 #define PANEL_PROV_ITEM_COUNT 10u
 #define PANEL_PROV_RECORD_MAGIC 0x564F5250u
 #define PANEL_PROV_RECORD_VERSION 1u

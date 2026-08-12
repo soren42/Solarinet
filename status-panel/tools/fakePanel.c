@@ -46,8 +46,37 @@ typedef struct {
   PanelProv prov;
   PanelProvStore store;
   PanelProvFlash flash;
+  PanelProvCrypto crypto;
   int commits, wipes;
 } Fake;
+
+/* Accept-all crypto seam: the handler is fail-closed (a NULL seam refuses
+ * every commit with _CRYPTO_INVALID), and the smoke stages pattern blobs, not
+ * real DER, so this double accepts structure it never inspects. */
+static int okCert(void *user, const uint8_t *der, uint16_t len, int isCa) {
+  (void)user;
+  (void)der;
+  (void)len;
+  (void)isCa;
+  return 1;
+}
+
+static int okKey(void *user, const uint8_t *der, uint16_t len) {
+  (void)user;
+  (void)der;
+  (void)len;
+  return 1;
+}
+
+static int okMatch(void *user, const uint8_t *keyDer, uint16_t keyLen,
+                   const uint8_t *certDer, uint16_t certLen) {
+  (void)user;
+  (void)keyDer;
+  (void)keyLen;
+  (void)certDer;
+  (void)certLen;
+  return 1;
+}
 
 static void onFrame(uint8_t type, const uint8_t *payload, size_t len,
                     void *user) {
@@ -57,7 +86,7 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len,
   size_t an, fn;
   if (type != PANEL_FT_PROVISION) return;
   an = panelProvHandle(&fk->prov, payload, len, false, &fk->store, &fk->flash,
-                       NULL, ack, sizeof(ack));
+                       &fk->crypto, ack, sizeof(ack));
   if (an == 0u) return;
   if (len >= 1u && payload[0] == PANEL_PROV_COMMIT && ack[1] == PANEL_PROVST_OK)
     ++fk->commits;
@@ -94,6 +123,10 @@ int main(void) {
   fk.fd = master;
   fk.flash.readSlot = ramRead;
   fk.flash.writeSlot = ramWrite;
+  fk.crypto.validCert = okCert;
+  fk.crypto.validKey = okKey;
+  fk.crypto.keyMatchesCert = okMatch;
+  fk.crypto.user = NULL;
   panelProvInit(&fk.prov);
   panelProvStoreLoad(&fk.store, &fk.flash);
   panelParserInit(&parser);

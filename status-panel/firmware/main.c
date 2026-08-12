@@ -249,9 +249,10 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
        * transport flag is hardwired false because this build's only host
        * link IS USB-CDC; P3's transport arbitration must pass the real
        * "arrived over WiFi" bit here (D2). Crypto seam is NULL until P3
-       * wires mbedTLS — commit accepts structurally-unverified DER, which
-       * only matters once something consumes it, and that something (the
-       * WiFi transport) arrives together with the validators. */
+       * wires mbedTLS — the handler is fail-closed, so on THIS build every
+       * commit answers CRYPTO_INVALID. Staging and wipe still work; commit
+       * becomes possible in P3, together with the transport that consumes
+       * the credentials. */
       uint8_t ack[PANEL_PROVACK_SIZE];
       size_t n = panelProvHandle(&gProv, payload, len, false, &gProvStore,
                                  &gProvFlash, NULL, ack, sizeof(ack));
