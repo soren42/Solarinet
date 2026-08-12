@@ -199,8 +199,6 @@ static void applyControl(PanelCtlAction act, uint8_t arg);
 static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user) {
   (void)user;
   uint32_t arriveMs = nowMs();
-  panelLinkNoteFrame(&gLink, arriveMs);  /* ANY valid frame, PING included */
-
   switch (type) {
     case PANEL_FT_SNAPSHOT: {
       PanelSnapshot snap;
@@ -213,14 +211,14 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
        * still holds a much larger lastApplied, and panelSeqNewer() correctly
        * calls every subsequent snapshot OLDER — for the next ~32768 snapshots,
        * about 18 hours at the 2 s cadence. The panel is not visibly broken while
-       * this happens, which is what makes it nasty: rendering is autonomous
-       * (CONTRACT §5) so the screens keep animating the last applied snapshot,
-       * the rejected frames are CRC-valid and so keep refreshing the liveness
-       * timer, and the link never goes LOST. It silently shows stale data
-       * forever. A live crit alert raised after such a restart never reaches
-       * PanelEnv at all — no inlay, no tone, no beacon.                      */
+       * this happens. Rendering is autonomous (CONTRACT §5), so without an
+       * adoption path PanelEnv would retain the old snapshot and a new crit
+       * alert would never reach the inlay, tone, or beacon. D14 now binds
+       * LINKLOST to accepted-snapshot staleness, but that visible warning is
+       * not a substitute for eventually recovering the serial stream.       */
       bool resynced = false;
-      if (!panelLinkAcceptSnapshot(&gLink, snap.seq, arriveMs, &resynced)) return;
+      if (!panelLinkAcceptSnapshot(&gLink, PANEL_LINK_SERIAL, snap.seq,
+                                   arriveMs, &resynced)) return;
       if (resynced) sendLog("seq resync: sender restarted");
       panelEnvApply(&gEnv, &snap);
       break;

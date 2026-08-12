@@ -18,7 +18,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* CONTRACT §4: more than 15 s with no valid frame of any kind is LINK LOST. */
+/* CONTRACT-SW D14: LINKLOST is based on accepted SNAPSHOT staleness only. */
 #define PANEL_LINK_TIMEOUT_MS 15000u
 
 /* Snapshots arriving but none ACCEPTED for this long means the sender's seq
@@ -31,11 +31,22 @@ typedef enum {
   PANEL_LINK_CAME_BACK = 2
 } PanelLinkEdge;
 
+typedef enum {
+  PANEL_LINK_SERIAL = 0,
+  PANEL_LINK_WIFI = 1,
+  PANEL_LINK_TRANSPORT_COUNT = 2
+} PanelLinkTransport;
+
 typedef struct {
-  uint32_t lastFrameMs;    /* any CRC-valid frame, PING included             */
-  uint32_t lastAppliedMs;  /* last snapshot ACCEPTED, not merely received    */
   uint16_t lastSeq;
-  bool     haveSeq;
+  bool haveSeq;
+  bool adoptNext;
+} PanelLinkSeq;
+
+typedef struct {
+  uint32_t lastAppliedMs;  /* last snapshot ACCEPTED, not merely received    */
+  PanelLinkSeq seq[PANEL_LINK_TRANSPORT_COUNT];
+  PanelLinkTransport activeTransport;
   bool     lost;
 } PanelLink;
 
@@ -44,16 +55,22 @@ typedef struct {
  * Input: link, current ms. Output: none.                                    */
 void panelLinkInit(PanelLink *link, uint32_t nowMs);
 
-/* panelLinkNoteFrame — record that a CRC-valid frame of ANY type arrived.
- * Input: link, the ms at which it arrived. Output: none.                    */
-void panelLinkNoteFrame(PanelLink *link, uint32_t nowMs);
+/* Switch the active input. D13 preserves each transport's sequence history,
+ * then explicitly adopts the first snapshot on the newly active transport. */
+void panelLinkSetActiveTransport(PanelLink *link,
+                                 PanelLinkTransport transport);
+
+/* A new TCP connection resets its daemon TX sequence. Mark its next snapshot
+ * for explicit adoption; the serial-only timed escape hatch is unchanged. */
+void panelLinkResetTransportSeq(PanelLink *link,
+                                PanelLinkTransport transport);
 
 /* panelLinkAcceptSnapshot — apply protocol.h's receiver ordering rule.
  * Input:  link, the snapshot's seq, current ms, out-param resynced (may be
  *         NULL) which is set true when the escape hatch fired.
  * Output: true if the caller should apply this snapshot, false to drop it.  */
-bool panelLinkAcceptSnapshot(PanelLink *link, uint16_t seq, uint32_t nowMs,
-                             bool *resynced);
+bool panelLinkAcceptSnapshot(PanelLink *link, PanelLinkTransport transport,
+                             uint16_t seq, uint32_t nowMs, bool *resynced);
 
 /* panelLinkPoll — evaluate liveness once per tick.
  * Input:  link, current ms. Output: the edge crossed this tick, if any.

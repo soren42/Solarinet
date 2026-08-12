@@ -59,8 +59,8 @@ static void caseHealthyStreamNeverDropsLink(void) {
       /* The frame lands mid-tick, AFTER tickMs was sampled, and its read
        * crosses a millisecond boundary. This +1 is the whole incident. */
       uint32_t arriveMs = tickMs + 1u;
-      panelLinkNoteFrame(&link, arriveMs);
-      if (panelLinkAcceptSnapshot(&link, seq++, arriveMs, NULL)) applied++;
+      if (panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, seq++, arriveMs,
+                                  NULL)) applied++;
       snapshots++;
     }
 
@@ -94,9 +94,11 @@ static void caseRealOutageStillFires(void) {
   check(panelLinkPoll(&link, ms + 16000u) == PANEL_LINK_NO_CHANGE,
         "case 2: LINKLOST is edge-triggered, not repeated");
 
-  panelLinkNoteFrame(&link, ms + 20000u);
+  check(panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 1u, ms + 20000u,
+                                NULL),
+        "case 2: recovery snapshot applies");
   check(panelLinkPoll(&link, ms + 20000u) == PANEL_LINK_CAME_BACK,
-        "case 2: a frame restores the link once");
+        "case 2: an accepted snapshot restores the link once");
   check(panelLinkPoll(&link, ms + 20040u) == PANEL_LINK_NO_CHANGE,
         "case 2: LINKBACK is edge-triggered, not repeated");
 }
@@ -111,8 +113,6 @@ static void caseClockWrap(void) {
   uint32_t  beforeWrap = 0xFFFFF000u;   /* ~4 s before rollover */
 
   panelLinkInit(&link, beforeWrap);
-  panelLinkNoteFrame(&link, beforeWrap);
-
   uint32_t afterWrap = beforeWrap + 6000u;   /* wraps past zero */
   check(panelLinkPoll(&link, afterWrap) == PANEL_LINK_NO_CHANGE,
         "case 3: 6 s spanning the uint32 wrap is not lost");
@@ -131,13 +131,17 @@ static void caseSeqOrdering(void) {
   panelLinkInit(&link, ms);
 
   bool resynced = false;
-  check(panelLinkAcceptSnapshot(&link, 10u, ms, &resynced) && !resynced,
+  check(panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 10u, ms,
+                                &resynced) && !resynced,
         "case 4: first snapshot applies");
-  check(panelLinkAcceptSnapshot(&link, 11u, ms + 2000u, &resynced) && !resynced,
+  check(panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 11u, ms + 2000u,
+                                &resynced) && !resynced,
         "case 4: newer seq applies");
-  check(!panelLinkAcceptSnapshot(&link, 11u, ms + 4000u, &resynced) && !resynced,
+  check(!panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 11u, ms + 4000u,
+                                 &resynced) && !resynced,
         "case 4: equal seq is a duplicate and is dropped");
-  check(!panelLinkAcceptSnapshot(&link, 9u, ms + 6000u, &resynced) && !resynced,
+  check(!panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 9u, ms + 6000u,
+                                 &resynced) && !resynced,
         "case 4: older seq is dropped");
 
   /* Sender restarts its counter at 1 and never advances past our last applied
@@ -148,17 +152,20 @@ static void caseSeqOrdering(void) {
   uint32_t restartMs = ms + 8000u;
   int      dropped   = 0;
   for (uint32_t t = 0u; t < 24000u; t += 2000u) {
-    if (!panelLinkAcceptSnapshot(&link, 1u, restartMs + t, &resynced)) dropped++;
+    if (!panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 1u,
+                                 restartMs + t, &resynced)) dropped++;
   }
   check(dropped == 12, "case 4: duplicates keep dropping inside the window");
   check(!resynced, "case 4: escape hatch stays idle inside the window");
 
   /* lastAppliedMs is still ms + 2000 (the last acceptance), so cross the
    * 30 s mark measured from there. */
-  check(panelLinkAcceptSnapshot(&link, 1u, ms + 2000u + 30001u, &resynced),
+  check(panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 1u,
+                                ms + 2000u + 30001u, &resynced),
         "case 4: escape hatch applies after 30 s with nothing applied");
   check(resynced, "case 4: escape hatch reports the resync");
-  check(panelLinkAcceptSnapshot(&link, 2u, ms + 2000u + 32000u, &resynced) &&
+  check(panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, 2u,
+                                ms + 2000u + 32000u, &resynced) &&
             !resynced,
         "case 4: stream resumes normally on the adopted counter");
 }
@@ -178,8 +185,7 @@ static void caseNoSpuriousResync(void) {
   uint16_t seq = 1;
   for (int i = 0; i < 150; i++) {
     bool resynced = false;
-    panelLinkNoteFrame(&link, ms);
-    panelLinkAcceptSnapshot(&link, seq++, ms, &resynced);
+    panelLinkAcceptSnapshot(&link, PANEL_LINK_SERIAL, seq++, ms, &resynced);
     if (resynced) resyncCount++;
     ms += 2000u;
   }

@@ -15,6 +15,7 @@ PROV_SRC = panelProvTest.c ../../protocol.c
 # injecting fake flash (torn writes, corrupt slots, refused I/O).
 PROVSUB_SRC = panelProvSubsysTest.c ../panelProv.c ../panelProvStore.c ../../protocol.c
 HELP_SRC = panelHelpTest.c ../panelHelp.c
+NET_SRC  = panelNetFsmTest.c ../panelNetFsm.c ../panelLink.c ../../protocol.c
 # A1 renderer under ASAN/UBSAN — the review-proven hubs[-2] class must crash
 # loudly here, never ship (REVIEW-AW M3/M4). Needs the fb/env/screens units.
 A1_SRC   = panelScreensATest.c ../panelScreensA.c ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
@@ -31,7 +32,7 @@ PARITY_WRAP = -Wl,--wrap=panelFbSet -Wl,--wrap=panelFbSetRgb \
               -Wl,--wrap=panelFbDimAll -Wl,--wrap=panelText \
               -Wl,--wrap=panelTextOver -Wl,--wrap=panelBig \
               -Wl,--wrap=panelScroll
-BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelProvSubsysTest panelHelpTest panelScreensATest panelParityTest
+BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelProvSubsysTest panelHelpTest panelNetFsmTest panelScreensATest panelParityTest
 
 .PHONY: all clean
 all: $(BINS)
@@ -41,6 +42,7 @@ all: $(BINS)
 	./panelProvTest
 	ASAN_OPTIONS=detect_leaks=0 ./panelProvSubsysTest
 	./panelHelpTest
+	ASAN_OPTIONS=detect_leaks=0 ./panelNetFsmTest
 	# LeakSanitizer cannot initialize when this suite runs under ptrace-based
 	# harnesses; ASAN/UBSAN bounds checks remain enabled for this renderer test.
 	ASAN_OPTIONS=detect_leaks=0 ./panelScreensATest
@@ -71,6 +73,9 @@ panelProvSubsysTest: $(PROVSUB_SRC) ../panelProv.h ../panelProvStore.h ../../pro
 
 panelHelpTest: $(HELP_SRC) ../panelHelp.h
 	$(CC) $(CFLAGS) -o $@ $(HELP_SRC)
+
+panelNetFsmTest: $(NET_SRC) ../panelNetFsm.h ../panelLink.h ../../protocol.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(NET_SRC)
 
 clean:
 	rm -f $(BINS)
