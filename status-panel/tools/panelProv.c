@@ -95,8 +95,12 @@ static long long nowMsClock(void) {
 }
 
 /* PROVACK receiver state: the panel interleaves HELLO/STATE/EVENT/LOG traffic
- * with our acks, so run the real parser and keep only PROVACK frames. */
+ * with our acks, so run the real parser and keep only PROVACK frames. The
+ * itemId/generation filter lives HERE, in the parser callback: one read() can
+ * coalesce a stale ack and the current one, and a latch-first-then-filter
+ * receiver would swallow the current ack along with the stale. */
 typedef struct {
+  uint8_t wantItem, wantGeneration;
   int got;
   uint8_t itemId, status, generation;
   uint16_t nextOffset;
@@ -105,10 +109,28 @@ typedef struct {
 static void onFrame(uint8_t type, const uint8_t *payload, size_t len,
                     void *user) {
   AckWait *w = (AckWait *)user;
+  uint8_t itemId, status, generation;
+  uint16_t nextOffset;
   if (type != PANEL_FT_PROVACK || w->got) return;
-  if (panelDecodeProvAck(payload, len, &w->itemId, &w->status, &w->generation,
-                         &w->nextOffset) == 0)
-    w->got = 1;
+  if (panelDecodeProvAck(payload, len, &itemId, &status, &generation,
+                         &nextOffset) != 0)
+    return;
+  if (itemId != w->wantItem || generation != w->wantGeneration)
+    return; /* stale ack from a previous run or superseded epoch: drop */
+  w->itemId = itemId;
+  w->status = status;
+  w->generation = generation;
+  w->nextOffset = nextOffset;
+  w->got = 1;
+}
+
+/* Zeroize a secret-bearing buffer through a volatile pointer so the store
+ * cannot be elided as dead ahead of free() — then free it. */
+static void scrubFree(uint8_t *p, size_t n) {
+  volatile uint8_t *b = (volatile uint8_t *)p;
+  if (p == NULL) return;
+  while (n--) *b++ = 0u;
+  free(p);
 }
 
 /* Complete-write loop: USB-CDC/tty writes may be partial or EINTR'd. */
@@ -143,6 +165,8 @@ static int transact(int fd, PanelParser *parser, uint8_t itemId,
   for (attempt = 0; attempt < ACK_TRIES; ++attempt) {
     long long deadline = nowMsClock() + ACK_TIMEOUT_MS;
     memset(ack, 0, sizeof(*ack));
+    ack->wantItem = itemId;
+    ack->wantGeneration = generation;
     if (writeAll(fd, frame, fn) != 0) {
       fprintf(stderr, "panelProv: write: %s\n", strerror(errno));
       return -1;
@@ -157,15 +181,7 @@ static int transact(int fd, PanelParser *parser, uint8_t itemId,
       if (n > 0)
         panelParserFeed(parser, buf, (size_t)n, (uint32_t)nowMsClock(),
                         onFrame, ack);
-      if (ack->got) {
-        if (ack->itemId != itemId || ack->generation != generation) {
-          /* Stale ack (previous run or superseded epoch): discard and keep
-           * parsing — leaving got set would drop every later PROVACK. */
-          memset(ack, 0, sizeof(*ack));
-          continue;
-        }
-        return ack->status;
-      }
+      if (ack->got) return ack->status;
     }
     fprintf(stderr, "panelProv: item %u offset %u: no PROVACK, retry %d/%d\n",
             itemId, offset, attempt + 1, ACK_TRIES);
@@ -190,7 +206,11 @@ static int sendItem(int fd, PanelParser *parser, uint8_t generation,
                       item->data + offset, chunk, &ack);
     if (status < 0) return -1;
     if (status == PANEL_PROVST_OFFSET_MISMATCH) {
-      if (ack.nextOffset >= item->len || ++stalls > ACK_TRIES) {
+      /* A legitimate mismatch means the panel's accepted watermark is BEHIND
+       * the offset we attempted (lost ack, dropped chunk). A watermark at or
+       * past the attempted offset is contradictory — resuming forward would
+       * skip bytes we never sent. */
+      if (ack.nextOffset >= offset || ++stalls > ACK_TRIES) {
         fprintf(stderr, "panelProv: %s: unrecoverable offset state (%u)\n",
                 item->name, ack.nextOffset);
         return -1;
@@ -253,7 +273,7 @@ static uint8_t *readWholeFile(const char *path, uint16_t maxLen,
   buf = malloc((size_t)size + 1);
   if (buf == NULL || fread(buf, 1, (size_t)size, f) != (size_t)size) {
     fprintf(stderr, "panelProv: %s: read failed\n", path);
-    free(buf);
+    scrubFree(buf, (size_t)size);
     fclose(f);
     return NULL;
   }
@@ -263,7 +283,7 @@ static uint8_t *readWholeFile(const char *path, uint16_t maxLen,
     --size;
   if (size > (long)maxLen) {
     fprintf(stderr, "panelProv: %s: exceeds the %u-byte bound\n", path, maxLen);
-    free(buf);
+    scrubFree(buf, (size_t)size);
     return NULL;
   }
   *lenOut = (uint16_t)size;
@@ -299,11 +319,11 @@ static int confAdd(ItemSet *set, uint8_t itemId, const char *name,
   for (i = 0; i < set->count; ++i)
     if (set->items[i].itemId == itemId) {
       fprintf(stderr, "panelProv: duplicate conf key '%s'\n", name);
-      free(data);
+      scrubFree(data, len);
       return -1;
     }
   if (set->count >= (int)(sizeof(set->items) / sizeof(set->items[0]))) {
-    free(data);
+    scrubFree(data, len);
     return -1;
   }
   set->items[set->count].itemId = itemId;
@@ -317,12 +337,8 @@ static int confAdd(ItemSet *set, uint8_t itemId, const char *name,
 /* Zeroize-then-free every staged buffer (psk and key bytes live here). */
 static void freeItems(ItemSet *set) {
   int i;
-  for (i = 0; i < set->count; ++i) {
-    if (set->items[i].data != NULL) {
-      memset(set->items[i].data, 0, set->items[i].len);
-      free(set->items[i].data);
-    }
-  }
+  for (i = 0; i < set->count; ++i)
+    scrubFree(set->items[i].data, set->items[i].len);
   set->count = 0;
 }
 
@@ -360,7 +376,7 @@ static int loadConf(const char *path, ItemSet *set) {
       if (d != NULL && len < PANEL_PROV_MIN_PSK) {
         fprintf(stderr, "panelProv: psk shorter than %u bytes\n",
                 PANEL_PROV_MIN_PSK);
-        free(d);
+        scrubFree(d, len);
         d = NULL;
       }
       if (confAdd(set, PANEL_PROV_PSK, "psk", d, len)) goto fail;
@@ -455,9 +471,10 @@ int main(int argc, char **argv) {
 
   /* The generation must differ from whatever session the panel may have
    * staged before (an interrupted earlier run could leave items — e.g. an
-   * ntpHost this conf omits — that a matching epoch would silently commit).
-   * A random byte leaves a 1/256 residual collision; wall-clock seconds
-   * would collide for any two runs in the same second. */
+   * ntpHost this conf omits — that a continued epoch would silently commit).
+   * The panel's staged generation is unknowable from here, so randomness
+   * alone leaves a 1/256 collision; the provisioning path below closes it
+   * deterministically with a throwaway bump TLV (see there). */
   {
     FILE *r = fopen("/dev/urandom", "rb");
     if (r == NULL || fread(&generation, 1u, 1u, r) != 1u) {
@@ -487,6 +504,24 @@ int main(int argc, char **argv) {
     freeItems(&set);
     close(fd);
     return 1;
+  }
+  /* Deterministic session freshness (D1): stage one throwaway byte at the
+   * random generation g, then run the REAL session at g+1. If g happened to
+   * match an interrupted session the bump merely continued it; the g+1
+   * transition then discards everything staged — including the bump — so no
+   * stale item can survive into this run's commit regardless of collisions. */
+  {
+    static const uint8_t bump[1] = { 'x' };
+    status = transact(fd, &parser, PANEL_PROV_SSID, generation, 0u, bump, 1u,
+                      &ack);
+    if (status != PANEL_PROVST_OK) {
+      fprintf(stderr, "panelProv: session-open bump refused: %s\n",
+              status < 0 ? "no PROVACK" : statusName((uint8_t)status));
+      freeItems(&set);
+      close(fd);
+      return 1;
+    }
+    generation = (uint8_t)(generation + 1u);
   }
   printf("panelProv: provisioning via %s (generation %u)\n", dev, generation);
   for (i = 0; i < set.count; ++i) {

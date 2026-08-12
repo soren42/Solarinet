@@ -41,6 +41,13 @@ done
 slave=$(head -n1 "$work/pty")
 [ -n "$slave" ] || { echo "smoke: fakePanel produced no pty"; exit 1; }
 
+# Negative: duplicate conf keys are refused before any wire traffic.
+cp "$work/prov.conf" "$work/dup.conf"
+echo "ssid=SecondSsid" >> "$work/dup.conf"
+if ./panelProv --dev "$slave" --conf "$work/dup.conf" 2>/dev/null; then
+  echo "smoke: duplicate-key conf was NOT refused"; exit 1
+fi
+
 ./panelProv --dev "$slave" --conf "$work/prov.conf"
 ./panelProv --dev "$slave" --wipe
 
