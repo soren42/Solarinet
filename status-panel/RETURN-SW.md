@@ -9,7 +9,7 @@ mode are **code-complete, cross-lab reviewed at every gate, and ready for
 your review**. Nothing has been merged, pushed, deployed, flashed, or
 issued a certificate — every live action in this program remains yours.
 
-## What was built (12 commits, 53b9a82..a3ce9b5)
+## What was built (14 commits, 53b9a82..8bcdbca)
 
 | Phase | Commits | Author → Reviewer | Outcome |
 |---|---|---|---|
@@ -18,7 +18,9 @@ issued a certificate — every live action in this program remains yours.
 | P2 provisioning + cred store + panelProv | e4be4ab, c99ff00, 01a421e | Claude → codex | APPROVE after 2 rounds (10 MUST + partials) |
 | P3 WiFi transport (FSM + device glue) | 787d33f, f1ec244 | codex → Claude | APPROVE; reviewer caught SNTP_COMP_ROUNDTRIP epoch bug |
 | P4 power ride-through + alarm | 623c823, d3ab452 | Claude → codex | REVISE → APPROVE (same-tick ack, glyph-under-help, composition seam) |
-| P5 docs + final gate | a3ce9b5 | Lead → codex (whole-branch) | see final-review section |
+| P5 docs + final gate | a3ce9b5 | Lead → codex (whole-branch) | REVISE — 8 MUST + 1 SHOULD (p5-final-review.md) |
+| P5-R1 review fixes | d594b25 | Lead → codex (scoped re-review) | 7/9 FIXED, 2 PARTIAL + 1 new MEDIUM (p5-rereview.md) |
+| P5-R2 partials + race | 8bcdbca | Lead → codex (final verify) | see final-review section |
 
 ## Deliverables
 
@@ -46,18 +48,38 @@ issued a certificate — every live action in this program remains yours.
 ## Test evidence (final state, all run this session)
 
 - Firmware host suite: all binaries green under ASAN/UBSAN, including
-  panelPowerTest 49 checks, panelParityTest 107, netFsm 36, link 22.
-- Daemon: codec tests + listener harness 10/10 (6 refusal cases).
-- Tools smoke: pty round-trip incl. wipe.
+  panelPowerTest 61 checks (incl. new episode-identity/MUST-2 block),
+  parity harness 107 total, netFsm 36, link 22.
+- Daemon: codec tests (incl. ACK-event round-trip/truncation/wrong-kind)
+  + listener harness 16 cases, 7 refusals — journal text pinned
+  VERBATIM (listener-ready line, missing-denylist line, file-mode
+  refusal; refusal reasons by substring since OpenSSL wording varies),
+  not-yet-valid cert, unreadable-denylist fatal, 0644-key refused /
+  0400-key accepted, 90 s read-idle eviction via injected clock, and
+  write-deadline eviction of a stalled peer (WRITE_MS overridden to
+  300 ms in the harness build; production stays 5000 ms).
+- Tools smoke: pty round-trip incl. wipe, PLUS fault-injection pass —
+  dropped PROVACK (timeout+retransmit+idempotent re-ack) and forged
+  watermark desync (genuine OFFSET_MISMATCH, tool resumes at the
+  handler's watermark); per-item "bytes staged, PROVACK ok" and COMMIT
+  ack asserted. A WIPE-ack pty teardown race the re-review caught was
+  fixed (fakePanel drains the shared input queue before exit);
+  15/15 consecutive smoke runs after the fix.
 - Device build on lithium (arm-none-eabi 14.2, SDK 2.1.1): clean; only
   the two known-benign warning classes (vendored lwIP mbedtls glue,
   newlib _link/_unlink).
-- Two-build reproducibility pair at the final firmware state (a3ce9b5,
-  firmware unchanged since d3ab452): two clean builds on lithium,
-  BYTE-IDENTICAL, sha256 `6aae0b066ac464475a745585986fca885cdc7bb0
-  cca23aa9fcdab8c832ddd96e` — the flash-gate evidence for this image.
-- Final whole-branch cross-lab review: **[PENDING — see
-  p5-final-review.md at repo root]**
+- Two-build reproducibility pair at HEAD d594b25 (supersedes the
+  a3ce9b5-era `6aae0b06…` pair): two clean Release builds on lithium,
+  BYTE-IDENTICAL, sha256 `7b35d1069381958bc627dbcd6de669be3ccc9a77
+  96d6f5b493974ff368da3981`, archived at lithium
+  `~/fw-archive/7b35d106.uf2` — the flash-gate evidence for this image.
+- Final whole-branch cross-lab review chain: **REVISE**
+  (p5-final-review.md, 8 MUST + 1 SHOULD) → d594b25 → re-review
+  **REVISE, 7/9 FIXED** (p5-rereview.md: MUST-8/SHOULD-1 partial +
+  1 new MEDIUM) → 8bcdbca → final verify: **APPROVE**
+  (p5-r2-verify.md; reviewer ran smoke 10/10 independently; its
+  sandbox cannot bind loopback, so the listener harness runtime
+  evidence is the Lead's local runs — 16 cases green).
 
 ## Decisions I made under the standing "best judgement" grant
 
