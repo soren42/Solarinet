@@ -140,8 +140,8 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     <p class="d" style="margin-top:14px;max-width:64ch">The panel is a monitoring instrument, not a decoration. It renders fleet state that xenon computed, over a link it does not control, on a matrix with 583 pixels and no room for a second reading of anything. This manual states what each region means, so that a glance from across the room is a measurement rather than an impression.</p>
     <p class="d" style="margin-top:10px;max-width:64ch">Every layout, threshold and colour here was read out of the shipped firmware renderers and the build contracts. Where the firmware deviates from the design brief &mdash; and it does, in several places, for stated reasons &mdash; this manual documents the firmware, because the firmware is what is on the wall.</p>
     <div style="margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-      <div class="spec"><div class="r"><span>Version</span><span>1.0.0</span></div><div class="r"><span>Date</span><span>2026-08-08</span></div></div>
-      <div class="spec"><div class="r"><span>Hardware</span><span>Pimoroni GU / RP2350</span></div><div class="r"><span>Host</span><span>lithium (UNO Q)</span></div></div>
+      <div class="spec"><div class="r"><span>Version</span><span>1.1.0</span></div><div class="r"><span>Date</span><span>2026-08-17</span></div></div>
+      <div class="spec"><div class="r"><span>Hardware</span><span>Pimoroni GU / RP2350</span></div><div class="r"><span>Host</span><span>lithium &middot; WiFi (&sect;21)</span></div></div>
       <div class="spec"><div class="r"><span>Format</span><span>Letter &middot; 816&times;1056</span></div><div class="r"><span>Themes</span><span>Dark &middot; Light</span></div></div>
     </div>
   </div>
@@ -174,10 +174,12 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
       <div class="cl m">18</div><div class="cl">Rotation &amp; weights</div><div class="cl" style="color:var(--color-dim)">Per-screen enable, &frac14;&times;&ndash;10&times;, and who confirms a setting</div>
       <div class="cl m">19</div><div class="cl">The glance matrix</div><div class="cl" style="color:var(--color-dim)">The UNO Q's own 13&times;8 summary of the panel</div>
       <div class="cl m">20</div><div class="cl">Troubleshooting</div><div class="cl" style="color:var(--color-dim)">LINK LOST, NO DATA, stale, and nothing on the wall</div>
+      <div class="cl m">21</div><div class="cl">Standalone WiFi</div><div class="cl" style="color:var(--color-dim)">Life without lithium, and who wins when USB is plugged in</div>
+      <div class="cl m">22</div><div class="cl">Power &amp; battery</div><div class="cl" style="color:var(--color-dim)">The ride-through cap, the battery glyph, the power-loss alarm</div>
     </div>
     <div class="hl"><p><b>A convention used throughout.</b> Screens are named <span class="mono">&lt;theme&gt;&lt;slot&gt;</span> &mdash; A0 is theme A, slot 0. Matrix coordinates are given as <span class="mono">x</span> (column, 0&ndash;52, left to right) and <span class="mono">y</span> (row, 0&ndash;10, top to bottom). "Row&nbsp;6" always means the seventh row down.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>02</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>02</span></div>
 </section>
 
 <!-- ============ P03 THE INSTRUMENT ============ -->
@@ -237,7 +239,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 
     <div class="hl"><p><b>Staleness has two independent sources.</b> The endpoint marks data stale when the newest monitoring sample is more than 30&nbsp;s old; the daemon marks it stale when the payload it last fetched is more than 30&nbsp;s old. Either one is enough. A stale flag does not blank the panel and does not raise an alarm &mdash; the screens keep animating on the last good data, which is why the flag exists at all.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>03</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>03</span></div>
 </section>
 
 <!-- ============ P04 PHYSICAL PANEL ============ -->
@@ -253,8 +255,8 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
       <div class="cl m">D</div><div class="cl">Theme INSTRUMENTS</div><div class="cl" style="color:var(--color-dim)">As above. D1 is where the panel boots</div>
       <div class="cl m">LUX +</div><div class="cl">Brightness +5%</div><div class="cl" style="color:var(--color-dim)">Latches <b>manual</b> &mdash; the light sensor stops driving brightness until AUTO is re-enabled from the control page</div>
       <div class="cl m">LUX &minus;</div><div class="cl">Brightness &minus;5%</div><div class="cl" style="color:var(--color-dim)">Same latch. The driver floors at 25%, so the panel dims down but never out</div>
-      <div class="cl m">VOL +</div><div class="cl">Help overlay</div><div class="cl" style="color:var(--color-dim)">Two lines of help for the screen showing, for 30&nbsp;s. VOL&nbsp;+ again closes it; any other button closes it <em>and</em> performs its normal action. Rotation pauses while help is open. Ignored while an alarm is armed &mdash; the acknowledge wins</div>
-      <div class="cl m">VOL &minus;</div><div class="cl">Alarm tone quieter</div><div class="cl" style="color:var(--color-dim)">Steps of 0.1, and the <em>only</em> volume control &mdash; there is no louder button; a reboot restores the default level. Affects the alarm triad only; the panel is otherwise silent</div>
+      <div class="cl m">VOL +</div><div class="cl">Help overlay</div><div class="cl" style="color:var(--color-dim)">Two lines of help for the screen showing, for 30&nbsp;s. VOL&nbsp;+ again closes it; any other button closes it <em>and</em> acts. Rotation pauses while help is open</div>
+      <div class="cl m">VOL &minus;</div><div class="cl">Alarm tone quieter</div><div class="cl" style="color:var(--color-dim)">Steps of 0.1, and the <em>only</em> volume control; a reboot restores the default. Affects the alarm triad only &mdash; the panel is otherwise silent</div>
       <div class="cl m">ZZZ</div><div class="cl">Sleep the display</div><div class="cl" style="color:var(--color-dim)">Blanks the matrix. Any button wakes it. An arriving alarm wakes it once, on the rising edge</div>
     </div>
 
@@ -273,10 +275,12 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     </div>
 
     <h2>Boot and sleep</h2>
-    <p class="d">The panel boots to <b>theme D, slot 1</b> &mdash; D1, Pool bars &mdash; the "resting face": a proportional read of every pool plus a scrolling alert ticker, which is the most information the matrix can hold without being read closely. Before the first snapshot arrives it shows <span class="mono">NO&nbsp;DATA</span> rather than a black board.</p>
-    <p class="d">Sleep blanks the framebuffer but does not stop the firmware. Snapshots keep arriving, history keeps accumulating, and the alarm beacon is still painted &mdash; a sleeping panel with a fault on it shows four flashing red pixels in the top-right corner and nothing else. That is the intended overnight behaviour, not a fault.</p>
+    <div class="g2">
+      <div class="card"><h4>Boot</h4><p>The panel boots to <b>theme D, slot 1</b> &mdash; Pool bars, the "resting face": a proportional read of every pool plus the alert ticker. Before the first snapshot arrives it shows <span class="mono">NO&nbsp;DATA</span> rather than a black board.</p></div>
+      <div class="card"><h4>Sleep</h4><p>Sleep blanks the matrix but not the firmware: snapshots and history continue, and the alarm beacon is still painted. A sleeping panel with a fault shows four flashing red pixels top-right and nothing else &mdash; intended overnight behaviour, not a fault.</p></div>
+    </div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>04</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>04</span></div>
 </section>
 
 <!-- ============ P05 READING THE MATRIX ============ -->
@@ -308,7 +312,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 
     <div class="hl warn"><p><b>Text on the matrix is 3&times;5 pixels.</b> A label drawn at row&nbsp;<span class="mono">y</span> occupies rows <span class="mono">y</span> through <span class="mono">y+4</span>; a big numeral at row <span class="mono">y</span> occupies <span class="mono">y</span> through <span class="mono">y+6</span>. Two consequences follow, and they are why the screens look sparser than they might: a label can start no lower than row&nbsp;6 without falling off the bottom, and no more than two text elements fit in eleven rows. Screens that tried for three have been cut back to two &mdash; the figure you lose was always redundant with one you keep.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>05</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>05</span></div>
 </section>
 
 <!-- ============ P06 A0 ============ -->
@@ -345,7 +349,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     </div>
     <div class="hl"><p><b>A0 does not name anything.</b> It answers "how big is this" in under a second and then sends you to the dashboard. Use B0 for counts and C2 or D1 for which pool.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>06</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>06</span></div>
 </section>
 
 <!-- ============ P07 A1 ============ -->
@@ -392,7 +396,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     <div class="hl"><p><b>The internet column inherits the router's state.</b> The internet is only reachable <em>through</em> the gateway, so when the router gate is degraded or down, column&nbsp;51 renders in the router's treatment &mdash; never a healthy full-height marker over a dead gateway. If no router appears in the payload at all, the column fails dark. The backup WAN beside it is the exception, and that contrast is the story the screen exists to tell.</p></div>
     <div class="hl warn"><p><b>A down gate is drawn broken.</b> Colour alone does not carry the distinction: a gate in the down state is painted with every other pixel skipped, so it reads as a discontinuity from across the room. Up is azure, degraded is amber, down is red and broken. With no gear data in the snapshot the screen shows <span class="mono">NO&nbsp;DATA</span> rather than an invented topology.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>07</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>07</span></div>
 </section>
 
 <!-- ============ P08 A2 ============ -->
@@ -435,7 +439,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     </div>
     <div class="hl"><p><b>How to use it.</b> Lane&nbsp;0 backlog in red means probes are losing packets; lane&nbsp;1 red means monitoring data has gone stale; lanes&nbsp;2 and&nbsp;3 red mean a large fraction of the fleet is unknown or degraded. All four clear is the normal condition, and normal looks like four dark indicator blocks with packets sliding past.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>08</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>08</span></div>
 </section>
 
 <!-- ============ P09 B0 ============ -->
@@ -475,7 +479,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     </div>
     <div class="hl"><p><b>The tier flag reads pools, not systems.</b> That is deliberate: the systems array on the wire is capped, and the flag exists precisely to announce the host that a cap might have hidden.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>09</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>09</span></div>
 </section>
 
 <!-- ============ P10 B1 ============ -->
@@ -508,7 +512,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     <div class="hl warn"><p><b>The peak is adaptive.</b> The bar is scaled against a running peak the firmware maintains and decays, not against a configured link speed. A quiet period therefore <em>raises</em> the apparent utilisation of the next burst. Read the bar as "busy relative to recent history"; read the ticker for absolute figures.</p></div>
     <div class="hl"><p><b>Two readings, at two distances.</b> The <b>bar</b> is the at-a-glance figure &mdash; you read its length and the colour it has reached from across the room, without reading anything. The <b>ticker</b> is the authoritative one, and the only place the absolute rates appear: it carries <span class="mono">LINK n%</span> alongside the IN and OUT figures that percentage was derived from. There is deliberately no third element. The screen has eleven rows, a five-row label and a five-row ticker already claim ten of them, and every attempt to fit a standalone percent has cost more than it added.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>10</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>10</span></div>
 </section>
 
 <!-- ============ P11 B2 ============ -->
@@ -546,7 +550,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
       <div class="card"><h4>What to act on</h4><p>Red <span class="mono">LOSS</span> is packet loss on the probes and warrants attention before load does. An amber mean load with an azure hot count means the fleet is evenly busy; an azure mean with an amber hot count means a few hosts are pinned.</p></div>
     </div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>11</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>11</span></div>
 </section>
 
 <!-- ============ P12 C0 ============ -->
@@ -588,7 +592,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
       <div class="card"><h4>What to act on</h4><p>Any bar standing in the red band. C0 tells you the shape of the load &mdash; a broad clump is an evenly busy fleet, a spike at the right is a small number of pinned hosts. B2's hot count gives you how many; C2 and D1 give you which pool.</p></div>
     </div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>12</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>12</span></div>
 </section>
 
 <!-- ============ P13 C1 ============ -->
@@ -624,7 +628,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     <div class="hl"><p><b>Every trace has a floor of one pixel.</b> A row of single dim pixels is a real zero reading, not a dead screen. The tip pixel of each bar is painted brighter than its body, so the profile of a trace is legible even when every bar is one or two pixels tall.</p></div>
     <div class="hl warn"><p><b>History is the panel's, and it is lost on reboot.</b> Nothing on this screen comes from the server. After a firmware restart the traces refill from the left over about two minutes at the 2&nbsp;s snapshot rate. A partially filled trace is a recently restarted panel, not a fleet that just came online.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>13</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>13</span></div>
 </section>
 
 <!-- ============ P14 C2 ============ -->
@@ -661,7 +665,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     <div class="hl"><p><b>The key and the bar answer different questions.</b> A pool can be entirely healthy and heavily loaded (slate key, long red bar) or idle and broken (red key, short azure bar). Read the key column first &mdash; it is the condition &mdash; then the bar for capacity.</p></div>
     <div class="hl warn"><p><b>Severity order is fixed at down &gt; degraded &gt; unknown &gt; maintenance.</b> Unknown outranks maintenance deliberately: a pool nobody can reach is a worse situation than one that is down for planned work. D1 uses the same order, so the two pool screens can never disagree.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>14</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>14</span></div>
 </section>
 
 <!-- ============ P15 D0 ============ -->
@@ -698,7 +702,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     </div>
     <div class="hl warn"><p><b>The rows are systems, not named probe targets.</b> The wire carries fleet-aggregate latency and loss only, so each row samples one worst-first system against those aggregates: a down system samples mostly as loss, a degraded or unknown one mostly as slow, and everything else samples healthy with the aggregate RTT jittered per column. The texture is real; the per-row precision is not. Treat D0 as a shape, and confirm identity elsewhere.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>15</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>15</span></div>
 </section>
 
 <!-- ============ P16 D1 ============ -->
@@ -738,7 +742,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     </div>
     <div class="hl"><p><b>Why the unknown band exists.</b> Hosts returning no telemetry used to fall into the idle shimmer and read as healthy. They now have their own slate band in the stack, between degraded and maintenance, so a pool full of silent hosts cannot look like a pool full of well ones.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>16</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>16</span></div>
 </section>
 
 <!-- ============ P17 D2 ============ -->
@@ -775,7 +779,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     </div>
     <div class="hl"><p><b>The readout counts agent nodes.</b> <span class="mono">n SYS</span> is the same population as B0's UP/DOWN &mdash; the dashboard headline &mdash; not the wider roster that A0's lattice and the pool screens draw from.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>17</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>17</span></div>
 </section>
 
 <!-- ============ P18 ALARMS ============ -->
@@ -824,7 +828,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
     <div class="hl"><p><b>Ack is scoped to the episode.</b> The server composes an episode id for each alarm episode; acknowledging records that id on the panel. A <em>new</em> episode id re-arms everything &mdash; inlay, tone and beacon &mdash; even if the previous one was acknowledged seconds earlier. There are exactly two ways to acknowledge: any physical button while the alarm is armed, or the control page's ACK button. Both run the same code path, so they cannot drift apart.</p></div>
     <div class="hl warn"><p><b>The rising edge wakes a sleeping panel once</b> &mdash; and only once. It does not hold the panel awake. If nobody acknowledges, the display sleeps again on its own schedule and the beacon is what carries the fault through the night. That is the design, and it is why the beacon is exempt from dimming.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>18</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>18</span></div>
 </section>
 
 <!-- ============ P19 ALARM GALLERY ============ -->
@@ -875,7 +879,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 
     <div class="hl crit"><p><b>An acknowledged alarm still looks like an alarm.</b> That is intentional. The quiet, unblinking version of this overlay means "a human has seen this and it is still broken" &mdash; not "handled". It clears when the underlying alert clears, and by no other route.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>19</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>19</span></div>
 </section>
 
 <!-- ============ P19 CONTROL PAGE ============ -->
@@ -910,7 +914,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
       <div class="card"><h4>The simulation is an approximation</h4><p>The twelve virtual screens resample the 5&nbsp;s dashboard poll onto the same 53-sample rings the firmware fills at 2&nbsp;s. Ribbons, histograms and traces will differ in detail from the wall even when the fleet data is identical.</p></div>
     </div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>20</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>20</span></div>
 </section>
 
 <!-- ============ P20 ROTATION AND WEIGHTS ============ -->
@@ -949,7 +953,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 
     <div class="hl warn"><p><b>Read the page's chips, not your memory.</b> The panel reports its own configuration back, and the page renders <em>that</em>. A summary chip near the top reads, for example, <span class="mono">10 of 12 screens in rotation &middot; 2 skipped &middot; 3 weighted</span>, and screens the panel has not reported are counted separately as unreported rather than folded into "on". If the chip says <span class="mono">Screen config not reported</span>, the panel has not told the dashboard anything yet &mdash; the settings you last chose may well be in force, but nothing on the page is evidence of it.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>21</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>21</span></div>
 </section>
 
 <!-- ============ P21 GLANCE MATRIX ============ -->
@@ -1008,7 +1012,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 
     <div class="hl"><p><b>Two whole-matrix behaviours.</b> An armed, unacknowledged alarm pulses the entire glance, mirroring the wall beacon. A sleeping panel halves every level, so the glance visibly dims with the panel it reports on. And if the facts file is missing or older than 15&nbsp;s, everything else goes dark and a <b>single pixel blinks at the top centre</b> &mdash; the feed is alive but the daemon is not publishing.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>22</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>22</span></div>
 </section>
 
 <!-- ============ P22 TROUBLESHOOTING ============ -->
@@ -1051,7 +1055,58 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 
     <div class="hl"><p><b>A last cross-check.</b> Three things must agree before you trust a reading: the panel, the control page, and the dashboard's own alert count. All three are derived from the same dashboard-active alert definition, so a genuine disagreement between them is a bug worth reporting rather than a number worth averaging.</p></div>
   </div>
-  <div class="foot"><span>SolariNet &middot; Status Panel 1.0.0</span><span>23</span></div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>23</span></div>
+</section>
+
+<!-- ============ P23 STANDALONE WIFI ============ -->
+<section class="page" data-label="P23 Standalone WiFi">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 21</div><h1 class="t">Standalone WiFi</h1><div class="sub">The same panel, the same screens, no lithium in the chain: a provisioned panel speaks the identical frame protocol over mutually-authenticated TLS to the daemon on xenon.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="g2">
+      <div class="card"><h4>How it connects</h4><p>At boot the panel first fetches the time (certificates cannot be judged without a clock &mdash; TLS is not attempted until the clock is plausible), then joins the provisioned network and connects to <span class="mono">panelgw.akoria.net:7443</span>. Panel and daemon verify each other's certificates against the same private CA. Live fleet state appears within one poll cadence of the link coming up.</p></div>
+      <div class="card"><h4>When it drops</h4><p>AP restart, DHCP renew, daemon restart &mdash; all the same case: the panel backs off and reconnects on its own, starting at 1&nbsp;s and capping at 60&nbsp;s between attempts. Nothing to do at the wall. Meanwhile the last good state keeps rendering under the ordinary staleness rules.</p></div>
+      <div class="card"><h4>USB always wins</h4><p>Plug the panel into any host running the daemon and it switches to USB within 15&nbsp;s of the first valid frame, suspending WiFi. Unplug, and WiFi resumes (an unplug is detected and skips the wait). That is the whole bench workflow: walk up, plug in, work, unplug.</p></div>
+      <div class="card"><h4>Unprovisioned = today's panel</h4><p>With no stored credentials the radio stays off and USB serial behaves exactly as before standalone mode existed. Credentials are written only over USB with the <span class="mono">panelProv</span> bench tool &mdash; the firmware refuses provisioning frames on WiFi, permanently.</p></div>
+    </div>
+    <div class="tbl tight" style="grid-template-columns:.75fr 1.7fr">
+      <div class="hd">On the wall</div><div class="hd">What it means in standalone mode</div>
+      <div class="cl" style="color:var(--color-warn)"><b>LINK LOST</b></div>
+      <div class="cl" style="color:var(--color-dim)">Unchanged meaning: no fresh snapshot past the staleness bound, on <em>any</em> transport. WiFi outage, daemon down on xenon, or certificate trouble all end up here once the last snapshot ages out</div>
+      <div class="cl">Long LINK LOST after a power cut</div>
+      <div class="cl" style="color:var(--color-dim)">The panel may be waiting on time sync before it will attempt TLS &mdash; it retries on its own. If it persists, check the xenon journal: certificate refusals are logged there with the reason</div>
+      <div class="cl">Fine on USB, dead on WiFi</div>
+      <div class="cl" style="color:var(--color-dim)">Credentials, certificates, or the listener &mdash; not the panel's renderer. Start at <span class="mono">journalctl -u solari-panel</span> on xenon; the standalone runbook's inventory page lists what should be valid</div>
+    </div>
+    <div class="hl"><p><b>A clean switch never blips the wall.</b> Transport changes with fresh snapshots in hand do not trigger LINK LOST &mdash; that message is bound to data staleness only. If you see it during a USB plug/unplug, something else is actually stale.</p></div>
+    <p class="d">Operations &mdash; certificate issuance, provisioning, renewal, revocation &mdash; live in the companion document <span class="mono">SolariNet_Panel_Standalone_Runbook.html</span>. This manual covers only what the wall shows.</p>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>24</span></div>
+</section>
+
+<!-- ============ P24 POWER AND BATTERY ============ -->
+<section class="page" data-label="P24 Power and battery">
+  <div class="ph"><div class="bar" style="background:var(--color-warn)"></div><div><div class="eyebrow" style="color:var(--color-warn)">Section 22</div><h1 class="t">Power &amp; battery</h1><div class="sub">The battery is a ride-through UPS, not a portable mode. Losing wall power is itself an alarm — the panel dims hard, marks itself, and sounds.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <p>When USB power disappears (debounced over 100&nbsp;ms, so a flicker does not count), three things happen at once:</p>
+    <div class="g2" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="card"><h4>1 &middot; Brightness caps</h4><p>Output clamps to the battery ceiling (build default 20%, field-calibratable). LUX&plusmn; still work underneath the cap &mdash; the panel remembers what you asked for and returns to it exactly when power is restored.</p></div>
+      <div class="card"><h4>2 &middot; The glyph</h4><p>A small steady amber battery outline appears at the top right (columns 49&ndash;52, rows 6&ndash;10), with the pixels behind it knocked back so it reads at a glance. It shows the entire time the panel is on battery &mdash; through help pages, through sleep, alarm or no alarm &mdash; and never touches the beacon's corner.</p></div>
+      <div class="card"><h4>3 &middot; The alarm arms</h4><p>Power loss raises its own alarm episode, with the usual tone cadence, beacon and night-profile rules. Any button acknowledges it &mdash; and an acknowledge covers <em>all</em> current noise, server alerts included.</p></div>
+    </div>
+    <div class="tbl tight" style="grid-template-columns:1fr 1.6fr">
+      <div class="hd">Situation</div><div class="hd">Behaviour</div>
+      <div class="cl">Power restored</div><div class="cl" style="color:var(--color-dim)">Cap lifts to your previous brightness, glyph disappears, the power alarm clears itself. A live server alert is untouched &mdash; restore never silences the fleet</div>
+      <div class="cl">Second outage, same day</div><div class="cl" style="color:var(--color-dim)">A fresh episode: the panel alarms again. Acknowledging the first outage never mutes the next one</div>
+      <div class="cl">Server alert while on battery</div><div class="cl" style="color:var(--color-dim)">The inlay text shows the fleet alert &mdash; the server always wins the words; the glyph carries the power story. One button press acknowledges both</div>
+      <div class="cl">Boot on battery</div><div class="cl" style="color:var(--color-dim)">Treated as a power loss from the first instant: capped, glyph on, alarm armed &mdash; before any data has even arrived</div>
+      <div class="cl">Battery runs out</div><div class="cl" style="color:var(--color-dim)">The pack's protection cuts off and the panel dies cleanly. It resumes on wall power or USB with no ceremony &mdash; there is no low-battery warning by design</div>
+    </div>
+    <div class="hl warn"><p><b>Measured, not promised.</b> Ride-through runtime at capped brightness with WiFi associated: <span class="mono">[OPERATOR: from the D19 measurement session]</span>. The pack itself &mdash; capacity, protection cutoff, connector polarity checked against the silkscreen &mdash; is recorded in the P4 design addendum <em>before</em> it is ever connected. The board has no charger: the battery does not recharge from USB.</p></div>
+    <div class="hl"><p><b>Why the panel alarms about itself.</b> A panel on battery is a room that lost power &mdash; exactly the kind of event the fleet exists to notice. The alarm is not the panel complaining; it is the panel doing its job with the last power it has.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Status Panel 1.1.0</span><span>25</span></div>
 </section>
 
 </div>
