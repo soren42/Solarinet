@@ -144,6 +144,8 @@ static float    gAlarmToneAt = -1000.0f;  /* start time of the current triad */
 static int      gToneNote = 3;            /* 3 = triad finished              */
 static float    gAlarmRaisedAt = 0.0f;    /* gT at this episode's rising edge*/
 static bool     gAlarmSilenced = false;   /* auto-silenced: tone off, seen   */
+static PanelAlarmIdent gAlarmIdent;       /* episodes the armed state is FOR */
+static bool     gAckPending = false;      /* CONTROL ack deferred to runAlarm*/
 
 static uint8_t  gBtnStable[PANEL_BTN_COUNT];
 static uint8_t  gBtnCount[PANEL_BTN_COUNT];
@@ -356,6 +358,10 @@ static void pressTheme(int theme) {
  * new episodeId re-arms the tone even after this ran.
  * Input:  none. Output: none; emits EV_ACK when it actually silenced an alarm. */
 static void ackAlarm(void) {
+  uint8_t coverage = 0;
+  uint32_t serverEp = 0, powerEp = 0;
+  uint8_t ackPayload[PANEL_ACKEV_SIZE];
+  size_t n;
   if (!gAlarmArmed) return;
   /* D15 ack-all: one acknowledge covers EVERY currently-unacked source. The
    * server episode is only recorded when it is actually live — a power-only
@@ -364,13 +370,23 @@ static void ackAlarm(void) {
   if (gEnv.haveData && gEnv.alarmActive && !gLink.lost) {
     gAckedEpisode = gEnv.snap.topAlert.episodeId;
     gHaveAcked = true;
+    coverage |= PANEL_ACKEV_SERVER;
+    serverEp = gAckedEpisode;
+  }
+  /* D16: the journal must record WHICH episodes an ack-all covered, so the
+   * coverage is captured before panelPowerAck clears the pending flag. */
+  if (panelPowerAlarmPending(&gPower)) {
+    coverage |= PANEL_ACKEV_POWER;
+    powerEp = gPower.episodeId;
   }
   panelPowerAck(&gPower);
   gAlarmArmed = false;
   gAlarmSilenced = false;
   panelHwToneOff();
   gToneNote = 3;
-  sendEvent(PANEL_EV_ACK, 0);
+  n = panelEncodeAckEvent(coverage, serverEp, powerEp,
+                          ackPayload, sizeof(ackPayload));
+  if (n) sendFrame(PANEL_FT_EVENT, ackPayload, n);
 }
 
 /* handlePress — one debounced button-down edge.
@@ -446,7 +462,14 @@ static void applyControl(PanelCtlAction act, uint8_t arg) {
       gAutoBright = true;
       break;
     case PANEL_CTLACT_ACKALARM:
-      ackAlarm();
+      /* Deferred to the tick, AFTER this tick's VBUS poll and runAlarm()
+       * (final review MUST-1): frames are pumped at the top of the tick,
+       * so an ack applied here would run against LAST tick's alarm state —
+       * an episode committing this very tick (VBUS edge, or the SNAPSHOT
+       * pumped just before this CONTROL) would arm after the ack was
+       * consumed and never be acknowledged by it. The button path gets the
+       * same guarantee from its position after runAlarm().                */
+      gAckPending = true;
       break;
     case PANEL_CTLACT_DWELL:
       gDwellSec = (float)arg;
@@ -568,10 +591,18 @@ static void runAlarm(void) {
   bool serverUnacked = serverActive &&
                        !(gHaveAcked && gAckedEpisode == episode);
   bool wantAlarm = panelAlarmWant(serverUnacked, &gPower);
+  /* Final review MUST-2: episode IDENTITY, not the armed boolean, is the
+   * re-arm key. A new unacked episode on either source must sound, wake and
+   * restart auto-silence even while the alarm is already armed for the other
+   * source (or an older episode) — otherwise a power loss during a held
+   * server alarm is silent. The transition logic is the pure, host-tested
+   * panelAlarmIdentUpdate, not a second copy here. */
+  bool freshEpisode = panelAlarmIdentUpdate(&gAlarmIdent, serverUnacked,
+                                            episode, &gPower);
 
   if (wantAlarm) {
-    if (!gAlarmArmed) {
-      /* Rising edge, or a NEW episodeId after an acknowledged one. */
+    if (!gAlarmArmed || freshEpisode) {
+      /* Rising edge, or a NEW unacked episode on either source. */
       gAlarmArmed = true;
       gAlarmSilenced = false;
       gAlarmRaisedAt = gT;
@@ -682,6 +713,7 @@ int main(void) {
    * across reboots (D15). CYW43 is already up via panelNetInit above. */
   panelPowerInit(&gPower, get_rand_32(),
                  cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN), nowMs());
+  panelAlarmIdentReset(&gAlarmIdent);
   if (gPower.onBattery) requestBrightness(gBrightReq);
 
   sendHello();
@@ -748,6 +780,11 @@ int main(void) {
      * consumed as the acknowledge the contract promises ("any button during
      * an alarm"), not as a theme/sleep action racing the arm by 40 ms. */
     runAlarm();
+    /* A CONTROL ack pumped earlier this tick applies HERE (review MUST-1):
+     * runAlarm has now armed from this tick's snapshots and VBUS edge, so
+     * the ack covers exactly what the sender saw plus anything that
+     * committed in between — the same view a button press gets below. */
+    if (gAckPending) { gAckPending = false; ackAlarm(); }
     scanButtons();
     panelHelpTick(&gHelp, gT, gAlarmArmed);
     runAutoBrightness();

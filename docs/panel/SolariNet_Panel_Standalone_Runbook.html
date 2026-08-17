@@ -221,13 +221,14 @@ denylist=/etc/solari-panel/denylist.txt</pre>
       <li><b>Set <span class="mono">serialDev=</span> to an explicit empty value on xenon</b> &mdash; omitting the key leaves the default serial glob in place and the daemon quietly retries a device that will never appear. The empty value disables serial; that transport stays lithium's (bench fallback).</li>
       <li><b><span class="mono">listenAddr</span> is never a wildcard</b> &mdash; the daemon refuses <span class="mono">0.0.0.0</span>/<span class="mono">::</span> outright. Left unset, it selects the default-route address and logs the choice; pin it explicitly for production.</li>
       <li><b>Create the denylist now, empty</b>: <span class="mono">touch /etc/solari-panel/denylist.txt</span>. A missing file logs "empty denylist" once; an unreadable file is fatal at start, by design.</li>
-      <li><b>File modes are enforced</b>: key <span class="mono">0600</span>, certs <span class="mono">0644</span> or stricter, root-or-daemon-owned, or the listener refuses to start.</li>
+      <li><b>File modes are enforced</b>: key <span class="mono">0600</span> or stricter (<span class="mono">0400</span> is fine), certs/CA <span class="mono">0644</span> or stricter (no group/other write, no exec), root-or-daemon-owned, or the listener refuses to start.</li>
     </ul>
     <h3>2.4 &middot; Start and verify</h3>
     <pre class="cmd">sudo systemctl enable --now solari-panel      <b># unit per lithium's, adjusted paths</b>
 journalctl -u solari-panel -n 20              <b># expect: TLS listener ready on &lt;addr&gt;:7443</b>
 <b># negative check from any LAN host — no client cert must mean refusal:</b>
-openssl s_client -connect panelgw.akoria.net:7443 &lt;/dev/null   <b># handshake fails; journal logs the refusal</b></pre>
+openssl s_client -connect panelgw.akoria.net:7443 &lt;/dev/null   <b># handshake fails; journal logs
+#   "TLS client refused peer=... identity=... reason=..."</b></pre>
     <div class="roll"><p><b>Rollback.</b> <span class="mono">systemctl disable --now solari-panel</span> on xenon. The lithium serial chain has been running untouched throughout &mdash; the wall panel never noticed this stage.</p></div>
   </div>
   <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>04</span></div>
@@ -312,8 +313,8 @@ step ca revoke <span class="blank">[serial]</span>
 echo 'ABCD1234...' | sudo tee -a /etc/solari-panel/denylist.txt
 sudo systemctl restart solari-panel
 <b># 4 — verify: a connect attempt with the old cert is refused AFTER chain
-#     verification; the journal logs "TLS client refused" with the peer
-#     address and presented identity</b></pre>
+#     verification; the journal logs "TLS client refused peer=... identity=...
+#     reason=serial denylisted"</b></pre>
     <p class="d">Step&nbsp;3 is the one that actually locks the door &mdash; the listener loads the denylist at start only. The CA revocation (step&nbsp;2) is bookkeeping that keeps chlorine's records true and protects any future verifier that does consult the CA. Do both, in this order, same sitting.</p>
     <div class="hl crit"><p><b>Compromise posture.</b> If the panel's key is suspected compromised (board stolen off the wall), revoke + denylist first, then reissue and reprovision at the bench. The credential store is plain flash by accepted threat model &mdash; physical possession of the board means possession of its key.</p></div>
     <h3>06 &middot; Renew (annual bench visit)</h3>

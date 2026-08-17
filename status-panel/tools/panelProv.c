@@ -233,7 +233,11 @@ static int sendItem(int fd, PanelParser *parser, uint8_t generation,
     stalls = 0;
     offset = ack.nextOffset;
   } while (offset < item->len);
-  printf("panelProv: %-10s %5u bytes staged\n", item->name, item->len);
+  /* CONTRACT-SW §8: the tool prints the PROVACK for every item — the final
+   * accepted status by name, so "PROVACK ok" on every line IS the per-item
+   * success signal the runbook tells the operator to look for. */
+  printf("panelProv: %-10s %5u bytes staged, PROVACK %s\n", item->name,
+         item->len, statusName(PANEL_PROVST_OK));
   return 0;
 }
 
@@ -491,7 +495,7 @@ int main(int argc, char **argv) {
                       &ack);
     close(fd);
     if (status == PANEL_PROVST_OK) {
-      printf("panelProv: wipe acknowledged — credentials cleared\n");
+      printf("panelProv: WIPE PROVACK ok — credentials cleared\n");
       return 0;
     }
     fprintf(stderr, "panelProv: wipe failed: %s\n",
@@ -536,7 +540,7 @@ int main(int argc, char **argv) {
   freeItems(&set);
   close(fd);
   if (status == PANEL_PROVST_OK) {
-    printf("panelProv: COMMIT ok — credentials persisted (A/B store)\n");
+    printf("panelProv: COMMIT PROVACK ok — credentials persisted (A/B store)\n");
     return 0;
   }
   fprintf(stderr, "panelProv: commit failed: %s\n",

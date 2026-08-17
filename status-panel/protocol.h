@@ -73,7 +73,9 @@ typedef enum {                     /* host -> panel */
                                    /* panel -> host (diagnostics only)      */
   PANEL_FT_HELLO    = 0x81,        /* u8 protoVer, u8 fwMajor, u8 fwMinor,
                                       then ASCII build string (<=32)        */
-  PANEL_FT_EVENT    = 0x82,        /* u8 kind (PanelEventKind), u8 arg      */
+  PANEL_FT_EVENT    = 0x82,        /* u8 kind (PanelEventKind), u8 arg,
+                                      then kind-specific extension bytes
+                                      (today: PANEL_EV_ACK episode ids)     */
   PANEL_FT_LOG      = 0x83,        /* ASCII text (<=128)                    */
   PANEL_FT_STATE    = 0x84,        /* CONTRACT-CP §3: u8 theme, u8 screen,
                                       u8 brightnessPct, u8 autoBright,
@@ -198,11 +200,27 @@ int panelDecodeProvAck(const uint8_t *payload, size_t len, uint8_t *itemId,
 
 typedef enum {
   PANEL_EV_BUTTON      = 0x01,     /* arg = button index 0..8               */
-  PANEL_EV_ACK         = 0x02,     /* arg = 0; alarm acknowledged           */
+  PANEL_EV_ACK         = 0x02,     /* arg = coverage bits; +8 episode bytes */
   PANEL_EV_THEMECHANGE = 0x03,     /* arg = theme 0..3                      */
   PANEL_EV_LINKLOST    = 0x04,     /* arg = 0; snapshot staleness tripped   */
   PANEL_EV_LINKBACK    = 0x05      /* arg = 0; snapshots flowing again      */
 } PanelEventKind;
+
+/* ACK EVENT extension (D16): an ack-all must journal WHICH episodes it
+ * covered, so the EVENT payload for PANEL_EV_ACK is
+ *   0  u8  kind (= PANEL_EV_ACK)
+ *   1  u8  coverage    bit0 = server episode covered, bit1 = power episode
+ *   2  u32 serverEpisode (LE; 0 when bit0 clear)
+ *   6  u32 powerEpisode  (LE; 0 when bit1 clear)
+ * Receivers that only read kind/arg keep working (additive-extension
+ * convention); decode tolerates trailing bytes like PROVACK does.          */
+#define PANEL_ACKEV_SERVER 0x01u
+#define PANEL_ACKEV_POWER  0x02u
+#define PANEL_ACKEV_SIZE   10u
+size_t panelEncodeAckEvent(uint8_t coverage, uint32_t serverEpisode,
+                           uint32_t powerEpisode, uint8_t *payload, size_t cap);
+int panelDecodeAckEvent(const uint8_t *payload, size_t len, uint8_t *coverage,
+                        uint32_t *serverEpisode, uint32_t *powerEpisode);
 
 /* ---- canonical state / severity enums (wire values, u8) ----------------- */
 

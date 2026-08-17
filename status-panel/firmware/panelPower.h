@@ -73,4 +73,28 @@ bool panelPowerAlarmPending(const PanelPower *p);
  * whose episodeId is not the acknowledged one. */
 bool panelAlarmWant(bool serverUnacked, const PanelPower *p);
 
+/* PanelAlarmIdent — which unacked episode(s) the currently-armed alarm was
+ * raised FOR. D15/D16 make episode identity the re-arm key on BOTH sources:
+ * a new episode must sound, wake and restart auto-silence even while the
+ * alarm is already armed for the other source (or for an older episode of
+ * the same source). runAlarm() keys on panelAlarmIdentUpdate() so the host
+ * suite exercises the same transition logic the device runs.               */
+typedef struct {
+  bool     serverLive;   /* the armed state includes a server episode      */
+  uint32_t serverEp;     /*   ...this one                                  */
+  bool     powerLive;    /* the armed state includes a power episode       */
+  uint32_t powerEp;      /*   ...this one                                  */
+} PanelAlarmIdent;
+
+void panelAlarmIdentReset(PanelAlarmIdent *id);
+
+/* panelAlarmIdentUpdate — fold this tick's unacked sources into the armed
+ * identity. Returns true when a NEW unacked episode appeared on either
+ * source (including the very first): the caller must (re)initialize tone
+ * cadence, auto-silence and wake on a true return. Sources that are no
+ * longer unacked drop out of the identity automatically, so a fully-acked
+ * or fully-cleared tick returns false with an empty identity.              */
+bool panelAlarmIdentUpdate(PanelAlarmIdent *id, bool serverUnacked,
+                           uint32_t serverEp, const PanelPower *p);
+
 #endif /* SOLARI_PANEL_POWER_H */

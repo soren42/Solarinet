@@ -21,9 +21,21 @@ openssl x509 -req -in "$test_dir/bad.csr" -CA "$test_dir/badroot.pem" -CAkey "$t
 touch "$test_dir/index.txt"
 printf '1000\n' >"$test_dir/serial"
 mkdir "$test_dir/newcerts"
-printf '%s\n' '[ca]' 'default_ca=issuer' '[issuer]' "database=$test_dir/index.txt" "new_certs_dir=$test_dir/newcerts" "certificate=$test_dir/root.pem" "private_key=$test_dir/root.key" "serial=$test_dir/serial" 'default_md=sha256' 'policy=policy' '[policy]' 'commonName=supplied' >"$test_dir/ca.conf"
+printf '%s\n' '[ca]' 'default_ca=issuer' '[issuer]' "database=$test_dir/index.txt" "new_certs_dir=$test_dir/newcerts" "certificate=$test_dir/root.pem" "private_key=$test_dir/root.key" "serial=$test_dir/serial" 'default_md=sha256' 'unique_subject=no' 'policy=policy' '[policy]' 'commonName=supplied' >"$test_dir/ca.conf"
 openssl ca -batch -config "$test_dir/ca.conf" -in "$test_dir/client.csr" -startdate 20200101000000Z -enddate 20200102000000Z -extfile "$test_dir/good.ext" -out "$test_dir/expired.pem" >/dev/null 2>&1
+openssl ca -batch -config "$test_dir/ca.conf" -in "$test_dir/client.csr" -startdate 20990101000000Z -enddate 20990102000000Z -extfile "$test_dir/good.ext" -out "$test_dir/notyet.pem" >/dev/null 2>&1
 printf '64\n' >"$test_dir/denylist"
+printf '65\n' >"$test_dir/denylist-unreadable"
 chmod 600 "$test_dir"/*.key
 chmod 644 "$test_dir"/*.pem
+chmod 000 "$test_dir/denylist-unreadable"
+# File-mode policy fixtures (final review MUST-4): a 0644 private key must be
+# refused; 0400 key and 0600 certificate are "stricter" and must be accepted.
+mkdir "$test_dir/modes-bad" "$test_dir/modes-strict"
+for d in modes-bad modes-strict; do
+  cp "$test_dir/server.pem" "$test_dir/server.key" "$test_dir/root.pem" "$test_dir/$d/"
+done
+chmod 644 "$test_dir/modes-bad/server.key"
+chmod 400 "$test_dir/modes-strict/server.key"
+chmod 600 "$test_dir/modes-strict/server.pem"
 ./tests/listener_test "$test_dir"

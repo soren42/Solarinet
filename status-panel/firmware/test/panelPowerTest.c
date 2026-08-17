@@ -151,6 +151,41 @@ int main(void) {
   check(panelAlarmWant(false, &c2) && panelAlarmWant(true, &c2),
         "power episode survives any server-side transition");
 
+  /* ---- Episode identity (final review MUST-2): a NEW unacked episode on
+   * either source must report fresh even while the alarm is already armed —
+   * main.c re-inits cadence/auto-silence/wake on `fresh`. ---- */
+  {
+    PanelAlarmIdent id;
+    PanelPower c3;
+    ms = 1000u;
+    panelPowerInit(&c3, 9u, true, ms);
+    panelAlarmIdentReset(&id);
+    check(!panelAlarmIdentUpdate(&id, false, 0u, &c3), "ident: quiet start");
+
+    /* Server episode appears — fresh once, then steady. */
+    check(panelAlarmIdentUpdate(&id, true, 100u, &c3), "ident: server episode fresh");
+    check(!panelAlarmIdentUpdate(&id, true, 100u, &c3), "ident: steady server not fresh");
+
+    /* Power loss while the server alarm still holds armed: MUST-2 core. */
+    check(feed(&c3, false, 4, &ms) == PANEL_POWER_LOSS, "ident: loss");
+    check(panelAlarmIdentUpdate(&id, true, 100u, &c3),
+          "ident: power episode fresh while server holds armed");
+    check(!panelAlarmIdentUpdate(&id, true, 100u, &c3), "ident: both steady");
+
+    /* Server episode id rolls A -> B under a held alarm: also fresh. */
+    check(panelAlarmIdentUpdate(&id, true, 101u, &c3), "ident: server A->B fresh");
+
+    /* Ack-all empties the ident; the same episodes never re-fire. */
+    panelPowerAck(&c3);
+    check(!panelAlarmIdentUpdate(&id, false, 0u, &c3), "ident: ack-all clears");
+    check(!panelAlarmIdentUpdate(&id, false, 0u, &c3), "ident: stays clear");
+
+    /* A second power episode after restore is a new identity. */
+    check(feed(&c3, true, 4, &ms) == PANEL_POWER_RESTORE, "ident: restore");
+    check(feed(&c3, false, 4, &ms) == PANEL_POWER_LOSS, "ident: loss 2");
+    check(panelAlarmIdentUpdate(&id, false, 0u, &c3), "ident: second power episode fresh");
+  }
+
   printf("panelPowerTest: %d checks passed\n", gChecks);
   return 0;
 }

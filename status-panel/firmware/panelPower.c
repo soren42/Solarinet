@@ -59,3 +59,23 @@ bool panelPowerAlarmPending(const PanelPower *p) {
 bool panelAlarmWant(bool serverUnacked, const PanelPower *p) {
   return serverUnacked || panelPowerAlarmPending(p);
 }
+
+void panelAlarmIdentReset(PanelAlarmIdent *id) {
+  id->serverLive = false;
+  id->serverEp   = 0u;
+  id->powerLive  = false;
+  id->powerEp    = 0u;
+}
+
+bool panelAlarmIdentUpdate(PanelAlarmIdent *id, bool serverUnacked,
+                           uint32_t serverEp, const PanelPower *p) {
+  bool powerUnacked = panelPowerAlarmPending(p);
+  bool fresh =
+      (serverUnacked && (!id->serverLive || id->serverEp != serverEp)) ||
+      (powerUnacked  && (!id->powerLive  || id->powerEp  != p->episodeId));
+  id->serverLive = serverUnacked;
+  id->serverEp   = serverUnacked ? serverEp : 0u;
+  id->powerLive  = powerUnacked;
+  id->powerEp    = powerUnacked ? p->episodeId : 0u;
+  return fresh;
+}

@@ -48,6 +48,17 @@ typedef struct {
   PanelProvFlash flash;
   PanelProvCrypto crypto;
   int commits, wipes;
+  /* Fault injection (final review MUST-8): exercise panelProv's timeout
+   * retransmit and offset-mismatch resume paths against the REAL handler.
+   *   dropAck: swallow the PROVACK of the Nth PROVISION frame (1-based) —
+   *            the tool must time out and retransmit; the handler's
+   *            idempotent re-ack then advances it.
+   *   desync:  answer the Nth DATA frame (1-based) with a FORGED ok WITHOUT
+   *            handling it — the tool advances past the handler's watermark,
+   *            the next real frame draws a genuine OFFSET_MISMATCH, and the
+   *            tool must resume at the returned watermark. */
+  int dropAck, desync, desyncDone;
+  int provSeen, dataSeen;
 } Fake;
 
 /* Accept-all crypto seam: the handler is fail-closed (a NULL seam refuses
@@ -85,9 +96,36 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len,
   uint8_t frame[PANEL_HDR_SIZE + PANEL_PROVACK_SIZE + PANEL_CRC_SIZE];
   size_t an, fn;
   if (type != PANEL_FT_PROVISION) return;
+  ++fk->provSeen;
+  if (len >= 1u && payload[0] != PANEL_PROV_COMMIT &&
+      payload[0] != PANEL_PROV_WIPE) {
+    ++fk->dataSeen;
+    if (fk->desync > 0 && !fk->desyncDone && fk->dataSeen >= fk->desync) {
+      uint8_t itemId, generation;
+      uint16_t offset, dataLen;
+      const uint8_t *data;
+      /* Fire only on a FULL chunk: a full chunk is never its item's last
+       * (no staged item is an exact multiple of PANEL_PROV_CHUNK in the
+       * smoke), so the tool's NEXT frame continues the same item and the
+       * handler's stale watermark produces a genuine OFFSET_MISMATCH. A
+       * short final chunk would instead silently skip the whole item and
+       * surface only at commit. */
+      if (panelDecodeProvision(payload, len, &itemId, &generation, &offset,
+                               &data, &dataLen) == 0 &&
+          dataLen == PANEL_PROV_CHUNK) {
+        fk->desyncDone = 1;
+        an = panelEncodeProvAck(itemId, PANEL_PROVST_OK, generation,
+                                (uint16_t)(offset + dataLen), ack, sizeof(ack));
+        fn = panelEncodeFrame(PANEL_FT_PROVACK, ack, an, frame, sizeof(frame));
+        if (fn) (void)!write(fk->fd, frame, fn);
+        return;   /* handler never saw it: its watermark is now behind */
+      }
+    }
+  }
   an = panelProvHandle(&fk->prov, payload, len, false, &fk->store, &fk->flash,
                        &fk->crypto, ack, sizeof(ack));
   if (an == 0u) return;
+  if (fk->dropAck > 0 && fk->provSeen == fk->dropAck) return;
   if (len >= 1u && payload[0] == PANEL_PROV_COMMIT && ack[1] == PANEL_PROVST_OK)
     ++fk->commits;
   if (len >= 1u && payload[0] == PANEL_PROV_WIPE && ack[1] == PANEL_PROVST_OK)
@@ -96,12 +134,25 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len,
   if (fn) (void)!write(fk->fd, frame, fn);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
   PanelParser parser;
   Fake fk;
   int master = posix_openpt(O_RDWR | O_NOCTTY);
   const char *slave;
   long long served = 0;
+  int i, dropAck = 0, desync = 0;
+
+  for (i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "--drop-ack") == 0 && i + 1 < argc)
+      dropAck = atoi(argv[++i]);
+    else if (strcmp(argv[i], "--desync") == 0 && i + 1 < argc)
+      desync = atoi(argv[++i]);
+    else {
+      fprintf(stderr, "fakePanel: usage: fakePanel [--drop-ack N] "
+                      "[--desync N]\n");
+      return 2;
+    }
+  }
 
   if (master < 0 || grantpt(master) != 0 || unlockpt(master) != 0 ||
       (slave = ptsname(master)) == NULL) {
@@ -121,6 +172,8 @@ int main(void) {
   memset(gSectors, 0xff, sizeof(gSectors));
   memset(&fk, 0, sizeof(fk));
   fk.fd = master;
+  fk.dropAck = dropAck;
+  fk.desync = desync;
   fk.flash.readSlot = ramRead;
   fk.flash.writeSlot = ramWrite;
   fk.crypto.validCert = okCert;
