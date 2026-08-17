@@ -28,6 +28,7 @@
 
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
+#include "tusb.h"
 #ifdef SOLARI_PANEL_PICO_FLASH
 #include "pico/flash.h"
 #endif
@@ -41,6 +42,8 @@
 #include "panelProvStore.h"
 #include "panelHw.h"
 #include "panelLink.h"
+#include "panelNet.h"
+#include "panelNetFsm.h"
 #include "panelFb.h"
 #include "panelFont.h"
 #include "panelHist.h"
@@ -80,6 +83,7 @@ bi_decl(bi_program_description("SolariNet fleet status panel (Galactic Unicorn)"
 /* ---- panel state -------------------------------------------------------- */
 static PanelEnv    gEnv;
 static PanelParser gParser;
+static PanelParser gWifiParser;
 
 static int   gTheme = 3;       /* CONTRACT §5: boot = Theme D ...            */
 static int   gScreen = 1;      /* ... screen 2 of 3, the "resting face"      */
@@ -97,6 +101,8 @@ static float gAutoBrightSmoothed = 0.85f;
 /* Link liveness + snapshot ordering. See panelLink.c; do not reimplement the
  * time arithmetic here, that is what flapped the link on 2026-08-04.       */
 static PanelLink gLink;
+static PanelNetFsm gNetFsm;
+static PanelNet *gNet;
 
 /* CONTROL dedupe + STATE cadence. See panelCtl.c; the ascending-cmdId rule and
  * the change/heartbeat decision live there so the host suite can drive them.  */
@@ -111,6 +117,7 @@ static PanelScreenCfgFlash gScreenCfgFlash;
 static PanelProv gProv;
 static PanelProvStore gProvStore;
 static PanelProvFlash gProvFlash;
+static const PanelProvCrypto *gProvCrypto;
 
 /* Alarm state — CONTRACT §9. ack is firmware-local and scoped to episodeId;
  * a NEW episodeId re-arms the tone even if the previous one was acked. */
@@ -143,8 +150,15 @@ static void sendFrame(uint8_t type, const uint8_t *payload, size_t len) {
   if (len > 160) return;
   size_t n = panelEncodeFrame(type, payload, len, out, sizeof(out));
   if (!n) return;
-  fwrite(out, 1, n, stdout);
-  fflush(stdout);
+  /* D14 TX mux: LINKED TLS is authoritative; serial is the fallback for all
+   * other states.  A failed TLS write is allowed to be lost rather than
+   * double-driving both transports during the same arbitration state. */
+  if (panelNetUseWifiTx(gNetFsm.state, panelNetTlsUp(gNet))) {
+    (void)panelNetWrite(gNet, out, n);
+  } else {
+    fwrite(out, 1, n, stdout);
+    fflush(stdout);
+  }
 }
 
 /* sendHello — PANEL_FT_HELLO: u8 protoVer, u8 fwMajor, u8 fwMinor, then the
@@ -197,8 +211,14 @@ static void applyControl(PanelCtlAction act, uint8_t arg);
  * applied seq is a duplicate and ignored, and so is an older one — both via
  * panelSeqNewer() in the shared codec, which is RFC1982 wraparound-aware.   */
 static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user) {
-  (void)user;
+  PanelLinkTransport transport = (PanelLinkTransport)(uintptr_t)user;
+  bool onWifi = transport == PANEL_LINK_WIFI;
   uint32_t arriveMs = nowMs();
+  if (!onWifi) {
+    panelNetFsmUsbFrameSeen(&gNetFsm, panelNetKnownHostType(type), arriveMs);
+    if (gNetFsm.state == PANEL_NET_SUSPENDED)
+      panelLinkSetActiveTransport(&gLink, PANEL_LINK_SERIAL);
+  }
   switch (type) {
     case PANEL_FT_SNAPSHOT: {
       PanelSnapshot snap;
@@ -217,7 +237,7 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
        * LINKLOST to accepted-snapshot staleness, but that visible warning is
        * not a substitute for eventually recovering the serial stream.       */
       bool resynced = false;
-      if (!panelLinkAcceptSnapshot(&gLink, PANEL_LINK_SERIAL, snap.seq,
+      if (!panelLinkAcceptSnapshot(&gLink, transport, snap.seq,
                                    arriveMs, &resynced)) return;
       if (resynced) sendLog("seq resync: sender restarted");
       panelEnvApply(&gEnv, &snap);
@@ -243,18 +263,17 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
       break;
     }
     case PANEL_FT_PROVISION: {
-      /* Lockstep by contract: one PROVISION, one PROVACK, no queueing. The
-       * transport flag is hardwired false because this build's only host
-       * link IS USB-CDC; P3's transport arbitration must pass the real
-       * "arrived over WiFi" bit here (D2). Crypto seam is NULL until P3
-       * wires mbedTLS — the handler is fail-closed, so on THIS build every
-       * commit answers CRYPTO_INVALID. Staging and wipe still work; commit
-       * becomes possible in P3, together with the transport that consumes
-       * the credentials. */
+      /* D2: WiFi provisioning reaches the same handler with onWifi=true and
+       * receives REJECTED_WIFI without touching staging or flash. */
       uint8_t ack[PANEL_PROVACK_SIZE];
-      size_t n = panelProvHandle(&gProv, payload, len, false, &gProvStore,
-                                 &gProvFlash, NULL, ack, sizeof(ack));
+      size_t n = panelProvHandle(&gProv, payload, len, onWifi, &gProvStore,
+                                 &gProvFlash, gProvCrypto, ack, sizeof(ack));
       if (n) sendFrame(PANEL_FT_PROVACK, ack, n);
+      if (!onWifi && len > 0u &&
+          (payload[0] == PANEL_PROV_COMMIT || payload[0] == PANEL_PROV_WIPE)) {
+        panelNetCredentialsChanged(gNet);
+        panelNetFsmSetProvisioned(&gNetFsm, gProvStore.valid);
+      }
       break;
     }
     case PANEL_FT_PING:
@@ -278,7 +297,8 @@ static void pumpSerial(void) {
       buf[n++] = (uint8_t)c;
     }
     if (!n) break;
-    panelParserFeed(&gParser, buf, n, ms, onFrame, NULL);
+    panelParserFeed(&gParser, buf, n, ms, onFrame,
+                    (void *)(uintptr_t)PANEL_LINK_SERIAL);
     if (n < sizeof(buf)) break;
   }
 }
@@ -581,6 +601,7 @@ int main(void) {
   panelHwInit();
   panelEnvInit(&gEnv);
   panelParserInit(&gParser);
+  panelParserInit(&gWifiParser);
   panelLinkInit(&gLink, nowMs());
   panelCtlInit(&gCtl, nowMs());
   panelHelpInit(&gHelp);
@@ -597,10 +618,26 @@ int main(void) {
   panelProvInit(&gProv);
   panelProvStoreLoad(&gProvStore, &gProvFlash);
 
+  /* D18/D7: panelNetInit always initializes CYW43.  Seed the frozen FSM from
+   * the flash-store election and the powered-lifetime AON wall clock. */
+  gNet = panelNetInit(&gProvStore, &gWifiParser, onFrame,
+                      (void *)(uintptr_t)PANEL_LINK_WIFI, &gLink);
+  gProvCrypto = panelNetProvCrypto(gNet);
+  PanelNetOps netOps = panelNetOps(gNet);
+  uint64_t wallEpoch = 0u;
+  bool timeValid = panelNetWallTime(gNet, &wallEpoch) &&
+                   panelNetEpochPlausible(wallEpoch, SOLARI_BUILD_EPOCH);
+  panelNetFsmInit(&gNetFsm, &netOps, gProvStore.valid, timeValid, wallEpoch,
+                  SOLARI_BUILD_EPOCH);
+  panelNetAttachFsm(gNet, &gNetFsm);
+
   sendHello();
 
   absolute_time_t next = make_timeout_time_ms(TICK_MS);
   uint32_t prevMs = nowMs();
+  bool cdcRaw = tud_cdc_connected();
+  bool cdcStable = cdcRaw;
+  uint32_t cdcChangedMs = prevMs;
 
   for (;;) {
     sleep_until(next);
@@ -613,6 +650,24 @@ int main(void) {
     gT += dt;
 
     pumpSerial();
+
+    /* D18: DTR/CDC loss bypasses the 15 s USB-silence delay, but only after
+     * 100 ms of stable disconnect to reject enumeration chatter. */
+    bool connected = tud_cdc_connected();
+    if (connected != cdcRaw) {
+      cdcRaw = connected;
+      cdcChangedMs = nowMs();
+    } else if (connected != cdcStable &&
+               (uint32_t)(nowMs() - cdcChangedMs) >= 100u) {
+      cdcStable = connected;
+      if (!cdcStable) panelNetFsmCdcDisconnected(&gNetFsm, nowMs());
+    }
+
+    panelNetPoll(gNet, nowMs());
+    panelNetFsmPoll(&gNetFsm, nowMs());
+    panelLinkSetActiveTransport(&gLink,
+        gNetFsm.state == PANEL_NET_LINKED ? PANEL_LINK_WIFI :
+                                           PANEL_LINK_SERIAL);
 
     /* Sample the clock AFTER the pump: a frame parsed during this tick stamps
      * its arrival later than `ms`, and feeding a stale `ms` here is precisely

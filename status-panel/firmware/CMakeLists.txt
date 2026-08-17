@@ -78,6 +78,7 @@ add_executable(solari-panel-fw
   panelScreenCfg.c
   panelProv.c
   panelProvStore.c
+  panelNet.c
   panelNetFsm.c
   panelLink.c
   panelHist.c
@@ -102,6 +103,8 @@ target_compile_definitions(solari-panel-fw PRIVATE
   SOLARI_FW_VERSION_MINOR=1   # 1.1: CONTROL/STATE support (CONTRACT-CP.md)
   SOLARI_BUILD_EPOCH=${SOLARI_SOURCE_DATE_EPOCH}
   SOLARI_PANEL_PICO_FLASH=1  # keeps pico-sdk flash calls out of host tests
+  SOLARI_PANEL_DEVICE_NET=1  # keeps SDK headers out of host helper tests
+  MBEDTLS_CONFIG_FILE="mbedtls_config.h"
   PICO_STDIO_ENABLE_CRLF_SUPPORT=0   # binary-safe stdio: no LF->CRLF mangling
   PICO_STDIO_DEFAULT_CRLF=0
   PICO_STDIO_USB_SUPPORT_CHARS_AVAILABLE_CALLBACK=0
@@ -140,6 +143,11 @@ target_link_libraries(solari-panel-fw
   hardware_flash
   pico_flash
   pico_multicore
+  pico_aon_timer
+  pico_cyw43_arch_lwip_poll
+  pico_lwip_mbedtls
+  pico_lwip_sntp
+  pico_mbedtls
   galactic_unicorn
   m                # newlib libm: sqrtf/powf/log10f in the screen renderers
 )
