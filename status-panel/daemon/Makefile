@@ -23,7 +23,7 @@ tests/codec_test: tests/codec_test.c solariPanel.c listener.c listener.h ../prot
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-unused-function -DSOLARI_PANEL_TEST -o $@ tests/codec_test.c solariPanel.c listener.c ../protocol.c vendor/cJSON.c $(LDLIBS)
 
 tests/listener_test: tests/listener_test.c solariPanel.c listener.c listener.h ../protocol.c ../protocol.h vendor/cJSON.c vendor/cJSON.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-unused-function -DSOLARI_PANEL_TEST -o $@ tests/listener_test.c solariPanel.c listener.c ../protocol.c vendor/cJSON.c $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-unused-function -DSOLARI_PANEL_TEST -DWRITE_MS=300u -o $@ tests/listener_test.c solariPanel.c listener.c ../protocol.c vendor/cJSON.c $(LDLIBS)
 
 clean:
 	rm -f solariPanel tests/codec_test tests/listener_test

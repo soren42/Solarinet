@@ -15,6 +15,8 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <sys/ioctl.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -161,7 +163,8 @@ int main(int argc, char **argv) {
   }
   /* Hold a slave fd ourselves so the pty survives between the smoke's two
    * panelProv invocations — otherwise the first close() tears it down. */
-  if (open(slave, O_RDWR | O_NOCTTY) < 0) {
+  int heldSlave = open(slave, O_RDWR | O_NOCTTY);
+  if (heldSlave < 0) {
     perror("fakePanel: slave hold");
     return 2;
   }
@@ -192,6 +195,20 @@ int main(int argc, char **argv) {
     if (n <= 0) break;
     served += n;
     panelParserFeed(&parser, buf, (size_t)n, (uint32_t)served, onFrame, &fk);
+  }
+  /* Teardown race guard: the final PROVACK may still sit unread in the
+   * slave input queue when the loop condition goes false. Closing the
+   * master then destroys the pty and the client sees EIO instead of the
+   * ack. FIONREAD on our held slave fd reports the shared queue, so wait
+   * (bounded) until the client has actually consumed it. */
+  {
+    int spins;
+    for (spins = 0; spins < 200; ++spins) {
+      int queued = 0;
+      struct timespec nap = {0, 10000000L};
+      if (ioctl(heldSlave, FIONREAD, &queued) != 0 || queued == 0) break;
+      nanosleep(&nap, NULL);
+    }
   }
   fprintf(stderr, "fakePanel: %d commit(s), %d wipe(s), store %s\n",
           fk.commits, fk.wipes, fk.store.valid ? "valid" : "empty");
