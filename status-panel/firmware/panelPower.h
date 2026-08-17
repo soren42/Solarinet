@@ -66,4 +66,11 @@ void panelPowerAck(PanelPower *p);
  * OR-composition input to the alarm state machine. */
 bool panelPowerAlarmPending(const PanelPower *p);
 
+/* panelAlarmWant — THE composition predicate (D15): the alarm is wanted
+ * while ANY source holds an unacked episode. main.c's runAlarm() keys on
+ * this exact function so the host suite exercises the same OR the device
+ * runs, not a reimplementation. serverUnacked = a live server topAlert
+ * whose episodeId is not the acknowledged one. */
+bool panelAlarmWant(bool serverUnacked, const PanelPower *p);
+
 #endif /* SOLARI_PANEL_POWER_H */

@@ -567,7 +567,7 @@ static void runAlarm(void) {
   uint32_t episode = gEnv.snap.topAlert.episodeId;
   bool serverUnacked = serverActive &&
                        !(gHaveAcked && gAckedEpisode == episode);
-  bool wantAlarm = serverUnacked || panelPowerAlarmPending(&gPower);
+  bool wantAlarm = panelAlarmWant(serverUnacked, &gPower);
 
   if (wantAlarm) {
     if (!gAlarmArmed) {
@@ -742,8 +742,13 @@ int main(void) {
       requestBrightness(gBrightReq);
     }
 
-    scanButtons();
+    /* runAlarm BEFORE scanButtons (review P4 MUST-1): the alarm arms from
+     * this tick's data before buttons are read, so a press on the very tick
+     * an episode commits — power-loss edge or first alarming snapshot — is
+     * consumed as the acknowledge the contract promises ("any button during
+     * an alarm"), not as a theme/sleep action racing the arm by 40 ms. */
     runAlarm();
+    scanButtons();
     panelHelpTick(&gHelp, gT, gAlarmArmed);
     runAutoBrightness();
 
@@ -793,13 +798,12 @@ int main(void) {
       kScreens[gTheme][gScreen](&gEnv, gT, dt);
       if (gAlarmArmed && serverAlarmShowing) panelInlay(&gEnv, gT);
     }
-    if (!gHelp.active) {
-      /* D16: power inlay only when no server alert owns the text; the glyph
-       * rides on top of every treatment WHENEVER on battery. Help overlay is
-       * an explicit user request and stays clean — the beacon still shows. */
-      if (gAlarmArmed && !serverAlarmShowing) panelInlayPower(gT);
-      if (gPower.onBattery) panelPowerGlyph();
-    }
+    /* D16: power inlay only when no server alert owns the text. Suppressed
+     * under the help overlay exactly as the server inlay is (the beacon
+     * carries the alarm there). The GLYPH is not: "whenever on battery,
+     * alarm state notwithstanding" includes help (review P4 MUST-2). */
+    if (gAlarmArmed && !serverAlarmShowing && !gHelp.active) panelInlayPower(gT);
+    if (gPower.onBattery) panelPowerGlyph();
     /* Beacon last of all: it must sit on top of the inlay, whose right-hand
      * rail runs through x=52. Placed outside the branch so it also covers the
      * zero-node NO DATA case, which draws no inlay.                         */

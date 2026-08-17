@@ -55,3 +55,7 @@ void panelPowerAck(PanelPower *p) {
 bool panelPowerAlarmPending(const PanelPower *p) {
   return p->onBattery && !p->acked;
 }
+
+bool panelAlarmWant(bool serverUnacked, const PanelPower *p) {
+  return serverUnacked || panelPowerAlarmPending(p);
+}

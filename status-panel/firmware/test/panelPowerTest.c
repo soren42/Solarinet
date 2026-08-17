@@ -121,6 +121,36 @@ int main(void) {
             (0xDEADBEEFu & PANEL_POWER_EPISODE_MASK),
         "dirty salt: masked into namespace");
 
+  /* ---- D15/D21 OR-composition, through the SAME predicate main.c keys on
+   * (panelAlarmWant). Simulated server side: `srvUnacked` plays the role of
+   * runAlarm()'s serverActive && !ackedThis input. ---- */
+  PanelPower c2;
+  ms = 1000u;
+  panelPowerInit(&c2, 9u, true, ms);
+  check(!panelAlarmWant(false, &c2), "compose: no source, no alarm");
+  check(panelAlarmWant(true, &c2), "compose: server alone");
+  check(feed(&c2, false, 4, &ms) == PANEL_POWER_LOSS, "compose: loss");
+  check(panelAlarmWant(false, &c2), "compose: power alone");
+  check(panelAlarmWant(true, &c2), "compose: both (D21 simultaneous)");
+
+  /* Ack-all: one acknowledge covers both sources — the caller records the
+   * server ack (srvUnacked falls) AND calls panelPowerAck. */
+  panelPowerAck(&c2);
+  check(!panelAlarmWant(false, &c2), "ack-all: silent after both acked");
+
+  /* Restore isolation: VBUS restore clears ONLY the power episode — a live
+   * unacked server episode keeps the alarm wanted. */
+  check(feed(&c2, false, 1, &ms) == PANEL_POWER_STEADY, "hold battery");
+  check(feed(&c2, true, 4, &ms) == PANEL_POWER_RESTORE, "compose: restore");
+  check(panelAlarmWant(true, &c2), "restore keeps the server alarm");
+  check(!panelAlarmWant(false, &c2), "restore cleared the power side");
+
+  /* Server SNAPSHOT-side changes never clear the power episode: a fresh
+   * loss stays pending regardless of the server input's transitions. */
+  check(feed(&c2, false, 4, &ms) == PANEL_POWER_LOSS, "compose: loss 2");
+  check(panelAlarmWant(false, &c2) && panelAlarmWant(true, &c2),
+        "power episode survives any server-side transition");
+
   printf("panelPowerTest: %d checks passed\n", gChecks);
   return 0;
 }
