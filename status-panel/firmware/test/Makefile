@@ -17,6 +17,7 @@ PROVSUB_SRC = panelProvSubsysTest.c ../panelProv.c ../panelProvStore.c ../../pro
 HELP_SRC = panelHelpTest.c ../panelHelp.c
 NET_SRC  = panelNetFsmTest.c ../panelNetFsm.c ../panelLink.c ../../protocol.c
 NETGLUE_SRC = panelNetTest.c ../panelNet.c ../panelProvStore.c ../../protocol.c
+POWER_SRC = panelPowerTest.c ../panelPower.c
 # A1 renderer under ASAN/UBSAN — the review-proven hubs[-2] class must crash
 # loudly here, never ship (REVIEW-AW M3/M4). Needs the fb/env/screens units.
 A1_SRC   = panelScreensATest.c ../panelScreensA.c ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
@@ -33,7 +34,7 @@ PARITY_WRAP = -Wl,--wrap=panelFbSet -Wl,--wrap=panelFbSetRgb \
               -Wl,--wrap=panelFbDimAll -Wl,--wrap=panelText \
               -Wl,--wrap=panelTextOver -Wl,--wrap=panelBig \
               -Wl,--wrap=panelScroll
-BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelProvSubsysTest panelHelpTest panelNetFsmTest panelNetTest panelScreensATest panelParityTest
+BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelProvSubsysTest panelHelpTest panelNetFsmTest panelNetTest panelPowerTest panelScreensATest panelParityTest
 
 .PHONY: all clean
 all: $(BINS)
@@ -45,6 +46,7 @@ all: $(BINS)
 	./panelHelpTest
 	ASAN_OPTIONS=detect_leaks=0 ./panelNetFsmTest
 	./panelNetTest
+	ASAN_OPTIONS=detect_leaks=0 ./panelPowerTest
 	# LeakSanitizer cannot initialize when this suite runs under ptrace-based
 	# harnesses; ASAN/UBSAN bounds checks remain enabled for this renderer test.
 	ASAN_OPTIONS=detect_leaks=0 ./panelScreensATest
@@ -81,6 +83,9 @@ panelNetFsmTest: $(NET_SRC) ../panelNetFsm.h ../panelLink.h ../../protocol.h
 
 panelNetTest: $(NETGLUE_SRC) ../panelNet.h ../../protocol.h
 	$(CC) $(CFLAGS) -o $@ $(NETGLUE_SRC)
+
+panelPowerTest: $(POWER_SRC) ../panelPower.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(POWER_SRC)
 
 clean:
 	rm -f $(BINS)

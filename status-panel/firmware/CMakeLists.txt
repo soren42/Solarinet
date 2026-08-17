@@ -80,6 +80,7 @@ add_executable(solari-panel-fw
   panelProvStore.c
   panelNet.c
   panelNetFsm.c
+  panelPower.c
   panelLink.c
   panelHist.c
   panelScreensA.c

@@ -17,7 +17,7 @@
  *   4. detail scrolling on row y=6, ink, b=0.55, 11 px/s
  * The tone (item 5) and acknowledge (item 6) are the alarm state machine in
  * main.c, not part of the paint.                                            */
-void panelInlay(const PanelEnv *env, float t) {
+static void inlayBody(const char *subject, const char *detail, float t) {
   panelFbDimAll(0.1f);
 
   float pulse = 0.55f + 0.45f * fabsf(sinf(t * 2.2f));
@@ -29,17 +29,49 @@ void panelInlay(const PanelEnv *env, float t) {
   /* DESIGN-BRIEF: subject truncated to 12 chars. The truncation is the spec,
    * so copy exactly rather than let snprintf warn about a clipped %s. */
   char subj[13];
-  size_t sn = strlen(env->subject);
+  size_t sn = strlen(subject);
   if (sn > 12) sn = 12;
-  memcpy(subj, env->subject, sn);
+  memcpy(subj, subject, sn);
   subj[sn] = '\0';
   int x = (PANEL_W - panelTextW(subj)) / 2;
   if (x < 2) x = 2;
   panelText(x, 1, subj, cCrit, 0.95f);
 
+  panelScroll(t, 6, detail, cInk, 0.55f, 11.0f);
+}
+
+void panelInlay(const PanelEnv *env, float t) {
   char detail[PANEL_ALERT_DETAIL + 8];
   snprintf(detail, sizeof(detail), "%s" PANEL_TAIL, env->detail);
-  panelScroll(t, 6, detail, cInk, 0.55f, 11.0f);
+  inlayBody(env->subject, detail, t);
+}
+
+/* Power-loss inlay — same vocabulary as a server alert, fixed text (D16).
+ * Only reached when NO live server topAlert exists; main.c arbitrates. */
+void panelInlayPower(float t) {
+  inlayBody("POWER LOSS", "ON BATTERY" PANEL_TAIL, t);
+}
+
+/* ---- On-battery glyph ---------------------------------------------------
+ * DESIGN-BRIEF-P4 §2: 4x5 battery outline, cols 49-52 x rows 6-10, nub at
+ * cols 50-51 row 6, interior dark (no charge telemetry exists — state is
+ * carried by hue, not fill). Steady warn amber at 0.55: blinking belongs to
+ * the alarm beacon's vocabulary, and steady-amber reads as "condition
+ * present, noise handled". A 1 px knockout halo (the panelTextOver
+ * watermark technique) lets ticker text pass behind it legibly.           */
+void panelPowerGlyph(void) {
+  for (int y = 5; y <= 10; y++)
+    for (int x = 48; x <= 52; x++) panelFbDim(x, y, 0.15f);
+  panelFbSet(50, 6, cWarn, 0.55f);   /* nub */
+  panelFbSet(51, 6, cWarn, 0.55f);
+  for (int x = 49; x <= 52; x++) {   /* body top + bottom */
+    panelFbSet(x, 7, cWarn, 0.55f);
+    panelFbSet(x, 10, cWarn, 0.55f);
+  }
+  for (int y = 8; y <= 9; y++) {     /* body sides; interior stays dark */
+    panelFbSet(49, y, cWarn, 0.55f);
+    panelFbSet(52, y, cWarn, 0.55f);
+  }
 }
 
 /* ---- Unacknowledged-episode beacon --------------------------------------

@@ -28,6 +28,8 @@
 
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
+#include "pico/rand.h"
+#include "pico/cyw43_arch.h"
 #include "tusb.h"
 #ifdef SOLARI_PANEL_PICO_FLASH
 #include "pico/flash.h"
@@ -43,6 +45,7 @@
 #include "panelHw.h"
 #include "panelLink.h"
 #include "panelNet.h"
+#include "panelPower.h"
 #include "panelNetFsm.h"
 #include "panelFb.h"
 #include "panelFont.h"
@@ -78,6 +81,13 @@ bi_decl(bi_program_description("SolariNet fleet status panel (Galactic Unicorn)"
  * below the ADC's 4095 ceiling: the panel lives in direct daylight and that is
  * the NORMAL condition, not the extreme. Tunable knob — see runAutoBrightness. */
 #define PANEL_LUX_FULL   1600.0f
+/* CONTRACT-SW §7a: on-battery brightness ceiling, field-calibratable exactly
+ * like PANEL_LUX_FULL. Sits below panelHw's 0.25 UX floor by design, which is
+ * why the cap path uses panelHwSetBrightnessRaw. D19: the shipped default is
+ * ratified by measurement, not asserted — this is the knob, not the answer. */
+#ifndef PANEL_BATT_BRIGHT_MAX
+#define PANEL_BATT_BRIGHT_MAX 0.20f
+#endif
 #define DEBOUNCE_TICKS   2       /* 80 ms at the 25 Hz tick                  */
 
 /* ---- panel state -------------------------------------------------------- */
@@ -97,6 +107,12 @@ static float gDwellSec = DWELL_DEFAULT_SEC;
 static bool  gSleeping = false;
 static bool  gAutoBright = true;   /* SHOULD; LUX+/- latches manual control  */
 static float gAutoBrightSmoothed = 0.85f;
+
+/* D16/D18: VBUS ride-through. gPower owns debounce + power episodes; the
+ * brightness cap keeps the PRE-cap request here so LUX+/- keep working under
+ * the cap and a VBUS restore lifts it losslessly (DESIGN-BRIEF-P4 §3). */
+static PanelPower gPower;
+static float gBrightReq = 0.85f;   /* matches panelHw's boot default */
 
 /* Link liveness + snapshot ordering. See panelLink.c; do not reimplement the
  * time arithmetic here, that is what flapped the link on 2026-08-04.       */
@@ -140,6 +156,19 @@ static const PanelScreenFn kScreens[4][3] = {
 };
 
 static uint32_t nowMs(void) { return to_ms_since_boot(get_absolute_time()); }
+
+/* requestBrightness — the ONLY brightness write path (buttons, CONTROL, and
+ * auto-brightness all land here). The request keeps the DESIGN-BRIEF 0.25
+ * floor; the on-battery cap is applied AFTER it, through the raw setter,
+ * because PANEL_BATT_BRIGHT_MAX sits below that floor by contract. */
+static void requestBrightness(float v) {
+  if (v < 0.25f) v = 0.25f;
+  if (v > 1.00f) v = 1.00f;
+  gBrightReq = v;
+  if (gPower.onBattery && v > PANEL_BATT_BRIGHT_MAX)
+    v = PANEL_BATT_BRIGHT_MAX;
+  panelHwSetBrightnessRaw(v);
+}
 
 /* sendFrame — encode and push one panel->host frame.
  * Input:  type, payload + length. Output: none (best effort; the daemon is
@@ -328,8 +357,15 @@ static void pressTheme(int theme) {
  * Input:  none. Output: none; emits EV_ACK when it actually silenced an alarm. */
 static void ackAlarm(void) {
   if (!gAlarmArmed) return;
-  gAckedEpisode = gEnv.snap.topAlert.episodeId;
-  gHaveAcked = true;
+  /* D15 ack-all: one acknowledge covers EVERY currently-unacked source. The
+   * server episode is only recorded when it is actually live — a power-only
+   * alarm must not stamp a stale topAlert id as acknowledged, or a later
+   * server episode reusing that id would arrive pre-acked. */
+  if (gEnv.haveData && gEnv.alarmActive && !gLink.lost) {
+    gAckedEpisode = gEnv.snap.topAlert.episodeId;
+    gHaveAcked = true;
+  }
+  panelPowerAck(&gPower);
   gAlarmArmed = false;
   gAlarmSilenced = false;
   panelHwToneOff();
@@ -356,11 +392,14 @@ static void handlePress(PanelButton b) {
       break;
     case PANEL_BTN_LUXUP:
       gAutoBright = false;
-      panelHwSetBrightness(panelHwGetBrightness() + BRIGHT_STEP);
+      /* Step the REQUEST, not the hardware value: under the battery cap the
+       * hardware reads capped, and stepping that would erase the setting the
+       * restore is supposed to bring back (DESIGN-BRIEF-P4 §3). */
+      requestBrightness(gBrightReq + BRIGHT_STEP);
       break;
     case PANEL_BTN_LUXDN:
       gAutoBright = false;
-      panelHwSetBrightness(panelHwGetBrightness() - BRIGHT_STEP);
+      requestBrightness(gBrightReq - BRIGHT_STEP);
       break;
     case PANEL_BTN_VOLUP:
       (void)panelHelpToggle(&gHelp, gT, false);
@@ -401,7 +440,7 @@ static void applyControl(PanelCtlAction act, uint8_t arg) {
       break;
     case PANEL_CTLACT_BRIGHTNESS:
       gAutoBright = false;    /* latches manual, exactly as LUX+/- do */
-      panelHwSetBrightness((float)arg / 100.0f);
+      requestBrightness((float)arg / 100.0f);
       break;
     case PANEL_CTLACT_AUTOBRIGHT:
       gAutoBright = true;
@@ -518,12 +557,20 @@ static void scanButtons(void) {
  * the firmware never recomputes score; episodeId is the re-arm key, and ack is
  * firmware-local per episode. */
 static void runAlarm(void) {
-  bool wantAlarm = gEnv.haveData && gEnv.alarmActive && !gLink.lost;
+  /* D15/D16 composition: the tone is active while ANY source holds an unacked
+   * episode. Sources are the server's topAlert (episodeId from the SNAPSHOT,
+   * ack tracked in gAckedEpisode) and the local power-loss episode (allocated
+   * and ack-tracked inside panelPower). A SNAPSHOT never clears the power
+   * episode; a VBUS restore clears ONLY the power episode — each source can
+   * therefore hold the alarm up on its own.                                 */
+  bool serverActive = gEnv.haveData && gEnv.alarmActive && !gLink.lost;
   uint32_t episode = gEnv.snap.topAlert.episodeId;
+  bool serverUnacked = serverActive &&
+                       !(gHaveAcked && gAckedEpisode == episode);
+  bool wantAlarm = serverUnacked || panelPowerAlarmPending(&gPower);
 
   if (wantAlarm) {
-    bool ackedThis = gHaveAcked && gAckedEpisode == episode;
-    if (!ackedThis && !gAlarmArmed) {
+    if (!gAlarmArmed) {
       /* Rising edge, or a NEW episodeId after an acknowledged one. */
       gAlarmArmed = true;
       gAlarmSilenced = false;
@@ -536,7 +583,6 @@ static void runAlarm(void) {
        * a sleeping panel. Recorded as a deviation in RETURN-C3.md.           */
       gSleeping = false;
     }
-    if (ackedThis) { gAlarmArmed = false; gAlarmSilenced = false; }
   } else {
     if (gAlarmArmed) { panelHwToneOff(); gToneNote = 3; }
     gAlarmArmed = false;
@@ -593,7 +639,7 @@ static void runAutoBrightness(void) {
    * walking between the window and the board does not visibly pump it. */
   float k = (target > gAutoBrightSmoothed) ? 0.08f : 0.01f;
   gAutoBrightSmoothed += (target - gAutoBrightSmoothed) * k;
-  panelHwSetBrightness(gAutoBrightSmoothed);
+  requestBrightness(gAutoBrightSmoothed);
 }
 
 int main(void) {
@@ -630,6 +676,13 @@ int main(void) {
   panelNetFsmInit(&gNetFsm, &netOps, gProvStore.valid, timeValid, wallEpoch,
                   SOLARI_BUILD_EPOCH);
   panelNetAttachFsm(gNet, &gNetFsm);
+
+  /* D18: boot-on-battery is a power loss at t=0 — episode, cap and glyph all
+   * precede the first snapshot. The salt makes per-boot episode ids unique
+   * across reboots (D15). CYW43 is already up via panelNetInit above. */
+  panelPowerInit(&gPower, get_rand_32(),
+                 cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN), nowMs());
+  if (gPower.onBattery) requestBrightness(gBrightReq);
 
   sendHello();
 
@@ -680,6 +733,15 @@ int main(void) {
       default: break;
     }
 
+    /* D18: VBUS through the CYW43's WL_GPIO2 (init is unconditional since
+     * P3), 100 ms debounce both edges. An edge re-applies the brightness
+     * request so the on-battery cap engages and lifts atomically (§3). */
+    if (panelPowerPoll(&gPower,
+                       cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN),
+                       nowMs()) != PANEL_POWER_STEADY) {
+      requestBrightness(gBrightReq);
+    }
+
     scanButtons();
     runAlarm();
     panelHelpTick(&gHelp, gT, gAlarmArmed);
@@ -702,10 +764,17 @@ int main(void) {
      * short-circuit below cannot skip the heartbeat. */
     reportState(nowMs());
 
+    /* The inlay text is owned by a LIVE server topAlert; when the alarm is
+     * armed without one (a power-loss episode — which, unlike a server
+     * episode, CAN coexist with LINK LOST) the power inlay carries it. */
+    bool serverAlarmShowing = gEnv.haveData && gEnv.alarmActive && !gLink.lost;
+
     panelFbClear();
     if (gSleeping) {
-      /* Blanked, but the tick keeps running — and an unacknowledged episode
-       * still shows its beacon on the otherwise dark panel. */
+      /* Blanked, but the tick keeps running — an unacknowledged episode
+       * still shows its beacon, and an on-battery panel its glyph, on the
+       * otherwise dark board. */
+      if (gPower.onBattery) panelPowerGlyph();
       if (gAlarmArmed) panelBeacon(gT);
       panelFbFlush();
       continue;
@@ -722,12 +791,18 @@ int main(void) {
       panelScreenNoData(gT);
     } else {
       kScreens[gTheme][gScreen](&gEnv, gT, dt);
-      if (gAlarmArmed) panelInlay(&gEnv, gT);
+      if (gAlarmArmed && serverAlarmShowing) panelInlay(&gEnv, gT);
+    }
+    if (!gHelp.active) {
+      /* D16: power inlay only when no server alert owns the text; the glyph
+       * rides on top of every treatment WHENEVER on battery. Help overlay is
+       * an explicit user request and stays clean — the beacon still shows. */
+      if (gAlarmArmed && !serverAlarmShowing) panelInlayPower(gT);
+      if (gPower.onBattery) panelPowerGlyph();
     }
     /* Beacon last of all: it must sit on top of the inlay, whose right-hand
      * rail runs through x=52. Placed outside the branch so it also covers the
-     * zero-node NO DATA case, which draws no inlay. (LINK LOST cannot coexist
-     * with an armed alarm — runAlarm() clears it.)                          */
+     * zero-node NO DATA case, which draws no inlay.                         */
     if (gAlarmArmed) panelBeacon(gT);
     panelFbFlush();
   }

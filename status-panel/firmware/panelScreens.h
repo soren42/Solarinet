@@ -45,6 +45,16 @@ void panelScreenD2(const PanelEnv *env, float t, float dt);
  * armed and unacknowledged. */
 void panelInlay(const PanelEnv *env, float t);
 
+/* panelInlayPower — CONTRACT-SW §7/D16: the alert inlay carrying the local
+ * power-loss episode. Drawn only when the alarm is armed and NO live server
+ * topAlert exists — a server alert always wins the inlay text. */
+void panelInlayPower(float t);
+
+/* panelPowerGlyph — DESIGN-BRIEF-P4 §2: steady warn-amber 4x5 battery outline,
+ * bottom-right (cols 49-52, rows 6-10), with a 1 px knockout halo. Shown
+ * WHENEVER on battery, alarm state notwithstanding — including in sleep. */
+void panelPowerGlyph(void);
+
 /* panelBeacon — OPERATOR AMENDMENT: 4-pixel top-right red flasher, live from an
  * episode's rising edge until it is acknowledged, independent of tone state.
  * Painted after everything else, including in sleep. */
