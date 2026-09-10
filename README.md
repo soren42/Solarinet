@@ -79,6 +79,6 @@ Every tier-to-tier message rides the **SolariNet Control Protocol (SCP)**: a ver
 
 ---
 
-SolariNet Monitoring · prepared by Jason C. Kay (N4JCK).
+SolariNet Monitoring · prepared by Jason Kay.
 Source mirror: [github.com/soren42/Solarinet](https://github.com/soren42/Solarinet).
 Where this README and the architecture document disagree, the architecture document wins.
