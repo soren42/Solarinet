@@ -28,6 +28,9 @@
 
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
+#include "pico/rand.h"
+#include "pico/cyw43_arch.h"
+#include "tusb.h"
 #ifdef SOLARI_PANEL_PICO_FLASH
 #include "pico/flash.h"
 #endif
@@ -37,8 +40,13 @@
 #include "panelHelp.h"
 #include "panelHelpOverlay.h"
 #include "panelScreenCfg.h"
+#include "panelProv.h"
+#include "panelProvStore.h"
 #include "panelHw.h"
 #include "panelLink.h"
+#include "panelNet.h"
+#include "panelPower.h"
+#include "panelNetFsm.h"
 #include "panelFb.h"
 #include "panelFont.h"
 #include "panelHist.h"
@@ -73,11 +81,19 @@ bi_decl(bi_program_description("SolariNet fleet status panel (Galactic Unicorn)"
  * below the ADC's 4095 ceiling: the panel lives in direct daylight and that is
  * the NORMAL condition, not the extreme. Tunable knob — see runAutoBrightness. */
 #define PANEL_LUX_FULL   1600.0f
+/* CONTRACT-SW §7a: on-battery brightness ceiling, field-calibratable exactly
+ * like PANEL_LUX_FULL. Sits below panelHw's 0.25 UX floor by design, which is
+ * why the cap path uses panelHwSetBrightnessRaw. D19: the shipped default is
+ * ratified by measurement, not asserted — this is the knob, not the answer. */
+#ifndef PANEL_BATT_BRIGHT_MAX
+#define PANEL_BATT_BRIGHT_MAX 0.20f
+#endif
 #define DEBOUNCE_TICKS   2       /* 80 ms at the 25 Hz tick                  */
 
 /* ---- panel state -------------------------------------------------------- */
 static PanelEnv    gEnv;
 static PanelParser gParser;
+static PanelParser gWifiParser;
 
 static int   gTheme = 3;       /* CONTRACT §5: boot = Theme D ...            */
 static int   gScreen = 1;      /* ... screen 2 of 3, the "resting face"      */
@@ -92,9 +108,17 @@ static bool  gSleeping = false;
 static bool  gAutoBright = true;   /* SHOULD; LUX+/- latches manual control  */
 static float gAutoBrightSmoothed = 0.85f;
 
+/* D16/D18: VBUS ride-through. gPower owns debounce + power episodes; the
+ * brightness cap keeps the PRE-cap request here so LUX+/- keep working under
+ * the cap and a VBUS restore lifts it losslessly (DESIGN-BRIEF-P4 §3). */
+static PanelPower gPower;
+static float gBrightReq = 0.85f;   /* matches panelHw's boot default */
+
 /* Link liveness + snapshot ordering. See panelLink.c; do not reimplement the
  * time arithmetic here, that is what flapped the link on 2026-08-04.       */
 static PanelLink gLink;
+static PanelNetFsm gNetFsm;
+static PanelNet *gNet;
 
 /* CONTROL dedupe + STATE cadence. See panelCtl.c; the ascending-cmdId rule and
  * the change/heartbeat decision live there so the host suite can drive them.  */
@@ -102,6 +126,14 @@ static PanelCtl gCtl;
 static PanelHelp gHelp;
 static PanelScreenCfg gScreenCfg;
 static PanelScreenCfgFlash gScreenCfgFlash;
+
+/* WiFi provisioning (CONTRACT-SW §13). The store loads at boot so P3's WiFi
+ * transport can read credentials; the handler runs lockstep inside onFrame.
+ * ~13 KiB of state (staging + record) — static, never on the tick stack.  */
+static PanelProv gProv;
+static PanelProvStore gProvStore;
+static PanelProvFlash gProvFlash;
+static const PanelProvCrypto *gProvCrypto;
 
 /* Alarm state — CONTRACT §9. ack is firmware-local and scoped to episodeId;
  * a NEW episodeId re-arms the tone even if the previous one was acked. */
@@ -112,6 +144,8 @@ static float    gAlarmToneAt = -1000.0f;  /* start time of the current triad */
 static int      gToneNote = 3;            /* 3 = triad finished              */
 static float    gAlarmRaisedAt = 0.0f;    /* gT at this episode's rising edge*/
 static bool     gAlarmSilenced = false;   /* auto-silenced: tone off, seen   */
+static PanelAlarmIdent gAlarmIdent;       /* episodes the armed state is FOR */
+static bool     gAckPending = false;      /* CONTROL ack deferred to runAlarm*/
 
 static uint8_t  gBtnStable[PANEL_BTN_COUNT];
 static uint8_t  gBtnCount[PANEL_BTN_COUNT];
@@ -125,6 +159,19 @@ static const PanelScreenFn kScreens[4][3] = {
 
 static uint32_t nowMs(void) { return to_ms_since_boot(get_absolute_time()); }
 
+/* requestBrightness — the ONLY brightness write path (buttons, CONTROL, and
+ * auto-brightness all land here). The request keeps the DESIGN-BRIEF 0.25
+ * floor; the on-battery cap is applied AFTER it, through the raw setter,
+ * because PANEL_BATT_BRIGHT_MAX sits below that floor by contract. */
+static void requestBrightness(float v) {
+  if (v < 0.25f) v = 0.25f;
+  if (v > 1.00f) v = 1.00f;
+  gBrightReq = v;
+  if (gPower.onBattery && v > PANEL_BATT_BRIGHT_MAX)
+    v = PANEL_BATT_BRIGHT_MAX;
+  panelHwSetBrightnessRaw(v);
+}
+
 /* sendFrame — encode and push one panel->host frame.
  * Input:  type, payload + length. Output: none (best effort; the daemon is
  * required to tolerate silence, and stdio drops writes when no host is
@@ -134,8 +181,15 @@ static void sendFrame(uint8_t type, const uint8_t *payload, size_t len) {
   if (len > 160) return;
   size_t n = panelEncodeFrame(type, payload, len, out, sizeof(out));
   if (!n) return;
-  fwrite(out, 1, n, stdout);
-  fflush(stdout);
+  /* D14 TX mux: LINKED TLS is authoritative; serial is the fallback for all
+   * other states.  A failed TLS write is allowed to be lost rather than
+   * double-driving both transports during the same arbitration state. */
+  if (panelNetUseWifiTx(gNetFsm.state, panelNetTlsUp(gNet))) {
+    (void)panelNetWrite(gNet, out, n);
+  } else {
+    fwrite(out, 1, n, stdout);
+    fflush(stdout);
+  }
 }
 
 /* sendHello — PANEL_FT_HELLO: u8 protoVer, u8 fwMajor, u8 fwMinor, then the
@@ -188,10 +242,14 @@ static void applyControl(PanelCtlAction act, uint8_t arg);
  * applied seq is a duplicate and ignored, and so is an older one — both via
  * panelSeqNewer() in the shared codec, which is RFC1982 wraparound-aware.   */
 static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user) {
-  (void)user;
+  PanelLinkTransport transport = (PanelLinkTransport)(uintptr_t)user;
+  bool onWifi = transport == PANEL_LINK_WIFI;
   uint32_t arriveMs = nowMs();
-  panelLinkNoteFrame(&gLink, arriveMs);  /* ANY valid frame, PING included */
-
+  if (!onWifi) {
+    panelNetFsmUsbFrameSeen(&gNetFsm, panelNetKnownHostType(type), arriveMs);
+    if (gNetFsm.state == PANEL_NET_SUSPENDED)
+      panelLinkSetActiveTransport(&gLink, PANEL_LINK_SERIAL);
+  }
   switch (type) {
     case PANEL_FT_SNAPSHOT: {
       PanelSnapshot snap;
@@ -204,14 +262,14 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
        * still holds a much larger lastApplied, and panelSeqNewer() correctly
        * calls every subsequent snapshot OLDER — for the next ~32768 snapshots,
        * about 18 hours at the 2 s cadence. The panel is not visibly broken while
-       * this happens, which is what makes it nasty: rendering is autonomous
-       * (CONTRACT §5) so the screens keep animating the last applied snapshot,
-       * the rejected frames are CRC-valid and so keep refreshing the liveness
-       * timer, and the link never goes LOST. It silently shows stale data
-       * forever. A live crit alert raised after such a restart never reaches
-       * PanelEnv at all — no inlay, no tone, no beacon.                      */
+       * this happens. Rendering is autonomous (CONTRACT §5), so without an
+       * adoption path PanelEnv would retain the old snapshot and a new crit
+       * alert would never reach the inlay, tone, or beacon. D14 now binds
+       * LINKLOST to accepted-snapshot staleness, but that visible warning is
+       * not a substitute for eventually recovering the serial stream.       */
       bool resynced = false;
-      if (!panelLinkAcceptSnapshot(&gLink, snap.seq, arriveMs, &resynced)) return;
+      if (!panelLinkAcceptSnapshot(&gLink, transport, snap.seq,
+                                   arriveMs, &resynced)) return;
       if (resynced) sendLog("seq resync: sender restarted");
       panelEnvApply(&gEnv, &snap);
       break;
@@ -235,6 +293,20 @@ static void onFrame(uint8_t type, const uint8_t *payload, size_t len, void *user
       applyControl(panelCtlConsume(&gCtl, cmdId, kind, cmdArg, &arg), arg);
       break;
     }
+    case PANEL_FT_PROVISION: {
+      /* D2: WiFi provisioning reaches the same handler with onWifi=true and
+       * receives REJECTED_WIFI without touching staging or flash. */
+      uint8_t ack[PANEL_PROVACK_SIZE];
+      size_t n = panelProvHandle(&gProv, payload, len, onWifi, &gProvStore,
+                                 &gProvFlash, gProvCrypto, ack, sizeof(ack));
+      if (n) sendFrame(PANEL_FT_PROVACK, ack, n);
+      if (!onWifi && len > 0u &&
+          (payload[0] == PANEL_PROV_COMMIT || payload[0] == PANEL_PROV_WIPE)) {
+        panelNetCredentialsChanged(gNet);
+        panelNetFsmSetProvisioned(&gNetFsm, gProvStore.valid);
+      }
+      break;
+    }
     case PANEL_FT_PING:
     default:
       break;   /* unknown types are skipped, never desync (protocol.h) */
@@ -256,7 +328,8 @@ static void pumpSerial(void) {
       buf[n++] = (uint8_t)c;
     }
     if (!n) break;
-    panelParserFeed(&gParser, buf, n, ms, onFrame, NULL);
+    panelParserFeed(&gParser, buf, n, ms, onFrame,
+                    (void *)(uintptr_t)PANEL_LINK_SERIAL);
     if (n < sizeof(buf)) break;
   }
 }
@@ -285,14 +358,35 @@ static void pressTheme(int theme) {
  * new episodeId re-arms the tone even after this ran.
  * Input:  none. Output: none; emits EV_ACK when it actually silenced an alarm. */
 static void ackAlarm(void) {
+  uint8_t coverage = 0;
+  uint32_t serverEp = 0, powerEp = 0;
+  uint8_t ackPayload[PANEL_ACKEV_SIZE];
+  size_t n;
   if (!gAlarmArmed) return;
-  gAckedEpisode = gEnv.snap.topAlert.episodeId;
-  gHaveAcked = true;
+  /* D15 ack-all: one acknowledge covers EVERY currently-unacked source. The
+   * server episode is only recorded when it is actually live — a power-only
+   * alarm must not stamp a stale topAlert id as acknowledged, or a later
+   * server episode reusing that id would arrive pre-acked. */
+  if (gEnv.haveData && gEnv.alarmActive && !gLink.lost) {
+    gAckedEpisode = gEnv.snap.topAlert.episodeId;
+    gHaveAcked = true;
+    coverage |= PANEL_ACKEV_SERVER;
+    serverEp = gAckedEpisode;
+  }
+  /* D16: the journal must record WHICH episodes an ack-all covered, so the
+   * coverage is captured before panelPowerAck clears the pending flag. */
+  if (panelPowerAlarmPending(&gPower)) {
+    coverage |= PANEL_ACKEV_POWER;
+    powerEp = gPower.episodeId;
+  }
+  panelPowerAck(&gPower);
   gAlarmArmed = false;
   gAlarmSilenced = false;
   panelHwToneOff();
   gToneNote = 3;
-  sendEvent(PANEL_EV_ACK, 0);
+  n = panelEncodeAckEvent(coverage, serverEp, powerEp,
+                          ackPayload, sizeof(ackPayload));
+  if (n) sendFrame(PANEL_FT_EVENT, ackPayload, n);
 }
 
 /* handlePress — one debounced button-down edge.
@@ -314,11 +408,14 @@ static void handlePress(PanelButton b) {
       break;
     case PANEL_BTN_LUXUP:
       gAutoBright = false;
-      panelHwSetBrightness(panelHwGetBrightness() + BRIGHT_STEP);
+      /* Step the REQUEST, not the hardware value: under the battery cap the
+       * hardware reads capped, and stepping that would erase the setting the
+       * restore is supposed to bring back (DESIGN-BRIEF-P4 §3). */
+      requestBrightness(gBrightReq + BRIGHT_STEP);
       break;
     case PANEL_BTN_LUXDN:
       gAutoBright = false;
-      panelHwSetBrightness(panelHwGetBrightness() - BRIGHT_STEP);
+      requestBrightness(gBrightReq - BRIGHT_STEP);
       break;
     case PANEL_BTN_VOLUP:
       (void)panelHelpToggle(&gHelp, gT, false);
@@ -359,13 +456,20 @@ static void applyControl(PanelCtlAction act, uint8_t arg) {
       break;
     case PANEL_CTLACT_BRIGHTNESS:
       gAutoBright = false;    /* latches manual, exactly as LUX+/- do */
-      panelHwSetBrightness((float)arg / 100.0f);
+      requestBrightness((float)arg / 100.0f);
       break;
     case PANEL_CTLACT_AUTOBRIGHT:
       gAutoBright = true;
       break;
     case PANEL_CTLACT_ACKALARM:
-      ackAlarm();
+      /* Deferred to the tick, AFTER this tick's VBUS poll and runAlarm()
+       * (final review MUST-1): frames are pumped at the top of the tick,
+       * so an ack applied here would run against LAST tick's alarm state —
+       * an episode committing this very tick (VBUS edge, or the SNAPSHOT
+       * pumped just before this CONTROL) would arm after the ack was
+       * consumed and never be acknowledged by it. The button path gets the
+       * same guarantee from its position after runAlarm().                */
+      gAckPending = true;
       break;
     case PANEL_CTLACT_DWELL:
       gDwellSec = (float)arg;
@@ -476,13 +580,29 @@ static void scanButtons(void) {
  * the firmware never recomputes score; episodeId is the re-arm key, and ack is
  * firmware-local per episode. */
 static void runAlarm(void) {
-  bool wantAlarm = gEnv.haveData && gEnv.alarmActive && !gLink.lost;
+  /* D15/D16 composition: the tone is active while ANY source holds an unacked
+   * episode. Sources are the server's topAlert (episodeId from the SNAPSHOT,
+   * ack tracked in gAckedEpisode) and the local power-loss episode (allocated
+   * and ack-tracked inside panelPower). A SNAPSHOT never clears the power
+   * episode; a VBUS restore clears ONLY the power episode — each source can
+   * therefore hold the alarm up on its own.                                 */
+  bool serverActive = gEnv.haveData && gEnv.alarmActive && !gLink.lost;
   uint32_t episode = gEnv.snap.topAlert.episodeId;
+  bool serverUnacked = serverActive &&
+                       !(gHaveAcked && gAckedEpisode == episode);
+  bool wantAlarm = panelAlarmWant(serverUnacked, &gPower);
+  /* Final review MUST-2: episode IDENTITY, not the armed boolean, is the
+   * re-arm key. A new unacked episode on either source must sound, wake and
+   * restart auto-silence even while the alarm is already armed for the other
+   * source (or an older episode) — otherwise a power loss during a held
+   * server alarm is silent. The transition logic is the pure, host-tested
+   * panelAlarmIdentUpdate, not a second copy here. */
+  bool freshEpisode = panelAlarmIdentUpdate(&gAlarmIdent, serverUnacked,
+                                            episode, &gPower);
 
   if (wantAlarm) {
-    bool ackedThis = gHaveAcked && gAckedEpisode == episode;
-    if (!ackedThis && !gAlarmArmed) {
-      /* Rising edge, or a NEW episodeId after an acknowledged one. */
+    if (!gAlarmArmed || freshEpisode) {
+      /* Rising edge, or a NEW unacked episode on either source. */
       gAlarmArmed = true;
       gAlarmSilenced = false;
       gAlarmRaisedAt = gT;
@@ -494,7 +614,6 @@ static void runAlarm(void) {
        * a sleeping panel. Recorded as a deviation in RETURN-C3.md.           */
       gSleeping = false;
     }
-    if (ackedThis) { gAlarmArmed = false; gAlarmSilenced = false; }
   } else {
     if (gAlarmArmed) { panelHwToneOff(); gToneNote = 3; }
     gAlarmArmed = false;
@@ -551,7 +670,7 @@ static void runAutoBrightness(void) {
    * walking between the window and the board does not visibly pump it. */
   float k = (target > gAutoBrightSmoothed) ? 0.08f : 0.01f;
   gAutoBrightSmoothed += (target - gAutoBrightSmoothed) * k;
-  panelHwSetBrightness(gAutoBrightSmoothed);
+  requestBrightness(gAutoBrightSmoothed);
 }
 
 int main(void) {
@@ -559,6 +678,7 @@ int main(void) {
   panelHwInit();
   panelEnvInit(&gEnv);
   panelParserInit(&gParser);
+  panelParserInit(&gWifiParser);
   panelLinkInit(&gLink, nowMs());
   panelCtlInit(&gCtl, nowMs());
   panelHelpInit(&gHelp);
@@ -571,11 +691,38 @@ int main(void) {
 #endif
   gScreenCfgFlash = panelScreenCfgDeviceFlash();
   panelScreenCfgLoad(&gScreenCfg, &gScreenCfgFlash, nowMs());
+  gProvFlash = panelProvDeviceFlash();
+  panelProvInit(&gProv);
+  panelProvStoreLoad(&gProvStore, &gProvFlash);
+
+  /* D18/D7: panelNetInit always initializes CYW43.  Seed the frozen FSM from
+   * the flash-store election and the powered-lifetime AON wall clock. */
+  gNet = panelNetInit(&gProvStore, &gWifiParser, onFrame,
+                      (void *)(uintptr_t)PANEL_LINK_WIFI, &gLink);
+  gProvCrypto = panelNetProvCrypto(gNet);
+  PanelNetOps netOps = panelNetOps(gNet);
+  uint64_t wallEpoch = 0u;
+  bool timeValid = panelNetWallTime(gNet, &wallEpoch) &&
+                   panelNetEpochPlausible(wallEpoch, SOLARI_BUILD_EPOCH);
+  panelNetFsmInit(&gNetFsm, &netOps, gProvStore.valid, timeValid, wallEpoch,
+                  SOLARI_BUILD_EPOCH);
+  panelNetAttachFsm(gNet, &gNetFsm);
+
+  /* D18: boot-on-battery is a power loss at t=0 — episode, cap and glyph all
+   * precede the first snapshot. The salt makes per-boot episode ids unique
+   * across reboots (D15). CYW43 is already up via panelNetInit above. */
+  panelPowerInit(&gPower, get_rand_32(),
+                 cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN), nowMs());
+  panelAlarmIdentReset(&gAlarmIdent);
+  if (gPower.onBattery) requestBrightness(gBrightReq);
 
   sendHello();
 
   absolute_time_t next = make_timeout_time_ms(TICK_MS);
   uint32_t prevMs = nowMs();
+  bool cdcRaw = tud_cdc_connected();
+  bool cdcStable = cdcRaw;
+  uint32_t cdcChangedMs = prevMs;
 
   for (;;) {
     sleep_until(next);
@@ -589,6 +736,24 @@ int main(void) {
 
     pumpSerial();
 
+    /* D18: DTR/CDC loss bypasses the 15 s USB-silence delay, but only after
+     * 100 ms of stable disconnect to reject enumeration chatter. */
+    bool connected = tud_cdc_connected();
+    if (connected != cdcRaw) {
+      cdcRaw = connected;
+      cdcChangedMs = nowMs();
+    } else if (connected != cdcStable &&
+               (uint32_t)(nowMs() - cdcChangedMs) >= 100u) {
+      cdcStable = connected;
+      if (!cdcStable) panelNetFsmCdcDisconnected(&gNetFsm, nowMs());
+    }
+
+    panelNetPoll(gNet, nowMs());
+    panelNetFsmPoll(&gNetFsm, nowMs());
+    panelLinkSetActiveTransport(&gLink,
+        gNetFsm.state == PANEL_NET_LINKED ? PANEL_LINK_WIFI :
+                                           PANEL_LINK_SERIAL);
+
     /* Sample the clock AFTER the pump: a frame parsed during this tick stamps
      * its arrival later than `ms`, and feeding a stale `ms` here is precisely
      * what produced one LINKLOST/LINKBACK pair per snapshot in build dbd33885.
@@ -600,8 +765,27 @@ int main(void) {
       default: break;
     }
 
-    scanButtons();
+    /* D18: VBUS through the CYW43's WL_GPIO2 (init is unconditional since
+     * P3), 100 ms debounce both edges. An edge re-applies the brightness
+     * request so the on-battery cap engages and lifts atomically (§3). */
+    if (panelPowerPoll(&gPower,
+                       cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN),
+                       nowMs()) != PANEL_POWER_STEADY) {
+      requestBrightness(gBrightReq);
+    }
+
+    /* runAlarm BEFORE scanButtons (review P4 MUST-1): the alarm arms from
+     * this tick's data before buttons are read, so a press on the very tick
+     * an episode commits — power-loss edge or first alarming snapshot — is
+     * consumed as the acknowledge the contract promises ("any button during
+     * an alarm"), not as a theme/sleep action racing the arm by 40 ms. */
     runAlarm();
+    /* A CONTROL ack pumped earlier this tick applies HERE (review MUST-1):
+     * runAlarm has now armed from this tick's snapshots and VBUS edge, so
+     * the ack covers exactly what the sender saw plus anything that
+     * committed in between — the same view a button press gets below. */
+    if (gAckPending) { gAckPending = false; ackAlarm(); }
+    scanButtons();
     panelHelpTick(&gHelp, gT, gAlarmArmed);
     runAutoBrightness();
 
@@ -622,10 +806,17 @@ int main(void) {
      * short-circuit below cannot skip the heartbeat. */
     reportState(nowMs());
 
+    /* The inlay text is owned by a LIVE server topAlert; when the alarm is
+     * armed without one (a power-loss episode — which, unlike a server
+     * episode, CAN coexist with LINK LOST) the power inlay carries it. */
+    bool serverAlarmShowing = gEnv.haveData && gEnv.alarmActive && !gLink.lost;
+
     panelFbClear();
     if (gSleeping) {
-      /* Blanked, but the tick keeps running — and an unacknowledged episode
-       * still shows its beacon on the otherwise dark panel. */
+      /* Blanked, but the tick keeps running — an unacknowledged episode
+       * still shows its beacon, and an on-battery panel its glyph, on the
+       * otherwise dark board. */
+      if (gPower.onBattery) panelPowerGlyph();
       if (gAlarmArmed) panelBeacon(gT);
       panelFbFlush();
       continue;
@@ -642,12 +833,17 @@ int main(void) {
       panelScreenNoData(gT);
     } else {
       kScreens[gTheme][gScreen](&gEnv, gT, dt);
-      if (gAlarmArmed) panelInlay(&gEnv, gT);
+      if (gAlarmArmed && serverAlarmShowing) panelInlay(&gEnv, gT);
     }
+    /* D16: power inlay only when no server alert owns the text. Suppressed
+     * under the help overlay exactly as the server inlay is (the beacon
+     * carries the alarm there). The GLYPH is not: "whenever on battery,
+     * alarm state notwithstanding" includes help (review P4 MUST-2). */
+    if (gAlarmArmed && !serverAlarmShowing && !gHelp.active) panelInlayPower(gT);
+    if (gPower.onBattery) panelPowerGlyph();
     /* Beacon last of all: it must sit on top of the inlay, whose right-hand
      * rail runs through x=52. Placed outside the branch so it also covers the
-     * zero-node NO DATA case, which draws no inlay. (LINK LOST cannot coexist
-     * with an armed alarm — runAlarm() clears it.)                          */
+     * zero-node NO DATA case, which draws no inlay.                         */
     if (gAlarmArmed) panelBeacon(gT);
     panelFbFlush();
   }

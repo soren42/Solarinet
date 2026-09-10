@@ -10,7 +10,14 @@ CFLAGS  ?= -std=c11 -Wall -Wextra -Werror -O1 -g
 LINK_SRC = panelLinkTest.c ../panelLink.c ../../protocol.c
 CTL_SRC  = panelCtlTest.c ../panelCtl.c ../../protocol.c
 CFG_SRC  = panelScreenCfgTest.c ../panelScreenCfg.c ../../protocol.c
+PROV_SRC = panelProvTest.c ../../protocol.c
+# Provisioning subsystem: TLV handler + A/B flash store against a fault-
+# injecting fake flash (torn writes, corrupt slots, refused I/O).
+PROVSUB_SRC = panelProvSubsysTest.c ../panelProv.c ../panelProvStore.c ../../protocol.c
 HELP_SRC = panelHelpTest.c ../panelHelp.c
+NET_SRC  = panelNetFsmTest.c ../panelNetFsm.c ../panelLink.c ../../protocol.c
+NETGLUE_SRC = panelNetTest.c ../panelNet.c ../panelProvStore.c ../../protocol.c
+POWER_SRC = panelPowerTest.c ../panelPower.c
 # A1 renderer under ASAN/UBSAN — the review-proven hubs[-2] class must crash
 # loudly here, never ship (REVIEW-AW M3/M4). Needs the fb/env/screens units.
 A1_SRC   = panelScreensATest.c ../panelScreensA.c ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
@@ -27,14 +34,19 @@ PARITY_WRAP = -Wl,--wrap=panelFbSet -Wl,--wrap=panelFbSetRgb \
               -Wl,--wrap=panelFbDimAll -Wl,--wrap=panelText \
               -Wl,--wrap=panelTextOver -Wl,--wrap=panelBig \
               -Wl,--wrap=panelScroll
-BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelHelpTest panelScreensATest panelParityTest
+BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelProvSubsysTest panelHelpTest panelNetFsmTest panelNetTest panelPowerTest panelScreensATest panelParityTest
 
 .PHONY: all clean
 all: $(BINS)
 	./panelLinkTest
 	./panelCtlTest
 	./panelScreenCfgTest
+	./panelProvTest
+	ASAN_OPTIONS=detect_leaks=0 ./panelProvSubsysTest
 	./panelHelpTest
+	ASAN_OPTIONS=detect_leaks=0 ./panelNetFsmTest
+	./panelNetTest
+	ASAN_OPTIONS=detect_leaks=0 ./panelPowerTest
 	# LeakSanitizer cannot initialize when this suite runs under ptrace-based
 	# harnesses; ASAN/UBSAN bounds checks remain enabled for this renderer test.
 	ASAN_OPTIONS=detect_leaks=0 ./panelScreensATest
@@ -57,8 +69,23 @@ panelParityTest: $(PARITY_SRC) testJson.h ../panelScreens.h ../panelFb.h ../pane
 panelScreenCfgTest: $(CFG_SRC) ../panelScreenCfg.h ../../protocol.h
 	$(CC) $(CFLAGS) -o $@ $(CFG_SRC)
 
+panelProvTest: $(PROV_SRC) ../../protocol.h
+	$(CC) $(CFLAGS) -o $@ $(PROV_SRC)
+
+panelProvSubsysTest: $(PROVSUB_SRC) ../panelProv.h ../panelProvStore.h ../../protocol.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(PROVSUB_SRC)
+
 panelHelpTest: $(HELP_SRC) ../panelHelp.h
 	$(CC) $(CFLAGS) -o $@ $(HELP_SRC)
+
+panelNetFsmTest: $(NET_SRC) ../panelNetFsm.h ../panelLink.h ../../protocol.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(NET_SRC)
+
+panelNetTest: $(NETGLUE_SRC) ../panelNet.h ../../protocol.h
+	$(CC) $(CFLAGS) -o $@ $(NETGLUE_SRC)
+
+panelPowerTest: $(POWER_SRC) ../panelPower.h
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(POWER_SRC)
 
 clean:
 	rm -f $(BINS)

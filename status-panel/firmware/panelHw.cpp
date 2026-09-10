@@ -75,6 +75,15 @@ extern "C" void panelHwSetBrightness(float value) {
 
 extern "C" float panelHwGetBrightness(void) { return gBrightness; }
 
+/* Battery-cap path only (panelHw.h): floor 0.05 so the D16 cap can sit below
+ * the 0.25 UX floor, but the panel can still never go fully dark. */
+extern "C" void panelHwSetBrightnessRaw(float value) {
+  if (value < 0.05f) value = 0.05f;
+  if (value > 1.00f) value = 1.00f;
+  gBrightness = value;
+  gUnicorn.set_brightness(value);
+}
+
 extern "C" void panelHwSetVolume(float value) {
   if (value < 0.0f) value = 0.0f;
   if (value > 1.0f) value = 1.0f;

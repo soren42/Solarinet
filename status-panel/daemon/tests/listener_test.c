@@ -1,0 +1,101 @@
+#define _POSIX_C_SOURCE 200809L
+#include "../listener.h"
+#include "../../protocol.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <openssl/ssl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+
+int panelForwardCommandsTlsForTest(PanelListener *listener,const char *text,int stateSeen);
+
+typedef struct {int fd;SSL_CTX *ctx;SSL *ssl;} Client;
+typedef struct {int hello,control,state;uint32_t cmdId;} Seen;
+static Seen seen;
+static int logCount,refusalCount;
+/* Exact-text log capture (final review SHOULD-1): the runbook quotes the
+ * startup, connect and refusal journal lines, so the suite pins them —
+ * docs and journal output can no longer drift apart silently. */
+/* Just past the listener's READ_IDLE_MS (90 000 ms). */
+#define READ_IDLE_TEST_MS 91000u
+#define LOG_KEEP 64
+static char logKept[LOG_KEEP][512];
+static int logKeptCount;
+static int logHas(const char *needle){int i;for(i=0;i<logKeptCount;++i)if(strstr(logKept[i],needle)!=NULL)return 1;return 0;}
+static int logHasExact(const char *line){int i;for(i=0;i<logKeptCount;++i)if(strcmp(logKept[i],line)==0)return 1;return 0;}
+static void logForget(void){logKeptCount=0;}
+
+static uint32_t tick(void){struct timespec ts;clock_gettime(CLOCK_MONOTONIC,&ts);return (uint32_t)((uint64_t)ts.tv_sec*1000u+(uint64_t)ts.tv_nsec/1000000u);}
+static void pauseMs(long ms){struct timespec ts;ts.tv_sec=ms/1000L;ts.tv_nsec=(ms%1000L)*1000000L;nanosleep(&ts,NULL);}
+static int require(int condition,const char *message){if(!condition){fprintf(stderr,"listener test: %s\n",message);return -1;}return 0;}
+static void logLine(const char *message,void *user){(void)user;++logCount;if(strstr(message,"refused")!=NULL)++refusalCount;if(logKeptCount<LOG_KEEP){snprintf(logKept[logKeptCount],sizeof(logKept[0]),"%s",message);++logKeptCount;}if(strstr(message,"refused")!=NULL||strstr(message,"failed")!=NULL||strstr(message,"must be")!=NULL)fprintf(stderr,"listener log: %s\n",message);}
+static void frameSeen(uint8_t type,const uint8_t *payload,size_t length,uint64_t generation,void *user){uint8_t kind,arg;(void)generation;(void)user;if(type==PANEL_FT_STATE)++seen.state;if(type==PANEL_FT_CONTROL){++seen.control;(void)panelDecodeControl(payload,length,&seen.cmdId,&kind,&arg);}}
+static void clientFrame(uint8_t type,const uint8_t *payload,size_t length,void *user){uint8_t kind,arg;(void)user;if(type==PANEL_FT_HELLOREQ)++seen.hello;if(type==PANEL_FT_CONTROL){++seen.control;(void)panelDecodeControl(payload,length,&seen.cmdId,&kind,&arg);}}
+static void closeClient(Client *client){if(client->ssl!=NULL){SSL_set_quiet_shutdown(client->ssl,1);SSL_free(client->ssl);}SSL_CTX_free(client->ctx);if(client->fd>=0)close(client->fd);memset(client,0,sizeof(*client));client->fd=-1;}
+static int startClient(Client *client,unsigned int port,const char *cert,const char *key,const char *ca){struct sockaddr_in address;int flags;memset(client,0,sizeof(*client));client->fd=-1;client->ctx=SSL_CTX_new(TLS_client_method());if(client->ctx==NULL||SSL_CTX_set_min_proto_version(client->ctx,TLS1_2_VERSION)!=1||SSL_CTX_load_verify_locations(client->ctx,ca,NULL)!=1||SSL_CTX_use_certificate_chain_file(client->ctx,cert)!=1||SSL_CTX_use_PrivateKey_file(client->ctx,key,SSL_FILETYPE_PEM)!=1)return -1;client->fd=socket(AF_INET,SOCK_STREAM,0);if(client->fd<0)return -1;flags=fcntl(client->fd,F_GETFL,0);if(flags<0||fcntl(client->fd,F_SETFL,flags|O_NONBLOCK)<0)return -1;memset(&address,0,sizeof(address));address.sin_family=AF_INET;address.sin_port=htons((uint16_t)port);inet_pton(AF_INET,"127.0.0.1",&address.sin_addr);if(connect(client->fd,(struct sockaddr *)&address,sizeof(address))!=0&&errno!=EINPROGRESS)return -1;client->ssl=SSL_new(client->ctx);if(client->ssl==NULL)return -1;SSL_set_fd(client->ssl,client->fd);SSL_set_tlsext_host_name(client->ssl,"localhost");X509_VERIFY_PARAM_set1_host(SSL_get0_param(client->ssl),"localhost",0u);SSL_set_verify(client->ssl,SSL_VERIFY_PEER,NULL);return 0;}
+static int slowClient(unsigned int port){struct sockaddr_in address;int fd=socket(AF_INET,SOCK_STREAM,0);if(fd<0)return -1;memset(&address,0,sizeof(address));address.sin_family=AF_INET;address.sin_port=htons((uint16_t)port);inet_pton(AF_INET,"127.0.0.1",&address.sin_addr);if(connect(fd,(struct sockaddr *)&address,sizeof(address))!=0){close(fd);return -1;}return fd;}
+static int driveHandshake(PanelListener *listener,Client *client,int expectAuthorized,uint64_t oldGeneration){uint32_t deadline=tick()+3000u;int clientDone=0;while((int32_t)(tick()-deadline)<0){int result;if(!clientDone){result=SSL_connect(client->ssl);if(result==1)clientDone=1;else{int error=SSL_get_error(client->ssl,result);if(error!=SSL_ERROR_WANT_READ&&error!=SSL_ERROR_WANT_WRITE)clientDone=-1;}}panelListenerService(listener,tick());if(expectAuthorized&&panelListenerGeneration(listener)>oldGeneration)return 0;if(!expectAuthorized&&clientDone<0){int i;for(i=0;i<10;++i){panelListenerService(listener,tick());pauseMs(2L);}return panelListenerGeneration(listener)==oldGeneration?0:-1;}pauseMs(2L);}return !expectAuthorized&&panelListenerGeneration(listener)==oldGeneration?0:-1;}
+static int drainFrames(PanelListener *listener,Client *client,int wantHello,int wantControl){PanelParser parser;uint8_t bytes[512];uint32_t deadline=tick()+1000u;panelParserInit(&parser);while((int32_t)(tick()-deadline)<0){int n=SSL_read(client->ssl,bytes,sizeof(bytes));if(n>0)panelParserFeed(&parser,bytes,(size_t)n,tick(),clientFrame,NULL);else{int error=SSL_get_error(client->ssl,n);if(error!=SSL_ERROR_WANT_READ&&error!=SSL_ERROR_WANT_WRITE)return -1;}panelListenerService(listener,tick());if(seen.hello>=wantHello&&seen.control>=wantControl)return 0;pauseMs(2L);}return -1;}
+static int sendBytes(PanelListener *listener,Client *client,const uint8_t *bytes,size_t length){size_t sent=0u;uint32_t deadline=tick()+1000u;while(sent<length&&(int32_t)(tick()-deadline)<0){int n=SSL_write(client->ssl,bytes+sent,(int)(length-sent));if(n>0)sent+=(size_t)n;else{int error=SSL_get_error(client->ssl,n);if(error!=SSL_ERROR_WANT_READ&&error!=SSL_ERROR_WANT_WRITE)return -1;}panelListenerService(listener,tick());pauseMs(2L);}panelListenerService(listener,tick());return sent==length?0:-1;}
+static PanelListener *makeListener(const char *dir,const char *denylist){PanelListenerConfig config;char cert[512],key[512],ca[512];snprintf(cert,sizeof(cert),"%s/server.pem",dir);snprintf(key,sizeof(key),"%s/server.key",dir);snprintf(ca,sizeof(ca),"%s/root.pem",dir);memset(&config,0,sizeof(config));config.address="127.0.0.1";config.port=0u;config.certificate=cert;config.privateKey=key;config.clientCa=ca;config.allowedSan="panel-01.panel.akoria.net";config.denylist=denylist;return panelListenerCreate(&config,frameSeen,NULL,logLine,NULL);}
+
+int main(int argc,char **argv){PanelListener *listener;Client good1,good2,bad;char goodCert[512],goodKey[512],badCert[512],badKey[512],rootCa[512],wrongSan[512],wrongEku[512],expired[512],notYet[512],deny[512],missing[512],unreadable[512],modesBad[512],modesStrict[512];uint64_t generation;uint8_t payload[PANEL_STATE_SIZE],frame[PANEL_HDR_SIZE+PANEL_STATE_SIZE+PANEL_CRC_SIZE];size_t frameLength;int slowFd;const char *commands="{\"ok\":true,\"data\":{\"commands\":[{\"id\":77,\"kind\":1,\"arg\":2}]}}";if(argc!=2)return 2;snprintf(goodCert,sizeof(goodCert),"%s/good.pem",argv[1]);snprintf(goodKey,sizeof(goodKey),"%s/client.key",argv[1]);snprintf(badCert,sizeof(badCert),"%s/bad.pem",argv[1]);snprintf(badKey,sizeof(badKey),"%s/badclient.key",argv[1]);snprintf(rootCa,sizeof(rootCa),"%s/root.pem",argv[1]);snprintf(wrongSan,sizeof(wrongSan),"%s/wrongsan.pem",argv[1]);snprintf(wrongEku,sizeof(wrongEku),"%s/wrongeku.pem",argv[1]);snprintf(expired,sizeof(expired),"%s/expired.pem",argv[1]);snprintf(notYet,sizeof(notYet),"%s/notyet.pem",argv[1]);snprintf(deny,sizeof(deny),"%s/denylist",argv[1]);snprintf(missing,sizeof(missing),"%s/missing-denylist",argv[1]);snprintf(unreadable,sizeof(unreadable),"%s/denylist-unreadable",argv[1]);snprintf(modesBad,sizeof(modesBad),"%s/modes-bad",argv[1]);snprintf(modesStrict,sizeof(modesStrict),"%s/modes-strict",argv[1]);SSL_library_init();listener=makeListener(argv[1],missing);if(require(listener!=NULL,"listener creation failed"))return 1;{char expect[600];snprintf(expect,sizeof(expect),"denylist %s missing; using empty denylist",missing);if(require(logHasExact(expect),"missing-denylist startup line not journaled verbatim"))return 1;}{char expect[600];snprintf(expect,sizeof(expect),"TLS listener ready on 127.0.0.1:%u",panelListenerPort(listener));if(require(logHasExact(expect),"listener-ready line (runbook-quoted) not journaled verbatim"))return 1;}memset(&seen,0,sizeof(seen));slowFd=slowClient(panelListenerPort(listener));if(require(slowFd>=0,"slow TLS peer connect failed"))return 1;{uint32_t started=tick();panelListenerService(listener,started);panelListenerService(listener,started+10001u);}close(slowFd);if(require(!panelListenerConnected(listener)&&panelListenerGeneration(listener)==0u,"handshake deadline did not refuse slow peer"))return 1;if(startClient(&good1,panelListenerPort(listener),goodCert,goodKey,rootCa)!=0||driveHandshake(listener,&good1,1,0u)!=0)return 1;if(require(panelListenerGeneration(listener)==1u,"authorized client did not connect")||drainFrames(listener,&good1,1,0)!=0||require(seen.hello==1,"HELLOREQ missing at connect"))return 1;if(require(logHas("TLS panel connected peer=")&&logHas("generation=1"),"connect journal line missing runbook-quoted fields"))return 1;generation=panelListenerGeneration(listener);
+  if(startClient(&bad,panelListenerPort(listener),badCert,badKey,rootCa)!=0||driveHandshake(listener,&bad,0,generation)!=0||require(panelListenerConnected(listener)&&panelListenerGeneration(listener)==generation,"wrong-CA peer evicted active session"))return 1;
+  closeClient(&bad);
+  if(require(logHas("reason=unable to get local issuer certificate"),"wrong-CA refusal reason not journaled"))return 1;
+  if(startClient(&bad,panelListenerPort(listener),wrongSan,goodKey,rootCa)!=0||driveHandshake(listener,&bad,0,generation)!=0||require(panelListenerGeneration(listener)==generation,"wrong-SAN peer authorized"))return 1;
+  closeClient(&bad);
+  if(require(logHas("reason=SAN not authorized"),"wrong-SAN refusal reason not journaled"))return 1;
+  if(startClient(&bad,panelListenerPort(listener),wrongEku,goodKey,rootCa)!=0||driveHandshake(listener,&bad,0,generation)!=0||require(panelListenerGeneration(listener)==generation,"wrong-EKU peer authorized"))return 1;
+  closeClient(&bad);
+  /* OpenSSL's own purpose check (X509_PURPOSE_SSL_CLIENT) fires during the
+   * handshake, ahead of the listener's authReason EKU branch — which stays
+   * as defense-in-depth for stacks that skip the purpose check. The wording
+   * varies by OpenSSL release ("unsupported"/"unsuitable certificate
+   * purpose"), so pin only the stable tail. */
+  if(require(logHas("certificate purpose")||logHas("reason=EKU lacks clientAuth"),"wrong-EKU refusal reason not journaled"))return 1;
+  if(startClient(&bad,panelListenerPort(listener),expired,goodKey,rootCa)!=0||driveHandshake(listener,&bad,0,generation)!=0||require(panelListenerGeneration(listener)==generation,"expired peer authorized"))return 1;
+  closeClient(&bad);
+  if(require(logHas("reason=certificate has expired"),"expired refusal reason not journaled"))return 1;
+  if(startClient(&bad,panelListenerPort(listener),notYet,goodKey,rootCa)!=0||driveHandshake(listener,&bad,0,generation)!=0||require(panelListenerGeneration(listener)==generation,"not-yet-valid peer authorized"))return 1;
+  closeClient(&bad);
+  if(require(logHas("reason=certificate is not yet valid"),"not-yet-valid refusal reason not journaled"))return 1;
+  panelEncodeState(1u,2u,3u,0u,0u,0u,0u,4u,5u,6u,payload,sizeof(payload));frameLength=panelEncodeFrame(PANEL_FT_STATE,payload,sizeof(payload),frame,sizeof(frame));if(sendBytes(listener,&good1,frame,5u)!=0)return 1;closeClient(&good1);{int i;for(i=0;i<20;++i){panelListenerService(listener,tick());pauseMs(2L);}}
+  if(startClient(&good1,panelListenerPort(listener),goodCert,goodKey,rootCa)!=0||driveHandshake(listener,&good1,1,generation)!=0)return 1;
+  generation=panelListenerGeneration(listener);if(sendBytes(listener,&good1,frame,frameLength)!=0||require(seen.state==1,"mid-frame parser state survived reconnect"))return 1;
+  seen.control=0;if(panelForwardCommandsTlsForTest(listener,commands,0)!=0||drainFrames(listener,&good1,0,1)==0||require(seen.control==0,"CONTROL crossed closed capability gate"))return 1;if(panelForwardCommandsTlsForTest(listener,commands,1)!=0||drainFrames(listener,&good1,0,1)!=0||require(seen.control==1,"CONTROL not forwarded after capability gate")||require(seen.cmdId==77u,"CONTROL cmdId mismatch"))return 1;
+  if(startClient(&good2,panelListenerPort(listener),goodCert,goodKey,rootCa)!=0||driveHandshake(listener,&good2,1,generation)!=0||require(panelListenerGeneration(listener)==generation+1u,"authorized supersession did not advance generation"))return 1;
+  /* Read-idle eviction (D21): panelListenerService takes `now` from the
+   * caller, so 90 s of silence is one injected-clock call, not a 90 s test. */
+  if(require(panelListenerConnected(listener),"expected active session before read-idle check"))return 1;
+  panelListenerService(listener,tick()+READ_IDLE_TEST_MS);
+  if(require(!panelListenerConnected(listener),"read-idle peer not evicted after 90 s silence"))return 1;
+  closeClient(&good1);closeClient(&good2);panelListenerDestroy(listener);
+  listener=makeListener(argv[1],deny);if(require(listener!=NULL,"denylist listener creation failed"))return 1;if(startClient(&bad,panelListenerPort(listener),goodCert,goodKey,rootCa)!=0||driveHandshake(listener,&bad,0,0u)!=0||require(!panelListenerConnected(listener),"denylisted serial authorized"))return 1;closeClient(&bad);panelListenerDestroy(listener);
+  if(require(logHas("reason=serial denylisted"),"denylist refusal reason not journaled"))return 1;
+  /* Unreadable denylist is fatal (fail closed), not silently empty. Root
+   * bypasses file permissions, so the case only runs unprivileged. */
+  if(geteuid()!=0u){logForget();if(require(makeListener(argv[1],unreadable)==NULL,"unreadable denylist did not refuse listener creation")||require(logHas("unreadable"),"unreadable-denylist reason not journaled"))return 1;}
+  /* File-mode policy is "or stricter", not exact-match: a 0644 private key
+   * must refuse; a 0400 key with a 0600 certificate must be accepted. */
+  logForget();
+  if(require(makeListener(modesBad,missing)==NULL,"0644 private key was not refused")||require(logHasExact("TLS files must be regular and root-or-daemon-owned; key mode 0600 or stricter, certificate/CA 0644 or stricter"),"file-mode refusal message not journaled verbatim"))return 1;
+  listener=makeListener(modesStrict,missing);
+  if(require(listener!=NULL,"0400 key / 0600 certificate wrongly refused"))return 1;
+  panelListenerDestroy(listener);
+  if(require(refusalCount==7,"expected exactly seven refusal log lines"))return 1;
+  /* Write-deadline eviction (D21): the harness builds listener.c with
+   * WRITE_MS overridden small (see Makefile), so a peer that stops reading
+   * while the daemon has frames to push is dropped by the deadline rather
+   * than wedging the write loop for the production 5 s. */
+  listener=makeListener(argv[1],missing);
+  if(require(listener!=NULL,"write-deadline listener creation failed"))return 1;
+  if(startClient(&good1,panelListenerPort(listener),goodCert,goodKey,rootCa)!=0||driveHandshake(listener,&good1,1,0u)!=0)return 1;
+  {static uint8_t stall[8192];int i,dropped=0;memset(stall,0x5au,sizeof(stall));for(i=0;i<10000;++i){if(panelListenerWrite(listener,stall,sizeof(stall))!=0){dropped=1;break;}}if(require(dropped&&!panelListenerConnected(listener),"stalled peer not evicted by the write deadline"))return 1;}
+  closeClient(&good1);panelListenerDestroy(listener);
+  printf("listener tests passed: 16 cases, %d log lines, %d refusals\n",logCount,refusalCount);return 0;}

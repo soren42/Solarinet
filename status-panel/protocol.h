@@ -62,10 +62,20 @@ typedef enum {                     /* host -> panel */
                                       u8[2] reserved. Idempotent; firmware
                                       consumes strictly ascending cmdId,
                                       cmdId <= lastCmdId is ignored.        */
+  PANEL_FT_PROVISION = 0x05,       /* CONTRACT-SW §4/§13 D1: one TLV —
+                                      u8 itemId (PanelProvItem),
+                                      u8 generation (transfer epoch; a
+                                      mismatch discards the staged set),
+                                      u16 offset (LE), u16 len (LE),
+                                      then len bytes. USB TRANSPORT ONLY;
+                                      firmware rejects it on WiFi with
+                                      PANEL_PROVST_REJECTED_WIFI.           */
                                    /* panel -> host (diagnostics only)      */
   PANEL_FT_HELLO    = 0x81,        /* u8 protoVer, u8 fwMajor, u8 fwMinor,
                                       then ASCII build string (<=32)        */
-  PANEL_FT_EVENT    = 0x82,        /* u8 kind (PanelEventKind), u8 arg      */
+  PANEL_FT_EVENT    = 0x82,        /* u8 kind (PanelEventKind), u8 arg,
+                                      then kind-specific extension bytes
+                                      (today: PANEL_EV_ACK episode ids)     */
   PANEL_FT_LOG      = 0x83,        /* ASCII text (<=128)                    */
   PANEL_FT_STATE    = 0x84,        /* CONTRACT-CP §3: u8 theme, u8 screen,
                                       u8 brightnessPct, u8 autoBright,
@@ -79,8 +89,15 @@ typedef enum {                     /* host -> panel */
                                       CONSUMED (applied or rejected), never
                                       advanced on mere receipt. Emitted on
                                       any state change + 30 s heartbeat.    */
-  PANEL_FT_CONFIG   = 0x85         /* CONTRACT-AW §3.3: u8[12] screenCfg,
+  PANEL_FT_CONFIG   = 0x85,        /* CONTRACT-AW §3.3: u8[12] screenCfg,
                                       u8 flags, u8[3] reserved.              */
+  PANEL_FT_PROVACK  = 0x86         /* CONTRACT-SW §13 D1/D4: u8 itemId,
+                                      u8 status (PanelProvStatus),
+                                      u8 generation, u16 nextOffset (LE) —
+                                      where the host resumes; on success
+                                      offset+len, on offset-mismatch the
+                                      accepted watermark. Lockstep: host
+                                      sends one PROVISION, awaits this.     */
 } PanelFrameType;
 
 typedef enum {                     /* PANEL_FT_CONTROL kinds; all idempotent */
@@ -98,6 +115,49 @@ typedef enum {                     /* PANEL_FT_CONTROL kinds; all idempotent */
 #define PANEL_CONTROL_SIZE 8u      /* CONTROL payload bytes                 */
 #define PANEL_STATE_SIZE   16u     /* STATE payload bytes                   */
 #define PANEL_CONFIG_SIZE  16u     /* CONFIG payload bytes                  */
+
+/* ---- provisioning (CONTRACT-SW §4 as amended by §13 D1/D3/D4) ----------- */
+
+typedef enum {                     /* PROVISION TLV item ids                */
+  PANEL_PROV_SSID       = 1,       /* UTF-8, 1..32 bytes                    */
+  PANEL_PROV_PSK        = 2,       /* UTF-8, 8..63 bytes (WPA2-PSK rules)   */
+  PANEL_PROV_SERVERHOST = 3,       /* UTF-8 hostname, 1..253 (RFC 1035)     */
+  PANEL_PROV_SERVERPORT = 4,       /* u16 LE, != 0                          */
+  PANEL_PROV_CACERT     = 5,       /* DER, <= 2048 bytes                    */
+  PANEL_PROV_CLIENTCERT = 6,       /* DER leaf-then-intermediates, <= 4096  */
+  PANEL_PROV_CLIENTKEY  = 7,       /* DER, <= 2048 bytes                    */
+  PANEL_PROV_COMMIT     = 8,       /* empty; validate + flash staged set    */
+  PANEL_PROV_WIPE       = 9,       /* empty; clears staging AND active rec  */
+  PANEL_PROV_NTPHOST    = 10       /* UTF-8, 1..253; optional (D7) — absent
+                                      means SNTP against serverHost         */
+} PanelProvItem;
+
+typedef enum {                     /* PROVACK status codes (§13 D4)         */
+  PANEL_PROVST_OK              = 0,
+  PANEL_PROVST_FORMAT_INVALID  = 1,/* well-framed TLV failed item rules     */
+  PANEL_PROVST_STORAGE_FULL    = 2,
+  PANEL_PROVST_REJECTED_WIFI   = 3,/* PROVISION arrived on WiFi transport   */
+  PANEL_PROVST_COMMIT_INVALID  = 4,/* staged set incomplete/inconsistent;
+                                      staging kept for correction           */
+  PANEL_PROVST_OFFSET_MISMATCH = 5,/* nextOffset = resume watermark         */
+  PANEL_PROVST_FLASH_IO        = 6,
+  PANEL_PROVST_CRYPTO_INVALID  = 7,/* DER unparseable / key-cert mismatch   */
+  PANEL_PROVST_BUSY            = 8
+} PanelProvStatus;
+
+#define PANEL_PROV_HDR_SIZE  6u    /* itemId, generation, offset, len       */
+#define PANEL_PROVACK_SIZE   5u    /* itemId, status, generation, nextOffset*/
+/* Item bounds (D3) — commit-time validation limits, not frame limits.      */
+#define PANEL_PROV_MAX_SSID        32u
+#define PANEL_PROV_MIN_PSK         8u
+#define PANEL_PROV_MAX_PSK         63u
+#define PANEL_PROV_MAX_HOST        253u  /* serverHost + ntpHost            */
+#define PANEL_PROV_MAX_CACERT      2048u
+#define PANEL_PROV_MAX_CLIENTCERT  4096u
+#define PANEL_PROV_MAX_CLIENTKEY   2048u
+/* Host-tool chunk size — a latency choice for USB CDC lockstep (§13 D2);
+ * PANEL_MAX_PAYLOAD is the only normative frame bound.                     */
+#define PANEL_PROV_CHUNK           192u
 
 /* CONTROL/STATE codecs — implemented in protocol.c, shared by BOTH sides
  * (declared here so neither side ever declares them locally).             */
@@ -120,14 +180,47 @@ size_t panelEncodeConfig(const uint8_t screenCfg[12], uint8_t flags,
                          uint8_t *payload, size_t cap);
 int panelDecodeConfig(const uint8_t *payload, size_t len,
                       uint8_t screenCfg[12], uint8_t *flags);
+/* PROVISION/PROVACK codecs are structural only: item semantics (bounds,
+ * DER validity, generation matching) are the firmware handler's job.
+ * Encode: data must not overlap payload. Decode: PROVISION is strict
+ * (declared len must match the payload exactly, and the payload must fit
+ * PANEL_MAX_PAYLOAD); PROVACK tolerates trailing bytes, the same-version
+ * additive-extension convention CONTROL/STATE already follow.              */
+size_t panelEncodeProvision(uint8_t itemId, uint8_t generation,
+                            uint16_t offset, const uint8_t *data,
+                            uint16_t dataLen, uint8_t *payload, size_t cap);
+int panelDecodeProvision(const uint8_t *payload, size_t len, uint8_t *itemId,
+                         uint8_t *generation, uint16_t *offset,
+                         const uint8_t **data, uint16_t *dataLen);
+size_t panelEncodeProvAck(uint8_t itemId, uint8_t status, uint8_t generation,
+                          uint16_t nextOffset, uint8_t *payload, size_t cap);
+int panelDecodeProvAck(const uint8_t *payload, size_t len, uint8_t *itemId,
+                       uint8_t *status, uint8_t *generation,
+                       uint16_t *nextOffset);
 
 typedef enum {
   PANEL_EV_BUTTON      = 0x01,     /* arg = button index 0..8               */
-  PANEL_EV_ACK         = 0x02,     /* arg = 0; alarm acknowledged           */
+  PANEL_EV_ACK         = 0x02,     /* arg = coverage bits; +8 episode bytes */
   PANEL_EV_THEMECHANGE = 0x03,     /* arg = theme 0..3                      */
   PANEL_EV_LINKLOST    = 0x04,     /* arg = 0; snapshot staleness tripped   */
   PANEL_EV_LINKBACK    = 0x05      /* arg = 0; snapshots flowing again      */
 } PanelEventKind;
+
+/* ACK EVENT extension (D16): an ack-all must journal WHICH episodes it
+ * covered, so the EVENT payload for PANEL_EV_ACK is
+ *   0  u8  kind (= PANEL_EV_ACK)
+ *   1  u8  coverage    bit0 = server episode covered, bit1 = power episode
+ *   2  u32 serverEpisode (LE; 0 when bit0 clear)
+ *   6  u32 powerEpisode  (LE; 0 when bit1 clear)
+ * Receivers that only read kind/arg keep working (additive-extension
+ * convention); decode tolerates trailing bytes like PROVACK does.          */
+#define PANEL_ACKEV_SERVER 0x01u
+#define PANEL_ACKEV_POWER  0x02u
+#define PANEL_ACKEV_SIZE   10u
+size_t panelEncodeAckEvent(uint8_t coverage, uint32_t serverEpisode,
+                           uint32_t powerEpisode, uint8_t *payload, size_t cap);
+int panelDecodeAckEvent(const uint8_t *payload, size_t len, uint8_t *coverage,
+                        uint32_t *serverEpisode, uint32_t *powerEpisode);
 
 /* ---- canonical state / severity enums (wire values, u8) ----------------- */
 

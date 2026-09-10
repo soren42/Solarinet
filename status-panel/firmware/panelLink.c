@@ -41,22 +41,50 @@ static int32_t ageMs(uint32_t now, uint32_t then) {
 }
 
 void panelLinkInit(PanelLink *link, uint32_t nowMs) {
-  link->lastFrameMs   = nowMs;
+  int i;
   link->lastAppliedMs = nowMs;
-  link->lastSeq       = 0;
-  link->haveSeq       = false;
+  link->activeTransport = PANEL_LINK_SERIAL;
+  for (i = 0; i < PANEL_LINK_TRANSPORT_COUNT; ++i) {
+    link->seq[i].lastSeq = 0u;
+    link->seq[i].haveSeq = false;
+    link->seq[i].adoptNext = false;
+  }
   link->lost          = false;
 }
 
-void panelLinkNoteFrame(PanelLink *link, uint32_t nowMs) {
-  link->lastFrameMs = nowMs;
+void panelLinkSetActiveTransport(PanelLink *link,
+                                 PanelLinkTransport transport) {
+  if (link == NULL || transport >= PANEL_LINK_TRANSPORT_COUNT ||
+      transport == link->activeTransport) return;
+  link->activeTransport = transport;
+  /* CONTRACT-SW D13: adoption is explicit on every active-transport switch,
+   * even when this transport has an older/equal retained sequence number. */
+  link->seq[transport].adoptNext = true;
 }
 
-bool panelLinkAcceptSnapshot(PanelLink *link, uint16_t seq, uint32_t nowMs,
-                             bool *resynced) {
-  if (resynced) *resynced = false;
+void panelLinkResetTransportSeq(PanelLink *link,
+                                PanelLinkTransport transport) {
+  if (link == NULL || transport >= PANEL_LINK_TRANSPORT_COUNT) return;
+  link->seq[transport].adoptNext = true;
+}
 
-  if (link->haveSeq && !panelSeqNewer(seq, link->lastSeq)) {
+bool panelLinkAcceptSnapshot(PanelLink *link, PanelLinkTransport transport,
+                             uint16_t seq, uint32_t nowMs, bool *resynced) {
+  PanelLinkSeq *seqState;
+  if (resynced) *resynced = false;
+  if (link == NULL || transport >= PANEL_LINK_TRANSPORT_COUNT ||
+      transport != link->activeTransport) return false;
+  seqState = &link->seq[transport];
+
+  if (seqState->adoptNext) {
+    seqState->adoptNext = false;
+    seqState->lastSeq = seq;
+    seqState->haveSeq = true;
+    link->lastAppliedMs = nowMs;
+    return true;
+  }
+
+  if (seqState->haveSeq && !panelSeqNewer(seq, seqState->lastSeq)) {
     /* protocol.h's ordering rule: older-or-equal is a duplicate and is dropped.
      * That rule has no way out if the SENDER's counter goes backwards — a
      * daemon restart, or a bug that resets seq — because every subsequent frame
@@ -67,23 +95,26 @@ bool panelLinkAcceptSnapshot(PanelLink *link, uint16_t seq, uint32_t nowMs,
      * PANEL_SEQ_RESYNC_MS, believe the sender and adopt its counter. The window
      * is long relative to the 2 s snapshot cadence, so ordinary duplicates and
      * brief reordering never trip it. */
-    if (ageMs(nowMs, link->lastAppliedMs) < (int32_t)PANEL_SEQ_RESYNC_MS) {
+    /* D13 keeps CONTRACT.md's timed resync escape hatch SERIAL-ONLY. WiFi
+     * sequence reset is signaled by panelLinkResetTransportSeq instead. */
+    if (transport != PANEL_LINK_SERIAL ||
+        ageMs(nowMs, link->lastAppliedMs) < (int32_t)PANEL_SEQ_RESYNC_MS) {
       return false;
     }
     if (resynced) *resynced = true;
   }
 
-  link->lastSeq       = seq;
-  link->haveSeq       = true;
+  seqState->lastSeq   = seq;
+  seqState->haveSeq   = true;
   link->lastAppliedMs = nowMs;
   return true;
 }
 
 PanelLinkEdge panelLinkPoll(PanelLink *link, uint32_t nowMs) {
-  /* CONTRACT §4: more than 15 s with no valid frame is LINK LOST; recovery is
-   * announced too so the daemon journal shows both edges. Signed compare — see
-   * the file header. */
-  bool lost = ageMs(nowMs, link->lastFrameMs) > (int32_t)PANEL_LINK_TIMEOUT_MS;
+  /* CONTRACT-SW D14: only accepted SNAPSHOT staleness drives LINKLOST/BACK.
+   * Switching transports does not touch either liveness flag or timestamp. */
+  bool lost = ageMs(nowMs, link->lastAppliedMs) >
+              (int32_t)PANEL_LINK_TIMEOUT_MS;
 
   if (lost && !link->lost) {
     link->lost = true;

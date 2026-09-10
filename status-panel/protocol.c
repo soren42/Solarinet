@@ -131,6 +131,78 @@ int panelDecodeConfig(const uint8_t *payload, size_t len,
   return 0;
 }
 
+/* Purpose: encode a PROVISION TLV at its fixed protocol offsets. Input: item/generation/offset/data/output buffer; data must not overlap payload. Output: payload size, or zero for invalid capacity/input. */
+size_t panelEncodeProvision(uint8_t itemId, uint8_t generation,
+                            uint16_t offset, const uint8_t *data,
+                            uint16_t dataLen, uint8_t *payload, size_t cap) {
+  size_t total = PANEL_PROV_HDR_SIZE + dataLen;
+  if (payload == NULL || cap < total || total > PANEL_MAX_PAYLOAD || (dataLen != 0u && data == NULL)) return 0u;
+  payload[0] = itemId;
+  payload[1] = generation;
+  writeLe16(payload + 2, offset);
+  writeLe16(payload + 4, dataLen);
+  if (dataLen != 0u) memcpy(payload + PANEL_PROV_HDR_SIZE, data, dataLen);
+  return total;
+}
+
+/* Purpose: decode a PROVISION TLV at its fixed protocol offsets. Input: complete payload/output fields; data aliases the payload. Output: zero success, -1 for malformed input (short header, payload over PANEL_MAX_PAYLOAD, or declared len not matching the payload exactly). */
+int panelDecodeProvision(const uint8_t *payload, size_t len, uint8_t *itemId,
+                         uint8_t *generation, uint16_t *offset,
+                         const uint8_t **data, uint16_t *dataLen) {
+  if (payload == NULL || itemId == NULL || generation == NULL || offset == NULL || data == NULL || dataLen == NULL || len < PANEL_PROV_HDR_SIZE || len > PANEL_MAX_PAYLOAD) return -1;
+  if (readLe16(payload + 4) != len - PANEL_PROV_HDR_SIZE) return -1;
+  *itemId = payload[0];
+  *generation = payload[1];
+  *offset = readLe16(payload + 2);
+  *dataLen = readLe16(payload + 4);
+  *data = payload + PANEL_PROV_HDR_SIZE;
+  return 0;
+}
+
+/* Purpose: encode a PROVACK payload at its fixed protocol offsets. Input: item/status/generation/nextOffset/output buffer. Output: payload size, or zero for invalid capacity. */
+size_t panelEncodeProvAck(uint8_t itemId, uint8_t status, uint8_t generation,
+                          uint16_t nextOffset, uint8_t *payload, size_t cap) {
+  if (payload == NULL || cap < PANEL_PROVACK_SIZE) return 0u;
+  payload[0] = itemId;
+  payload[1] = status;
+  payload[2] = generation;
+  writeLe16(payload + 3, nextOffset);
+  return PANEL_PROVACK_SIZE;
+}
+
+/* Purpose: decode a PROVACK payload at its fixed protocol offsets. Input: complete payload/output fields; trailing bytes beyond PANEL_PROVACK_SIZE are tolerated (same-version additive extension, matching the CONTROL/STATE convention). Output: zero success, -1 for malformed input. */
+int panelDecodeProvAck(const uint8_t *payload, size_t len, uint8_t *itemId,
+                       uint8_t *status, uint8_t *generation,
+                       uint16_t *nextOffset) {
+  if (payload == NULL || itemId == NULL || status == NULL || generation == NULL || nextOffset == NULL || len < PANEL_PROVACK_SIZE) return -1;
+  *itemId = payload[0];
+  *status = payload[1];
+  *generation = payload[2];
+  *nextOffset = readLe16(payload + 3);
+  return 0;
+}
+
+/* Purpose: encode a PANEL_EV_ACK EVENT payload with its episode coverage (D16). Input: coverage bits/episode ids/output buffer. Output: payload size, or zero for invalid capacity. */
+size_t panelEncodeAckEvent(uint8_t coverage, uint32_t serverEpisode,
+                           uint32_t powerEpisode, uint8_t *payload, size_t cap) {
+  if (payload == NULL || cap < PANEL_ACKEV_SIZE) return 0u;
+  payload[0] = PANEL_EV_ACK;
+  payload[1] = coverage;
+  writeLe32(payload + 2, (coverage & PANEL_ACKEV_SERVER) ? serverEpisode : 0u);
+  writeLe32(payload + 6, (coverage & PANEL_ACKEV_POWER) ? powerEpisode : 0u);
+  return PANEL_ACKEV_SIZE;
+}
+
+/* Purpose: decode a PANEL_EV_ACK EVENT payload; trailing bytes beyond PANEL_ACKEV_SIZE are tolerated (additive-extension convention). Input: complete payload/output fields. Output: zero success, -1 for malformed input or a non-ACK kind. */
+int panelDecodeAckEvent(const uint8_t *payload, size_t len, uint8_t *coverage,
+                        uint32_t *serverEpisode, uint32_t *powerEpisode) {
+  if (payload == NULL || coverage == NULL || serverEpisode == NULL || powerEpisode == NULL || len < PANEL_ACKEV_SIZE || payload[0] != PANEL_EV_ACK) return -1;
+  *coverage = payload[1];
+  *serverEpisode = readLe32(payload + 2);
+  *powerEpisode = readLe32(payload + 6);
+  return 0;
+}
+
 /* Purpose: encode one complete protocol frame. Input: type/payload/output buffer. Output: frame length, or zero on invalid capacity/input. */
 size_t panelEncodeFrame(uint8_t type, const uint8_t *payload, size_t payloadLen, uint8_t *out, size_t outCap) {
   size_t total = PANEL_HDR_SIZE + payloadLen + PANEL_CRC_SIZE; uint16_t crc;
@@ -181,7 +253,7 @@ int panelDecodeSnapshot(const uint8_t *p, size_t len, PanelSnapshot *s) {
 /* Purpose: keep a possible overlapping magic suffix after parser rejection. Input: parser/start offset. Output: parser buffer repositioned. */
 static void parserResync(PanelParser *p, size_t start) { size_t i, remain = 0u; for (i=start;i+1u<p->have;++i) if(p->buf[i]==PANEL_MAGIC0 && p->buf[i+1u]==PANEL_MAGIC1){ remain=p->have-i; memmove(p->buf,p->buf+i,remain); break; } if(remain==0u && p->have>start && p->buf[p->have-1u]==PANEL_MAGIC0){p->buf[0]=PANEL_MAGIC0;remain=1u;} p->have=remain; p->resyncs++; }
 /* Purpose: identify defined frame types. Input: type byte. Output: nonzero when dispatchable. */
-static int knownType(uint8_t type) { return type >= PANEL_FT_SNAPSHOT && type <= PANEL_FT_CONTROL ? 1 : (type >= PANEL_FT_HELLO && type <= PANEL_FT_CONFIG ? 1 : 0); }
+static int knownType(uint8_t type) { return type >= PANEL_FT_SNAPSHOT && type <= PANEL_FT_PROVISION ? 1 : (type >= PANEL_FT_HELLO && type <= PANEL_FT_PROVACK ? 1 : 0); }
 /* Purpose: initialize frame parser state. Input: parser. Output: zeroed parser. */
 void panelParserInit(PanelParser *p) { if (p != NULL) memset(p, 0, sizeof(*p)); }
 /* Purpose: consume serial bytes and dispatch valid frames. Input: bytes/time/callback. Output: callback invocations; malformed frames are discarded. */

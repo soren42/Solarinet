@@ -76,6 +76,11 @@ add_executable(solari-panel-fw
   panelHelpOverlay.c
   panelCtl.c
   panelScreenCfg.c
+  panelProv.c
+  panelProvStore.c
+  panelNet.c
+  panelNetFsm.c
+  panelPower.c
   panelLink.c
   panelHist.c
   panelScreensA.c
@@ -99,6 +104,8 @@ target_compile_definitions(solari-panel-fw PRIVATE
   SOLARI_FW_VERSION_MINOR=1   # 1.1: CONTROL/STATE support (CONTRACT-CP.md)
   SOLARI_BUILD_EPOCH=${SOLARI_SOURCE_DATE_EPOCH}
   SOLARI_PANEL_PICO_FLASH=1  # keeps pico-sdk flash calls out of host tests
+  SOLARI_PANEL_DEVICE_NET=1  # keeps SDK headers out of host helper tests
+  MBEDTLS_CONFIG_FILE="mbedtls_config.h"
   PICO_STDIO_ENABLE_CRLF_SUPPORT=0   # binary-safe stdio: no LF->CRLF mangling
   PICO_STDIO_DEFAULT_CRLF=0
   PICO_STDIO_USB_SUPPORT_CHARS_AVAILABLE_CALLBACK=0
@@ -137,6 +144,11 @@ target_link_libraries(solari-panel-fw
   hardware_flash
   pico_flash
   pico_multicore
+  pico_aon_timer
+  pico_cyw43_arch_lwip_poll
+  pico_lwip_mbedtls
+  pico_lwip_sntp
+  pico_mbedtls
   galactic_unicorn
   m                # newlib libm: sqrtf/powf/log10f in the screen renderers
 )
@@ -156,7 +168,8 @@ target_compile_options(solari-panel-fw PRIVATE
 
 pico_add_extra_outputs(solari-panel-fw)
 
-# CONTRACT-AW §10.4: protect panelScreenCfg's final reserved flash sector.
+# Protect the final FOUR reserved flash sectors: credential A/B + spare
+# (panelProvStore.c, CONTRACT-SW §13 D5) + the AW config sector (§10.4).
 # pico2_w's board definition sets PICO_FLASH_SIZE_BYTES to this same 4 MiB
 # value for the compiler; keep the build-time image guard explicit in CMake.
 set(SOLARI_PICO_FLASH_SIZE_BYTES 4194304)
@@ -165,5 +178,6 @@ add_custom_command(TARGET solari-panel-fw POST_BUILD
     -DIMAGE=$<TARGET_FILE_DIR:solari-panel-fw>/solari-panel-fw.bin
     -DFLASH_BYTES=${SOLARI_PICO_FLASH_SIZE_BYTES}
     -DSECTOR_BYTES=4096
+    -DPROV_HEADER=${CMAKE_CURRENT_LIST_DIR}/panelProvStore.h
     -P ${CMAKE_CURRENT_LIST_DIR}/panelFlashLayoutCheck.cmake
   VERBATIM)

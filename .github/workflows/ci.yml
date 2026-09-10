@@ -119,6 +119,8 @@ jobs:
         run: node tests/dashboard/test_panel_aw.js
       - name: Panel gear PHP mapping tests
         run: php tests/dashboard/test_panel_gear.php
+      - name: Panel episode-namespace tests (CONTRACT-SW §13 D17)
+        run: php tests/dashboard/test_panel_episode.php
       - name: Migration 020 against a scratch solarinet_stage DB (CONTRACT-RW §6)
         env:
           MYSQL_PWD: rwci_scratch
@@ -158,6 +160,8 @@ jobs:
         run: make -C status-panel/firmware/test
       - name: Daemon codec tests
         run: make -C status-panel/daemon test
+      - name: Provisioning tool + pty end-to-end smoke (CONTRACT-SW §13)
+        run: make -C status-panel/tools smoke
       - name: Page/firmware parity suite (JS side)
         run: node tests/dashboard/test_panel_parity.js
 

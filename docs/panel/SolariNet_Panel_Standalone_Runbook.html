@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet — Status Panel Standalone WiFi Ops Runbook</title>
+<style>
+:root{
+  --unit:8px;
+  --font-display:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+html[data-mode="dark"]{
+  --color-bg:#070A0F; --color-surface:#0E151D; --color-raised:#16202C; --color-paper:#0E151D;
+  --color-text:#DFE8F2; --color-dim:#9DB0C4; --color-faint:#6E8399;
+  --color-divider:#22303F; --color-divider-strong:#31465C;
+  --color-accent:#22B8F0; --color-accent-700:#5FCCFA; --color-accent-deep:#0E86B8;
+  --color-ok:#3DD68C; --color-quiet:#4E6B7E; --color-warn:#F5A623; --color-crit:#FF4D5E;
+  --color-maint:#9B87FF; --color-unknown:#7C8AA0;
+  --color-on-field:#06090D; --color-neutral-700:#8299AF;
+  --desk:#03050A;
+}
+html[data-mode="light"]{
+  --color-bg:#FFFFFF; --color-surface:#F4F7FA; --color-raised:#EAEFF5; --color-paper:#FFFFFF;
+  --color-text:#0F1720; --color-dim:#47596C; --color-faint:#5C6E80;
+  --color-divider:#D3DCE6; --color-divider-strong:#B3C1D0;
+  --color-accent:#0A7FB0; --color-accent-700:#065C81; --color-accent-deep:#054B6B;
+  --color-ok:#0B7F53; --color-quiet:#5A6E80; --color-warn:#94590A; --color-crit:#C4172C;
+  --color-maint:#5B41C8; --color-unknown:#5A6B7D;
+  --color-on-field:#FFFFFF; --color-neutral-700:#54687C;
+  --desk:#B9C3CE;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--desk);color:var(--color-text);font-family:var(--font-body);-webkit-font-smoothing:antialiased}
+.chrome{position:fixed;top:12px;right:12px;z-index:99;display:flex;gap:6px;background:var(--color-surface);border:1px solid var(--color-divider);border-radius:8px;padding:6px}
+.chrome button{font:600 11px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--color-dim);background:var(--color-raised);border:1px solid var(--color-divider);border-radius:5px;padding:7px 10px;cursor:pointer}
+.chrome button:hover{color:var(--color-accent);border-color:var(--color-accent)}
+.stack{display:flex;flex-direction:column;align-items:center;gap:22px;padding:26px 12px 60px}
+.page{width:816px;height:1056px;padding:44px 60px 36px;background:var(--color-bg);color:var(--color-text);display:flex;flex-direction:column;gap:12px;position:relative;overflow:hidden;box-shadow:0 6px 26px rgba(0,0,0,.42)}
+.ph{display:flex;gap:14px;align-items:flex-start}
+.bar{width:4px;align-self:stretch;background:var(--color-accent);flex:0 0 4px;border-radius:2px}
+.eyebrow{font:700 12px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--color-accent-700)}
+h1.t{font:600 29px/1.12 var(--font-display);letter-spacing:-.015em;margin:5px 0 0}
+.sub{font:400 13px/1.45 var(--font-body);color:var(--color-dim);margin-top:5px;max-width:62ch}
+.rule{height:2px;background:var(--color-text);opacity:.9}
+.body{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0}
+h2{font:600 17px/1.2 var(--font-display);margin:0;letter-spacing:-.01em}
+h3{font:700 12px/1.1 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--color-faint);margin:0}
+p{font:400 13px/1.45 var(--font-body);margin:0;color:var(--color-text)}
+p.d{color:var(--color-dim)}
+.foot{margin-top:auto;border-top:1px solid var(--color-divider);padding-top:8px;display:flex;justify-content:space-between;font:400 12px/1 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--color-faint)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.card{border:1px solid var(--color-divider);border-radius:8px;background:var(--color-surface);padding:12px 13px}
+.card h4{font:600 13px/1.25 var(--font-display);margin:0 0 5px}
+.card p{font-size:12px;line-height:1.4;color:var(--color-dim)}
+.tbl{display:grid;width:100%;font-size:12px}
+.tbl .hd{font:700 12px/1.1 var(--font-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--color-faint);padding:7px 9px;border-bottom:2px solid var(--color-divider-strong)}
+.tbl .cl{padding:7px 9px;border-bottom:1px solid var(--color-divider);font:400 12px/1.35 var(--font-body);display:flex;align-items:center;gap:7px}
+.tbl.tight .cl{padding:4px 9px}
+.tbl.tight .hd{padding:5px 9px}
+.tbl .cl.m{font-family:var(--font-mono);font-size:12px;color:var(--color-dim)}
+.mono{font-family:var(--font-mono)}
+.hl{background:var(--color-raised);border-left:3px solid var(--color-accent);border-radius:0 6px 6px 0;padding:10px 12px}
+.hl.crit{border-left-color:var(--color-crit)}
+.hl.warn{border-left-color:var(--color-warn)}
+.hl p{font-size:12px;line-height:1.45}
+.spec .r{display:flex;justify-content:space-between;gap:10px;border-top:1px solid var(--color-divider);padding:5px 0;font:400 12px/1.3 var(--font-body)}
+.spec .r span:first-child{color:var(--color-faint);font-family:var(--font-mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase}
+.spec .r span:last-child{font-family:var(--font-mono);text-align:right;color:var(--color-text)}
+ul.cl2{margin:0;padding-left:16px}
+ul.cl2 li{font:400 12px/1.5 var(--font-body);color:var(--color-dim);margin-bottom:3px}
+ul.cl2 li b{color:var(--color-text);font-weight:600}
+pre.cmd{margin:0;background:var(--color-raised);border:1px solid var(--color-divider);border-radius:6px;padding:9px 11px;font:400 11.5px/1.5 var(--font-mono);color:var(--color-text);white-space:pre-wrap;word-break:break-all}
+pre.cmd b{color:var(--color-accent-700);font-weight:600}
+.blank{font-family:var(--font-mono);color:var(--color-warn);background:var(--color-raised);border:1px dashed var(--color-warn);border-radius:4px;padding:0 5px}
+.roll{border:1px solid var(--color-divider);border-left:3px solid var(--color-ok);border-radius:0 6px 6px 0;background:var(--color-surface);padding:8px 11px}
+.roll p{font-size:12px;color:var(--color-dim)}
+.roll p b{color:var(--color-ok)}
+@media print{
+  @page{size:letter;margin:0}
+  body{background:#fff}
+  .chrome{display:none}
+  .stack{padding:0;gap:0}
+  .page{box-shadow:none;break-after:page}
+}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <button data-theme-toggle>Light</button>
+  <button onclick="window.print()">Print</button>
+</div>
+
+<div class="stack">
+
+<!-- ============ P01 COVER ============ -->
+<section class="page" data-label="P01 Cover" style="padding:0;gap:0">
+  <div style="height:352px;background:var(--color-surface);border-bottom:2px solid var(--color-accent);padding:44px 60px;display:flex;flex-direction:column">
+    <div class="eyebrow">Operations runbook</div>
+    <div style="margin-top:auto;display:flex;align-items:flex-end;gap:20px">
+      <svg width="104" height="104" viewBox="0 0 24 24" aria-label="SolariNet mark">
+        <g fill="none" stroke="var(--color-accent)" stroke-width="1.1" opacity=".55">
+          <path d="M12 12V4M12 12l6.9 4M12 12L5.1 16"/>
+        </g>
+        <rect x="9" y="9" width="6" height="6" rx="1.6" fill="var(--color-accent)"/>
+        <g fill="var(--color-text)">
+          <rect x="10.4" y="2.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 12 4)"/>
+          <rect x="17.3" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 18.9 16)"/>
+          <rect x="3.5" y="14.4" width="3.2" height="3.2" rx=".5" transform="rotate(45 5.1 16)"/>
+        </g>
+      </svg>
+      <div>
+        <div style="font:300 50px/1 var(--font-display);letter-spacing:-.03em">Standalone&nbsp;<span style="font-weight:600">WiFi</span></div>
+        <div style="font:400 14px/1.4 var(--font-mono);color:var(--color-dim);margin-top:10px;letter-spacing:.02em">Status panel &middot; PKI, deploy, provisioning &amp; lifecycle</div>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1;padding:36px 60px 36px;display:flex;flex-direction:column">
+    <div style="font:600 19px/1.35 var(--font-display);max-width:52ch">Four staged, reversible cutover stages, then the three procedures that keep the certificates honest for as long as the panel hangs on the wall.</div>
+    <p class="d" style="margin-top:14px;max-width:64ch">This runbook executes CONTRACT-SW v1.0 phase P5: issue the mTLS identities on chlorine, deploy the <span class="mono">solariPanel</span> listener on xenon, provision the panel over USB, and retire lithium from the chain. Every stage names its verification and its rollback before the next stage begins. Nothing in this document is standing consent &mdash; each stage is run deliberately, by the operator.</p>
+    <div class="hl warn" style="margin-top:14px"><p><b>Secrets discipline (red line).</b> Key material lives on chlorine, in the panel's flash, and transiently on the provisioning bench under <span class="mono">0600</span> paths. It never enters git, never a handoff packet, never a log line. This document references every secret by path only.</p></div>
+    <div style="margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      <div class="spec"><div class="r"><span>Version</span><span>1.0.0</span></div><div class="r"><span>Date</span><span>2026-08-17</span></div></div>
+      <div class="spec"><div class="r"><span>Contract</span><span>CONTRACT-SW v1.0</span></div><div class="r"><span>Branch</span><span>feat/standalone-wifi</span></div></div>
+      <div class="spec"><div class="r"><span>CA</span><span>chlorine 10.7.0.10</span></div><div class="r"><span>Listener</span><span>panelgw:7443</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ P02 CONTENTS + PRECONDITIONS ============ -->
+<section class="page" data-label="P02 Contents">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 00</div><h1 class="t">Contents &amp; preconditions</h1><div class="sub">Stages 1&ndash;4 run once, in order, each gated on its verification. Sections 05&ndash;07 are the recurring lifecycle procedures.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <div class="tbl tight" style="grid-template-columns:46px 1fr 1.35fr">
+      <div class="hd">&sect;</div><div class="hd">Section</div><div class="hd">What it does</div>
+      <div class="cl m">01</div><div class="cl">Stage 1 &middot; Issue identities</div><div class="cl" style="color:var(--color-dim)">Server + client certificates from the chlorine step-ca</div>
+      <div class="cl m">02</div><div class="cl">Stage 2 &middot; Deploy the listener</div><div class="cl" style="color:var(--color-dim)">solariPanel on xenon in listen+serial mode; DNS name</div>
+      <div class="cl m">03</div><div class="cl">Stage 3 &middot; Provision the panel</div><div class="cl" style="color:var(--color-dim)">panelProv over USB; live-connection proof; secret cleanup</div>
+      <div class="cl m">04</div><div class="cl">Stage 4 &middot; Cutover</div><div class="cl" style="color:var(--color-dim)">Panel on the wall on WiFi; lithium retired from the chain</div>
+      <div class="cl m">05</div><div class="cl">Revocation</div><div class="cl" style="color:var(--color-dim)">step-ca revoke + serial denylist + daemon restart</div>
+      <div class="cl m">06</div><div class="cl">Renewal</div><div class="cl" style="color:var(--color-dim)">Annual bench visit; daemon cert replacement; rollback window</div>
+      <div class="cl m">07</div><div class="cl">Inventory &amp; expiry watch</div><div class="cl" style="color:var(--color-dim)">Cert inventory table; monthly expiry probe on xenon</div>
+    </div>
+    <h2>Preconditions</h2>
+    <ul class="cl2">
+      <li><b>Branch merged and flashed.</b> The standalone firmware and the listener-capable daemon come from <span class="mono">feat/standalone-wifi</span>; the flash follows the existing two-build byte-identical gate. This runbook assumes both are done.</li>
+      <li><b>chlorine step-ca reachable</b> at 10.7.0.10 and the operator can authenticate to it. Provisioner name: <span class="blank">[OPERATOR: provisioner]</span>.</li>
+      <li><b>DNS control</b> per the service-URL convention (SoR&nbsp;+ BIND generator) to create <span class="mono">panelgw.akoria.net</span>.</li>
+      <li><b>A bench host</b> with a USB cable to the panel and the <span class="mono">status-panel/tools/panelProv</span> binary built (<span class="mono">make -C status-panel/tools</span>).</li>
+      <li><b>The battery pack record</b> in DESIGN-BRIEF-P4-POWER.md &sect;1 is completed <em>before</em> the pack is ever connected (polarity confirmed against the silkscreen; the board has no charger and no power-path mixing).</li>
+    </ul>
+    <div class="hl"><p><b>Identity plan, fixed by contract.</b> The daemon presents a certificate with SAN DNS <span class="mono">panelgw.akoria.net</span> and the <span class="mono">serverAuth</span>&nbsp;EKU; the panel presents SAN DNS <span class="mono">panel-01.panel.akoria.net</span> with the <span class="mono">clientAuth</span>&nbsp;EKU. Both chains anchor on the chlorine root. CN is display-only on both sides. The step-ca template must pin the EKU and SAN shape so a duplicate identity cannot be issued casually &mdash; that template pinning is an operational invariant of this runbook.</p></div>
+    <div class="hl warn"><p><b>Port, not vhost.</b> <span class="mono">panelgw.akoria.net</span> is a raw-TLS service on dedicated port <b>7443</b> &mdash; it is <em>not</em> an HTTPS vhost, so the usual :443 SNI convention does not apply. The name exists so certificates and firmware never carry a hard-coded address.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>02</span></div>
+</section>
+
+<!-- ============ P03 STAGE 1 ISSUANCE ============ -->
+<section class="page" data-label="P03 Stage 1 Issuance">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 01</div><h1 class="t">Stage 1 &middot; Issue the identities</h1><div class="sub">Two certificates from chlorine: the listener's server identity and the panel's client identity. Run on a host with step authenticated against chlorine.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>1.1 &middot; Server certificate (daemon on xenon)</h3>
+    <pre class="cmd"><b># on xenon, working dir /etc/solari-panel (root, umask 077)</b>
+step ca certificate "panelgw.akoria.net" panelgw.crt panelgw.key \
+    --san panelgw.akoria.net
+chmod 0600 panelgw.key &amp;&amp; chmod 0644 panelgw.crt
+step ca root ca.pem          <b># chlorine root, pinned by both sides</b></pre>
+    <p class="d">The certificate file must carry the full chain (leaf then intermediates) &mdash; the listener calls <span class="mono">SSL_CTX_use_certificate_chain_file</span>, and the firmware anchors on the root only. If your provisioner emits a bare leaf, append the intermediate(s) to <span class="mono">panelgw.crt</span>.</p>
+    <h3>1.2 &middot; Client certificate (the panel)</h3>
+    <pre class="cmd"><b># on the provisioning bench, working dir ~/panel-prov (umask 077)</b>
+step ca certificate "panel-01" panel-01.crt panel-01.key \
+    --san panel-01.panel.akoria.net</pre>
+    <h3>1.3 &middot; Convert to DER for provisioning</h3>
+    <p class="d">The credential store holds DER, not PEM. The client chain is leaf-then-intermediates concatenated DER.</p>
+    <pre class="cmd">openssl x509  -in ca.pem       -outform der -out ca.der
+openssl x509  -in panel-01.crt -outform der -out panel-01.der
+<b># if panel-01.crt contains intermediates, convert each and:</b>
+<b>#   cat panel-01-leaf.der intermediate.der &gt; panel-01.der</b>
+openssl pkey  -in panel-01.key -outform der -out panel-01.key.der
+chmod 0600 panel-01.key panel-01.key.der</pre>
+    <h3>1.4 &middot; Verify before anything is installed</h3>
+    <pre class="cmd">step certificate inspect panelgw.crt   <b># SAN panelgw.akoria.net, EKU serverAuth</b>
+step certificate inspect panel-01.crt  <b># SAN panel-01.panel.akoria.net, EKU clientAuth</b>
+openssl x509 -in panel-01.crt -noout -serial   <b># record in §07 inventory</b>
+openssl x509 -in panelgw.crt  -noout -serial   <b># record in §07 inventory</b></pre>
+    <p class="d">Both EKUs and both SANs must read exactly as above. A certificate missing its SAN or EKU will be refused by the peer at Stage&nbsp;3 &mdash; fix it here, where it costs nothing.</p>
+    <div class="roll"><p><b>Rollback.</b> Certificates are inert until installed. If either is wrong, revoke it (&sect;05, no denylist entry needed for a never-deployed cert) and reissue. Nothing else has changed yet.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>03</span></div>
+</section>
+
+<!-- ============ P04 STAGE 2 DEPLOY ============ -->
+<section class="page" data-label="P04 Stage 2 Deploy">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 02</div><h1 class="t">Stage 2 &middot; Deploy the listener</h1><div class="sub">The one daemon binary gains a second transport. Serial mode on lithium keeps running untouched until Stage 4 — the fleet never loses its panel during this stage.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>2.1 &middot; DNS</h3>
+    <p class="d">Add <span class="mono">panelgw.akoria.net</span> as a CNAME to xenon's host record in the SoR, regenerate, and confirm: <span class="mono">dig +short panelgw.akoria.net</span> resolves to xenon's address.</p>
+    <h3>2.2 &middot; Build and install on xenon</h3>
+    <pre class="cmd">make -C status-panel/daemon clean &amp;&amp; make -C status-panel/daemon
+make -C status-panel/daemon test           <b># must be green before install</b>
+sudo install -m 0755 status-panel/daemon/solariPanel /usr/local/bin/</pre>
+    <h3>2.3 &middot; Configure</h3>
+    <pre class="cmd"><b># /etc/solari-panel/solari-panel.conf on xenon (0600 root)</b>
+apiBase=https://dashboard.akoria.net/api
+user=panel
+passFile=/etc/solari-panel/panel.pass
+serialDev=
+listen=7443
+listenAddr=<span class="blank">[OPERATOR: xenon LAN address]</span>
+tlsCert=/etc/solari-panel/panelgw.crt
+tlsKey=/etc/solari-panel/panelgw.key
+clientCa=/etc/solari-panel/ca.pem
+allowedSan=panel-01.panel.akoria.net
+denylist=/etc/solari-panel/denylist.txt</pre>
+    <ul class="cl2">
+      <li><b>Set <span class="mono">serialDev=</span> to an explicit empty value on xenon</b> &mdash; omitting the key leaves the default serial glob in place and the daemon quietly retries a device that will never appear. The empty value disables serial; that transport stays lithium's (bench fallback).</li>
+      <li><b><span class="mono">listenAddr</span> is never a wildcard</b> &mdash; the daemon refuses <span class="mono">0.0.0.0</span>/<span class="mono">::</span> outright. Left unset, it selects the default-route address and logs the choice; pin it explicitly for production.</li>
+      <li><b>Create the denylist now, empty</b>: <span class="mono">touch /etc/solari-panel/denylist.txt</span>. A missing file logs "empty denylist" once; an unreadable file is fatal at start, by design.</li>
+      <li><b>File modes are enforced</b>: key <span class="mono">0600</span> or stricter (<span class="mono">0400</span> is fine), certs/CA <span class="mono">0644</span> or stricter (no group/other write, no exec), root-or-daemon-owned, or the listener refuses to start.</li>
+    </ul>
+    <h3>2.4 &middot; Start and verify</h3>
+    <pre class="cmd">sudo systemctl enable --now solari-panel      <b># unit per lithium's, adjusted paths</b>
+journalctl -u solari-panel -n 20              <b># expect: TLS listener ready on &lt;addr&gt;:7443</b>
+<b># negative check from any LAN host — no client cert must mean refusal:</b>
+openssl s_client -connect panelgw.akoria.net:7443 &lt;/dev/null   <b># handshake fails; journal logs
+#   "TLS client refused peer=... identity=... reason=..."</b></pre>
+    <div class="roll"><p><b>Rollback.</b> <span class="mono">systemctl disable --now solari-panel</span> on xenon. The lithium serial chain has been running untouched throughout &mdash; the wall panel never noticed this stage.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>04</span></div>
+</section>
+
+<!-- ============ P05 STAGE 3 PROVISION ============ -->
+<section class="page" data-label="P05 Stage 3 Provision">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 03</div><h1 class="t">Stage 3 &middot; Provision the panel</h1><div class="sub">Credentials travel over USB only — PROVISION is rejected on WiFi by firmware rule. The tool is lockstep: one TLV, one PROVACK, resumable after any interruption.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>3.1 &middot; Bench conf</h3>
+    <pre class="cmd"><b># ~/panel-prov/panel-prov.conf (0600) — secrets referenced by path</b>
+ssid=<span class="blank">[OPERATOR: SSID]</span>
+pskFile=/home/<span class="blank">[user]</span>/panel-prov/psk.txt      <b># 0600; 8–63 bytes</b>
+serverHost=panelgw.akoria.net
+serverPort=7443
+caCert=/home/<span class="blank">[user]</span>/panel-prov/ca.der
+clientCert=/home/<span class="blank">[user]</span>/panel-prov/panel-01.der
+clientKey=/home/<span class="blank">[user]</span>/panel-prov/panel-01.key.der
+ntpHost=<span class="blank">[OPERATOR: gateway NTP, optional]</span></pre>
+    <h3>3.2 &middot; Run</h3>
+    <pre class="cmd">./panelProv --dev /dev/serial/by-id/usb-Raspberry_Pi_Pico_* \
+            --conf panel-prov.conf</pre>
+    <p class="d">Every item prints its PROVACK. <span class="mono">ok</span> throughout, ending with the commit ack, is success. The commit validates the whole staged set on-device (DER parse, key-matches-leaf, CA is a CA, host syntax) and writes the flash record atomically &mdash; the previous record stays valid at every interruption point. Common non-ok statuses: <span class="mono">commit-invalid</span> = staged set incomplete or fails validation (staging kept; fix the item and re-run); <span class="mono">crypto-invalid</span> = key/cert mismatch; <span class="mono">rejected-on-wifi</span> = you are somehow not on USB; <span class="mono">offset-mismatch</span> = auto-resumed by the tool.</p>
+    <h3>3.3 &middot; Prove the live connection</h3>
+    <ul class="cl2">
+      <li>Power-cycle the panel with <b>no USB data connection</b> (power only, or battery).</li>
+      <li>Panel obtains time (SNTP), joins WiFi, connects to the listener; xenon journal shows the mTLS accept with SAN <span class="mono">panel-01.panel.akoria.net</span>.</li>
+      <li>Live fleet state renders within one poll cadence; a control-page command round-trips (queue &rarr; WiFi &rarr; STATE <span class="mono">lastCmdId</span>) within the ≤12&nbsp;s bound.</li>
+      <li>Plug USB back into a daemon-running host: firmware switches to USB ≤15&nbsp;s; unplug: WiFi resumes via backoff.</li>
+    </ul>
+    <h3>3.4 &middot; Clean the bench</h3>
+    <pre class="cmd"><b># ONLY after §3.3 is proven — this is the rollback window closing</b>
+shred -u psk.txt panel-01.key panel-01.key.der</pre>
+    <p class="d">Certificates (public) may be kept for the &sect;07 inventory. Until the live connection is proven, the previous credential set &mdash; if this was a re-provision &mdash; stays staged aside on the bench as the rollback path.</p>
+    <div class="roll"><p><b>Rollback.</b> <span class="mono">panelProv --wipe</span> returns the panel to unprovisioned (WiFi off, USB serial exactly as before); or re-run panelProv with the retained previous set. USB serial always works regardless.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>05</span></div>
+</section>
+
+<!-- ============ P06 STAGE 4 CUTOVER ============ -->
+<section class="page" data-label="P06 Stage 4 Cutover">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 04</div><h1 class="t">Stage 4 &middot; Cutover &amp; retire lithium</h1><div class="sub">The panel goes back on the wall on WiFi power-only. Lithium leaves the chain but keeps the binary — a bench is only ever one USB cable away.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>4.1 &middot; Hang the panel</h3>
+    <ul class="cl2">
+      <li>Mount with USB <b>power only</b> (or the wall supply). Within the backoff cap the panel is rendering live state via panelgw.</li>
+      <li>Watch one full rotation and the control page's freshness chip; both must read current.</li>
+    </ul>
+    <h3>4.2 &middot; Retire lithium from the chain</h3>
+    <pre class="cmd"><b># on lithium</b>
+sudo systemctl disable --now solari-panel
+<b># binary and config stay installed — bench fallback, not deletion</b></pre>
+    <p class="d">Nothing else on lithium changes. Plugging the panel into lithium and restarting the unit restores the full serial chain at any time &mdash; that is the standing fallback for firmware work, reprovisioning, and any WiFi outage that outlasts patience.</p>
+    <h3>4.3 &middot; Post-cutover acceptance</h3>
+    <div class="tbl tight" style="grid-template-columns:1fr 1.5fr">
+      <div class="hd">Check</div><div class="hd">Pass looks like</div>
+      <div class="cl">AP bounce</div><div class="cl" style="color:var(--color-dim)">Restart the serving AP; panel reconnects unattended within the 60&nbsp;s backoff cap + one poll</div>
+      <div class="cl">Server restart</div><div class="cl" style="color:var(--color-dim)">Restart solari-panel on xenon; same reconnect bound; no stale-command replay (lastCmdId evidence)</div>
+      <div class="cl">Power pull</div><div class="cl" style="color:var(--color-dim)">On battery: brightness caps, glyph shows, alarm arms with a 0xC-range episode, button acks; restore clears it</div>
+      <div class="cl">USB arbitration</div><div class="cl" style="color:var(--color-dim)">USB into a daemon host wins ≤15&nbsp;s; unplug resumes WiFi; no duplicate command application</div>
+      <div class="cl">Staleness</div><div class="cl" style="color:var(--color-dim)">LINK LOST appears only on genuine snapshot staleness, never on a clean transport switch</div>
+    </div>
+    <div class="hl"><p><b>Ride-through numbers.</b> Measured draw and runtime at capped brightness with WiFi associated: <span class="blank">[OPERATOR: from the D19 measurement session]</span>. The ratified minimum ride-through: <span class="blank">[OPERATOR]</span>. No number is asserted here ahead of measurement, by contract.</p></div>
+    <div class="roll"><p><b>Rollback.</b> Take the panel down, USB into lithium, <span class="mono">systemctl enable --now solari-panel</span> on lithium, and optionally disable the xenon listener. That is the exact pre-P5 world.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>06</span></div>
+</section>
+
+<!-- ============ P07 REVOCATION + RENEWAL ============ -->
+<section class="page" data-label="P07 Revocation and renewal">
+  <div class="ph"><div class="bar" style="background:var(--color-crit)"></div><div><div class="eyebrow" style="color:var(--color-crit)">Section 05 · 06</div><h1 class="t">Revocation &amp; renewal</h1><div class="sub">One device, one issuer: a serial denylist instead of CRL machinery. Freshness is this procedure, run promptly — not a protocol guarantee.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>05 &middot; Revoke a panel certificate</h3>
+    <pre class="cmd"><b># 1 — read the serial (from the §07 inventory, or the cert itself)</b>
+openssl x509 -in panel-01.crt -noout -serial      <b># serial=ABCD1234...</b>
+<b># 2 — revoke at the CA (on a step-authenticated host)</b>
+step ca revoke <span class="blank">[serial]</span>
+<b># 3 — deny it at the listener (on xenon) — hex, one per line, # comments ok</b>
+echo 'ABCD1234...' | sudo tee -a /etc/solari-panel/denylist.txt
+sudo systemctl restart solari-panel
+<b># 4 — verify: a connect attempt with the old cert is refused AFTER chain
+#     verification; the journal logs "TLS client refused peer=... identity=...
+#     reason=serial denylisted"</b></pre>
+    <p class="d">Step&nbsp;3 is the one that actually locks the door &mdash; the listener loads the denylist at start only. The CA revocation (step&nbsp;2) is bookkeeping that keeps chlorine's records true and protects any future verifier that does consult the CA. Do both, in this order, same sitting.</p>
+    <div class="hl crit"><p><b>Compromise posture.</b> If the panel's key is suspected compromised (board stolen off the wall), revoke + denylist first, then reissue and reprovision at the bench. The credential store is plain flash by accepted threat model &mdash; physical possession of the board means possession of its key.</p></div>
+    <h3>06 &middot; Renew (annual bench visit)</h3>
+    <ul class="cl2">
+      <li><b>Window.</b> Renew when the &sect;07 probe first alerts (&lt;30 days to expiry). The alert lead time <em>is</em> the renewal window.</li>
+      <li><b>Panel cert:</b> Stage&nbsp;1 &sect;1.2&ndash;1.4 (fresh key + cert, new serial), then Stage&nbsp;3 in full &mdash; panelProv, live-connection proof, <em>then</em> shred. The old set stays staged aside until the new set proves live; rollback is re-running panelProv with it.</li>
+      <li><b>Daemon cert:</b> Stage&nbsp;1 &sect;1.1 on xenon, install over the old chain, <span class="mono">systemctl restart solari-panel</span>. The panel's trust is unaffected &mdash; same root.</li>
+      <li><b>Old serials</b> of cleanly-replaced certs need no denylist entry; denylist is for revocation, not rotation. Update the &sect;07 inventory either way.</li>
+      <li><b>On-device renewal (ACME) is out of scope</b> by contract &mdash; do not improvise it.</li>
+    </ul>
+    <div class="roll"><p><b>Rollback (renewal).</b> Panel side: reprovision with the retained previous set. Daemon side: reinstall the previous chain + restart. Both are two-minute operations while USB serial keeps the wall alive.</p></div>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>07</span></div>
+</section>
+
+<!-- ============ P08 INVENTORY + EXPIRY ============ -->
+<section class="page" data-label="P08 Inventory and expiry">
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 07</div><h1 class="t">Inventory &amp; expiry watch</h1><div class="sub">The runbook is the system of record for what was issued. The probe exists so the renewal window opens itself.</div></div></div>
+  <div class="rule"></div>
+  <div class="body">
+    <h3>7.1 &middot; Certificate inventory</h3>
+    <div class="tbl tight" style="grid-template-columns:.9fr 1.2fr 1fr .9fr">
+      <div class="hd">Identity</div><div class="hd">Serial (hex)</div><div class="hd">notAfter</div><div class="hd">Issued</div>
+      <div class="cl m">panelgw.akoria.net</div><div class="cl"><span class="blank">[OPERATOR]</span></div><div class="cl"><span class="blank">[OPERATOR]</span></div><div class="cl"><span class="blank">[OPERATOR]</span></div>
+      <div class="cl m">panel-01.panel.akoria.net</div><div class="cl"><span class="blank">[OPERATOR]</span></div><div class="cl"><span class="blank">[OPERATOR]</span></div><div class="cl"><span class="blank">[OPERATOR]</span></div>
+    </div>
+    <p class="d">Fill at Stage&nbsp;1 &sect;1.4; strike and re-enter on every renewal. Two rows is the whole fleet &mdash; if a third row ever appears, the allowedSan template policy conversation happens first.</p>
+    <h3>7.2 &middot; Expiry probe (xenon, monthly)</h3>
+    <pre class="cmd"><b># /usr/local/sbin/panel-cert-expiry.sh (root, 0755)</b>
+#!/bin/sh
+warn_days=30; rc=0
+for c in /etc/solari-panel/panelgw.crt /etc/solari-panel/panel-01.crt; do
+  if ! openssl x509 -in "$c" -noout -checkend $((warn_days*86400)); then
+    logger -p daemon.warning -t panel-cert "expires &lt;${warn_days}d: $c"
+    rc=1
+  fi
+done
+exit $rc</pre>
+    <pre class="cmd"><b># crontab (root on xenon) — first of the month, 08:15</b>
+15 8 1 * * /usr/local/sbin/panel-cert-expiry.sh</pre>
+    <ul class="cl2">
+      <li>Keep a copy of the panel's <b>public</b> cert at <span class="mono">/etc/solari-panel/panel-01.crt</span> (0644) purely so the probe can watch both expiries from one host. It is not used by the listener.</li>
+      <li>A TLS probe against :7443 was rejected by design &mdash; it would conflate reachability with validity. This probe reads the files.</li>
+      <li>Wire the <span class="mono">daemon.warning</span> line into the existing alert path: <span class="blank">[OPERATOR: journal-watch rule]</span>.</li>
+    </ul>
+    <h3>7.3 &middot; Standing invariants</h3>
+    <ul class="cl2">
+      <li><b>Template pinning:</b> the chlorine provisioner template pins EKU + SAN shape for both identities; issuance outside the template is a policy change, not a routine op.</li>
+      <li><b>One session:</b> the listener accepts one authenticated session; newest wins. A second panel is a contract change (multi-panel is out of scope).</li>
+      <li><b>Provisioning is USB-only, forever.</b> Any future "provision over the network" idea reopens the contract; the firmware rejects it today with <span class="mono">rejected-on-wifi</span>.</li>
+    </ul>
+  </div>
+  <div class="foot"><span>SolariNet &middot; Standalone WiFi 1.0.0</span><span>08</span></div>
+</section>
+
+</div>
+
+<script>
+document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
+  var h = document.documentElement;
+  var dark = h.getAttribute('data-mode') === 'dark';
+  h.setAttribute('data-mode', dark ? 'light' : 'dark');
+  this.textContent = dark ? 'Dark' : 'Light';
+});
+</script>
+</body>
+</html>

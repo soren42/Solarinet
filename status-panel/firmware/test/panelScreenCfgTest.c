@@ -32,7 +32,7 @@ static bool mockWrite(void *user, const uint8_t *data, size_t len) {
   return true;
 }
 
-typedef struct { int snapshot, state, config, control; } ParserCounts;
+typedef struct { int snapshot, state, config, control, other; } ParserCounts;
 
 /* Purpose: count parser-path delivery of every AW2 frame class. Input: frame callback fields. Output: counters updated. */
 static void receive(uint8_t type, const uint8_t *payload, size_t len, void *user) {
@@ -41,9 +41,10 @@ static void receive(uint8_t type, const uint8_t *payload, size_t len, void *user
   uint8_t config[PANEL_SCREEN_COUNT], flags, kind, arg;
   uint32_t command;
   if (type == PANEL_FT_SNAPSHOT && panelDecodeSnapshot(payload, len, &snap) == 0) ++counts->snapshot;
-  if (type == PANEL_FT_STATE) ++counts->state;
-  if (type == PANEL_FT_CONFIG && panelDecodeConfig(payload, len, config, &flags) == 0) ++counts->config;
-  if (type == PANEL_FT_CONTROL && panelDecodeControl(payload, len, &command, &kind, &arg) == 0) ++counts->control;
+  else if (type == PANEL_FT_STATE) ++counts->state;
+  else if (type == PANEL_FT_CONFIG && panelDecodeConfig(payload, len, config, &flags) == 0) ++counts->config;
+  else if (type == PANEL_FT_CONTROL && panelDecodeControl(payload, len, &command, &kind, &arg) == 0) ++counts->control;
+  else ++counts->other;
 }
 
 /* Purpose: feed one encoded frame bytewise through the real parser. Input: type/payload/counters. Output: none. */
@@ -77,7 +78,7 @@ int main(void) {
   PanelScreenCfg cfg, reboot;
   uint8_t config[PANEL_SCREEN_COUNT], payload[PANEL_MAX_PAYLOAD];
   PanelSnapshot sent, got;
-  ParserCounts counts = { 0, 0, 0, 0 };
+  ParserCounts counts = { 0, 0, 0, 0, 0 };
   size_t len;
   memset(&mock, 0xff, sizeof(mock));
   mock.writes = 0;
@@ -174,19 +175,22 @@ int main(void) {
     PanelParser parser;
     uint8_t frame[PANEL_HDR_SIZE + PANEL_MAX_PAYLOAD + PANEL_CRC_SIZE];
     size_t frameLen, j;
-    ParserCounts boundary = { 0, 0, 0, 0 };
+    ParserCounts boundary = { 0, 0, 0, 0, 0 };
     panelParserInit(&parser);
     (void)panelEncodeState(0u, 0u, 1u, 1u, 0u, 0u, 0u, 0u, 0u, 0u,
                            payload, sizeof(payload));
     frameLen = panelEncodeFrame(PANEL_FT_STATE, payload, PANEL_STATE_SIZE, frame, sizeof(frame));
     for (j = 0u; j < frameLen; ++j) panelParserFeed(&parser, frame + j, 1u, (uint32_t)j, receive, &boundary);
-    frameLen = panelEncodeFrame(0x86u, payload, 0u, frame, sizeof(frame));
+    /* 0x87 is the first type past PANEL_FT_PROVACK — the panel->host upper
+     * boundary (SW5 moved it from 0x86, which now dispatches). */
+    frameLen = panelEncodeFrame(0x87u, payload, 0u, frame, sizeof(frame));
     for (j = 0u; j < frameLen; ++j) panelParserFeed(&parser, frame + j, 1u, (uint32_t)(100u + j), receive, &boundary);
     (void)panelEncodeConfig(config, 1u, payload, sizeof(payload));
     frameLen = panelEncodeFrame(PANEL_FT_CONFIG, payload, PANEL_CONFIG_SIZE, frame, sizeof(frame));
     for (j = 0u; j < frameLen; ++j) panelParserFeed(&parser, frame + j, 1u, (uint32_t)(200u + j), receive, &boundary);
     check(boundary.state == 1 && boundary.config == 1 && boundary.snapshot == 0 &&
-          boundary.control == 0, "A5: 0x84/0x85 dispatch; valid 0x86 skips without desync");
+          boundary.control == 0 && boundary.other == 0,
+          "A5: 0x84/0x85 dispatch; valid 0x87 skips without desync or callback");
   }
   return gFailures == 0 ? 0 : 1;
 }

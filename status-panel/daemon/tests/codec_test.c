@@ -156,6 +156,20 @@ int main(void) {
     if(require(controlFrames==1,"forwardCommands did not emit exactly one CONTROL frame (envelope navigation broken?)")) return 1;
     if(require(cmdId==21u,"forwarded CONTROL carried wrong cmdId")) return 1;
   }
+  {
+    /* ACK EVENT extension (D16): coverage bits + episode ids ride behind the
+     * classic kind/arg pair; uncovered ids encode as zero; trailing bytes
+     * are tolerated for forward compatibility. */
+    uint8_t ackEv[PANEL_ACKEV_SIZE+2u];uint8_t coverage;uint32_t serverEp,powerEp;
+    memset(ackEv,0xa5,sizeof(ackEv));
+    if(require(panelEncodeAckEvent(PANEL_ACKEV_SERVER|PANEL_ACKEV_POWER,0x01020304u,0x0a0b0c0du,ackEv,sizeof(ackEv))==PANEL_ACKEV_SIZE,"ACK event encode failed")) return 1;
+    if(require(panelDecodeAckEvent(ackEv,sizeof(ackEv),&coverage,&serverEp,&powerEp)==0&&coverage==(PANEL_ACKEV_SERVER|PANEL_ACKEV_POWER)&&serverEp==0x01020304u&&powerEp==0x0a0b0c0du,"ACK event round trip failed (trailing bytes must be tolerated)")) return 1;
+    if(require(panelEncodeAckEvent(PANEL_ACKEV_POWER,0x01020304u,0x0a0b0c0du,ackEv,sizeof(ackEv))==PANEL_ACKEV_SIZE&&panelDecodeAckEvent(ackEv,PANEL_ACKEV_SIZE,&coverage,&serverEp,&powerEp)==0&&coverage==PANEL_ACKEV_POWER&&serverEp==0u&&powerEp==0x0a0b0c0du,"ACK event uncovered server episode not zeroed")) return 1;
+    if(require(panelEncodeAckEvent(PANEL_ACKEV_SERVER,7u,9u,ackEv,PANEL_ACKEV_SIZE-1u)==0u,"ACK event encode into short buffer not refused")) return 1;
+    if(require(panelDecodeAckEvent(ackEv,PANEL_ACKEV_SIZE-1u,&coverage,&serverEp,&powerEp)==-1,"truncated ACK event not rejected")) return 1;
+    ackEv[0]=PANEL_EV_BUTTON;
+    if(require(panelDecodeAckEvent(ackEv,PANEL_ACKEV_SIZE,&coverage,&serverEp,&powerEp)==-1,"wrong-kind ACK event not rejected")) return 1;
+  }
   puts("codec tests passed");
   return 0;
 }

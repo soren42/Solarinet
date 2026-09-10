@@ -52,6 +52,12 @@ void panelHwSetPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b);
 void panelHwSetBrightness(float value);
 float panelHwGetBrightness(void);
 
+/* panelHwSetBrightnessRaw — as panelHwSetBrightness but with the floor at
+ * 0.05 instead of the 0.25 UX floor. Exists ONLY for the on-battery cap
+ * (CONTRACT-SW §7a: PANEL_BATT_BRIGHT_MAX defaults to 0.20, below the UX
+ * floor); every user-intent path keeps the 0.25 floor via the setter above. */
+void panelHwSetBrightnessRaw(float value);
+
 /* panelHwSetVolume — 0.0..1.0. DESIGN-BRIEF models sound as on/off only; we
  * keep a level because the hardware supports one.                            */
 void panelHwSetVolume(float value);
