@@ -1012,7 +1012,7 @@ be. Discovery flows from the first into the second; DNS and Pi-hole flow out of 
 <h2 id="s7-1">7.1 &nbsp; Two databases</h2>
 <dl class="kv">
 <dt>Monitoring DB</dt><dd>~30 InnoDB tables under <span class="m">db/migrations/001–019</span> — nodes, reports, probe results, alerts and rules, topology edges, discovery, panel/criticality, lifecycle tombstones. All timestamps stored UTC.</dd>
-<dt>SoR / CMDB</dt><dd>Separate DB (<span class="m">netdb/sor/migrations/</span>) on <span class="m">cesium</span>, mirrored to <span class="m">benzene</span>. The canonical entity spine: <span class="m">entities, hardware_models, hardware_units, locations, networks, subnets, vlans, interfaces, ip_addresses</span>, plus <span class="m">sor_outbox</span> for change-data-capture.</dd>
+<dt>SoR / CMDB</dt><dd>Separate DB on <span class="m">cesium</span>, mirrored to <span class="m">benzene</span>. The canonical entity spine is defined in <span class="m">netdb/sor/schema.sql</span> (<span class="m">netdb/sor/migrations/</span> holds only incremental deltas): <span class="m">entities, hardware_models, hardware_units, locations, networks, subnets, vlans, interfaces, ip_addresses</span>. Change-data-capture rides a separate <span class="m">sor_outbox</span> table defined in <span class="m">deploy/sorsync/sql/01-outbox.sql</span>.</dd>
 </dl>
 
 <div class="callout gap">
@@ -1065,7 +1065,7 @@ columns exist.</p>
   <line x1="450" y1="302" x2="468" y2="302" stroke="#5B41C8" stroke-width="1.2" marker-end="url(#e1)"/>
   <text x="365" y="340" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#C4172C">F-08: emit path is not confirm-gated — see §4.2</text>
 </svg>
-<figcaption><b>Figure 7.1</b> — The SoR entity spine and its CDC outbox. Every page in the planned integration (I2/I4) hangs off <span class="m">entities</span>. <span class="obs">OBSERVED</span> from <span class="m">netdb/sor/migrations/</span>.</figcaption>
+<figcaption><b>Figure 7.1</b> — The SoR entity spine and its CDC outbox. Every page in the planned integration (I2/I4) hangs off <span class="m">entities</span>. <span class="obs">OBSERVED</span> from <span class="m">netdb/sor/schema.sql</span> + <span class="m">deploy/sorsync/sql/</span>.</figcaption>
 </figure>
 
 <h2 id="s7-2">7.2 &nbsp; Provenance as a first-class column</h2>
