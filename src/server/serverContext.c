@@ -33,7 +33,9 @@
 #include "solari/solariCrypto.h"
 #include "solari/solariLog.h"
 
+#include <grp.h>
 #include <netdb.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,6 +137,58 @@ void serverConfigDefaults(serverConfig *out)
     /* discovery / provisioning policy (Handoff §7.1) - conservative default */
     out->autoDiscover = true;
     out->autoEnroll   = false;
+
+    /* PHP→host security boundary (Task #1): off by default so an un-migrated
+     * deployment keeps its current behaviour; a hardened host opts in via [ctl]
+     * enforcePeer=true + operatorUid/dashboardUid/socketGid. */
+    out->ctlEnforcePeer = false;
+    out->ctlOperatorUid = 0;   /* 0 = fall back to the server's own euid       */
+    out->ctlDashboardUid = 0;  /* 0 = unset: no peer is classed dashboard      */
+    out->ctlSocketGid   = 0;   /* 0 = leave socket group ownership untouched   */
+}
+
+/* Resolve a config value that may be either a numeric id or a system NAME into
+ * a uid. Empty/absent -> fallback. A pure-digit value is taken literally; a
+ * name is looked up via getpwnam. On an unknown name the fallback is returned
+ * and a warning logged (fail-safe: an unresolved dashboard uid classes no peer
+ * as dashboard, so the boundary denies rather than over-grants). */
+static uint32_t serverCfgResolveUid(solariConfig *c, const char *section,
+                                    const char *key, uint32_t fallback)
+{
+    const char *v = solariConfigGetStr(c, section, key, "");
+    char *endp = NULL;
+    unsigned long num;
+    if (!v || v[0] == '\0') return fallback;
+    num = strtoul(v, &endp, 10);
+    if (endp && *endp == '\0') return (uint32_t)num;   /* all-digits: literal */
+    {
+        struct passwd *pw = getpwnam(v);
+        if (pw) return (uint32_t)pw->pw_uid;
+    }
+    solariLogf(SOLARI_LOG_WARN,
+               "config: [%s] %s='%s' is not a numeric uid or known user; "
+               "using fallback %u", section, key, v, fallback);
+    return fallback;
+}
+
+/* Same as serverCfgResolveUid but for a gid (numeric or a group NAME). */
+static uint32_t serverCfgResolveGid(solariConfig *c, const char *section,
+                                    const char *key, uint32_t fallback)
+{
+    const char *v = solariConfigGetStr(c, section, key, "");
+    char *endp = NULL;
+    unsigned long num;
+    if (!v || v[0] == '\0') return fallback;
+    num = strtoul(v, &endp, 10);
+    if (endp && *endp == '\0') return (uint32_t)num;
+    {
+        struct group *gr = getgrnam(v);
+        if (gr) return (uint32_t)gr->gr_gid;
+    }
+    solariLogf(SOLARI_LOG_WARN,
+               "config: [%s] %s='%s' is not a numeric gid or known group; "
+               "using fallback %u", section, key, v, fallback);
+    return fallback;
 }
 
 /* -------------------------------------------------------------- file loader */
@@ -223,6 +277,17 @@ solariStatus serverConfigFromFile(const char *path, serverConfig *out)
                                             out->autoDiscover);
     out->autoEnroll   = solariConfigGetBool(c, "discovery", "autoEnroll",
                                             out->autoEnroll);
+
+    /* PHP→host security boundary (Task #1). [ctl] section; uids/gid accept a
+     * numeric id or a system name (e.g. dashboardUid=www-solari). */
+    out->ctlEnforcePeer  = solariConfigGetBool(c, "ctl", "enforcePeer",
+                                               out->ctlEnforcePeer);
+    out->ctlOperatorUid  = serverCfgResolveUid(c, "ctl", "operatorUid",
+                                               out->ctlOperatorUid);
+    out->ctlDashboardUid = serverCfgResolveUid(c, "ctl", "dashboardUid",
+                                               out->ctlDashboardUid);
+    out->ctlSocketGid    = serverCfgResolveGid(c, "ctl", "socketGid",
+                                               out->ctlSocketGid);
 
     solariConfigFree(c);
     return SOLARI_OK;

@@ -109,6 +109,94 @@ static void test_rbac(void)
     TEST_ASSERT_EQUAL_STRING("dana", op);
 }
 
+/* Task #1 — verb-class mapping is an ALLOWLIST (review F1/F4). Only an explicit
+ * set of read/ordinary dashboard verbs is ORDINARY; the two queue verbs are
+ * ENQUEUE; EVERYTHING ELSE — including any verb not yet invented — defaults to
+ * PRIVILEGED. This is the fix for the original denylist, under which a new
+ * privileged verb (or one merely absent from the destructive list, like
+ * PROVISION/APPROVE/CONFIG_SET) was silently ordinary and reachable by PHP. */
+static void test_verb_priv_class(void)
+{
+    /* the ENQUEUE queue verbs */
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ENQUEUE, ctlVerbPrivClass("REQUEST_SUBMIT"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ENQUEUE, ctlVerbPrivClass("REQUEST_GET"));
+
+    /* the ALLOWLISTED ordinary dashboard-drivable verbs (exhaustive) */
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("PING"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("DISCOVER"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("SURVEY"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("ADOPT"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("ASSET_SET"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("IGNORE"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("POOL_NEW"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("POOL_SET"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("RULE_SET"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("ALERT_ACK"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("CRIT_SET"));
+
+    /* formerly-destructive verbs remain PRIVILEGED */
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("DECOMMISSION"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("RETIRE"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("ASSET_REMOVE"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("TARGET_REMOVE"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("POOL_DEL"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("RULE_DEL"));
+
+    /* the F1/F4 core: non-destructive-but-privileged verbs the OLD denylist let
+     * through as ordinary are now PRIVILEGED and thus refused to the dashboard */
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("PROVISION"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("APPROVE"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("REJECT"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("CONFIG_SET"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("CONTROL"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("DEPLOY"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("FLEET_PROVISION"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("FLEET_IMAGE"));
+
+    /* default-deny: an unknown / not-yet-invented verb is PRIVILEGED, not ordinary */
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("SOME_NEW_VERB_2027"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass(""));
+}
+
+/* Task #1 — peer classification from SO_PEERCRED uid. root and the operator uid
+ * are OPERATOR; the configured dashboard uid is DASHBOARD; anyone else UNKNOWN.
+ * A dashboardUid of 0 (unset) must match nobody, not root. */
+static void test_classify_peer(void)
+{
+    const uint32_t opUid = 1000, dashUid = 33;
+    /* root is always operator */
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_OPERATOR, ctlClassifyPeer(0, opUid, dashUid));
+    /* the operator uid */
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_OPERATOR, ctlClassifyPeer(opUid, opUid, dashUid));
+    /* the dashboard uid */
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_DASHBOARD, ctlClassifyPeer(dashUid, opUid, dashUid));
+    /* an unrelated uid */
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_UNKNOWN, ctlClassifyPeer(4242, opUid, dashUid));
+    /* unset dashboardUid (0) must not turn a stray uid into a dashboard, and
+     * must not shadow root's operator status */
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_UNKNOWN, ctlClassifyPeer(4242, opUid, 0));
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_OPERATOR, ctlClassifyPeer(0, opUid, 0));
+}
+
+/* Task #1 — the authorization matrix. OPERATOR may invoke anything; DASHBOARD
+ * everything except PRIVILEGED; UNKNOWN nothing at all. This is the core of the
+ * boundary: PHP (DASHBOARD) is refused every privileged verb even with op=. */
+static void test_peer_may_invoke(void)
+{
+    /* OPERATOR: all three classes */
+    TEST_ASSERT_TRUE(ctlPeerMayInvoke(CTL_PEER_OPERATOR, CTL_VC_ORDINARY));
+    TEST_ASSERT_TRUE(ctlPeerMayInvoke(CTL_PEER_OPERATOR, CTL_VC_ENQUEUE));
+    TEST_ASSERT_TRUE(ctlPeerMayInvoke(CTL_PEER_OPERATOR, CTL_VC_PRIVILEGED));
+    /* DASHBOARD: ordinary + enqueue, but NEVER privileged */
+    TEST_ASSERT_TRUE(ctlPeerMayInvoke(CTL_PEER_DASHBOARD, CTL_VC_ORDINARY));
+    TEST_ASSERT_TRUE(ctlPeerMayInvoke(CTL_PEER_DASHBOARD, CTL_VC_ENQUEUE));
+    TEST_ASSERT_FALSE(ctlPeerMayInvoke(CTL_PEER_DASHBOARD, CTL_VC_PRIVILEGED));
+    /* UNKNOWN: nothing */
+    TEST_ASSERT_FALSE(ctlPeerMayInvoke(CTL_PEER_UNKNOWN, CTL_VC_ORDINARY));
+    TEST_ASSERT_FALSE(ctlPeerMayInvoke(CTL_PEER_UNKNOWN, CTL_VC_ENQUEUE));
+    TEST_ASSERT_FALSE(ctlPeerMayInvoke(CTL_PEER_UNKNOWN, CTL_VC_PRIVILEGED));
+}
+
 static void test_pool_delete_guard(void)
 {
     TEST_ASSERT_FALSE(ctlPoolCanDelete(0));
@@ -151,6 +239,9 @@ int main(void)
     RUN_TEST(test_arg_numeric);
     RUN_TEST(test_split_verb);
     RUN_TEST(test_rbac);
+    RUN_TEST(test_verb_priv_class);
+    RUN_TEST(test_classify_peer);
+    RUN_TEST(test_peer_may_invoke);
     RUN_TEST(test_pool_delete_guard);
     RUN_TEST(test_reply_format);
     RUN_TEST(test_looks_like_csr);

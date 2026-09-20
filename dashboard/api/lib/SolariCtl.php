@@ -75,10 +75,139 @@ final class SolariCtl
         return $r['fields'];
     }
 
-    /** Build the single request line. */
+    /**
+     * Enqueue a PRIVILEGED verb the dashboard is not allowed to run directly.
+     *
+     * Under the PHP→host security boundary (Task #1), the C bridge classifies
+     * this connection by its SO_PEERCRED uid as DASHBOARD and REFUSES every
+     * privileged verb (SIGN/DEPLOY/RETIRE/DECOMMISSION/…), even with a valid
+     * operator. The dashboard cannot mint a cert or tear down a node itself; it
+     * records the request here and the privileged server process executes it.
+     *
+     * The inner verb's own "k=v k=v" argument string is built with the same
+     * per-value encoding as a normal request, then placed whole into the SUBMIT
+     * `args` field — which frame() URL-encodes once more because it contains
+     * spaces. The C REQUEST_SUBMIT handler decodes that one layer and stores the
+     * inner wire verbatim; the consumer replays "<verb> <inner>" with operator
+     * authority. Each value is thus decoded exactly once at each hop.
+     *
+     * @param string                        $verb     inner privileged verb
+     * @param array<string,string|int|bool> $args     the inner verb's own args
+     * @param string                        $operator authenticated session user (audit)
+     * @param string|null                   $idem     optional idempotency key; a
+     *        resubmit with the same key returns the existing request id.
+     * @return array<string,string> reply fields: ['request' => id, 'status' => 'pending']
+     */
+    public static function enqueue(string $verb, array $args, string $operator,
+                                   ?string $idem = null): array
+    {
+        $inner = self::frameArgs($args);   // "k=v k=v" with per-value encoding
+        $submit = ['verb' => strtoupper($verb), 'op' => $operator];
+        if ($inner !== '') {
+            $submit['args'] = $inner;      // frame() URL-encodes this whole blob
+        }
+        if ($idem !== null && $idem !== '') {
+            $submit['idem'] = $idem;
+        }
+        return self::call('REQUEST_SUBMIT', $submit);
+    }
+
+    /**
+     * Poll a queued request's status. Read-only, allowed for the dashboard peer.
+     *
+     * @return array<string,string> ['request'=>id, 'state'=>pending|claimed|done|failed,
+     *         and once terminal, 'result'=>… (done) or 'error'=>… (failed)]
+     */
+    public static function poll(int $requestId): array
+    {
+        return self::call('REQUEST_GET', ['request' => $requestId]);
+    }
+
+    /**
+     * Run a PRIVILEGED verb through the queue and return its result in the SAME
+     * shape a direct call() would have — enqueue, then poll to completion inside
+     * this request. This is how the mutation routes stay synchronous for the UI
+     * while PHP never executes (nor is permitted to execute) the privileged verb:
+     * the dashboard peer is refused it directly, so it records the request and
+     * the privileged server process runs it, and we read back the result it is
+     * allowed to read.
+     *
+     * The operator is passed separately and stored as the request's requestedBy;
+     * the consumer binds op= from that column server-side, so callers MUST NOT put
+     * op= in $args (it would be ignored — the consumer's injected op= wins).
+     *
+     * Poll semantics: the server drains the queue on its main-loop tick, so a
+     * settled result normally arrives in well under a second. If it has not
+     * settled within $waitSec we hand back {request, status:'queued'} so the
+     * caller/UI can poll REQUEST_GET later rather than blocking the request.
+     *
+     * @param array<string,string|int|bool> $args inner verb args (NO op=)
+     * @return array<string,string> the inner verb's reply fields (as call() would return)
+     */
+    public static function callQueued(string $verb, array $args, string $operator,
+                                      ?string $idem = null, float $waitSec = 4.0): array
+    {
+        $sub   = self::enqueue($verb, $args, $operator, $idem);
+        $reqId = (int) ($sub['request'] ?? 0);
+        if ($reqId <= 0) {
+            Response::error('control_error',
+                'Operator bridge did not return a request id.', 502);
+        }
+
+        $deadline = microtime(true) + $waitSec;
+        do {
+            $status = self::poll($reqId);
+            $state  = $status['state'] ?? '';
+
+            if ($state === 'done') {
+                // The stored result is the inner verb's whole "OK ..." reply line;
+                // re-parse it so callers get the same fields a direct call() gave.
+                $inner = self::parseReply(($status['result'] ?? '') . "\n");
+                if (!$inner['ok']) {
+                    self::failFromInner($inner, $verb);
+                }
+                return $inner['fields'];
+            }
+            if ($state === 'failed') {
+                // error holds the inner "ERR <code> <message>" line.
+                self::failFromInner(self::parseReply(($status['error'] ?? '') . "\n"), $verb);
+            }
+            // pending / claimed: let the server tick, then re-poll.
+            usleep(100000);   // 100 ms
+        } while (microtime(true) < $deadline);
+
+        // Not settled in the request budget: return the id for async polling.
+        return ['request' => (string) $reqId, 'status' => 'queued'];
+    }
+
+    /** Emit the §11.2 error envelope for a failed inner (queued) verb and exit. */
+    private static function failFromInner(array $inner, string $verb): void
+    {
+        $status = self::statusForCode($inner['code'], $inner['message']);
+        $code   = ($status === 403) ? 'forbidden'
+                : (($status === 502) ? 'control_unavailable' : 'control_error');
+        Response::error($code,
+            $inner['message'] !== '' ? $inner['message'] : ('control verb ' . $verb . ' failed'),
+            $status);
+    }
+
+    /** Build the single request line: "VERB k=v k=v ...\n". */
     private static function frame(string $verb, array $args): string
     {
-        $parts = [strtoupper($verb)];
+        $inner = self::frameArgs($args);
+        return strtoupper($verb) . ($inner !== '' ? ' ' . $inner : '') . "\n";
+    }
+
+    /**
+     * Build the space-joined "k=v k=v" argument string (no verb, no newline),
+     * URL-encoding any value that is not a bare token. Shared by frame() and the
+     * queue enqueue path so both encode values identically.
+     *
+     * @param array<string,string|int|bool> $args
+     */
+    private static function frameArgs(array $args): string
+    {
+        $parts = [];
         foreach ($args as $k => $v) {
             if ($v === null) {
                 continue;
@@ -95,7 +224,7 @@ final class SolariCtl
             }
             $parts[] = $k . '=' . $sv;
         }
-        return implode(' ', $parts) . "\n";
+        return implode(' ', $parts);
     }
 
     /** Open the AF_UNIX socket, write one line, read one reply line, close. */

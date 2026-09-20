@@ -1667,6 +1667,306 @@ solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eventId)
     return rc;
 }
 
+/* ===================================================================== */
+/* Privileged control-verb request queue (Task #1 — PHP→host boundary)    */
+/* ===================================================================== */
+/*
+ * The ctlRequest table (db/migrations/020_ctl_request_queue.sql) is the
+ * hand-off queue between the unprivileged dashboard peer and the privileged
+ * server process. The dashboard is REFUSED every PRIVILEGED verb at the socket
+ * (SO_PEERCRED + the verb-class ACL in solariCtl.c); instead it Submits a row
+ * here, and the in-process consumer (serverCtlQueuePoll) Claims + executes it
+ * with operator authority, then records the result. These four functions are
+ * that queue's entire data-access surface; all state lives in the server's own
+ * monitoring DB, co-located with its single consumer.
+ */
+
+/* serverDbCtlRequestSubmit — enqueue one privileged request from the dashboard.
+ *
+ * Input:  verb        inner privileged verb name (already validated by caller)
+ *         argsWire    inner verb args in ctl line-protocol form (may be "")
+ *         requestedBy authenticated operator string from the PHP session
+ *         peerUid     SO_PEERCRED uid of the submitter (audit)
+ *         idemKey     optional client idempotency key (NULL = unkeyed)
+ *         reqIdOut    receives the row id (new, or the existing one on replay)
+ * Output: SOLARI_OK with *reqIdOut set. A repeated idemKey collides on the
+ *         UNIQUE index (errno 1062); we treat that as success and return the
+ *         id of the row already queued, so a resubmit is idempotent rather than
+ *         an error. ERR_DB on any other failure.
+ */
+solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *verb,
+        const char *argsWire, const char *requestedBy,
+        uint32_t peerUid, const char *idemKey, unsigned long long *reqIdOut)
+{
+    static const char *SQL =
+        "INSERT INTO ctlRequest (verb, argsWire, requestedBy, peerUid, "
+        "  idempotencyKey, state, createdAt) "
+        "VALUES (?, ?, ?, ?, ?, 'pending', UTC_TIMESTAMP(6))";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[5];
+    unsigned long long vPeer = peerUid;
+    unsigned long lV, lA, lR, lK;
+    solariStatus rc;
+
+    if (reqIdOut) *reqIdOut = 0;
+    if (!conn || !verb || !verb[0] || !requestedBy || !requestedBy[0])
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], verb, &lV);
+    dbBindStr(&b[1], argsWire ? argsWire : "", &lA);
+    dbBindStr(&b[2], requestedBy, &lR);
+    dbBindU64(&b[3], &vPeer);
+    dbBindStr(&b[4], (idemKey && idemKey[0]) ? idemKey : NULL, &lK);
+    if (mysql_stmt_bind_param(st, b) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    if (mysql_stmt_execute(st) != 0) {
+        unsigned int e = mysql_stmt_errno(st);
+        mysql_stmt_close(st);
+        /* Duplicate idempotency key: the request is already queued. Look up its
+         * id and return it, so the caller sees the original pending request. */
+        if (e == 1062 && idemKey && idemKey[0]) {
+            /* Scope the lookup to (requestedBy, idemKey) to match the composite
+             * UNIQUE key (review F10): a global key let one requester pre-seed a
+             * predictable key so another's submit silently returned the first
+             * one's request id. Keys now only collide within the same requester. */
+            static const char *SEL =
+                "SELECT id FROM ctlRequest WHERE requestedBy = ? AND idempotencyKey = ?";
+            MYSQL_STMT *sel;
+            MYSQL_BIND  in[2], out[1];
+            unsigned long long vId = 0;
+            unsigned long lReqSel, lKey;
+            my_bool isNull = 0;
+            if (dbStmtPrepare(conn, SEL, &sel) != SOLARI_OK) return ERR_DB;
+            dbBindStr(&in[0], requestedBy, &lReqSel);
+            dbBindStr(&in[1], idemKey, &lKey);
+            if (mysql_stmt_bind_param(sel, in) != 0 ||
+                mysql_stmt_execute(sel) != 0) {
+                mysql_stmt_close(sel); return ERR_DB;
+            }
+            dbBindOutU64(&out[0], &vId, &isNull);
+            if (mysql_stmt_bind_result(sel, out) != 0) {
+                mysql_stmt_close(sel); return ERR_DB;
+            }
+            if (mysql_stmt_fetch(sel) == 0 && !isNull && reqIdOut) *reqIdOut = vId;
+            mysql_stmt_close(sel);
+            return (reqIdOut && *reqIdOut) ? SOLARI_OK : ERR_DB;
+        }
+        solariLogf(SOLARI_LOG_ERROR, "serverDb: ctlRequest submit failed (errno %u)", e);
+        return ERR_DB;
+    }
+    if (reqIdOut) *reqIdOut = (unsigned long long)mysql_stmt_insert_id(st);
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+/* serverDbCtlRequestClaim — atomically claim the oldest pending request.
+ *
+ * The claim is a compare-and-set: UPDATE the oldest pending row to 'claimed'
+ * only while it is still 'pending'. mysql_stmt_affected_rows() == 1 means this
+ * caller won it; 0 means another claimer took it (or the queue is empty). On a
+ * win we SELECT the claimed row's verb + args for replay.
+ *
+ * Input:  claimedBy  consumer label (audit)
+ * Output: *reqIdOut, verbOut, argsWireOut for the won row.
+ *         SOLARI_OK   a row was claimed.
+ *         ERR_TLV_END the queue is empty / nothing was claimed (not an error).
+ *         ERR_DB      on failure.
+ */
+solariStatus serverDbCtlRequestClaim(serverDb *db, const char *claimedBy,
+        unsigned long long *reqIdOut, char *verbOut, size_t verbCap,
+        char *argsWireOut, size_t argsCap,
+        char *requestedByOut, size_t requestedByCap)
+{
+    /* Target the single oldest pending row by id; the WHERE state='pending'
+     * predicate is the CAS — two claimers racing the same row, only one UPDATE
+     * changes it. ORDER BY id LIMIT 1 keeps it FIFO and touches one row.
+     *
+     * id=LAST_INSERT_ID(id) stamps THIS row's id into the connection-local
+     * LAST_INSERT_ID() as a side effect of the winning UPDATE, so we can fetch
+     * exactly the row we just claimed by its id (cross-lab review F5). The prior
+     * "SELECT ... WHERE claimedBy=? ORDER BY claimedAt DESC" correlated the row
+     * only by the (nonunique) consumer label + recency: two same-label claimers
+     * racing could both read the newer row and double-execute it while the older
+     * stayed orphaned in 'claimed'. LAST_INSERT_ID is per-connection, so it is
+     * immune to that race regardless of how many consumers share a label. */
+    static const char *UPD =
+        "UPDATE ctlRequest SET state='claimed', claimedBy=?, attempts=attempts+1, "
+        "  claimedAt=UTC_TIMESTAMP(6), id=LAST_INSERT_ID(id) "
+        "WHERE state='pending' ORDER BY id LIMIT 1";
+    static const char *SEL =
+        "SELECT id, verb, argsWire, requestedBy FROM ctlRequest WHERE id=?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long lBy;
+    unsigned long long claimedId;
+    solariStatus rc;
+
+    if (reqIdOut) *reqIdOut = 0;
+    if (verbOut && verbCap) verbOut[0] = '\0';
+    if (argsWireOut && argsCap) argsWireOut[0] = '\0';
+    if (requestedByOut && requestedByCap) requestedByOut[0] = '\0';
+    if (!conn || !claimedBy || !claimedBy[0] || !verbOut || !verbCap ||
+        !argsWireOut || !argsCap)
+        return ERR_INVALID_ARG;
+
+    /* --- CAS claim --- */
+    rc = dbStmtPrepare(conn, UPD, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], claimedBy, &lBy);
+    rc = dbStmtRunWrite(st, b, 1);
+    if (rc != SOLARI_OK) { mysql_stmt_close(st); return rc; }
+    if (mysql_stmt_affected_rows(st) == 0) { mysql_stmt_close(st); return ERR_TLV_END; }
+    /* The winning UPDATE set LAST_INSERT_ID(id) to the claimed row's id. */
+    claimedId = (unsigned long long)mysql_stmt_insert_id(st);
+    mysql_stmt_close(st);
+
+    /* --- fetch exactly the row we just claimed, by its id --- */
+    {
+        MYSQL_BIND in[1], out[4];
+        unsigned long long vId = 0, vIdIn = claimedId;
+        unsigned long lVerb = 0, lArgs = 0, lReq = 0;
+        my_bool nId = 0, nVerb = 0, nArgs = 0, nReq = 0;
+        int fetch;
+
+        rc = dbStmtPrepare(conn, SEL, &st);
+        if (rc != SOLARI_OK) return rc;
+        dbBindU64(&in[0], &vIdIn);
+        if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+            mysql_stmt_close(st); return ERR_DB;
+        }
+        dbBindOutU64(&out[0], &vId, &nId);
+        dbBindOutStr(&out[1], verbOut, (unsigned long)verbCap, &lVerb, &nVerb);
+        dbBindOutStr(&out[2], argsWireOut, (unsigned long)argsCap, &lArgs, &nArgs);
+        dbBindOutStr(&out[3], requestedByOut ? requestedByOut : verbOut,
+                     (unsigned long)(requestedByOut ? requestedByCap : 0),
+                     &lReq, &nReq);
+        if (mysql_stmt_bind_result(st, out) != 0) { mysql_stmt_close(st); return ERR_DB; }
+        fetch = mysql_stmt_fetch(st);
+        if (fetch != 0 && fetch != MYSQL_DATA_TRUNCATED) {
+            /* Claimed a row but cannot read it back — leave it 'claimed' (its
+             * attempts counter records the miss) and report empty so the caller
+             * retries rather than replaying a half-read command. */
+            mysql_stmt_close(st);
+            return ERR_DB;
+        }
+        /* A truncated verb/args must NOT be replayed: the forced NUL below would
+         * hand the operator-authority consumer a valid-looking PREFIX of an
+         * attacker-oversized command (cross-lab review F7). Fail the row closed
+         * so it can never execute, then report empty. verbOut/argsWire are sized
+         * to the protocol cap, so any truncation here is anomalous input. */
+        if ((!nVerb && lVerb >= verbCap) || (!nArgs && lArgs >= argsCap)) {
+            mysql_stmt_close(st);
+            (void)serverDbCtlRequestComplete(db, claimedId, false,
+                                             "stored request exceeds replay buffer");
+            if (reqIdOut) *reqIdOut = 0;
+            return ERR_BUFFER_FULL;
+        }
+        if (reqIdOut && !nId) *reqIdOut = vId;
+        verbOut[(!nVerb && lVerb < verbCap) ? lVerb : verbCap - 1] = '\0';
+        argsWireOut[(!nArgs && lArgs < argsCap) ? lArgs : argsCap - 1] = '\0';
+        if (requestedByOut && requestedByCap)
+            requestedByOut[(!nReq && lReq < requestedByCap) ? lReq
+                                                            : requestedByCap - 1] = '\0';
+        mysql_stmt_close(st);
+    }
+    return SOLARI_OK;
+}
+
+/* serverDbCtlRequestComplete — record the terminal result of a claimed request.
+ *
+ * Input:  reqId       the claimed row
+ *         ok          true → state='done' and resultText → result column;
+ *                     false → state='failed' and resultText → error column.
+ *         resultText  the inner verb reply (or failure reason); may be NULL.
+ * Output: SOLARI_OK on write, ERR_DB on failure.
+ */
+solariStatus serverDbCtlRequestComplete(serverDb *db, unsigned long long reqId,
+        bool ok, const char *resultText)
+{
+    /* One UPDATE for both outcomes: the ok flag routes the text into result vs
+     * error and picks the state, and only ever advances a 'claimed' row so a
+     * late/duplicate completion cannot resurrect or overwrite a settled one. */
+    static const char *SQL =
+        "UPDATE ctlRequest SET "
+        "  state = IF(?, 'done', 'failed'), "
+        "  result = IF(?, ?, result), "
+        "  error  = IF(?, error, ?), "
+        "  completedAt = UTC_TIMESTAMP(6) "
+        "WHERE id = ? AND state = 'claimed'";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[6];
+    int okFlag = ok ? 1 : 0;
+    unsigned long long vId = reqId;
+    unsigned long lRes, lErr;
+    solariStatus rc;
+
+    if (!conn || reqId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindI32(&b[0], &okFlag);                                   /* state IF */
+    dbBindI32(&b[1], &okFlag);                                   /* result IF */
+    dbBindStr(&b[2], (ok && resultText) ? resultText : NULL, &lRes);
+    dbBindI32(&b[3], &okFlag);                                   /* error IF */
+    dbBindStr(&b[4], (!ok && resultText) ? resultText : NULL, &lErr);
+    dbBindU64(&b[5], &vId);
+    rc = dbStmtRunWrite(st, b, 6);
+    if (rc != SOLARI_OK) { mysql_stmt_close(st); return rc; }
+    /* Exactly one 'claimed' row must have matched. Zero means the id was wrong or
+     * the row was already settled/reclaimed — report it instead of the previous
+     * unconditional SOLARI_OK, which hid lost or raced completions (review F8). */
+    if (mysql_stmt_affected_rows(st) == 0) { mysql_stmt_close(st); return ERR_TLV_END; }
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+/* serverDbCtlRequestGet — read one request's state + terminal detail.
+ *
+ * Input:  reqId       the row to read
+ * Output: stateOut    'pending'|'claimed'|'done'|'failed'
+ *         detailOut   result (done) or error (failed) text; "" while in flight
+ *         SOLARI_OK   row found. ERR_TLV_END if no such request. ERR_DB on fail.
+ */
+solariStatus serverDbCtlRequestGet(serverDb *db, unsigned long long reqId,
+        char *stateOut, size_t stateCap, char *detailOut, size_t detailCap)
+{
+    /* COALESCE picks whichever terminal column is populated; NULL→'' so the
+     * caller always gets a clean string. */
+    static const char *SQL =
+        "SELECT state, COALESCE(result, error, '') FROM ctlRequest WHERE id = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  in[1], out[2];
+    unsigned long long vId = reqId;
+    unsigned long lState = 0, lDetail = 0;
+    my_bool nState = 0, nDetail = 0;
+    int fetch;
+    solariStatus rc;
+
+    if (stateOut && stateCap) stateOut[0] = '\0';
+    if (detailOut && detailCap) detailOut[0] = '\0';
+    if (!conn || reqId == 0 || !stateOut || !stateCap || !detailOut || !detailCap)
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &vId);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    dbBindOutStr(&out[0], stateOut, (unsigned long)stateCap, &lState, &nState);
+    dbBindOutStr(&out[1], detailOut, (unsigned long)detailCap, &lDetail, &nDetail);
+    if (mysql_stmt_bind_result(st, out) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    fetch = mysql_stmt_fetch(st);
+    if (fetch == MYSQL_NO_DATA) { mysql_stmt_close(st); return ERR_TLV_END; }
+    if (fetch != 0 && fetch != MYSQL_DATA_TRUNCATED) { mysql_stmt_close(st); return ERR_DB; }
+    stateOut[(!nState && lState < stateCap) ? lState : stateCap - 1] = '\0';
+    detailOut[(!nDetail && lDetail < detailCap) ? lDetail : detailCap - 1] = '\0';
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
 solariStatus serverDbLoadAlertRules(serverDb *db, const char *scope,
                                     serverAlertRule *out, size_t *count)
 {

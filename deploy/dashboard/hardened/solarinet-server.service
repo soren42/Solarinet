@@ -1,0 +1,69 @@
+; SolariNet SCP server (ingest/control + solariCtl bridge) — HARDENED (Task #1).
+;
+; Differs from ../solarinet-server.service in two ways:
+;   1. Runs as the dedicated `solari` service user (not the repo owner), so the
+;      CA key and DB password it holds are readable by NO other service uid — in
+;      particular not by www-solari (the php-fpm pool). The server is the sole
+;      CA-key holder; the in-process queue consumer executes privileged verbs
+;      here, out of PHP's reach.
+;   2. Carries systemd sandboxing so a server compromise cannot trivially reach
+;      the rest of the host.
+;
+; The server creates the ctl socket 0660 and chowns it to group solari-ctl (via
+; [ctl] socketGid), then enforces SO_PEERCRED: the www-solari peer is classified
+; DASHBOARD and refused every privileged verb. See server.conf ([ctl] block).
+;
+; Install:
+;   sudo cp solarinet-server.service /etc/systemd/system/solarinet-server.service
+;   # env file (NOT committed), owned by solari, 0600:
+;   sudo install -o solari -g solari -m600 /dev/stdin /etc/solarinet/server.env <<<'SOLARI_DB_PASS=…'
+;   sudo systemctl daemon-reload && sudo systemctl enable --now solarinet-server
+
+[Unit]
+Description=SolariNet SCP server (ingest/control + solariCtl bridge) [hardened]
+After=network-online.target mariadb.service
+Wants=network-online.target mariadb.service
+
+[Service]
+Type=simple
+User=solari
+Group=solari
+; Join solari-ctl so the socket it creates is group-reachable by www-solari.
+SupplementaryGroups=solari-ctl
+; The socket lives here; RuntimeDirectory makes /run/solari solari:solari at start
+; and removes it at stop. Mode 0751: owner+group get full access; `other` gets
+; traverse-only (--x). www-solari is in solari-ctl, not solari, so it is `other`
+; here — 0750 would deny it the traverse it needs to resolve the socket by name,
+; making the socket's own 0660 gate unreachable (review F12). 0751 grants the
+; traverse but NOT list/read, so www-solari opens /run/solari/solariCtl.sock by
+; name yet cannot enumerate or create siblings. The socket's 0660 solari:solari-ctl
+; remains the real gate.
+RuntimeDirectory=solari
+RuntimeDirectoryMode=0751
+WorkingDirectory=/opt/solarinet
+EnvironmentFile=/etc/solarinet/server.env
+ExecStart=/opt/solarinet/bin/solariServer --config /etc/solarinet/server.conf
+Restart=on-failure
+RestartSec=2
+
+; ---- sandboxing (defence in depth) ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+; Writable paths the server genuinely needs: its runtime socket dir and PKI.
+ReadWritePaths=/run/solari /var/lib/solarinet/pki
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+; Discovery/scan needs raw sockets + broad net; keep AF_UNIX + AF_INET(6) only.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
