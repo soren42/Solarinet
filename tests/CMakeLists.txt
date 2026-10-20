@@ -73,6 +73,13 @@ if(TARGET clientcore)
   add_executable(test_client_control unit/test_client_control.c)
   target_link_libraries(test_client_control PRIVATE clientcore unity)
   add_test(NAME test_client_control COMMAND test_client_control)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(test_client_control_persistence unit/test_client_control_persistence.c)
+    target_link_libraries(test_client_control_persistence PRIVATE clientcore unity)
+    target_link_options(test_client_control_persistence PRIVATE
+      "-Wl,--wrap=fsync" "-Wl,--wrap=rename")
+    add_test(NAME test_client_control_persistence COMMAND test_client_control_persistence)
+  endif()
 endif()
 
 # Config-push convergence end-to-end over loopback sockets: PUB->SUB directive,

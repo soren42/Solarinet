@@ -112,6 +112,15 @@ so the host appears in Fleet Overview / NodeDetail with live metrics.
 
 A reporting client is marked `up` and its `lastSeenAt` advances each cycle.
 
+Client configuration pushes now require a writable `[control] stateFile` or the
+derived `<spoolDb>.ctrl` path. The client persists a complete effective config
+snapshot with a version, length, and checksum; it syncs and atomically replaces
+the file before changing its running config or reporting the new epoch. Legacy
+unversioned state is rejected with an error log and the base `.conf` epoch until
+the server resynchronizes it. Rehearse that resynchronization before upgrading a
+fleet with saved pushes. POSIX file/rename/directory-sync failures and truncated
+state are covered by fault tests; Windows durability still needs native proof.
+
 ## Gotchas
 - **`<LocationMatch "^/api/">` needs the trailing slash** — `^/api` also matches
   the SPA's `/api.jsx` adapter and would route it to PHP, breaking the app.

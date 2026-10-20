@@ -12,15 +12,29 @@
  * the current applied epoch) but NOT re-applied, so an idempotent
  * re-provision converges instead of thrashing the live config.
  */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "clientControl.h"
 
+#include "solari/solariCrypto.h"
 #include "solari/solariJson.h"
 #include "solari/solariLog.h"
 #include "solari/solariTlv.h"
 
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 /* Bounds for hot-applied scheduling values (defensive: the dashboard
  * validates tighter ranges; the agent only refuses the absurd). */
@@ -211,7 +225,7 @@ solariStatus clientControlHandle(clientControlState *st, clientConfig *cfg,
             out->blob    = c.payload;
             out->blobLen = c.payloadLen;
             solariLogf(SOLARI_LOG_INFO,
-                       "control: verb %u applied, epoch %llu (interval %us, "
+                       "control: verb %u candidate epoch %llu (interval %us, "
                        "%u procs, %u logs)",
                        (unsigned)c.verb, (unsigned long long)c.targetEpoch,
                        (unsigned)cfg->sampleIntervalSec,
@@ -239,7 +253,7 @@ solariStatus clientControlHandle(clientControlState *st, clientConfig *cfg,
 }
 
 /* ===================================================================== */
-/* Applied-state persistence ("<epoch>\n<blob>")                         */
+/* Applied-state persistence (versioned header + checksummed full snapshot) */
 /* ===================================================================== */
 
 void clientControlStatePath(const clientConfig *cfg, char *out, size_t cap)
@@ -258,10 +272,13 @@ solariStatus clientControlStateLoad(clientControlState *st, clientConfig *cfg)
     char   path[CLIENT_PATH_MAX + 8];
     FILE  *f;
     char  *blob = NULL;
-    char   line[32];
-    uint64_t epoch;
-    long   sz;
-    size_t blobLen = 0;
+    char   line[160], savedHash[65], actualHash[65], end;
+    unsigned long long epoch;
+    unsigned long blobLen;
+    clientConfig candidate;
+    solariSha256Ctx hash;
+    uint8_t digest[32];
+    char prefix[64];
 
     if (!st || !cfg) return ERR_INVALID_ARG;
     st->appliedEpoch = cfg->configEpoch;        /* .conf floor */
@@ -270,36 +287,39 @@ solariStatus clientControlStateLoad(clientControlState *st, clientConfig *cfg)
     if (path[0] == '\0') return SOLARI_OK;      /* persistence off */
 
     f = fopen(path, "rb");
-    if (!f) return SOLARI_OK;                    /* first run: nothing saved */
-
-    if (!fgets(line, sizeof line, f)) { fclose(f); return SOLARI_OK; }
-    epoch = (uint64_t)strtoull(line, NULL, 10);
-
-    /* The rest of the file is the applied blob. */
-    if (fseek(f, 0, SEEK_END) == 0 && (sz = ftell(f)) > 0) {
-        size_t hdr = strlen(line);
-        if ((size_t)sz > hdr && (size_t)sz - hdr <= CLIENT_CTRL_BLOB_MAX) {
-            blobLen = (size_t)sz - hdr;
-            blob = (char *)malloc(blobLen + 1);
-            if (blob && fseek(f, (long)hdr, SEEK_SET) == 0 &&
-                fread(blob, 1, blobLen, f) == blobLen)
-                blob[blobLen] = '\0';
-            else { free(blob); blob = NULL; }
-        }
+    if (!f) return errno == ENOENT ? SOLARI_OK : ERR_PLATFORM;
+    if (!fgets(line, sizeof line, f) || strchr(line, '-') != NULL ||
+        sscanf(line, "SOLARI_CTRL_V1 %llu %lu %64[0-9a-f]%c",
+               &epoch, &blobLen, savedHash, &end) != 4 || end != '\n' ||
+        strlen(savedHash) != 64 || blobLen > CLIENT_CTRL_BLOB_MAX) {
+        fclose(f);
+        return ERR_INVALID_ARG;                 /* legacy/corrupt state: resync */
     }
+    blob = (char *)malloc((size_t)blobLen + 1);
+    if (!blob) { fclose(f); return ERR_PLATFORM; }
+    if (fread(blob, 1, (size_t)blobLen, f) != (size_t)blobLen ||
+        fgetc(f) != EOF || ferror(f)) {
+        free(blob); fclose(f); return ERR_INVALID_ARG;
+    }
+    blob[blobLen] = '\0';
     fclose(f);
-
+    snprintf(prefix, sizeof prefix, "%llu:%lu:", epoch, blobLen);
+    solariSha256Init(&hash);
+    solariSha256Update(&hash, prefix, strlen(prefix));
+    solariSha256Update(&hash, blob, (size_t)blobLen);
+    solariSha256Final(&hash, digest);
+    solariHexEncode(digest, sizeof digest, actualHash, sizeof actualHash);
+    if (strcmp(savedHash, actualHash) != 0) { free(blob); return ERR_INVALID_ARG; }
+    candidate = *cfg;
+    if (clientControlApplyBlob(&candidate, blob, (size_t)blobLen) != SOLARI_OK) {
+        free(blob); return ERR_INVALID_ARG;
+    }
     if (epoch > st->appliedEpoch) {
-        /* Re-apply the persisted push over the .conf so a restart keeps it. */
-        if (!blob || clientControlApplyBlob(cfg, blob, blobLen) == SOLARI_OK) {
-            st->appliedEpoch = epoch;
-            solariLogf(SOLARI_LOG_INFO,
-                       "control: restored applied epoch %llu from %s",
-                       (unsigned long long)epoch, path);
-        } else {
-            solariLogf(SOLARI_LOG_WARN,
-                       "control: stale state in %s ignored (bad blob)", path);
-        }
+        candidate.configEpoch = epoch;
+        *cfg = candidate;
+        st->appliedEpoch = epoch;
+        solariLogf(SOLARI_LOG_INFO, "control: restored durable epoch %llu from %s",
+                   epoch, path);
     }
     free(blob);
     return SOLARI_OK;
@@ -310,20 +330,169 @@ solariStatus clientControlStateSave(const clientConfig *cfg,
                                     const uint8_t *blob, uint16_t blobLen)
 {
     char  path[CLIENT_PATH_MAX + 8];
-    char  tmp[CLIENT_PATH_MAX + 16];
+    char  tmp[CLIENT_PATH_MAX + 32], prefix[64], hex[65];
+    uint8_t digest[32];
+    solariSha256Ctx hash;
     FILE *f;
+    int fd, failed = 0;
 
-    if (!cfg || !st) return ERR_INVALID_ARG;
+    if (!cfg || !st || (!blob && blobLen) || blobLen > CLIENT_CTRL_BLOB_MAX)
+        return ERR_INVALID_ARG;
     clientControlStatePath(cfg, path, sizeof path);
-    if (path[0] == '\0') return SOLARI_OK;      /* persistence off */
-
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    f = fopen(tmp, "wb");
-    if (!f) return ERR_PLATFORM;
-    fprintf(f, "%llu\n", (unsigned long long)st->appliedEpoch);
-    if (blob && blobLen > 0) fwrite(blob, 1, blobLen, f);
-    if (fclose(f) != 0) { remove(tmp); return ERR_PLATFORM; }
+    if (path[0] == '\0') return ERR_INVALID_ARG;
+    snprintf(prefix, sizeof prefix, "%llu:%lu:",
+             (unsigned long long)st->appliedEpoch, (unsigned long)blobLen);
+    solariSha256Init(&hash);
+    solariSha256Update(&hash, prefix, strlen(prefix));
+    if (blobLen) solariSha256Update(&hash, blob, blobLen);
+    solariSha256Final(&hash, digest);
+    solariHexEncode(digest, sizeof digest, hex, sizeof hex);
+    snprintf(tmp, sizeof tmp, "%s.tmp.XXXXXX", path);
+#ifdef _WIN32
+    if (_mktemp_s(tmp, strlen(tmp) + 1) != 0) return ERR_PLATFORM;
+    fd = _open(tmp, _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY, _S_IREAD | _S_IWRITE);
+    f = fd < 0 ? NULL : _fdopen(fd, "wb");
+#else
+    fd = mkstemp(tmp);
+    f = fd < 0 ? NULL : fdopen(fd, "wb");
+#endif
+    if (!f) {
+        if (fd >= 0) {
+#ifdef _WIN32
+            _close(fd);
+#else
+            close(fd);
+#endif
+            remove(tmp);
+        }
+        return ERR_PLATFORM;
+    }
+    if (fprintf(f, "SOLARI_CTRL_V1 %llu %lu %s\n",
+                (unsigned long long)st->appliedEpoch, (unsigned long)blobLen, hex) < 0 ||
+        (blobLen && fwrite(blob, 1, blobLen, f) != blobLen) || fflush(f) != 0)
+        failed = 1;
+#ifdef _WIN32
+    if (!failed && _commit(fd) != 0) failed = 1;
+#else
+    if (!failed && fsync(fd) != 0) failed = 1;
+#endif
+    if (fclose(f) != 0) failed = 1;
+    if (failed) { remove(tmp); return ERR_PLATFORM; }
+#ifdef _WIN32
+    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        remove(tmp); return ERR_PLATFORM;
+    }
+#else
     if (rename(tmp, path) != 0) { remove(tmp); return ERR_PLATFORM; }
+    {
+        char directory[CLIENT_PATH_MAX + 8], *slash;
+        snprintf(directory, sizeof directory, "%s", path);
+        slash = strrchr(directory, '/');
+        if (!slash) snprintf(directory, sizeof directory, ".");
+        else if (slash == directory) slash[1] = '\0';
+        else *slash = '\0';
+        fd = open(directory, O_RDONLY);
+        if (fd < 0) return ERR_PLATFORM;
+        failed = fsync(fd) != 0;
+        if (close(fd) != 0) failed = 1;
+        if (failed) return ERR_PLATFORM;
+    }
+#endif
+    return SOLARI_OK;
+}
+
+/* Append bounded JSON for the full effective push-config, not just its latest
+ * patch. Otherwise a later partial directive would forget earlier settings
+ * across restart while still claiming the newer epoch. */
+static bool snapshotText(char *out, size_t cap, size_t *used, const char *text)
+{
+    size_t length = strlen(text);
+    if (*used + length >= cap) return false;
+    memcpy(out + *used, text, length + 1);
+    *used += length;
+    return true;
+}
+
+static bool snapshotString(char *out, size_t cap, size_t *used, const char *text)
+{
+    if (!snapshotText(out, cap, used, "\"")) return false;
+    for (; *text; text++) {
+        char encoded[3] = { *text, '\0', '\0' };
+        if (*text == '"' || *text == '\\') { encoded[0] = '\\'; encoded[1] = *text; }
+        else if (*text == '\n') { encoded[0] = '\\'; encoded[1] = 'n'; }
+        else if (*text == '\r') { encoded[0] = '\\'; encoded[1] = 'r'; }
+        else if (*text == '\t') { encoded[0] = '\\'; encoded[1] = 't'; }
+        else if ((unsigned char)*text < 32) return false;
+        if (!snapshotText(out, cap, used, encoded)) return false;
+    }
+    return snapshotText(out, cap, used, "\"");
+}
+
+static solariStatus stateSnapshot(const clientConfig *cfg, char *out, size_t cap,
+                                  uint16_t *length)
+{
+    char prefix[160], logEntry[SOLARI_LOGPATH_MAX + 132];
+    size_t used = 0, i;
+    if (cfg->procCount > SOLARI_MAX_PROCS || cfg->logCount > SOLARI_MAX_LOGS)
+        return ERR_INVALID_ARG;
+    snprintf(prefix, sizeof prefix,
+             "{\"sampleIntervalSec\":%u,\"watchdogIntervalSec\":%u,\"processes\":[",
+             (unsigned)cfg->sampleIntervalSec, (unsigned)cfg->watchdogIntervalSec);
+    if (!snapshotText(out, cap, &used, prefix)) return ERR_BUFFER_FULL;
+    for (i = 0; i < cfg->procCount; i++) {
+        if ((i && !snapshotText(out, cap, &used, ",")) ||
+            !snapshotString(out, cap, &used, cfg->procs[i])) return ERR_BUFFER_FULL;
+    }
+    if (!snapshotText(out, cap, &used, "],\"logfiles\":[")) return ERR_BUFFER_FULL;
+    for (i = 0; i < cfg->logCount; i++) {
+        snprintf(logEntry, sizeof logEntry, "%s%s%s", cfg->logs[i].path,
+                 cfg->logs[i].regex[0] ? " : " : "", cfg->logs[i].regex);
+        if ((i && !snapshotText(out, cap, &used, ",")) ||
+            !snapshotString(out, cap, &used, logEntry)) return ERR_BUFFER_FULL;
+    }
+    if (!snapshotText(out, cap, &used, "]}")) return ERR_BUFFER_FULL;
+    *length = (uint16_t)used;
+    return SOLARI_OK;
+}
+
+/* Stage, save, then activate. No success payload escapes before durable state. */
+solariStatus clientControlHandleDurable(clientControlState *st, clientConfig *cfg,
+                                        uint64_t selfNodeId,
+                                        const uint8_t *payload, size_t payloadLen,
+                                        uint8_t *resultBuf, size_t resultCap,
+                                        size_t *resultLen, uint16_t *resultTlvCount,
+                                        clientControlOutcome *out)
+{
+    clientConfig candidate;
+    clientControlState proposed;
+    solariStatus rc;
+    char *snapshot;
+    uint16_t snapshotLen = 0;
+    if (!st || !cfg || !out) return ERR_INVALID_ARG;
+    candidate = *cfg;
+    proposed = *st;
+    rc = clientControlHandle(&proposed, &candidate, selfNodeId, payload, payloadLen,
+                             resultBuf, resultCap, resultLen, resultTlvCount, out);
+    if (rc != SOLARI_OK || !out->applied) return rc;
+    snapshot = (char *)malloc(CLIENT_CTRL_BLOB_MAX + 1);
+    rc = snapshot ? stateSnapshot(&candidate, snapshot, CLIENT_CTRL_BLOB_MAX + 1,
+                                  &snapshotLen) : ERR_PLATFORM;
+    if (rc == SOLARI_OK)
+        rc = clientControlStateSave(&candidate, &proposed,
+                                     (const uint8_t *)snapshot, snapshotLen);
+    free(snapshot);
+    if (rc != SOLARI_OK) {
+        out->applied = false;
+        if (buildResult(out->verb, rc, st->appliedEpoch, resultBuf, resultCap,
+                        resultLen, resultTlvCount) != SOLARI_OK)
+            out->wantReply = false;
+        solariLogf(SOLARI_LOG_ERROR, "control: durable save failed; epoch remains %llu",
+                   (unsigned long long)st->appliedEpoch);
+        return rc;
+    }
+    candidate.configEpoch = proposed.appliedEpoch;
+    *cfg = candidate;
+    *st = proposed;
     return SOLARI_OK;
 }
 
@@ -453,18 +622,9 @@ void clientControlPoll(clientControlIo *io, clientContext *ctx,
                 hdr.msgType == SCP_MSG_CONTROL &&
                 handled < CLIENT_CTRL_BURST) {
                 handled++;
-                (void)clientControlHandle(st, cfg, ctx->nodeId, payload, plen,
+                (void)clientControlHandleDurable(st, cfg, ctx->nodeId, payload, plen,
                                           tlv, sizeof tlv, &tlvLen, &tlvCount,
                                           &oc);
-                if (oc.applied &&
-                    clientControlStateSave(cfg, st, oc.blob, oc.blobLen) != SOLARI_OK)
-                    /* Hot-apply succeeded (running config is current, so the
-                     * convergence ack below is truthful for this process); only
-                     * restart-durability failed. Make it loud rather than silent. */
-                    solariLogf(SOLARI_LOG_ERROR,
-                               "control: applied epoch %llu but state persist "
-                               "failed; config will not survive a restart",
-                               (unsigned long long)st->appliedEpoch);
                 if (oc.wantReply) {
                     if (!solariReporterConnected(ctx->rep))
                         (void)solariReporterConnect(ctx->rep);

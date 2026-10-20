@@ -8,10 +8,10 @@
  * an SCP_MSG_CONTROL_RESULT over its existing ingest (push) connection so the
  * server folds the applied epoch into convergence (serverControlOnResult).
  *
- * Layering mirrors serverControl.c: all parse/apply/decide logic is pure over
- * caller memory (no sockets, no files) and unit-testable; the transport glue
- * (SUB dial + poll + reply send) and the tiny state file are separate and the
- * transport is compiled only with CLIENT_WITH_REPORTING.
+ * Parse/apply/decide logic remains pure over caller memory. The runtime durable
+ * entrypoint stages that result, saves a complete effective-config snapshot,
+ * and activates only after persistence succeeds. Transport is compiled only
+ * with CLIENT_WITH_REPORTING.
  */
 #ifndef SOLARI_CLIENT_CONTROL_H
 #define SOLARI_CLIENT_CONTROL_H
@@ -30,7 +30,7 @@ typedef struct {
 /* Outcome of one handled directive, for the I/O glue. */
 typedef struct {
     bool           wantReply;   /* a CONTROL_RESULT payload was built        */
-    bool           applied;     /* cfg changed: persist blob + epoch         */
+    bool           applied;     /* cfg changed (durable in HandleDurable)    */
     uint8_t        verb;        /* directive verb (0 if unparseable)         */
     const uint8_t *blob;        /* applied config blob (aliases the inbound  */
     uint16_t       blobLen;     /*   payload; valid until the next recv)     */
@@ -52,7 +52,7 @@ solariStatus clientControlApplyBlob(clientConfig *cfg, const char *json, size_t 
  * acknowledged as converged without re-applying), apply CTRL_SET_CONFIG /
  * CTRL_PROVISION blobs onto cfg, and build the CONTROL_RESULT payload
  * (TLV_CTRL_VERB + TLV_ERROR_CODE + TLV_CTRL_TARGET_EPOCH = applied epoch)
- * into resultBuf. Pure; the caller sends the reply and persists state.
+ * into resultBuf. Pure; runtime callers use HandleDurable before sending it.
  * Returns the directive's own outcome (SOLARI_OK also for a clean drop). */
 solariStatus clientControlHandle(clientControlState *st, clientConfig *cfg,
                                  uint64_t selfNodeId,
@@ -61,20 +61,30 @@ solariStatus clientControlHandle(clientControlState *st, clientConfig *cfg,
                                  size_t *resultLen, uint16_t *resultTlvCount,
                                  clientControlOutcome *out);
 
+/* Runtime entrypoint: validate in a candidate, persist before activating cfg
+ * and epoch, then build a truthful result. Save failure keeps both unchanged. */
+solariStatus clientControlHandleDurable(clientControlState *st, clientConfig *cfg,
+                                        uint64_t selfNodeId,
+                                        const uint8_t *payload, size_t payloadLen,
+                                        uint8_t *resultBuf, size_t resultCap,
+                                        size_t *resultLen, uint16_t *resultTlvCount,
+                                        clientControlOutcome *out);
+
 /* ---- applied-state persistence (file I/O only; no sockets) ---- */
 
 /* Resolve the state-file path for cfg into out ("" when persistence is off:
  * no ctrlStateFile and no spoolDb to derive from). */
 void clientControlStatePath(const clientConfig *cfg, char *out, size_t cap);
 
-/* Load the persisted applied state ("<epoch>\n<blob>"): sets st->appliedEpoch
+/* Load versioned length/checksummed applied state: sets st->appliedEpoch
  * (floored at cfg->configEpoch) and re-applies the stored blob when its epoch
- * is newer than the .conf's, so a restart keeps pushed config. Missing or
- * unreadable state degrades to the .conf (SOLARI_OK). */
+ * is newer than the .conf's, so a restart keeps pushed config. Missing
+ * state starts at the .conf; unreadable, legacy or corrupt state returns error
+ * without advancing its epoch. */
 solariStatus clientControlStateLoad(clientControlState *st, clientConfig *cfg);
 
-/* Persist the applied state atomically-ish (write + rename). No-op (OK) when
- * persistence is off. */
+/* Persist versioned state with checked writes, file sync, atomic replacement,
+ * and directory sync on POSIX. An absent persistence path is an error. */
 solariStatus clientControlStateSave(const clientConfig *cfg,
                                     const clientControlState *st,
                                     const uint8_t *blob, uint16_t blobLen);
