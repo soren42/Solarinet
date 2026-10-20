@@ -231,6 +231,34 @@ static void test_looks_like_csr(void)
     TEST_ASSERT_FALSE(ctlLooksLikeCsr(NULL));
 }
 
+static void test_request_stream_requires_complete_bounded_line(void)
+{
+    int fds[2];
+    char request[CTL_REQ_CAP];
+    char long_line[8192];
+    memset(long_line, 'x', sizeof long_line);
+    long_line[sizeof long_line - 1] = '\n';
+    TEST_ASSERT_EQUAL_INT(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
+    TEST_ASSERT_EQUAL_INT(4, write(fds[0], "PING", 4));
+    TEST_ASSERT_EQUAL_INT(1, write(fds[0], "\n", 1));
+    TEST_ASSERT_EQUAL_INT(5, ctlReadLine(fds[1], request, sizeof request));
+    TEST_ASSERT_EQUAL_STRING("PING\n", request);
+    TEST_ASSERT_EQUAL_INT((int)sizeof long_line,
+                          write(fds[0], long_line, sizeof long_line));
+    TEST_ASSERT_EQUAL_INT((int)sizeof long_line,
+                          ctlReadLine(fds[1], request, sizeof request));
+    TEST_ASSERT_EQUAL_INT(0, shutdown(fds[0], SHUT_WR));
+    close(fds[0]);
+    close(fds[1]);
+
+    TEST_ASSERT_EQUAL_INT(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
+    TEST_ASSERT_EQUAL_INT(4, write(fds[0], "PING", 4));
+    TEST_ASSERT_EQUAL_INT(0, shutdown(fds[0], SHUT_WR));
+    TEST_ASSERT_EQUAL_INT(-1, ctlReadLine(fds[1], request, sizeof request));
+    close(fds[0]);
+    close(fds[1]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -245,5 +273,6 @@ int main(void)
     RUN_TEST(test_pool_delete_guard);
     RUN_TEST(test_reply_format);
     RUN_TEST(test_looks_like_csr);
+    RUN_TEST(test_request_stream_requires_complete_bounded_line);
     return UNITY_END();
 }

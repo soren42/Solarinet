@@ -22,6 +22,7 @@
  */
 #include <ctype.h>
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,6 +31,7 @@
 #include <unistd.h>
 
 #define CTL_MAX_LINE (256 * 1024)   /* generous: CSR/cert PEMs are a few KB */
+#define CTL_REQUEST_CAP 16384        /* matches solariCtl.c CTL_REQ_CAP */
 
 /* URL-encode `in` into `out` (cap incl. NUL): keep the bare-token set the
  * bridge's parser treats as safe, %XX everything else. Mirrors ctlPctEncode.
@@ -123,24 +125,27 @@ static int ctlRoundTrip(const char *sockPath, const char *req,
     }
     while (off < len) {
         ssize_t w = write(fd, req + off, len - off);
+        if (w < 0 && errno == EINTR) continue;
         if (w <= 0) { close(fd); return -1; }
         off += (size_t)w;
     }
     off = 0;
+    int complete = 0;
     for (;;) {
         ssize_t r;
         char   *nl;
         if (off + 1 >= cap) { close(fd); return -1; }
         r = read(fd, reply + off, cap - 1 - off);
+        if (r < 0 && errno == EINTR) continue;
         if (r < 0) { close(fd); return -1; }
         if (r == 0) break;
         off += (size_t)r;
         reply[off] = '\0';
         nl = strchr(reply, '\n');
-        if (nl) { *nl = '\0'; break; }
+        if (nl) { *nl = '\0'; complete = 1; break; }
     }
     close(fd);
-    return (off > 0) ? 0 : -1;
+    return complete ? 0 : -1;
 }
 
 static void usage(const char *a0)
@@ -207,7 +212,7 @@ int main(int argc, char **argv)
             return 3;
         }
         n = (size_t)snprintf(req, CTL_MAX_LINE, "SIGN op=%s csr=%s\n", op, enc);
-        if (n >= CTL_MAX_LINE) {
+        if (n >= CTL_REQUEST_CAP) {
             fprintf(stderr, "solariCtlClient: request too large\n");
             free(csr); free(enc); free(req); free(reply);
             return 3;

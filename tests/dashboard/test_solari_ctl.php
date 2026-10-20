@@ -14,6 +14,8 @@ function assert_true(bool $cond, string $message): void
 $rc = new ReflectionClass(SolariCtl::class);
 assert_true($rc->getConstant('REPLY_CAP') === 16384,
     'SolariCtl::REPLY_CAP must match src/server/solariCtl.c CTL_REPLY_CAP');
+assert_true($rc->getConstant('REQUEST_CAP') === 16384,
+    'SolariCtl::REQUEST_CAP must match src/server/solariCtl.c CTL_REQ_CAP');
 
 $parse = $rc->getMethod('parseReply');
 $parse->setAccessible(true);

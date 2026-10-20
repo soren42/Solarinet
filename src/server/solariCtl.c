@@ -94,9 +94,11 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -117,9 +119,10 @@
 #  include <mbedtls/version.h>
 #endif
 
-/* Largest single operator request line we will read in one poll. The PHP layer
+/* Largest single operator request line. The PHP layer
  * frames one request per line; anything larger is a malformed/abusive caller. */
-#define CTL_REQ_CAP   4096
+#define CTL_REQ_CAP   16384
+#define CTL_READ_TIMEOUT_MS 2000
 /* Largest reply line we assemble. */
 #define CTL_REPLY_CAP 16384   /* large enough to return a URL-encoded signed cert */
 /* Max accepted-but-unserviced backlog on the listening socket. */
@@ -1358,6 +1361,43 @@ void serverCtlClose(serverCtl *ctl)
     free(ctl);
 }
 
+/* Read one complete request with an absolute deadline. Fragmented writes are
+ * normal for a stream socket; never dispatch an unterminated prefix. */
+static ssize_t ctlReadLine(int fd, char *out, size_t cap)
+{
+    struct timespec ts;
+    int64_t deadline;
+    size_t used = 0;
+    if (cap < 2 || clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+    deadline = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 +
+               CTL_READ_TIMEOUT_MS;
+    while (used < cap - 1) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int64_t now, remaining;
+        ssize_t got;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+        now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        remaining = deadline - now;
+        if (remaining <= 0) return -1;
+        int ready = poll(&pfd, 1, (int)remaining);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready <= 0 || (pfd.revents & (POLLERR | POLLNVAL))) return -1;
+        got = recv(fd, out + used, cap - 1 - used, MSG_DONTWAIT);
+        if (got < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
+            continue;
+        if (got <= 0) return -1;
+        if (memchr(out + used, '\n', (size_t)got) != NULL) {
+            char *end = memchr(out + used, '\n', (size_t)got);
+            size_t line_len = (size_t)(end - out) + 1;
+            if (line_len != used + (size_t)got) return -1;
+            out[line_len] = '\0';
+            return (ssize_t)line_len;
+        }
+        used += (size_t)got;
+    }
+    return -1;
+}
+
 /* Accept and service exactly one ready connection: read one request line,
  * dispatch it, write the reply, close. Returns SOLARI_OK if a request was
  * serviced, ERR_CONN_RETRY if nothing was ready, or a platform error. The
@@ -1402,14 +1442,12 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
         }
     }
 
-    got = read(cfd, req, sizeof req - 1);
+    got = ctlReadLine(cfd, req, sizeof req);
     if (got <= 0) {
-        if (got < 0)
-            solariLogf(SOLARI_LOG_WARN, "ctl: read() failed: %s", strerror(errno));
+        solariLogf(SOLARI_LOG_WARN, "ctl: incomplete, oversized, or timed-out request");
         close(cfd);
         return ERR_CONN_RETRY;
     }
-    req[got] = '\0';
 
     replyLen = ctlHandleLine(ctl, req, peerClass, peerUid, reply, sizeof reply);
 
@@ -1417,7 +1455,7 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
     {
         size_t off = 0;
         while (off < replyLen) {
-            ssize_t w = write(cfd, reply + off, replyLen - off);
+            ssize_t w = send(cfd, reply + off, replyLen - off, MSG_NOSIGNAL);
             if (w <= 0) {
                 if (w < 0 && errno == EINTR) continue;
                 break;

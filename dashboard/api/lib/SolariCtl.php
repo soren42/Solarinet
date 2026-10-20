@@ -36,6 +36,8 @@ final class SolariCtl
 
     /** Largest reply line we will read (matches CTL_REPLY_CAP in solariCtl.c). */
     private const REPLY_CAP = 16384;
+    /** Largest request line accepted by solariCtl.c, including its newline. */
+    private const REQUEST_CAP = 16384;
 
     /**
      * Send one VERB request to the bridge and return the parsed reply.
@@ -230,6 +232,9 @@ final class SolariCtl
     /** Open the AF_UNIX socket, write one line, read one reply line, close. */
     private static function transact(string $line): string
     {
+        if (strlen($line) >= self::REQUEST_CAP) {
+            Response::error('control_bad_request', 'Operator request exceeds bridge limit.', 400);
+        }
         $sock = getenv('SOLARI_CTL_SOCK');
         if ($sock === false || $sock === '') {
             $sock = self::DEFAULT_SOCK;
@@ -248,16 +253,22 @@ final class SolariCtl
 
         stream_set_timeout($fp, self::TIMEOUT_SEC);
 
-        $written = @fwrite($fp, $line);
-        if ($written === false) {
-            fclose($fp);
-            Response::error('control_unavailable', 'Failed to send to operator bridge.', 502);
+        $offset = 0;
+        $length = strlen($line);
+        while ($offset < $length) {
+            $written = @fwrite($fp, substr($line, $offset));
+            $meta = stream_get_meta_data($fp);
+            if ($written === false || $written === 0 || !empty($meta['timed_out'])) {
+                fclose($fp);
+                Response::error('control_unavailable', 'Failed to send complete operator request.', 502);
+            }
+            $offset += $written;
         }
 
         // The bridge replies with exactly one '\n'-terminated line then closes.
         $reply = '';
         while (!feof($fp) && strlen($reply) < self::REPLY_CAP) {
-            $chunk = fread($fp, self::REPLY_CAP);
+            $chunk = fread($fp, self::REPLY_CAP - strlen($reply));
             if ($chunk === false || $chunk === '') {
                 $meta = stream_get_meta_data($fp);
                 if (!empty($meta['timed_out'])) {
@@ -272,8 +283,8 @@ final class SolariCtl
         }
         fclose($fp);
 
-        if ($reply === '') {
-            Response::error('control_unavailable', 'No reply from operator bridge.', 502);
+        if ($reply === '' || strpos($reply, "\n") === false) {
+            Response::error('control_unavailable', 'Incomplete reply from operator bridge.', 502);
         }
         return $reply;
     }
