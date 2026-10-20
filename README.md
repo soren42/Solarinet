@@ -4,31 +4,28 @@
 
 SolariNet observes a private intranet from three vantage points — a per-host **client**, on-the-wire **remote monitors**, and a fusing **server** — and publishes one authoritative picture of health to a PHP command-and-control dashboard. The full design is in [docs/SolariNet_Architecture_and_Plan.html](docs/SolariNet_Architecture_and_Plan.html), which is the single source of truth for the build.
 
-> **Engineering rules.** ISO C99, functions only — no C++, no OOP emulation beyond the opaque-handle pattern. `camelCase` identifiers, K&R braces, four-space indent. No Node.js / server-side JS anywhere in the toolchain; the only non-C runtime is PHP 8.x for the dashboard. All wire data is big-endian and packed field-by-field — never `memcpy` a struct onto the wire.
+> **Engineering rules.** The control plane is ISO C99, functions only — no C++, no OOP emulation beyond the opaque-handle pattern. `camelCase` identifiers, K&R braces, four-space indent. The dashboard uses PHP 8.x and browser JavaScript; operational integrations use Python. No Node.js server or bundler is required. All wire data is big-endian and packed field-by-field — never `memcpy` a struct onto the wire.
 
-## Build status by phase
+## Current status
 
-| Phase | Scope | State |
-|---|---|---|
-| 0 · Foundation | Repo layout, CMake + Makefile, toolchains | ✅ done |
-| 1 · libsolari core | common, error, time, log, crypto, framing, TLV, messages | ✅ done |
-| 2 · libsolari I/O | config parser + SQLite spool done & tested; nng/mbedTLS transport written to contract (compile-pending vendored nng) | 🔄 in progress |
-| 3 · Client + PAL | solariClient across the OS matrix | ⏳ pending |
-| 4 · Remote Monitor | probe engine + HRW redundancy | ⏳ pending |
-| 5 · Server | ingest, lease failover, MariaDB persistence | ⏳ pending |
-| 6 · Dashboard | Design handoff imported to dashboard/public (in-browser React PWA); reconciled vs §11.2 (see dashboard/API_RECONCILIATION.html). PHP/Apache REST+SSE layer still to build. | 🔄 in progress |
-| 7 · Hardening | enrollment, packaging, CI, docs | ⏳ pending |
+The C client, monitor, server, PHP API, browser dashboard, SoR, and deployment
+integrations have implementations and run on the intranet. The original phase
+table became stale as those components were built. **Implementation is not the
+same as release readiness:** the [stabilization workflow](docs/SolariNet_Stabilization_Integration_Workflow_2026-08-09.md)
+freezes new feature work until authorization, identity, durable delivery,
+schema, freshness, and fault-injection gates pass. The [October 2026 baseline](docs/SolariNet_Stabilization_Baseline_2026-10-20.html)
+records what was actually checked and what remains unverified.
 
 ## Building
 
-The Phase 1 core and its test suite have **no external dependencies** and build with any C99 compiler. CMake ≥ 3.16 drives everything; a thin `Makefile` wraps the common invocations.
+The core and its test suite have **no external dependencies** and build with any C99 compiler. The full client, monitor, and server build uses nng, mbedTLS, SQLite, cJSON, and MariaDB Connector/C. CMake ≥ 3.16 drives the build; a thin `Makefile` wraps common invocations.
 
 ```
 make core      # build libsolari core + tests (zero external deps)
 make test      # build and run the full Unity / ctest suite
 make clean     # remove all build trees
 
-# Later phases (need vendored nng / mbedTLS / SQLite under third_party/):
+# Full components (require the development libraries described below):
 make client    # solariClient   (all OS targets)
 make monitor   # solariMonitor  (Linux, all arch)
 make server    # solariServer   (x86_64 / arm64)
@@ -63,10 +60,9 @@ lib/solari/       libsolari implementation
 src/client/       solariClient + platform abstraction (plat/)
 src/monitor/      solariMonitor probe engine
 src/server/       solariServer ingest / lease / DB / control
-dashboard/        PHP 8.x data layer (contract only)
+dashboard/        PHP 8.x API + browser dashboard
 db/               MariaDB schema + migrations
-config/           sample .conf files
-deploy/           systemd units + enrollment scripts
+deploy/           systemd units, integrations, enrollment and sample configs
 tests/            unit (Unity), integration, fault injection, fixtures
 third_party/      vendored deps (nng, mbedTLS, SQLite, cJSON, Unity)
 cmake/toolchains/ cross-compile toolchain files
