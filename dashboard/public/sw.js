@@ -11,17 +11,17 @@
        blip (so the C2 keeps painting offline). This avoids the stale-bundle
        trap where a redeploy was masked by a cache-first shell.
      - vendored libs + fonts + icons: cache-first (immutable; rarely change).
-     - /api/* reads: network-first with a cache fallback (live wins; last
-       good payload survives a blip; the adapter fixture is the deeper fallback).
+     - /api/* reads: network only. Authenticated data must never be served from
+       a prior session's cache or presented as fresh during a network outage.
      - everything else: network, falling back to cache.
 
    Bump CACHE_VERSION on any vendor/asset change to evict the old set.
    ============================================================ */
 "use strict";
 
-const CACHE_VERSION = "solari-v6";
+// Bump the version to evict API responses cached by earlier service workers.
+const CACHE_VERSION = "solari-v7";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
-const API_CACHE = CACHE_VERSION + "-api";
 
 // App shell: everything index.html pulls in to render the last view.
 // Paths are relative to the SW scope (dashboard/public/).
@@ -103,9 +103,10 @@ self.addEventListener("fetch", function (event) {
   // SSE stream must never be cached/buffered.
   if (url.pathname.indexOf("/api/stream") === 0) return;
 
-  // API reads: network-first, fall back to last good cached response.
+  // API reads are session-bound and time-sensitive. Never cache or replay them;
+  // let a failed fetch reach api.jsx so the UI can label the view offline.
   if (url.pathname.indexOf("/api/") === 0) {
-    event.respondWith(networkFirst(req, API_CACHE));
+    event.respondWith(fetch(req, { cache: "no-store" }));
     return;
   }
 

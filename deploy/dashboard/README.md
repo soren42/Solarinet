@@ -107,4 +107,7 @@ A reporting client is marked `up` and its `lastSeenAt` advances each cycle.
 - The php-fpm pool runs as the **repo owner** so PHP can read `solari-auth.json`
   (0600) and connect to the jason-owned `solariCtl` socket.
 - The service worker serves app code **network-first**; a redeploy is picked up
-  on reload. Bump `CACHE_VERSION` in `sw.js` only on vendored-asset changes.
+  on reload. It never stores `/api/` responses because those may contain
+  session-bound inventory or health data. An offline API request fails, and the
+  dashboard must label any fallback as offline. Bump `CACHE_VERSION` when a
+  changed worker must evict older caches; v7 removes the former API cache.

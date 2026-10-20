@@ -113,6 +113,8 @@ jobs:
         run: |
           node tests/dashboard/test_jsx_parse.js
           node tests/dashboard/test_layout.js
+      - name: Service worker authenticated-cache boundary
+        run: node tests/dashboard/test_sw_cache.js
       - name: Lifecycle UI suite
         run: node tests/dashboard/test_lifecycle_ui.js
       - name: Panel AW UI suite
