@@ -117,6 +117,10 @@
     var url = path.charAt(0) === "/" && path.indexOf("/api") === 0 ? path : (BASE + path);
     var method = opts.method || "GET";
     var isWrite = method !== "GET" && method !== "HEAD";
+    if (isWrite && path !== EP.login && path !== EP.logout
+        && window.SOLARI && window.SOLARI.source !== "live") {
+      return Promise.reject(ApiError("DATA_STALE", "Live data is unavailable; actions are paused."));
+    }
     return fetch(url, {
       method: method,
       headers: Object.assign(
@@ -185,7 +189,6 @@
     fleetCatalog: "/api/control/fleet-catalog",
     fleetProvision: "/api/control/fleet-provision",
     image:        "/api/control/fleet-image",
-    stream:       "/api/stream",
     login:        "/api/auth/login",
     logout:       "/api/auth/logout",
     whoami:       "/api/auth/whoami",
@@ -1004,8 +1007,16 @@
       return loadLive().then(function (live) {
         Object.keys(live).forEach(function (k) { window.SOLARI[k] = live[k]; });
         window.SOLARI.source = "live";
+        window.SOLARI.lastLiveAt = Date.now();
+        window.SOLARI.staleReason = null;
         window.SOLARI.api = API;
         return window.SOLARI;
+      }).catch(function (err) {
+        if (window.SOLARI && window.SOLARI.source !== "offline") {
+          window.SOLARI.source = "stale";
+          window.SOLARI.staleReason = err && err.message ? err.message : "refresh failed";
+        }
+        throw err;
       });
     },
 
@@ -1057,18 +1068,6 @@
     login:  function (username, password) { return post(EP.login, { username: username, password: password }); },
     logout: function () { return post(EP.logout, {}); },
 
-    // live SSE stream (§8.4 / §11.1) — optional; screens may subscribe.
-    stream: function (onEvent) {
-      if (!window.EventSource) return null;
-      var es = new EventSource(BASE === "/api" ? EP.stream : (BASE + "/stream"));
-      ["nodeStateChange", "alertFired", "probeUpdate"].forEach(function (name) {
-        es.addEventListener(name, function (e) {
-          var data; try { data = JSON.parse(e.data); } catch (_) { data = e.data; }
-          onEvent && onEvent(name, data);
-        });
-      });
-      return es;
-    },
   };
 
   // =====================================================================
@@ -1092,6 +1091,8 @@
     var target = window.SOLARI || (window.SOLARI = {});
     Object.keys(live).forEach(function (k) { target[k] = live[k]; });
     target.source = "live";
+    target.lastLiveAt = Date.now();
+    target.staleReason = null;
     target.api = API;
     return target;
   }

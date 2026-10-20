@@ -73,6 +73,12 @@ Browse to `https://dashboard.akoria.net/` (alias `https://solarinet.akoria.net/`
 and sign in. Re-run step 6's `cp` after any SPA
 change (Apache serves a copy). API (PHP) edits are live from the repo.
 
+The dashboard polls every 10 seconds. Failed refreshes retain the last real
+snapshot with a visible **DATA STALE** age and pause write actions. The demo
+fixture is labeled separately. `/api/stream` returns an immediate 204 so older
+EventSource clients release their FPM worker and stop reconnecting; a dedicated
+event bridge requires a monotonic durable cursor before SSE can return.
+
 ## 7. Client agents (host metrics)
 
 A `solariClient` reports a host's CPU/RAM/disk/process metrics to the server's

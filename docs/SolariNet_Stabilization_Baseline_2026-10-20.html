@@ -28,10 +28,10 @@
   .observed { color:#066174; } .inferred { color:var(--warn); } .unverified { color:var(--danger); }
   ol { padding-left:23px; } li { margin:5px 0; }
   footer { border-top:1px solid var(--line); padding-top:13px; color:var(--muted); font-size:.82rem; margin-top:30px; }
-  @page { size:Letter; margin:.44in .55in; }
+  @page { size:Letter; margin:.40in .50in; }
   @media print {
     html { background:#fff; }
-    body { max-width:none; padding:0; font-size:.92em; line-height:1.40; }
+    body { max-width:none; padding:0; font-size:.90em; line-height:1.38; }
     h2, h3 { break-after:avoid; }
     .callout, .note { break-inside:avoid; }
     thead { display:table-header-group; }
@@ -76,6 +76,7 @@
   <li><span class="tag observed">Observed</span> The F-08 SoR candidate confirms mandatory broker routing before checkpointing, acknowledges consumer deliveries only after successful primary target apply, and reconciles periodically. Nineteen fault and ownership tests pass. F-08 remains open: live broker/crash drills and durable retry for the steel DNS copy are outstanding.</li>
   <li><span class="tag observed">Observed</span> The F-12 migration candidate installed 21 monitoring and 6 SoR files in disposable MariaDB 11.8 databases, then passed clean rechecks. It refused an untracked populated database and an interrupted ledger row. The former <code>--init-db</code> snapshot path now fails explicitly. Production adoption remains open; see the standalone migration runbook and PDF.</li>
   <li><span class="tag observed">Observed</span> The F-14 auth candidate gates local password login at the API and requires a private rate-limit directory; negative tests cover lockout, stale OIDC state, missing token claims, session expiry, and local role downgrade. The complete dashboard PHP suite passes. Live SSO callback, break-glass operation, and browser session tests remain open.</li>
+  <li><span class="tag observed">Observed</span> The F-13 freshness candidate marks retained real data stale after a failed poll, shows its age, and pauses writes until recovery. Browser-adapter simulation verifies outage and recovery. The former SSE route immediately returns 204, releasing the PHP worker; the dashboard continues its 10-second poll. Authenticated browser observation remains open.</li>
 </ul>
 
 <h2>3. Priority sequence and executable gates</h2>
