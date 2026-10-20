@@ -1,34 +1,81 @@
 #!/usr/bin/env python3
-"""gen-bare.py — emit single-label (NetBIOS/bare-name) master zones for every
-akoria.net host + CNAME alias, so dumb SMB/legacy clients that query "NAS-X"
-(no akoria.net suffix) resolve — the behavior Pi-hole's dnsmasq gave us before.
+"""Render bare-name zones into an isolated directory, retaining applied serials.
 
-Reads the rendered forward zone (db.akoria.net), resolves A + CNAME->A, and
-writes db.bare-<name> + named.conf.bare into OUTDIR. Zone file path in the
-config is fixed at /etc/bind/zones/ (same on xenon and inside steel's container).
-Usage: gen-bare.py <src db.akoria.net> <outdir>
+Usage: gen-bare.py FORWARD_ZONE OUTPUT [--previous APPLIED_ZONES]
+The runtime zone path defaults to /etc/bind/zones and is configurable for an
+atomic release directory. No source or previous-generation file is modified.
 """
-import re, sys, os
-src, outdir = sys.argv[1], sys.argv[2]
-os.makedirs(outdir, exist_ok=True)
-A, C = {}, {}
-for line in open(src):
-    m = re.match(r'^(\S+)\s+IN\s+A\s+(\d+\.\d+\.\d+\.\d+)', line)
-    if m: A[m.group(1).lower()] = m.group(2)
-    m = re.match(r'^(\S+)\s+IN\s+CNAME\s+(\S+)', line)
-    if m: C[m.group(1).lower()] = m.group(2).rstrip('.').split('.')[0].lower()
-names = {}
-names.update(A)
-for alias, tgt in C.items():
-    if tgt in A: names[alias] = A[tgt]          # resolve CNAME -> target IP
-SOA = ("$TTL 300\n@ IN SOA xenon.akoria.net. hostmaster.akoria.net. "
-       "( 2026071001 3600 600 604800 300 )\n@ IN NS xenon.akoria.net.\n")
-stanzas = []
-for name in sorted(names):
-    if name in ('@', '*'): continue
-    open(os.path.join(outdir, f"db.bare-{name}"), "w").write(SOA + f"@ IN A {names[name]}\n")
-    stanzas.append(f'zone "{name}" {{ type master; file "/etc/bind/zones/db.bare-{name}"; }};')
-open(os.path.join(outdir, "named.conf.bare"), "w").write(
-    "// single-label bare-name zones (NetBIOS SMB clients) — see deploy/dns-bare/\n"
-    + "\n".join(stanzas) + "\n")
-print(f"bare zones: {len(stanzas)} names ({len(A)} A + {len(names)-len(A)} CNAME-derived)")
+import argparse
+import ipaddress
+import pathlib
+import re
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "netdb"))
+from zone_serial import SERIAL_TOKEN, atomicWrite, stampZone
+
+
+def renderNames(source):
+    """Resolve local A/CNAME chains; reject cycles instead of dropping records."""
+    addresses, aliases = {}, {}
+    for line in pathlib.Path(source).read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^(\S+)\s+IN\s+A\s+(\S+)", line)
+        if match:
+            addresses[match[1].lower()] = str(ipaddress.IPv4Address(match[2]))
+        match = re.match(r"^(\S+)\s+IN\s+CNAME\s+(\S+)", line)
+        if match:
+            aliases[match[1].lower()] = match[2].rstrip(".").split(".")[0].lower()
+
+    def resolve(name, visited):
+        if name in addresses:
+            return addresses[name]
+        if name in visited:
+            raise ValueError(f"CNAME cycle while rendering bare zone: {name}")
+        if name not in aliases:
+            return None
+        return resolve(aliases[name], visited | {name})
+
+    result = {}
+    for name in sorted(addresses.keys() | aliases.keys()):
+        if name in ("@", "*") or not re.fullmatch(r"[a-z0-9_-]{1,63}", name):
+            continue
+        address = resolve(name, set())
+        if address is not None:
+            result[name] = address
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source")
+    parser.add_argument("output")
+    parser.add_argument("--previous")
+    parser.add_argument("--zone-dir", default="/etc/bind/zones")
+    args = parser.parse_args()
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", args.zone_dir):
+        parser.error("zone directory must be an absolute BIND-safe path")
+    names = renderNames(args.source)
+    if not names:
+        raise ValueError("forward zone contains no usable bare-name records")
+    previous = pathlib.Path(args.previous or args.output)
+    output = pathlib.Path(args.output)
+    zones, stanzas = {}, []
+    for name, address in names.items():
+        template = (f"$ORIGIN {name}.\n$TTL 300\n"
+                    "@ IN SOA xenon.akoria.net. hostmaster.akoria.net. (\n"
+                    f"  {SERIAL_TOKEN} ; serial\n"
+                    "  3600 600 604800 300 )\n"
+                    f"@ IN NS xenon.akoria.net.\n@ IN A {address}\n")
+        filename = f"db.bare-{name}"
+        zones[filename] = stampZone(template, previous / filename)
+        stanzas.append(f'zone "{name}" {{ type primary; file "{args.zone_dir}/{filename}"; }};')
+    for filename, content in zones.items():
+        atomicWrite(output / filename, content)
+    atomicWrite(output / "named.conf.bare",
+                "// Generated bare-name zones; replace as a complete generation.\n"
+                + "\n".join(stanzas) + "\n")
+    print(f"bare zones: {len(names)} names")
+
+
+if __name__ == "__main__":
+    main()

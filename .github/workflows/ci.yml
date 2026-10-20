@@ -78,7 +78,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y \
             build-essential cmake git pkg-config curl unzip ca-certificates \
-            libsqlite3-dev libcjson-dev libmariadb-dev mariadb-client
+            libsqlite3-dev libcjson-dev libmariadb-dev mariadb-client python3-yaml bind9-utils
           # nng + mbedTLS from packages; bootstrap falls back to source if absent.
           sudo apt-get install -y libmbedtls-dev libnng-dev || \
             echo "::warning::libnng-dev/libmbedtls-dev unavailable; server I/O may need --source-deps"
@@ -91,6 +91,8 @@ jobs:
             -DSOLARI_WITH_JSON=ON \
             -DSOLARI_BUILD_TESTS=ON
           cmake --build build-server -j
+      - name: Validate isolated DNS generations
+        run: python3 -m unittest discover -s netdb -p test_zone_generation.py -v
       - name: ctest (full build)
         env:
           SOLARI_TEST_DB: '1'

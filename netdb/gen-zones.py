@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Render BIND zones from the Akoria network source-of-truth.
 
-The interim source is netdb/akoria-hosts.yml. `load_source()` is the ONLY seam
-that knows the source format — swap its body for a MySQL query later and every
-downstream renderer is unchanged. Emits into netdb/zones/:
+Production uses the SoR backend; netdb/akoria-hosts.yml is a legacy fixture.
+`load_source()` selects the backend. Emits into --output (netdb/zones/ by default):
   - db.akoria.net           forward zone (A + CNAME)
   - db.<rev>.in-addr.arpa   one reverse (PTR) zone per /24 in use
   - named.conf.akoria       zone{} declarations for BIND
-Serial is date-based (YYYYMMDDnn); bump nn for multiple renders in a day.
+Unchanged zones retain their applied SOA serial. Changed zones advance from
+--previous, which must identify the last applied generation in production.
 """
-import os, re, sys, datetime, yaml
+import argparse, ipaddress, os, re, sys, yaml
+from zone_serial import SERIAL_TOKEN, atomicWrite, stampZone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC  = os.path.join(HERE, "akoria-hosts.yml")
@@ -29,7 +30,7 @@ def load_source(path=SRC):
     """Source-of-truth boundary. Returns (domain, hosts, ifaces, cnames).
 
     Two backends, selected by the NETDB_SOURCE env var (or --source arg):
-      * "yaml" (default) -- read akoria-hosts.yml, the interim source-of-truth.
+      * "yaml" (default) -- read akoria-hosts.yml, the legacy offline fixture.
       * "sor"            -- render FROM the System of Record (MariaDB `sor` on
                             cesium) via sor/source_sor.py. This closes the loop:
                             DNS becomes a rendered view of the SoR. Requires
@@ -44,34 +45,11 @@ def load_source(path=SRC):
     return d["domain"], d["hosts"], d.get("ifaces", {}), d["cnames"]
 
 
-def _prev_serial(origin):
-    """Read the serial from the previously-rendered zone file (OUT persists
-    between runs), so we can bump monotonically within the same day."""
-    try:
-        with open(os.path.join(OUT, f"db.{origin}")) as f:
-            for line in f:
-                m = re.search(r"(\d{10,})\s*;\s*serial", line)
-                if m:
-                    return int(m.group(1))
-    except FileNotFoundError:
-        pass
-    return None
-
-
-def serial(origin):
-    """Monotonic YYYYMMDDnn: date-based, but strictly increasing so multiple
-    same-day changes each bump the serial (secondaries only AXFR on a higher
-    serial — a static nn silently breaks replication for same-day edits)."""
-    base = int(datetime.date.today().strftime("%Y%m%d")) * 100
-    prev = _prev_serial(origin)
-    return prev + 1 if (prev is not None and prev >= base) else base + 1
-
-
 def _soa(origin):
     primary = f"{NS_HOSTS[0]}.akoria.net."
     return [f"$ORIGIN {origin}.", "$TTL 300", "",
             f"@   IN SOA {primary} {HOSTMASTER} (",
-            f"            {serial(origin)} ; serial",
+            f"            {SERIAL_TOKEN} ; serial",
             "            3600       ; refresh",
             "            600        ; retry",
             "            604800     ; expire",
@@ -128,22 +106,38 @@ def named_conf(domain, revs):
 
 
 def main():
-    # allow `gen-zones.py --source sor` as a shorthand for NETDB_SOURCE=sor
-    if "--source" in sys.argv:
-        i = sys.argv.index("--source")
-        if i + 1 < len(sys.argv):
-            os.environ["NETDB_SOURCE"] = sys.argv[i + 1]
+    global ZONEDIR
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", choices=["sor", "yaml"])
+    parser.add_argument("--output", default=OUT)
+    parser.add_argument("--previous", help="last applied zone directory; defaults to output")
+    parser.add_argument("--zone-dir", default=ZONEDIR,
+                        help="BIND runtime zone path in generated declarations")
+    args = parser.parse_args()
+    if args.source:
+        os.environ["NETDB_SOURCE"] = args.source
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", args.zone_dir):
+        parser.error("zone directory must be an absolute BIND-safe path")
+    ZONEDIR = args.zone_dir
     domain, hosts, ifaces, cnames = load_source()
-    os.makedirs(OUT, exist_ok=True)
-    # Render BEFORE truncating the file: forward()/reverses() read the prior
-    # serial out of the existing OUT files, and open(...,"w") would truncate
-    # the forward zone before forward() could read its old serial.
-    fwd = forward(domain, hosts, ifaces, cnames)
-    open(os.path.join(OUT, f"db.{domain}"), "w").write(fwd)
+    label = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.?$")
+    for name in [domain, *hosts, *ifaces, *cnames, *cnames.values()]:
+        if not isinstance(name, str) or not label.fullmatch(name):
+            raise ValueError(f"invalid DNS name: {name!r}")
+    for address in [*(host["ip"] for host in hosts.values()), *ifaces.values()]:
+        ipaddress.IPv4Address(address)
+    previous = args.previous or args.output
+    zones = {domain: forward(domain, hosts, ifaces, cnames)}
     revs = reverses(domain, hosts, ifaces)
-    for rev, txt in revs.items():
-        open(os.path.join(OUT, f"db.{rev}"), "w").write(txt)
-    open(os.path.join(OUT, "named.conf.akoria"), "w").write(named_conf(domain, revs))
+    zones.update(revs)
+    # Finish all serial decisions before writing, even for the legacy in-place
+    # invocation. Production callers render into a new isolated generation.
+    zones = {origin: stampZone(text, os.path.join(previous, f"db.{origin}"))
+             for origin, text in zones.items()}
+    os.makedirs(args.output, exist_ok=True)
+    for origin, text in zones.items():
+        atomicWrite(os.path.join(args.output, f"db.{origin}"), text)
+    atomicWrite(os.path.join(args.output, "named.conf.akoria"), named_conf(domain, revs))
     print(f"rendered db.{domain} + {len(revs)} reverse zones + named.conf.akoria")
     print(f"  A records: {len(hosts) + len(ifaces)}   CNAMEs: {len(cnames)}   reverse /24s: {len(revs)}")
 
