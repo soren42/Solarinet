@@ -28,10 +28,10 @@
   .observed { color:#066174; } .inferred { color:var(--warn); } .unverified { color:var(--danger); }
   ol { padding-left:23px; } li { margin:5px 0; }
   footer { border-top:1px solid var(--line); padding-top:13px; color:var(--muted); font-size:.82rem; margin-top:30px; }
-  @page { size:Letter; margin:.62in .68in; }
+  @page { size:Letter; margin:.50in .60in; }
   @media print {
     html { background:#fff; }
-    body { max-width:none; padding:0; }
+    body { max-width:none; padding:0; font-size:.94em; line-height:1.42; }
     h2, h3 { break-after:avoid; }
     .callout, .note { break-inside:avoid; }
     thead { display:table-header-group; }
@@ -72,6 +72,8 @@
   <li><span class="tag observed">Observed</span> PHP route/authorization tests pass; the full dashboard PHP and JS suites pass after the RackWire token-contract correction.</li>
   <li><span class="tag observed">Observed</span> A disposable MariaDB schema accepted every control-plane migration, and all nine live DB integration cases passed, including request-queue behavior. The schema was dropped afterward.</li>
   <li><span class="tag observed">Observed</span> A service-worker harness proved that offline API requests reject instead of reading an old authenticated cache, and activation removes the prior v6 API cache.</li>
+  <li><span class="tag observed">Observed</span> The F-11 control bridge candidate now requires a complete newline-terminated request within a 16 KiB cap and two-second deadline. The PHP and C clients loop on short writes and reject incomplete replies. A socket-pair test exercises fragmented, 8 KiB, and truncated requests; all 30 C suites and PHP parser checks pass.</li>
+  <li><span class="tag observed">Observed</span> The F-08 SoR candidate confirms mandatory broker routing before checkpointing, acknowledges consumer deliveries only after successful primary target apply, and reconciles periodically. Nineteen fault and ownership tests pass. F-08 remains open: live broker/crash drills and durable retry for the steel DNS copy are outstanding.</li>
 </ul>
 
 <h2>3. Priority sequence and executable gates</h2>
