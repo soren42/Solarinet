@@ -30,6 +30,7 @@ steel_host = jason@10.0.0.11
 steel_config_dir = /mnt/data/bind/config
 steel_reload_cmd = sudo docker kill -s HUP bind9
 debounce_sec = 4
+reconcile_interval_sec = 3600
 # SoR password for the render step (source_sor.py reads SOR_DB_PASSWORD)
 sor_db_password = CHANGME-sor-app-pw
 
@@ -48,6 +49,7 @@ source_label = monitoring
 targets = helium, mercury
 domain = akoria.net
 debounce_sec = 4
+reconcile_interval_sec = 3600
 
 [pihole.helium]
 ssh = jason@10.0.0.254

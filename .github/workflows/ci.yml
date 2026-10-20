@@ -30,6 +30,14 @@ permissions:
   contents: read
 
 jobs:
+  sorsync:
+    name: SoR outbox delivery boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fault-inject publisher and consumer failures
+        run: python3 -m unittest discover -s deploy/sorsync -p 'test_*.py' -v
+
   # ---- default core: zero external deps, always builds (Makefile `all`) -----
   core:
     name: core (default, no deps)

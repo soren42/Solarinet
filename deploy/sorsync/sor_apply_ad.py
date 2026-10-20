@@ -22,10 +22,12 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 import pika
 import pymysql
+from delivery import consume_after_apply
 
 CONF = os.environ.get("SORSYNC_CONF",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "sorsync.conf"))
@@ -66,9 +68,13 @@ def ad_query_a(c, name):
     """Current A record IP for name in the zone, or None."""
     rc, out = _sh(c, "query", name, "A")
     if rc != 0:
-        return None
+        if "WERR_DNS_ERROR_NAME_DOES_NOT_EXIST" in out:
+            return None
+        raise RuntimeError(f"AD DNS query failed for {name}: {out.strip()[:160]}")
     m = re.search(r"A:\s+([\d.]+)", out)
-    return m.group(1) if m else None
+    if not m:
+        raise RuntimeError(f"AD DNS query returned no A record for {name}: {out.strip()[:160]}")
+    return m.group(1)
 
 
 def sor_hosts(c):
@@ -92,23 +98,49 @@ def _state_path(c):
 
 def load_state(c):
     try:
-        return set(json.load(open(_state_path(c))))
-    except Exception:  # noqa: BLE001
+        with open(_state_path(c), encoding="utf-8") as state_file:
+            state = json.load(state_file)
+    except FileNotFoundError:
         return set()
+    # Older code stored every desired SoR name, including pre-existing AD
+    # records it did not create. Those names cannot safely be deletion-eligible.
+    if isinstance(state, list):
+        log("legacy AD managed-name state is untrusted; retaining records but "
+            "resetting deletion ownership")
+        return set()
+    if not isinstance(state, dict) or state.get("version") != 2 or not isinstance(state.get("managed"), list):
+        raise ValueError("invalid AD managed-name state format")
+    names = state["managed"]
+    if any(not isinstance(name, str) or not LABEL_RE.match(name) for name in names):
+        raise ValueError("invalid AD managed-name entry")
+    return set(names)
 
 
 def save_state(c, names):
+    path = _state_path(c)
+    directory = os.path.dirname(path) or "."
+    fd, temp_path = tempfile.mkstemp(prefix=".ad-managed-", dir=directory)
     try:
-        json.dump(sorted(names), open(_state_path(c), "w"))
-    except Exception as e:  # noqa: BLE001
-        log(f"state save failed: {e!r}")
+        with os.fdopen(fd, "w", encoding="utf-8") as state_file:
+            json.dump({"version": 2, "managed": sorted(names)}, state_file)
+            state_file.flush()
+            os.fsync(state_file.fileno())
+        os.replace(temp_path, path)
+        dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def reconcile(c):
     protect = {p.strip() for p in c.get("ad", "protect", fallback="radium").split(",") if p.strip()}
     desired = sor_hosts(c)
     managed = load_state(c)
-    added = updated = deleted = 0
+    added = updated = deleted = failed = 0
 
     for name, ip in sorted(desired.items()):
         cur = ad_query_a(c, name)
@@ -116,13 +148,16 @@ def reconcile(c):
             rc, out = _sh(c, "add", name, "A", ip)
             if rc == 0:
                 added += 1
+                managed.add(name)
             else:
+                failed += 1
                 log(f"add {name} {ip} failed: {out.strip()[:160]}")
         elif cur != ip:
             rc, out = _sh(c, "update", name, "A", cur, ip)
             if rc == 0:
                 updated += 1
             else:
+                failed += 1
                 log(f"update {name} {cur}->{ip} failed: {out.strip()[:160]}")
 
     # delete only names WE added that are gone from the SoR (never infra/DC)
@@ -134,14 +169,24 @@ def reconcile(c):
             rc, out = _sh(c, "delete", name, "A", cur)
             if rc == 0:
                 deleted += 1
+                managed.discard(name)
             else:
+                failed += 1
                 log(f"delete {name} {cur} failed: {out.strip()[:160]}")
+        else:
+            managed.discard(name)
 
-    save_state(c, set(desired))
+    # Only names this applier actually created are deletion-eligible. Persist
+    # successful additions even when another operation failed, then leave the
+    # broker event unacked for retry. A pre-existing AD record is never claimed.
+    save_state(c, managed)
     if added or updated or deleted:
         log(f"reconciled akoria.org: +{added} ~{updated} -{deleted}")
     else:
         log("reconciled akoria.org: no change")
+    if failed:
+        log(f"{failed} AD DNS operation(s) failed; delivery remains unacknowledged")
+    return failed == 0
 
 
 def run():
@@ -149,20 +194,11 @@ def run():
     exchange = c.get("amqp", "exchange", fallback="sor.events")
     debounce = c.getfloat("ad", "debounce_sec", fallback=4.0)
     reconnect = c.getfloat("amqp", "reconnect_delay_sec", fallback=5.0)
-    # Periodic self-heal: reconcile even when idle, so out-of-band drift (a manual
-    # AD edit, events missed during a long outage) self-corrects. This is the job
-    # the retired hourly akoria-dns-reconcile.timer used to do. 0 disables it.
     reconcile_interval = c.getfloat("ad", "reconcile_interval_sec", fallback=3600.0)
     queue = "sor.apply.ad"
 
-    log("initial reconcile on startup")
-    try:
-        reconcile(c)
-    except Exception as e:  # noqa: BLE001
-        log(f"initial reconcile error: {e!r}")
-    last_reconcile = time.monotonic()
-
     while _run:
+        conn = None
         try:
             conn = pika.BlockingConnection(pika.URLParameters(c.get("amqp", "url")))
             ch = conn.channel()
@@ -170,24 +206,19 @@ def run():
             ch.queue_declare(queue=queue, durable=True)
             for k in HOST_KEYS:
                 ch.queue_bind(exchange=exchange, queue=queue, routing_key=k)
-            log(f"consuming {queue} (debounce={debounce}s)")
-            dirty = False
-            for method, _props, _body in ch.consume(queue, inactivity_timeout=debounce):
-                if not _run:
-                    break
-                if method is None:
-                    due = reconcile_interval > 0 and (time.monotonic() - last_reconcile) >= reconcile_interval
-                    if dirty or due:
-                        reconcile(c)
-                        last_reconcile = time.monotonic()
-                        dirty = False
-                    continue
-                dirty = True
-                ch.basic_ack(method.delivery_tag)
-            ch.cancel(); conn.close()
+            log(f"consuming {queue} (debounce={debounce}s, reconcile={reconcile_interval}s)")
+            consume_after_apply(ch, queue, debounce, reconcile_interval,
+                                lambda: reconcile(c), lambda: _run)
         except Exception as e:  # noqa: BLE001
             log(f"error: {e!r}; reconnecting in {reconnect}s")
-            time.sleep(reconnect)
+            if _run:
+                time.sleep(reconnect)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()  # requeues unacked deliveries
+                except Exception:
+                    pass
 
 
 def _stop(*_):

@@ -4,9 +4,10 @@
 Polls the `sor_outbox` table (populated by CDC triggers in the same transaction
 as each change) and publishes every new row to the `sor.events` topic exchange
 with routing key `sor.<table>.<action>`. A checkpoint in `sor_sync_state`
-(`emit_checkpoint`) is advanced only after a successful publish, so delivery is
-at-least-once — downstream appliers (e.g. sor_apply_dns) must be idempotent, and
-they are (they re-render the whole view from current SoR state).
+(`emit_checkpoint`) advances only after broker confirmation of every mandatory-
+routed persistent message. Broker outages, negative acknowledgments, and missing
+routes leave the checkpoint behind for retry. Consumers must separately
+acknowledge only after applying.
 
 Config: sorsync.conf  ([sor] db creds, [amqp] url/exchange/poll).
 """
@@ -58,7 +59,36 @@ def get_checkpoint(db):
 
 def set_checkpoint(db, v):
     with db.cursor() as cur:
-        cur.execute("UPDATE sor_sync_state SET v=%s WHERE k='emit_checkpoint'", (v,))
+        # A missing state row must not turn a successful UPDATE of zero rows
+        # into a false checkpoint. Preserve monotonicity if two emitters race.
+        cur.execute(
+            "INSERT INTO sor_sync_state (k,v) VALUES ('emit_checkpoint',%s) "
+            "ON DUPLICATE KEY UPDATE v=GREATEST(v,VALUES(v))", (v,))
+
+
+def publish_batch(ch, db, rows, exchange, checkpoint):
+    """Confirm every route before moving the durable outbox checkpoint.
+
+    Any failure raises and leaves the DB checkpoint unchanged. Already-confirmed
+    messages may be repeated after reconnect; consumers render idempotently.
+    """
+    confirmed = checkpoint
+    for r in rows:
+        rk = f"sor.{r['table_name']}.{r['action']}"
+        body = json.dumps({
+            "outbox_id": r["id"], "table": r["table_name"],
+            "row_id": r["row_id"], "action": r["action"], "ts": r["ts"],
+        })
+        # BlockingChannel in confirm mode returns None on success and raises
+        # UnroutableError or NackError on failure. A missing bound queue is a
+        # failure, including during startup before consumers declare theirs.
+        ch.basic_publish(
+            exchange=exchange, routing_key=rk, body=body, mandatory=True,
+            properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"))
+        confirmed = r["id"]
+    if rows:
+        set_checkpoint(db, confirmed)
+    return confirmed
 
 
 def run():
@@ -76,6 +106,7 @@ def run():
             mq = pika.BlockingConnection(params)
             ch = mq.channel()
             ch.exchange_declare(exchange=exchange, exchange_type="topic", durable=True)
+            ch.confirm_delivery()
             cp = get_checkpoint(db)
             log(f"connected; checkpoint={cp} exchange={exchange}")
             while _run:
@@ -85,18 +116,8 @@ def run():
                         "UNIX_TIMESTAMP(changed_at) ts FROM sor_outbox "
                         "WHERE id > %s ORDER BY id LIMIT %s", (cp, batch))
                     rows = cur.fetchall()
-                for r in rows:
-                    rk = f"sor.{r['table_name']}.{r['action']}"
-                    body = json.dumps({
-                        "outbox_id": r["id"], "table": r["table_name"],
-                        "row_id": r["row_id"], "action": r["action"], "ts": r["ts"],
-                    })
-                    ch.basic_publish(
-                        exchange=exchange, routing_key=rk, body=body,
-                        properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"))
-                    cp = r["id"]
                 if rows:
-                    set_checkpoint(db, cp)
+                    cp = publish_batch(ch, db, rows, exchange, cp)
                     log(f"published {len(rows)} event(s); checkpoint={cp}")
                 else:
                     mq.process_data_events(0)  # keep heartbeats alive

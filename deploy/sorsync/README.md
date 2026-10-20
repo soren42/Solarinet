@@ -23,8 +23,8 @@ ops glue (the accepted non-C exception); the SoR + MQ do the heavy lifting.
 ## Components
 | Daemon | Role |
 |---|---|
-| `sor_emitd.py` | Drains `sor_outbox` (CDC triggers) → publishes `sor.<table>.<action>` to `sor.events`; advances `sor_sync_state.emit_checkpoint`. At-least-once. |
-| `sor_apply_dnsd.py` | Consumes DNS-relevant `sor.events`, debounces, re-renders zones (`gen-zones.py --source sor`), diffs vs live BIND, deploys + `rndc reload` only on change. Idempotent + startup reconcile. |
+| `sor_emitd.py` | Drains `sor_outbox` (CDC triggers) → publishes `sor.<table>.<action>` to `sor.events`; advances `sor_sync_state.emit_checkpoint` only after publisher confirms and mandatory routing. The emitter retries confirmed prefixes after a failure. |
+| `sor_apply_dnsd.py` | Consumes DNS-relevant `sor.events`, debounces, re-renders zones (`gen-zones.py --source sor`), diffs vs live BIND, copies changed files, then confirms reload even when files compare equal so a prior reload failure is retried. Idempotent + startup and hourly reconcile. |
 | `sor_apply_pihole.py` | Render target: SoR host set → `custom.list` on each Pi-hole (helium/mercury) over ssh; reload only on change. Runs on xenon. |
 | `sor_apply_ad.py` | Render target: SoR host set → AD `akoria.org` via `samba-tool dns`. Runs **on radium** (the DC) as root; state-file deletion policy never touches AD infra. |
 | `sor_reconcile_discovery.py` | Folds **adopted, named** `discovered` hosts into the SoR (correlated by IP, v4-mapped-aware), tagged `solarinet_monitor`. New hosts then flow forward to DNS automatically. |
@@ -41,6 +41,13 @@ Routing key `sor.<table>.<action>` (action ∈ insert|update|delete). Body:
 `{"outbox_id":N,"table":"dns_records","row_id":N,"action":"update","ts":epoch}`.
 Consumers re-render from **current** SoR state, so exact payload/ordering don't
 matter — only "something relevant changed."
+
+**Delivery status:** publisher confirms protect the outbox-to-broker boundary.
+The DNS, Pi-hole, and AD appliers now acknowledge after their configured primary
+targets apply, and periodically reconcile from the SoR. **F-08 remains open**
+until broker-loss, consumer-crash, and multi-target drills prove the live chain;
+steel bare-zone replication is still fail-soft and needs durable retry state.
+Do not infer target freshness from an advanced emitter checkpoint alone.
 
 ## Install
 ```

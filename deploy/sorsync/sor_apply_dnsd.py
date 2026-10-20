@@ -2,10 +2,12 @@
 """sor_apply_dnsd — forward applier: SoR change → DNS.
 
 Consumes `sor.events` (DNS-relevant tables), debounces a burst of changes, then
-re-renders BIND zones FROM the SoR (gen-zones.py --source sor), and — only if the
-rendered files differ from what BIND is serving — deploys them and `rndc reload`s.
-Idempotent: it renders the whole view from current SoR state, so at-least-once
-delivery and missed events self-heal (an initial render runs on startup too).
+re-renders BIND zones FROM the SoR (gen-zones.py --source sor), copies changed
+files, and confirms each reconciliation with `rndc reload`.
+Idempotent: it renders the whole view from current SoR state at startup, after
+events, and periodically. A failed primary apply leaves deliveries unacknowledged.
+Steel bare-zone replication remains fail-soft and needs its own durable target
+state before end-to-end delivery can be claimed.
 
 It also renders single-label "bare-name" master zones (gen-bare.py) so dumb SMB /
 legacy clients that query a bare hostname (e.g. NAS-X, no akoria.net suffix, DHCP
@@ -26,6 +28,7 @@ import sys
 import time
 
 import pika
+from delivery import consume_after_apply
 
 CONF = os.environ.get("SORSYNC_CONF",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "sorsync.conf"))
@@ -58,14 +61,16 @@ def render(c):
         log(f"render failed: {r.stderr.strip()[:300]}")
         return False
     # bare-name single-label zones (dumb SMB clients) — derived from the forward
-    # zone we just rendered. Non-fatal: main zones still deploy if this fails.
+    # zone we just rendered. A failed bare render blocks acknowledgment because
+    # the next retry must apply the complete configured DNS target set.
     gen_bare = c.get("dns", "gen_bare", fallback="")
     if gen_bare:
         src = c.get("dns", "zone_src_dir")
         rb = subprocess.run([py, gen_bare, os.path.join(src, "db.akoria.net"), src],
                             capture_output=True, text=True, timeout=60)
         if rb.returncode != 0:
-            log(f"bare-zone render failed (main zones unaffected): {rb.stderr.strip()[:200]}")
+            log(f"bare-zone render failed: {rb.stderr.strip()[:200]}")
+            return False
     return True
 
 
@@ -96,6 +101,10 @@ def deploy_if_changed(c):
             changed.append((nc, dstpath))
 
     if not changed:
+        # A previous copy can have succeeded while rndc reload failed. The
+        # files then compare equal on retry, but BIND may still serve the old
+        # view. Reload before confirming this reconciliation.
+        subprocess.run(reload_cmd, check=True, timeout=30)
         return []
     for f, live in changed:
         subprocess.run(["sudo", "cp", f, live], check=True, timeout=30)
@@ -130,28 +139,26 @@ def push_bare_to_steel(c, changed_names):
 
 
 def apply(c):
-    if render(c):
-        changed = deploy_if_changed(c)
-        if not changed:
-            log("rendered; no zone change (no reload)")
-        else:
-            push_bare_to_steel(c, changed)
+    if not render(c):
+        return False
+    changed = deploy_if_changed(c)
+    if not changed:
+        log("rendered; no zone change (no reload)")
+    else:
+        push_bare_to_steel(c, changed)
+    return True
 
 
 def run():
     c = load_cfg()
     exchange = c.get("amqp", "exchange", fallback="sor.events")
     debounce = c.getfloat("dns", "debounce_sec", fallback=4.0)
+    reconcile = c.getfloat("dns", "reconcile_interval_sec", fallback=3600.0)
     reconnect = c.getfloat("amqp", "reconnect_delay_sec", fallback=5.0)
     queue = "sor.apply.dns"
 
-    log("initial render on startup")
-    try:
-        apply(c)
-    except Exception as e:  # noqa: BLE001
-        log(f"initial render error: {e!r}")
-
     while _run:
+        conn = None
         try:
             conn = pika.BlockingConnection(pika.URLParameters(c.get("amqp", "url")))
             ch = conn.channel()
@@ -159,22 +166,19 @@ def run():
             ch.queue_declare(queue=queue, durable=True)
             for k in DNS_KEYS:
                 ch.queue_bind(exchange=exchange, queue=queue, routing_key=k)
-            log(f"consuming {queue} (debounce={debounce}s)")
-            dirty = False
-            for method, _props, _body in ch.consume(queue, inactivity_timeout=debounce):
-                if not _run:
-                    break
-                if method is None:            # debounce window elapsed
-                    if dirty:
-                        apply(c)
-                        dirty = False
-                    continue
-                dirty = True
-                ch.basic_ack(method.delivery_tag)
-            ch.cancel(); conn.close()
+            log(f"consuming {queue} (debounce={debounce}s, reconcile={reconcile}s)")
+            consume_after_apply(ch, queue, debounce, reconcile,
+                                lambda: apply(c), lambda: _run)
         except Exception as e:  # noqa: BLE001
             log(f"error: {e!r}; reconnecting in {reconnect}s")
-            time.sleep(reconnect)
+            if _run:
+                time.sleep(reconnect)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()  # unacked deliveries return to the queue
+                except Exception:
+                    pass
 
 
 def _stop(*_):
