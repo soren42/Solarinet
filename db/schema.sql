@@ -135,3 +135,38 @@ CREATE TABLE nodeConfig (
   targetEpoch BIGINT UNSIGNED NOT NULL, appliedEpoch BIGINT UNSIGNED,
   configBlob  JSON, lastDirectiveAt DATETIME, lastResult VARCHAR(128)
 ) ENGINE=InnoDB;
+
+-- Privileged control-verb request queue (Task #1 — PHP→host security boundary).
+-- The dashboard (PHP) is refused every PRIVILEGED ctl verb at the socket
+-- (SO_PEERCRED + verb-class ACL in src/server/solariCtl.c); it REQUEST_SUBMITs
+-- one pending row here instead, and the privileged in-process consumer
+-- (serverCtlQueuePoll, running as the sole CA-key holder) claims and executes it
+-- out of PHP's reach. This is the hand-off queue and its audit trail. Kept in
+-- sync with db/migrations/020_ctl_request_queue.sql.
+CREATE TABLE ctlRequest (
+  id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  verb           VARCHAR(48)  NOT NULL,               -- inner privileged verb
+  -- Capped at the ctl replay buffer (CTL_REQ_CAP=4096) so a stored row can never
+  -- exceed what the consumer replays; a wider TEXT column allowed silent
+  -- truncation-on-claim and replay of a valid-looking prefix (review F7).
+  argsWire       VARCHAR(4096) NOT NULL DEFAULT '',    -- inner args (ctl line-protocol, pct-encoded); replayed verbatim
+  requestedBy    VARCHAR(128) NOT NULL,                -- authenticated operator from the PHP session (audit)
+  peerUid        INT UNSIGNED NOT NULL,                -- SO_PEERCRED uid of the submitter (audit)
+  state          ENUM('pending','claimed','done','failed') NOT NULL DEFAULT 'pending',
+  attempts       INT UNSIGNED NOT NULL DEFAULT 0,      -- incremented on each claim
+  claimedBy      VARCHAR(64)  NULL,                    -- consumer that won the claim CAS
+  result         MEDIUMTEXT   NULL,                    -- inner verb reply on success
+  error          VARCHAR(512) NULL,                    -- failure reason on state=failed
+  idempotencyKey VARCHAR(128) NULL,                    -- optional client key; UNIQUE so a resubmit returns the existing request
+  createdAt      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),  -- microsecond: stable FIFO under burst
+  updatedAt      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  claimedAt      DATETIME(6)  NULL,
+  completedAt    DATETIME(6)  NULL,
+  -- Idempotency scoped to the requester (review F10): a global key let one caller
+  -- pre-seed a predictable key so another's submit silently returned the first
+  -- request. Composite still permits many NULLs; a key only collides within its
+  -- own requestedBy.
+  UNIQUE KEY uq_ctlRequest_idem (requestedBy, idempotencyKey),
+  INDEX ix_ctlRequest_pending (state, id),             -- consumer hot path: oldest pending first
+  INDEX ix_ctlRequest_created (createdAt)
+) ENGINE=InnoDB;

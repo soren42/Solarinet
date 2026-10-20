@@ -73,6 +73,13 @@
  * fail closed rather than minting an unsigned cert. See the CONTRACT GAPS note
  * at the file footer.
  */
+/* SO_PEERCRED + struct ucred are glibc extensions gated behind _GNU_SOURCE; the
+ * peer-credential check in ctlServiceOne needs them. Guarded so the unit test,
+ * which #includes this .c after its own _GNU_SOURCE, does not redefine it. */
+#ifndef _GNU_SOURCE
+#  define _GNU_SOURCE 1
+#endif
+
 #include "server.h"
 #include "serverScan.h"
 #include "serverAssets.h"
@@ -92,6 +99,7 @@
 #include <string.h>
 
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -132,6 +140,11 @@ struct serverCtl {
     char           caMode[8];                /* "local" | "remote"              */
     char           caUrl[SERVER_URL_MAX];    /* remote CA endpoint (caMode=remote) */
     bool           bound;                    /* listenFd is a real bound socket */
+    /* PHP→host security boundary (Task #1), copied from serverConfig at open. */
+    bool           enforcePeer;              /* gate SO_PEERCRED + verb-class ACL */
+    uint32_t       operatorUid;              /* resolved (server euid if unset) */
+    uint32_t       dashboardUid;             /* dashboard/PHP uid; 0 = unset    */
+    uint32_t       socketGid;                /* chown socket to this gid; 0=skip */
 };
 
 /* ===================================================================== */
@@ -342,6 +355,102 @@ static bool ctlVerbRequiresOperator(const char *verb)
            strcmp(verb, "CRIT_SET") == 0;
 }
 
+/* ===================================================================== */
+/* PHP→host security boundary: peer-credential classes + verb-class ACL   */
+/* (Task #1). Pure decision functions — no I/O, no globals — so the whole   */
+/* authorization matrix is unit-testable without a socket, DB, or CA key.   */
+/* ===================================================================== */
+
+/* Privilege class of a verb, independent of who is calling.
+ *   CTL_VC_PRIVILEGED — anything that mints certs, tears down, pushes config, or
+ *                       commands the fleet. The dashboard may never invoke these
+ *                       directly; it must REQUEST_SUBMIT them to the queue.
+ *   CTL_VC_ENQUEUE    — the queue verbs themselves (REQUEST_SUBMIT/REQUEST_GET).
+ *   CTL_VC_ORDINARY   — the explicit set of read-mostly / metadata verbs the
+ *                       dashboard legitimately drives directly.
+ *
+ * ALLOWLIST, not denylist (cross-lab review F1/F4): only the verbs enumerated
+ * here as ORDINARY (or the two ENQUEUE verbs) are dashboard-callable; EVERYTHING
+ * else — including any verb added later — defaults to PRIVILEGED and is refused
+ * to the dashboard peer. A denylist keyed on ctlVerbIsDestructive() silently
+ * classed cert-minting/fleet-command verbs (APPROVE→serverCtlSignCsr, PROVISION,
+ * CONFIG_SET, CONTROL, REJECT) as ORDINARY, letting a compromised PHP invoke them
+ * directly. Fail-closed is the only safe default for an authorization boundary.
+ * Pure. */
+typedef enum {
+    CTL_VC_ORDINARY = 0,
+    CTL_VC_ENQUEUE,
+    CTL_VC_PRIVILEGED
+} ctlVerbClass;
+
+/* The dashboard-safe direct verbs: monitoring reads, discovery, and asset/pool/
+ * rule metadata the UI legitimately edits inline. Deliberately excludes every
+ * cert/teardown/config-push/fleet-command verb. Keep this list conservative —
+ * adding a verb here grants the (potentially compromised) dashboard uid the right
+ * to call it directly, so a new verb belongs here ONLY if it is genuinely safe
+ * for an untrusted PHP process to invoke. */
+static bool ctlVerbIsDashboardOrdinary(const char *verb)
+{
+    return strcmp(verb, "PING")      == 0 ||   /* liveness            */
+           strcmp(verb, "DISCOVER")  == 0 ||   /* trigger a scan      */
+           strcmp(verb, "SURVEY")    == 0 ||   /* request telemetry   */
+           strcmp(verb, "ADOPT")     == 0 ||   /* discovered -> asset  */
+           strcmp(verb, "ASSET_SET") == 0 ||   /* asset metadata      */
+           strcmp(verb, "IGNORE")    == 0 ||   /* mark discovered ign. */
+           strcmp(verb, "POOL_NEW")  == 0 ||   /* create a pool       */
+           strcmp(verb, "POOL_SET")  == 0 ||   /* edit a pool         */
+           strcmp(verb, "RULE_SET")  == 0 ||   /* edit an alert rule  */
+           strcmp(verb, "ALERT_ACK") == 0 ||   /* ack an alert        */
+           strcmp(verb, "CRIT_SET")  == 0;     /* set criticality tier */
+}
+
+static ctlVerbClass ctlVerbPrivClass(const char *verb)
+{
+    if (strcmp(verb, "REQUEST_SUBMIT") == 0 || strcmp(verb, "REQUEST_GET") == 0)
+        return CTL_VC_ENQUEUE;
+    if (ctlVerbIsDashboardOrdinary(verb))
+        return CTL_VC_ORDINARY;
+    return CTL_VC_PRIVILEGED;   /* default-deny: unknown/new verbs are privileged */
+}
+
+/* Trust class of a connecting peer, decided from its SO_PEERCRED uid.
+ *   CTL_PEER_OPERATOR  — root, or the configured operator uid (the server's own
+ *                        account / the break-glass CLI): may invoke anything.
+ *   CTL_PEER_DASHBOARD — the configured dashboard/PHP uid: ordinary + enqueue,
+ *                        never privileged.
+ *   CTL_PEER_UNKNOWN   — any other uid: refused outright.
+ * operatorUid must already be resolved by the caller (0 is a real uid — root —
+ * and always classes as operator; the "0 = server euid" fallback is applied
+ * before this is called). dashboardUid == 0 means "unset": no peer is classed
+ * dashboard, so a misconfiguration denies rather than over-grants. Pure. */
+typedef enum {
+    CTL_PEER_UNKNOWN = 0,
+    CTL_PEER_DASHBOARD,
+    CTL_PEER_OPERATOR
+} ctlPeerClass;
+
+static ctlPeerClass ctlClassifyPeer(uint32_t peerUid, uint32_t operatorUid,
+                                    uint32_t dashboardUid)
+{
+    if (peerUid == 0)             return CTL_PEER_OPERATOR;  /* root */
+    if (peerUid == operatorUid)   return CTL_PEER_OPERATOR;
+    if (dashboardUid != 0 && peerUid == dashboardUid)
+                                  return CTL_PEER_DASHBOARD;
+    return CTL_PEER_UNKNOWN;
+}
+
+/* The authorization matrix. Default-deny: an unknown peer gets nothing, and the
+ * dashboard is refused every privileged verb even when it supplies op=. Pure. */
+static bool ctlPeerMayInvoke(ctlPeerClass peer, ctlVerbClass vc)
+{
+    switch (peer) {
+        case CTL_PEER_OPERATOR:  return true;                     /* anything   */
+        case CTL_PEER_DASHBOARD: return vc != CTL_VC_PRIVILEGED;  /* + enqueue  */
+        case CTL_PEER_UNKNOWN:
+        default:                 return false;                    /* nothing    */
+    }
+}
+
 static bool ctlPoolCanDelete(uint64_t poolId)
 {
     return poolId != 0 && poolId != 1;
@@ -425,6 +534,7 @@ static bool ctlLooksLikeCsr(const char *pem)
  * control conn). The parsing/RBAC layers above ARE pure and independently
  * testable. */
 static size_t ctlHandleLine(serverCtl *ctl, char *line,
+                            ctlPeerClass peerClass, uint32_t peerUid,
                             char *replyOut, size_t replyCap)
 {
     char verb[32];
@@ -439,7 +549,26 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
     if (st != SOLARI_OK)
         return ctlReplyErr(replyOut, replyCap, st, "malformed request");
 
-    /* RBAC gate first so a destructive verb with no operator never reaches the
+    /* Peer-class ACL (Task #1): decided from the kernel-supplied SO_PEERCRED uid,
+     * enforced BEFORE the op= RBAC gate so a privileged verb from the dashboard
+     * peer is refused regardless of what op= it claims. The dashboard must route
+     * privileged verbs through REQUEST_SUBMIT; an unknown peer gets nothing. When
+     * enforcePeer is off, ctlServiceOne sets peerClass=OPERATOR and this is a
+     * no-op (legacy behaviour preserved). */
+    {
+        ctlVerbClass vc = ctlVerbPrivClass(verb);
+        if (!ctlPeerMayInvoke(peerClass, vc)) {
+            solariLogf(SOLARI_LOG_WARN,
+                "ctl: peer uid=%u (class=%d) refused verb '%s' (vclass=%d)",
+                peerUid, (int)peerClass, verb, (int)vc);
+            return ctlReplyErr(replyOut, replyCap, ERR_AUTH_ROLE,
+                vc == CTL_VC_PRIVILEGED
+                    ? "privileged verb must be queued via REQUEST_SUBMIT"
+                    : "not authorized");
+        }
+    }
+
+    /* RBAC gate next so a destructive verb with no operator never reaches the
      * effecting APIs. */
     if ((st = ctlCheckRbac(verb, args, operator_, sizeof operator_)) != SOLARI_OK) {
         solariLogf(SOLARI_LOG_WARN,
@@ -450,6 +579,69 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
     /* ---- liveness ---- */
     if (strcmp(verb, "PING") == 0) {
         return ctlReplyOk(replyOut, replyCap, "pong");
+    }
+
+    /* ---- enqueue a privileged action for the server to execute (Task #1) ----
+     * The dashboard cannot run SIGN/DEPLOY/RETIRE/… itself (peer ACL above);
+     * it REQUEST_SUBMITs them here. We record ONE pending ctl_requests row and
+     * return its id; the privileged consumer (serverCtlQueuePoll, running in the
+     * server process) later claims and executes it. The inner verb MUST be a
+     * privileged one — ordinary verbs are called directly, not queued.
+     *   REQUEST_SUBMIT verb=<inner> op=<operator> [args=<pct-encoded wire>] [idem=<key>]
+     * `args` is the inner verb's own "k=v k=v" argument string, percent-encoded
+     * by PHP so it survives as a single value; ctlArgStr decodes it once and we
+     * store it verbatim for replay. */
+    if (strcmp(verb, "REQUEST_SUBMIT") == 0) {
+        char inner[32], argsWire[CTL_REQ_CAP], idem[128], extra[64];
+        unsigned long long reqId = 0;
+        if (ctlArgStr(args, "verb", inner, sizeof inner) != SOLARI_OK || !inner[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "verb required");
+        if (ctlVerbPrivClass(inner) != CTL_VC_PRIVILEGED)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG,
+                               "only privileged verbs may be queued");
+        if (ctlArgStr(args, "op", operator_, sizeof operator_) != SOLARI_OK || !operator_[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_AUTH_ROLE, "operator required");
+        if (ctlArgStr(args, "args", argsWire, sizeof argsWire) != SOLARI_OK) argsWire[0] = '\0';
+        if (ctlArgStr(args, "idem", idem,     sizeof idem)     != SOLARI_OK) idem[0]     = '\0';
+        st = serverDbCtlRequestSubmit(ctl->ctx->db, inner, argsWire, operator_,
+                                      (uint32_t)peerUid, idem[0] ? idem : NULL,
+                                      &reqId);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "enqueue failed");
+        solariLogf(SOLARI_LOG_INFO,
+                   "ctl: queued %s request=%llu op=%s peer=%u",
+                   inner, reqId, operator_, peerUid);
+        (void)snprintf(extra, sizeof extra, "request=%llu status=pending", reqId);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- poll a queued request's status (Task #1) ----
+     *   REQUEST_GET request=<id>
+     * Returns the row's state and, once settled, its result or error. Read-only,
+     * so the dashboard peer is allowed it directly. */
+    if (strcmp(verb, "REQUEST_GET") == 0) {
+        char idStr[32], state[16], detail[CTL_PEM_CAP], extra[CTL_REPLY_CAP];
+        unsigned long long reqId;
+        int n;
+        if (ctlArgStr(args, "request", idStr, sizeof idStr) != SOLARI_OK || !idStr[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "request required");
+        reqId = strtoull(idStr, NULL, 10);
+        /* detail is the raw result (state=done) or error (state=failed) text, or
+         * empty while pending/claimed. */
+        st = serverDbCtlRequestGet(ctl->ctx->db, reqId, state, sizeof state,
+                                   detail, sizeof detail);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "no such request");
+        n = snprintf(extra, sizeof extra, "request=%llu state=%s", reqId, state);
+        if (n > 0 && (size_t)n < sizeof extra && detail[0]) {
+            /* label by terminal state; percent-encode so the reply stays one line */
+            const char *label = (strcmp(state, "failed") == 0) ? " error=" : " result=";
+            size_t off = (size_t)n;
+            off += (size_t)snprintf(extra + off, sizeof extra - off, "%s", label);
+            if (off < sizeof extra)
+                (void)ctlPctEncode(detail, extra + off, sizeof extra - off);
+        }
+        return ctlReplyOk(replyOut, replyCap, extra);
     }
 
     /* ---- active discovery scan (non-destructive) ---- */
@@ -1031,6 +1223,15 @@ solariStatus serverCtlOpen(const serverConfig *cfg, serverContext *ctx,
                    cfg->caMode[0] ? cfg->caMode : "local");
     (void)snprintf(ctl->caUrl,     sizeof ctl->caUrl,     "%s", cfg->caUrl);
 
+    /* Security boundary (Task #1). Resolve the operator uid fallback here (0 in
+     * config means "the account the server runs as") so the pure classifier
+     * downstream sees a concrete uid. dashboardUid/socketGid keep 0 = unset. */
+    ctl->enforcePeer  = cfg->ctlEnforcePeer;
+    ctl->operatorUid  = cfg->ctlOperatorUid ? cfg->ctlOperatorUid
+                                            : (uint32_t)geteuid();
+    ctl->dashboardUid = cfg->ctlDashboardUid;
+    ctl->socketGid    = cfg->ctlSocketGid;
+
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         solariLogf(SOLARI_LOG_ERROR, "ctl: socket() failed: %s", strerror(errno));
@@ -1060,6 +1261,50 @@ solariStatus serverCtlOpen(const serverConfig *cfg, serverContext *ctx,
         (void)unlink(ctl->sockPath);
         free(ctl);
         return ERR_PLATFORM;
+    }
+
+    /* Socket access control (Task #1, defence in depth alongside SO_PEERCRED).
+     * The bind above created the node under the server's umask — historically
+     * world-reachable. Tighten it to 0660 and, when a ctl group is configured,
+     * chown it to that group so exactly two parties can connect: the server's
+     * own account (owner) and the dashboard uid (via ctl-group membership). The
+     * SO_PEERCRED check in ctlServiceOne is the real authority; these perms just
+     * stop an unrelated local uid from ever reaching accept(). Best-effort:
+     * a chmod/chown failure is logged, not fatal (SO_PEERCRED still guards). */
+    if (ctl->socketGid != 0) {
+        if (chown(ctl->sockPath, (uid_t)-1, (gid_t)ctl->socketGid) != 0)
+            solariLogf(SOLARI_LOG_WARN, "ctl: chown(%s, gid=%u) failed: %s",
+                       ctl->sockPath, ctl->socketGid, strerror(errno));
+    }
+    if (chmod(ctl->sockPath, 0660) != 0)
+        solariLogf(SOLARI_LOG_WARN, "ctl: chmod(%s, 0660) failed: %s",
+                   ctl->sockPath, strerror(errno));
+
+    /* Startup invariants for the security boundary (cross-lab review F6). When
+     * enforcement is on, a misconfiguration must fail CLOSED at boot rather than
+     * silently degrade to "every peer is operator". We refuse to come up unless:
+     *   - a dashboard uid is actually resolved (0 = unset would class no peer as
+     *     dashboard, so the queue path is unusable and the intent is unmet); and
+     *   - it differs from the operator uid (a collision would let ctlClassifyPeer
+     *     promote the PHP uid to OPERATOR and hand it every privileged verb).
+     * Enforcement is opt-in (default off) so an un-migrated host is unaffected;
+     * once a host opts in, these checks guarantee the boundary is real. */
+    if (ctl->enforcePeer) {
+        if (ctl->dashboardUid == 0) {
+            solariLogf(SOLARI_LOG_ERROR,
+                       "ctl: enforcePeer=true but dashboardUid is unset (0); "
+                       "refusing to start with an unenforceable boundary");
+            close(fd); (void)unlink(ctl->sockPath); free(ctl);
+            return ERR_INVALID_ARG;
+        }
+        if (ctl->dashboardUid == ctl->operatorUid) {
+            solariLogf(SOLARI_LOG_ERROR,
+                       "ctl: enforcePeer=true but dashboardUid==operatorUid (%u); "
+                       "that collision would promote the dashboard to OPERATOR",
+                       ctl->dashboardUid);
+            close(fd); (void)unlink(ctl->sockPath); free(ctl);
+            return ERR_INVALID_ARG;
+        }
     }
 
     /* Non-blocking accept: serverCtlPoll() is documented "non-blocking; processes
@@ -1124,6 +1369,8 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
     size_t  replyLen;
     ssize_t got;
     int     cfd;
+    ctlPeerClass peerClass = CTL_PEER_OPERATOR;  /* legacy default when !enforce */
+    uint32_t     peerUid   = (uint32_t)geteuid();
 
     cfd = accept(ctl->listenFd, NULL, NULL);
     if (cfd < 0) {
@@ -1135,6 +1382,26 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
         return ERR_PLATFORM;
     }
 
+    /* Peer credentials (Task #1). Read the connecting process's uid via
+     * SO_PEERCRED — a kernel-supplied identity the caller cannot forge — and
+     * classify it. When enforcement is off we keep the legacy behaviour (every
+     * peer treated as operator) but still record the uid for audit. When it is
+     * on, a getsockopt failure fails CLOSED (UNKNOWN → refused). */
+    {
+        struct ucred cred;
+        socklen_t    credLen = (socklen_t)sizeof cred;
+        if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &credLen) == 0) {
+            peerUid = (uint32_t)cred.uid;
+            peerClass = ctl->enforcePeer
+                ? ctlClassifyPeer(peerUid, ctl->operatorUid, ctl->dashboardUid)
+                : CTL_PEER_OPERATOR;
+        } else {
+            solariLogf(SOLARI_LOG_WARN, "ctl: SO_PEERCRED failed: %s",
+                       strerror(errno));
+            peerClass = ctl->enforcePeer ? CTL_PEER_UNKNOWN : CTL_PEER_OPERATOR;
+        }
+    }
+
     got = read(cfd, req, sizeof req - 1);
     if (got <= 0) {
         if (got < 0)
@@ -1144,7 +1411,7 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
     }
     req[got] = '\0';
 
-    replyLen = ctlHandleLine(ctl, req, reply, sizeof reply);
+    replyLen = ctlHandleLine(ctl, req, peerClass, peerUid, reply, sizeof reply);
 
     /* Best-effort reply; a closed peer is not the server's problem. */
     {
@@ -1184,6 +1451,99 @@ solariStatus serverCtlPoll(serverCtl *ctl)
         if (st != SOLARI_OK) return st;       /* platform error */
         serviced++;
     }
+    return SOLARI_OK;
+}
+
+/* ===================================================================== */
+/* Privileged request-queue consumer (Task #1)                            */
+/* ===================================================================== */
+
+/* Claim and execute at most one pending ctl_requests row. Runs inside the
+ * privileged server process (as `solari`, the sole CA-key holder) — NOT the
+ * dashboard — so a privileged verb the dashboard was refused at the socket is
+ * executed here, out of PHP's reach. The claim is an atomic CAS in the DB layer
+ * (UPDATE … WHERE state='pending'; affected-rows tells the winner), so even with
+ * multiple claimers exactly one wins a row. On a win we replay the stored action
+ * as an ordinary ctl line with OPERATOR authority (the queue itself was the
+ * authorization boundary) and record done/failed.
+ *
+ * Returns SOLARI_OK if a row was executed, ERR_CONN_RETRY if the queue was
+ * empty (nothing to do this tick), or a DB/platform error. Bounded to one row
+ * per call so a backlog cannot starve the main loop; the loop calls it each
+ * iteration. */
+solariStatus serverCtlQueuePoll(serverCtl *ctl)
+{
+    char     verb[48];
+    char     argsWire[CTL_REQ_CAP];
+    char     requestedBy[128];
+    char     opEnc[192];
+    char     line[CTL_REQ_CAP];
+    char     reply[CTL_REPLY_CAP];
+    unsigned long long reqId = 0;
+    size_t   replyLen;
+    bool     ok;
+    solariStatus st;
+
+    if (!ctl) return ERR_INVALID_ARG;
+    if (!ctl->ctx || !ctl->ctx->db) return SOLARI_OK;   /* no DB → nothing to do */
+
+    /* Atomically claim the oldest pending row. ERR_TLV_END = queue empty. A
+     * truncated/oversized row is failed inside Claim and reported ERR_BUFFER_FULL
+     * (never replayed); treat it like empty so the loop continues. */
+    st = serverDbCtlRequestClaim(ctl->ctx->db, "solariServer", &reqId,
+                                 verb, sizeof verb, argsWire, sizeof argsWire,
+                                 requestedBy, sizeof requestedBy);
+    if (st == ERR_TLV_END || st == ERR_BUFFER_FULL) return ERR_CONN_RETRY;
+    if (st != SOLARI_OK)   return st;
+
+    /* Rebuild the wire line and replay it with OPERATOR authority. The acting
+     * operator is bound SERVER-SIDE from the stored requestedBy column, not from
+     * any op= the dashboard may have smuggled into argsWire (review F9): we place
+     * our op= FIRST so ctlArgStr — which returns the first match — always sees
+     * the authenticated requester, never a PHP-supplied override. requestedBy is
+     * percent-encoded so a space/odd char in the audit string cannot break
+     * tokenization or inject a second arg. Guard against a verb+args that would
+     * overflow the line buffer (submit used the same CTL_REQ_CAP, but the added
+     * op= prefix and a trailing space + NUL must still fit). */
+    {
+        int n;
+        if (requestedBy[0]) {
+            if (ctlPctEncode(requestedBy, opEnc, sizeof opEnc) == 0)
+                opEnc[0] = '\0';
+        } else {
+            opEnc[0] = '\0';
+        }
+        n = opEnc[0]
+            ? (argsWire[0]
+                 ? snprintf(line, sizeof line, "%s op=%s %s", verb, opEnc, argsWire)
+                 : snprintf(line, sizeof line, "%s op=%s", verb, opEnc))
+            : (argsWire[0]
+                 ? snprintf(line, sizeof line, "%s %s", verb, argsWire)
+                 : snprintf(line, sizeof line, "%s", verb));
+        if (n < 0 || (size_t)n >= sizeof line) {
+            (void)serverDbCtlRequestComplete(ctl->ctx->db, reqId, false,
+                                             "request line too long to replay");
+            solariLogf(SOLARI_LOG_ERROR,
+                       "ctl: queued request=%llu verb=%s args too long; failed",
+                       reqId, verb);
+            return SOLARI_OK;
+        }
+    }
+
+    replyLen = ctlHandleLine(ctl, line, CTL_PEER_OPERATOR,
+                             (uint32_t)geteuid(), reply, sizeof reply);
+    /* Trim the trailing newline the reply formatter adds so it stores cleanly. */
+    if (replyLen && reply[replyLen - 1] == '\n') reply[--replyLen] = '\0';
+    ok = (replyLen >= 2 && reply[0] == 'O' && reply[1] == 'K');
+
+    st = serverDbCtlRequestComplete(ctl->ctx->db, reqId, ok, reply);
+    if (st != SOLARI_OK)
+        solariLogf(SOLARI_LOG_WARN,
+                   "ctl: request=%llu executed (%s) but result write failed: %s",
+                   reqId, ok ? "ok" : "fail", solariStrError(st));
+    solariLogf(ok ? SOLARI_LOG_INFO : SOLARI_LOG_WARN,
+               "ctl: executed queued request=%llu verb=%s -> %s",
+               reqId, verb, ok ? "done" : "failed");
     return SOLARI_OK;
 }
 

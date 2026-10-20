@@ -84,6 +84,18 @@ typedef struct {
 
     /* operator bridge (solariCtl) */
     char     ctlSocket[SERVER_PATH_MAX];     /* Unix domain socket path      */
+    /* PHP→host security boundary (Task #1). When ctlEnforcePeer is true the
+     * bridge classifies each connecting peer by its SO_PEERCRED uid and refuses
+     * PRIVILEGED (destructive) verbs to the dashboard uid, which must instead
+     * REQUEST_SUBMIT them to the ctl_requests queue for the privileged server to
+     * execute. Left false the bridge behaves exactly as before (legacy: caller
+     * uid == server uid), so the hardening is opt-in per deployment. uids of 0
+     * mean "unset": ctlOperatorUid falls back to the server's own euid, and an
+     * unset ctlDashboardUid matches no peer (no peer is classed dashboard). */
+    bool     ctlEnforcePeer;                  /* default false (opt-in)       */
+    uint32_t ctlOperatorUid;                  /* uid allowed privileged verbs; 0 = server euid */
+    uint32_t ctlDashboardUid;                 /* dashboard/PHP uid (enqueue only); 0 = unset */
+    uint32_t ctlSocketGid;                    /* gid to chown the socket to for 0660 access; 0 = leave */
 
     /* discovery / provisioning policy (Handoff §7.1) - conservative default */
     bool     autoDiscover;                   /* default true                 */
@@ -241,6 +253,37 @@ typedef struct {
 solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e);
 solariStatus serverDbDeleteAlertRule(serverDb *db, uint64_t ruleId);
 solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eventId);
+
+/* ---- privileged control-verb request queue (ctl_requests, Task #1) ---- */
+/* Enqueue ONE pending request. `verb` is the inner privileged verb; `argsWire`
+ * is its line-protocol args (stored verbatim for replay); `requestedBy` is the
+ * authenticated operator string; `peerUid` is the SO_PEERCRED uid of the
+ * submitter (audit). `idemKey` (may be NULL) makes the submit idempotent: a
+ * resubmit with the same live key returns the EXISTING request id in *reqIdOut
+ * rather than enqueuing a duplicate. Returns SOLARI_OK with *reqIdOut set. */
+solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *verb,
+                                      const char *argsWire, const char *requestedBy,
+                                      uint32_t peerUid, const char *idemKey,
+                                      unsigned long long *reqIdOut);
+/* Atomically claim the oldest pending request (state pending->claimed via an
+ * affected-rows CAS, so exactly one claimer wins). On success returns SOLARI_OK
+ * and fills *reqIdOut + verbOut + argsWireOut. ERR_TLV_END when the queue is
+ * empty. `claimedBy` identifies the winning consumer (audit). */
+solariStatus serverDbCtlRequestClaim(serverDb *db, const char *claimedBy,
+                                     unsigned long long *reqIdOut,
+                                     char *verbOut, size_t verbCap,
+                                     char *argsWireOut, size_t argsCap,
+                                     char *requestedByOut, size_t requestedByCap);
+/* Settle a claimed request: ok=true -> state done + resultText; ok=false ->
+ * state failed + resultText stored as the error. */
+solariStatus serverDbCtlRequestComplete(serverDb *db, unsigned long long reqId,
+                                        bool ok, const char *resultText);
+/* Read a request's state (+ raw result on done / raw error on failed) for the
+ * REQUEST_GET poll. detailOut is empty while pending/claimed. ERR_TLV_END if the
+ * id is unknown. */
+solariStatus serverDbCtlRequestGet(serverDb *db, unsigned long long reqId,
+                                   char *stateOut, size_t stateCap,
+                                   char *detailOut, size_t detailCap);
 
 /* ---- report persistence (§9.1 representative writers, §10) ---- */
 /* Upsert hostCurrent + append hostHistory in one txn (§9.1). All time UTC. */
@@ -604,6 +647,11 @@ void         serverCtlClose(serverCtl *ctl);
  * frame through ctx, and write the reply. Non-blocking; processes what is ready.
  * Returns SOLARI_OK (including when nothing was ready). */
 solariStatus serverCtlPoll(serverCtl *ctl);
+/* Privileged request-queue consumer (Task #1): claim and execute at most one
+ * pending ctl_requests row, running with the server's own (operator) authority
+ * out of the dashboard's reach. Returns SOLARI_OK if a row ran, ERR_CONN_RETRY
+ * if the queue was empty, or a DB/platform error. Call once per main-loop tick. */
+solariStatus serverCtlQueuePoll(serverCtl *ctl);
 /* Sign a CSR with the internal CA, returning the issued cert PEM into certBuf.
  * Holds the CA key material so it never reaches the web tier. ERR_BUFFER_FULL
  * if certBuf is too small, ERR_TLS on a signing failure. */

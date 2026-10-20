@@ -16,6 +16,8 @@
 #include "solari/solariNet.h"
 
 #include <mariadb/mysql.h>
+#include <stdio.h>
+#include <string.h>
 
 #define WEAK __attribute__((weak))
 
@@ -194,6 +196,22 @@ WEAK solariStatus serverDbDeleteAlertRule(serverDb *db, uint64_t rid)
 { (void)db;(void)rid; return SOLARI_OK; }
 WEAK solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eid)
 { (void)db;(void)eid; return SOLARI_OK; }
+WEAK solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *v,
+    const char *a, const char *rb, uint32_t pu, const char *ik, unsigned long long *ro)
+{ (void)db;(void)v;(void)a;(void)rb;(void)pu;(void)ik; if(ro)*ro=1; return SOLARI_OK; }
+WEAK solariStatus serverDbCtlRequestClaim(serverDb *db, const char *cb,
+    unsigned long long *ro, char *vo, size_t vc, char *ao, size_t ac,
+    char *rbo, size_t rbc)
+{ (void)db;(void)cb; if(ro)*ro=0; if(vo&&vc)vo[0]='\0'; if(ao&&ac)ao[0]='\0';
+  if(rbo&&rbc)rbo[0]='\0';
+  return ERR_TLV_END; }   /* stub: queue always empty */
+WEAK solariStatus serverDbCtlRequestComplete(serverDb *db, unsigned long long r,
+    bool ok, const char *t)
+{ (void)db;(void)r;(void)ok;(void)t; return SOLARI_OK; }
+WEAK solariStatus serverDbCtlRequestGet(serverDb *db, unsigned long long r,
+    char *so, size_t sc, char *do_, size_t dc)
+{ (void)db;(void)r; if(so&&sc)snprintf(so,sc,"pending"); if(do_&&dc)do_[0]='\0';
+  return SOLARI_OK; }
 WEAK solariStatus serverAssetsAdopt(serverContext *c, const serverAdoptOpts *o, uint64_t *aid)
 { (void)c;(void)o; if(aid)*aid=0; return SOLARI_OK; }
 WEAK solariStatus serverAssetsSetMeta(serverContext *c, const char *ip, const char *dn,

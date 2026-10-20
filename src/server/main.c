@@ -41,7 +41,8 @@
  * server has no listeners bound and idles on this sleep until the next tick. */
 enum {
     SERVER_INGEST_BURST   = 64,   /* max ingest frames drained per iteration   */
-    SERVER_STANDBY_IDLE_MS = 100  /* standby pause between lease re-evaluations */
+    SERVER_STANDBY_IDLE_MS = 100, /* standby pause between lease re-evaluations */
+    SERVER_CTL_QUEUE_BATCH = 8    /* max queued privileged requests per tick    */
 };
 
 /* Reply scratch sizes. WELCOME / PRIMARY_IS / ERROR payloads are a handful of
@@ -311,6 +312,18 @@ static void serverRunLoop(serverContext *ctx, const serverConfig *cfg)
 
         /* 4. Operator bridge (non-blocking; NULL when the bridge failed to open). */
         if (ctx->ctl) (void)serverCtlPoll(ctx->ctl);
+
+        /* 5. Privileged request-queue consumer (Task #1). Only the ACTIVE master
+         * — the CA-key holder — drains privileged actions the dashboard queued
+         * but was refused at the socket. Bounded per tick so a backlog cannot
+         * starve the fleet path; serverCtlQueuePoll executes at most one row and
+         * returns ERR_CONN_RETRY when the queue is empty. */
+        if (ctx->ctl && ctx->role == SRV_ACTIVE) {
+            int drained = 0;
+            while (drained < SERVER_CTL_QUEUE_BATCH &&
+                   serverCtlQueuePoll(ctx->ctl) == SOLARI_OK)
+                drained++;
+        }
     }
 
     solariLogf(SOLARI_LOG_INFO, "solariServer: shutdown signal received");

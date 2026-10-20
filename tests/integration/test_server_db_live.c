@@ -251,6 +251,118 @@ static void test_lease(void)
     TEST_ASSERT_EQUAL_UINT64(ITEST_NODE, holder);
 }
 
+/* ---- privileged control-verb request queue (Task #1) ----
+ * Exercises the real prepared statements behind the PHP→host boundary: submit,
+ * status read, the claim CAS (exactly one of two claimers wins a single pending
+ * row), completion, idempotency-key collapse, and empty-queue signalling. */
+static void test_ctl_request_queue(void)
+{
+    unsigned long long id1 = 0, id2 = 0, idIdem = 0, idIdem2 = 0, idIdemDave = 0;
+    char verb[48], args[512], state[16], detail[256], reqBy[128];
+    unsigned long long claimedId = 0;
+
+    /* Clean slate for a deterministic FIFO/CAS assertion on rerun. */
+    TEST_ASSERT_EQUAL_INT(0,
+        mysql_query(serverDbConn(g_db), "DELETE FROM ctlRequest"));
+
+    /* Submit two requests; ids are assigned in order. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestSubmit(g_db,
+        "RETIRE", "node=1 op=carol", "carol", 33, NULL, &id1));
+    TEST_ASSERT_TRUE(id1 > 0);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestSubmit(g_db,
+        "DECOMMISSION", "node=2 op=carol", "carol", 33, NULL, &id2));
+    TEST_ASSERT_TRUE(id2 > id1);
+
+    /* A fresh submit is visible as pending. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCtlRequestGet(g_db, id1, state, sizeof state, detail, sizeof detail));
+    TEST_ASSERT_EQUAL_STRING("pending", state);
+
+    /* Idempotency: the same key from the SAME requester collapses to one row and
+     * returns its id twice. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestSubmit(g_db,
+        "SIGN", "cn=host op=carol", "carol", 33, "idem-key-abc", &idIdem));
+    TEST_ASSERT_TRUE(idIdem > 0);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestSubmit(g_db,
+        "SIGN", "cn=host op=carol", "carol", 33, "idem-key-abc", &idIdem2));
+    TEST_ASSERT_EQUAL_UINT64(idIdem, idIdem2);
+    TEST_ASSERT_EQUAL_UINT64(3, liveCount("SELECT COUNT(*) FROM ctlRequest"));
+
+    /* F10: the SAME key from a DIFFERENT requester must NOT collapse. Idempotency
+     * is scoped to (requestedBy, idempotencyKey), so one caller cannot pre-seed a
+     * predictable key to make another's submit silently return the first's row.
+     * dave's submit creates a distinct row despite reusing carol's key. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestSubmit(g_db,
+        "SIGN", "cn=host op=dave", "dave", 34, "idem-key-abc", &idIdemDave));
+    TEST_ASSERT_TRUE(idIdemDave > 0);
+    TEST_ASSERT_TRUE(idIdemDave != idIdem);   /* not hijacked into carol's row */
+    TEST_ASSERT_EQUAL_UINT64(4, liveCount("SELECT COUNT(*) FROM ctlRequest"));
+
+    /* Claim CAS: the first claim wins the OLDEST pending row (id1). F9: the claim
+     * also returns the stored requestedBy so the consumer can bind the operator
+     * server-side rather than trusting a PHP-supplied op=. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestClaim(g_db, "claimerA",
+        &claimedId, verb, sizeof verb, args, sizeof args, reqBy, sizeof reqBy));
+    TEST_ASSERT_EQUAL_UINT64(id1, claimedId);
+    TEST_ASSERT_EQUAL_STRING("RETIRE", verb);
+    TEST_ASSERT_EQUAL_STRING("node=1 op=carol", args);
+    TEST_ASSERT_EQUAL_STRING("carol", reqBy);
+
+    /* The claimed row is no longer pending. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCtlRequestGet(g_db, id1, state, sizeof state, detail, sizeof detail));
+    TEST_ASSERT_EQUAL_STRING("claimed", state);
+
+    /* Complete it; the result text and terminal state land. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCtlRequestComplete(g_db, id1, true, "OK retired=1"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCtlRequestGet(g_db, id1, state, sizeof state, detail, sizeof detail));
+    TEST_ASSERT_EQUAL_STRING("done", state);
+    TEST_ASSERT_EQUAL_STRING("OK retired=1", detail);
+
+    /* F8: a second Complete on a settled row affects zero rows (WHERE claimed) and
+     * must SIGNAL that with ERR_TLV_END, not a false SOLARI_OK — the caller needs
+     * to know the row was already terminal. The row's result is untouched. */
+    TEST_ASSERT_EQUAL_INT(ERR_TLV_END,
+        serverDbCtlRequestComplete(g_db, id1, false, "should-not-apply"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCtlRequestGet(g_db, id1, state, sizeof state, detail, sizeof detail));
+    TEST_ASSERT_EQUAL_STRING("done", state);
+    TEST_ASSERT_EQUAL_STRING("OK retired=1", detail);
+
+    /* Drain the remaining pending rows FIFO, then the queue reports empty. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestClaim(g_db, "claimerA",
+        &claimedId, verb, sizeof verb, args, sizeof args, reqBy, sizeof reqBy));
+    TEST_ASSERT_EQUAL_UINT64(id2, claimedId);   /* FIFO: id2 before the idem rows */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestClaim(g_db, "claimerA",
+        &claimedId, verb, sizeof verb, args, sizeof args, reqBy, sizeof reqBy));
+    TEST_ASSERT_EQUAL_UINT64(idIdem, claimedId);
+    TEST_ASSERT_EQUAL_STRING("carol", reqBy);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbCtlRequestClaim(g_db, "claimerA",
+        &claimedId, verb, sizeof verb, args, sizeof args, reqBy, sizeof reqBy));
+    TEST_ASSERT_EQUAL_UINT64(idIdemDave, claimedId);
+    TEST_ASSERT_EQUAL_STRING("dave", reqBy);    /* F9: per-row operator, not a global */
+    TEST_ASSERT_EQUAL_INT(ERR_TLV_END, serverDbCtlRequestClaim(g_db, "claimerA",
+        &claimedId, verb, sizeof verb, args, sizeof args, reqBy, sizeof reqBy));
+
+    /* A failed completion routes text to error, not result. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCtlRequestComplete(g_db, id2, false, "boom"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCtlRequestGet(g_db, id2, state, sizeof state, detail, sizeof detail));
+    TEST_ASSERT_EQUAL_STRING("failed", state);
+    TEST_ASSERT_EQUAL_STRING("boom", detail);
+
+    /* An unknown request id is distinguishable from a real one. */
+    TEST_ASSERT_EQUAL_INT(ERR_TLV_END,
+        serverDbCtlRequestGet(g_db, 0xffffffffULL, state, sizeof state, detail, sizeof detail));
+
+    /* tidy up so a rerun starts clean */
+    TEST_ASSERT_EQUAL_INT(0,
+        mysql_query(serverDbConn(g_db), "DELETE FROM ctlRequest"));
+}
+
 int main(void)
 {
     if (!getenv("SOLARI_TEST_DB")) {
@@ -299,6 +411,7 @@ int main(void)
     RUN_TEST(test_discovered);
     RUN_TEST(test_enrollment);
     RUN_TEST(test_lease);
+    RUN_TEST(test_ctl_request_queue);
     serverDbClose(g_db);
     return UNITY_END();
 }
