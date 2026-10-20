@@ -60,6 +60,17 @@ jobs:
   server:
     name: server (full, IO + SQLite + server)
     runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: serverci_scratch
+          MARIADB_DATABASE: solarinet_receipts_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -uroot -pserverci_scratch"
+          --health-interval=5s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@v4
       - name: Install full dependency set (mirrors bootstrap-xenon.sh)
@@ -67,7 +78,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y \
             build-essential cmake git pkg-config curl unzip ca-certificates \
-            libsqlite3-dev libcjson-dev libmariadb-dev
+            libsqlite3-dev libcjson-dev libmariadb-dev mariadb-client
           # nng + mbedTLS from packages; bootstrap falls back to source if absent.
           sudo apt-get install -y libmbedtls-dev libnng-dev || \
             echo "::warning::libnng-dev/libmbedtls-dev unavailable; server I/O may need --source-deps"
@@ -81,7 +92,16 @@ jobs:
             -DSOLARI_BUILD_TESTS=ON
           cmake --build build-server -j
       - name: ctest (full build)
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_receipts_ci
+          MYSQL_PWD: serverci_scratch
         run: |
+          python3 tools/migrate.py --database monitoring --db-name solarinet_receipts_ci --host 127.0.0.1 --port 3306 --user root
           ctest --test-dir build-server --output-on-failure -E 'test_net_loopback'
           ctest --test-dir build-server --output-on-failure -R 'test_net_loopback' \
             || echo "::warning::transport loopback not green (best-effort stage)"
@@ -162,7 +182,7 @@ jobs:
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root
           python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root --check
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --check
-          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" = 21
+          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" = 22
           test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 6
       - name: Deploy script syntax
         run: |

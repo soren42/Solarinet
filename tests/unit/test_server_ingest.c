@@ -115,6 +115,43 @@ static void test_dedup_window_rolls_over(void)
     TEST_ASSERT_FALSE(serverDedupSeen(0xC0, 0, 9002)); /* evicted -> miss again */
 }
 
+static void test_report_identity_requires_one_complete_session(void)
+{
+    solariFrameHeader header;
+    serverReportReceipt receipt;
+    solariTlvWriter writer;
+    uint8_t payload[128], session[16];
+    memset(&header, 0, sizeof header);
+    memset(session, 0x42, sizeof session);
+    header.msgType = SCP_MSG_CLIENT_REPORT;
+    header.seqNo = 7;
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_NOT_EQUAL(SOLARI_OK, serverReportIdentity(&header, payload, 0, &receipt));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariTlvAppend(&writer, TLV_REPORT_SESSION, session, sizeof session));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverReportIdentity(&header, payload, writer.len, &receipt));
+    TEST_ASSERT_EQUAL_MEMORY(session, receipt.session, sizeof session);
+    TEST_ASSERT_EQUAL_UINT32(7, receipt.seqNo);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariTlvAppend(&writer, TLV_REPORT_SESSION, session, sizeof session));
+    TEST_ASSERT_NOT_EQUAL(SOLARI_OK,
+        serverReportIdentity(&header, payload, writer.len, &receipt));
+}
+
+static void test_report_validation_never_marks_before_commit(void)
+{
+    serverContext ctx;
+    solariFrameHeader header;
+    memset(&ctx, 0, sizeof ctx);
+    memset(&header, 0, sizeof header);
+    header.msgType = SCP_MSG_CLIENT_REPORT;
+    header.sourceNodeId = 42;
+    header.seqNo = 7;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -124,5 +161,7 @@ int main(void)
     RUN_TEST(test_matrix_server_and_unknown);
     RUN_TEST(test_dedup_basic);
     RUN_TEST(test_dedup_window_rolls_over);
+    RUN_TEST(test_report_identity_requires_one_complete_session);
+    RUN_TEST(test_report_validation_never_marks_before_commit);
     return UNITY_END();
 }

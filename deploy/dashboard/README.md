@@ -121,6 +121,16 @@ the server resynchronizes it. Rehearse that resynchronization before upgrading a
 fleet with saved pushes. POSIX file/rename/directory-sync failures and truncated
 state are covered by fault tests; Windows durability still needs native proof.
 
+Report delivery now carries `TLV_REPORT_SESSION` (0x0105), a random 16-byte
+reporter incarnation retained by spooled frames. Migration 021 adds receipts
+keyed by node/session/sequence/type, committed with current/history rows. Upgrade
+all client and monitor reporters before starting the new server: its report
+ingest rejects a missing session. Apply 021 only after the production migration
+audit and backup. Do not prune receipts while a sender could replay an older
+spooled frame. This prevents duplicate persistence; the one-way PULL transport
+still needs durable acknowledgments before delivery under DB failure can be
+claimed end to end.
+
 ## Gotchas
 - **`<LocationMatch "^/api/">` needs the trailing slash** — `^/api` also matches
   the SPA's `/api.jsx` adapter and would route it to PHP, breaking the app.

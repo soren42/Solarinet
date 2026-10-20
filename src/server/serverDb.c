@@ -27,6 +27,7 @@
 
 #include "solari/solariLog.h"
 #include "solari/solariTime.h"
+#include "solari/solariCrypto.h"
 
 #include <mariadb/mysql.h>
 #include <stdio.h>
@@ -1382,8 +1383,82 @@ static solariStatus dbWriteProcs(MYSQL *conn, unsigned long long *vNode,
     return SOLARI_OK;
 }
 
+/* Reserve a receipt inside the report transaction. A duplicate never reaches
+ * history writes; identity reuse with different content fails closed. */
+static solariStatus dbReportBegin(MYSQL *conn)
+{
+    my_bool reconnect = 0;
+    if (mysql_ping(conn) != 0) return ERR_DB;   /* reconnect only before BEGIN */
+    if (mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect) != 0) return ERR_DB;
+    if (mysql_autocommit(conn, 0) == 0) return SOLARI_OK;
+    reconnect = 1;
+    mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect);
+    return ERR_DB;
+}
+
+static solariStatus dbReportFinish(MYSQL *conn, bool commit, solariStatus outcome)
+{
+    my_bool reconnect = 1;
+    int failed = commit ? mysql_commit(conn) : mysql_rollback(conn);
+    if (failed && commit) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) failed = 1;
+    if (mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect) != 0) failed = 1;
+    return failed ? ERR_DB : outcome;
+}
+
+static solariStatus dbReportReceipt(MYSQL *conn, uint64_t nodeId,
+                                     const serverReportReceipt *receipt)
+{
+    static const char *insertSql =
+        "INSERT INTO reportReceipt (nodeId,sessionId,seqNo,msgType,payloadHash) "
+        "VALUES (?,UNHEX(?),?,?,UNHEX(?))";
+    static const char *matchSql =
+        "SELECT payloadHash=UNHEX(?) FROM reportReceipt "
+        "WHERE nodeId=? AND sessionId=UNHEX(?) AND seqNo=? AND msgType=?";
+    MYSQL_STMT *stmt;
+    MYSQL_BIND binds[5], result;
+    unsigned long long node = nodeId, seq = receipt->seqNo;
+    unsigned long sessionLen, hashLen;
+    int type = receipt->msgType, matches = 0;
+    my_bool isNull = 0;
+    char sessionHex[33], hashHex[65];
+    unsigned error;
+    solariStatus rc;
+    solariHexEncode(receipt->session, sizeof receipt->session, sessionHex, sizeof sessionHex);
+    solariHexEncode(receipt->payloadHash, sizeof receipt->payloadHash, hashHex, sizeof hashHex);
+    rc = dbStmtPrepare(conn, insertSql, &stmt);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&binds[0], &node);
+    dbBindStr(&binds[1], sessionHex, &sessionLen);
+    dbBindU64(&binds[2], &seq);
+    dbBindI32(&binds[3], &type);
+    dbBindStr(&binds[4], hashHex, &hashLen);
+    if (mysql_stmt_bind_param(stmt, binds) != 0) { mysql_stmt_close(stmt); return ERR_DB; }
+    if (mysql_stmt_execute(stmt) == 0) { mysql_stmt_close(stmt); return SOLARI_OK; }
+    error = mysql_stmt_errno(stmt);
+    mysql_stmt_close(stmt);
+    if (error != 1062) return ERR_DB;
+    rc = dbStmtPrepare(conn, matchSql, &stmt);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&binds[0], hashHex, &hashLen);
+    dbBindU64(&binds[1], &node);
+    dbBindStr(&binds[2], sessionHex, &sessionLen);
+    dbBindU64(&binds[3], &seq);
+    dbBindI32(&binds[4], &type);
+    if (mysql_stmt_bind_param(stmt, binds) != 0 || mysql_stmt_execute(stmt) != 0) {
+        mysql_stmt_close(stmt); return ERR_DB;
+    }
+    dbBindOutI32(&result, &matches, &isNull);
+    if (mysql_stmt_bind_result(stmt, &result) != 0 || mysql_stmt_fetch(stmt) != 0 || isNull) {
+        mysql_stmt_close(stmt); return ERR_DB;
+    }
+    mysql_stmt_close(stmt);
+    return matches ? ERR_CONN_RETRY : ERR_INVALID_ARG;
+}
+
 solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
-                                       const solariClientReport *rep)
+                                       const solariClientReport *rep,
+                                       const serverReportReceipt *receipt)
 {
     static const char *SQL_CUR =
         "INSERT INTO hostCurrent "
@@ -1424,7 +1499,8 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     static const char *usbJson = "[]";
     solariStatus rc;
 
-    if (!ctx || !ctx->db || !rep) return ERR_INVALID_ARG;
+    if (!ctx || !ctx->db || !rep || !receipt ||
+        receipt->msgType != SCP_MSG_CLIENT_REPORT) return ERR_INVALID_ARG;
     conn = dbConn(ctx->db);
     if (!conn) return ERR_DB;
 
@@ -1444,10 +1520,13 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbJsonIfaces(rep, ifacesJson, sizeof ifacesJson);
 
     /* One transaction: upsert current (+ JSON detail) + procs + history (§9.1). */
-    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    if (dbReportBegin(conn) != SOLARI_OK) return ERR_DB;
+
+    rc = dbReportReceipt(conn, nodeId, receipt);
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
     rc = dbStmtPrepare(conn, SQL_CUR, &st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
     dbBindU64(&b[0], &vNode);
     dbBindStr(&b[1], cpuJson,   &lCpu);
     dbBindU64(&b[2], &vRamU);
@@ -1468,13 +1547,13 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbBindStr(&b[17], rep->health.dmesgCritSample, &lDmesgCritSample);
     rc = dbStmtRunWrite(st, b, 18);
     mysql_stmt_close(st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
     rc = dbWriteProcs(conn, &vNode, rep);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
     rc = dbStmtPrepare(conn, SQL_HIST, &st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
     dbBindU64(&b[0], &vNode);
     dbBindI32(&b[1], &cpuAvg);
     dbBindU64(&b[2], &vRamU);
@@ -1488,21 +1567,20 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbBindU64(&b[10], &vDmesgCrit);
     rc = dbStmtRunWrite(st, b, 11);
     mysql_stmt_close(st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
-    if (mysql_commit(conn) != 0) {
+    rc = dbReportFinish(conn, true, SOLARI_OK);
+    if (rc != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR, "serverDb: client commit failed: %s",
                    mysql_error(conn));
-        mysql_rollback(conn);
-        mysql_autocommit(conn, 1);
         return ERR_DB;
     }
-    mysql_autocommit(conn, 1);
     return SOLARI_OK;
 }
 
 solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
-                                        const solariMonitorReport *rep)
+                                        const solariMonitorReport *rep,
+                                        const serverReportReceipt *receipt)
 {
     static const char *SQL_CUR =
         "INSERT INTO probeCurrent "
@@ -1523,11 +1601,16 @@ solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
     uint16_t    i;
     solariStatus rc = SOLARI_OK;
 
-    if (!ctx || !ctx->db || !rep) return ERR_INVALID_ARG;
+    if (!ctx || !ctx->db || !rep || !receipt ||
+        (receipt->msgType != SCP_MSG_MONITOR_REPORT &&
+         receipt->msgType != SCP_MSG_SURVEY_RESP)) return ERR_INVALID_ARG;
     conn = dbConn(ctx->db);
     if (!conn) return ERR_DB;
 
-    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    if (dbReportBegin(conn) != SOLARI_OK) return ERR_DB;
+
+    rc = dbReportReceipt(conn, nodeId, receipt);
+    if (rc != SOLARI_OK) goto fail_nostmt;
 
     rc = dbStmtPrepare(conn, SQL_CUR, &stCur);
     if (rc != SOLARI_OK) goto fail_nostmt;
@@ -1567,25 +1650,17 @@ solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
     mysql_stmt_close(stCur);
     mysql_stmt_close(stHist);
 
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
+    rc = dbReportFinish(conn, true, SOLARI_OK);
     if (rc != SOLARI_OK) {
-        mysql_rollback(conn);
-        mysql_autocommit(conn, 1);
-        return rc;
-    }
-    if (mysql_commit(conn) != 0) {
         solariLogf(SOLARI_LOG_ERROR, "serverDb: monitor commit failed: %s",
                    mysql_error(conn));
-        mysql_rollback(conn);
-        mysql_autocommit(conn, 1);
         return ERR_DB;
     }
-    mysql_autocommit(conn, 1);
     return SOLARI_OK;
 
 fail_nostmt:
-    mysql_rollback(conn);
-    mysql_autocommit(conn, 1);
-    return rc;
+    return dbReportFinish(conn, false, rc);
 }
 
 /* ===================================================================== */

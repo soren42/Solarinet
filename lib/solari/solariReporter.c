@@ -12,6 +12,9 @@
 #include "solari/solariFrame.h"
 #include "solari/solariLog.h"
 #include "solari/solariTime.h"
+#include "solari/solariTlv.h"
+
+#include <mbedtls/entropy.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -30,10 +33,22 @@ struct solariReporter {
     bool         hasCa, hasCert, hasKey;
     uint64_t     nodeId;
     uint32_t     seqNo;
+    uint8_t      session[16];       /* survives spool replay in each report TLV */
     int          activeUrl;          /* 0 primary, 1 failover */
     solariConn  *conn;
     solariSpool *spool;
 };
+
+/* A fresh incarnation keeps sequence reuse after restart/wrap unambiguous. */
+static solariStatus reporterNewSession(solariReporter *r)
+{
+    mbedtls_entropy_context entropy;
+    int result;
+    mbedtls_entropy_init(&entropy);
+    result = mbedtls_entropy_func(&entropy, r->session, sizeof r->session);
+    mbedtls_entropy_free(&entropy);
+    return result == 0 ? SOLARI_OK : ERR_TLS;
+}
 
 static void copyField(char *dst, size_t cap, const char *src, bool *present)
 {
@@ -50,9 +65,11 @@ solariStatus solariReporterOpen(const solariReporterOpts *opts, solariReporter *
 {
     solariReporter *r;
     if (!opts || !out || !opts->primaryUrl) return ERR_INVALID_ARG;
+    *out = NULL;
 
     r = calloc(1, sizeof *r);
     if (!r) return ERR_PLATFORM;
+    if (reporterNewSession(r) != SOLARI_OK) { free(r); return ERR_TLS; }
 
     copyField(r->primaryUrl,  sizeof r->primaryUrl,  opts->primaryUrl,  NULL);
     copyField(r->failoverUrl, sizeof r->failoverUrl, opts->failoverUrl, NULL);
@@ -129,7 +146,14 @@ solariStatus solariReporterFrameCorr(solariReporter *r, uint8_t msgType, uint8_t
                                      uint8_t *out, size_t cap, size_t *outLen)
 {
     solariFrameHeader h;
+    solariStatus rc;
+    uint8_t *reportPayload = NULL;
     if (!r || !out || !outLen) return ERR_INVALID_ARG;
+    if (r->seqNo == UINT32_MAX) {
+        rc = reporterNewSession(r);
+        if (rc != SOLARI_OK) return rc;
+        r->seqNo = 0;
+    }
     memset(&h, 0, sizeof h);
     h.magic[0] = SCP_MAGIC_0;
     h.magic[1] = SCP_MAGIC_1;
@@ -141,6 +165,25 @@ solariStatus solariReporterFrameCorr(solariReporter *r, uint8_t msgType, uint8_t
     h.sendTimeUnixMs = solariNowUnixMs();
     h.seqNo          = ++r->seqNo;
     h.correlationId  = correlationId;
+    if (msgType == SCP_MSG_CLIENT_REPORT || msgType == SCP_MSG_MONITOR_REPORT ||
+        msgType == SCP_MSG_SURVEY_RESP) {
+        solariTlvWriter writer;
+        if ((!payload && payloadLen) || payloadLen > SOLARI_MAX_FRAME - 20 ||
+            tlvCount == UINT16_MAX) return ERR_BUFFER_FULL;
+        reportPayload = (uint8_t *)malloc(payloadLen + 20);
+        if (!reportPayload) return ERR_PLATFORM;
+        if (payloadLen) memcpy(reportPayload, payload, payloadLen);
+        solariTlvWriterInit(&writer, reportPayload, payloadLen + 20);
+        writer.len = payloadLen;
+        writer.count = tlvCount;
+        rc = solariTlvAppend(&writer, TLV_REPORT_SESSION, r->session, sizeof r->session);
+        if (rc == SOLARI_OK) {
+            h.tlvCount = writer.count;
+            rc = solariFrameBuild(&h, reportPayload, writer.len, out, cap, outLen);
+        }
+        free(reportPayload);
+        return rc;
+    }
     return solariFrameBuild(&h, payload, payloadLen, out, cap, outLen);
 }
 

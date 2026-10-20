@@ -196,6 +196,54 @@ static void test_topology_frame(void)
     clientContextClose(&ctx);
 }
 
+static void reportSession(solariReporter *reporter, uint8_t session[16], uint32_t *seq)
+{
+    uint8_t frame[256];
+    const uint8_t *payload, *value;
+    size_t length, payloadLength;
+    uint16_t type, valueLength;
+    solariFrameHeader header;
+    solariTlvReader reader;
+    bool found = false;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariReporterFrame(reporter,
+        SCP_MSG_CLIENT_REPORT, 0, NULL, 0, 0, frame, sizeof frame, &length));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameParse(frame, length, &header, &payload, &payloadLength, NULL));
+    *seq = header.seqNo;
+    solariTlvReaderInit(&reader, payload, payloadLength);
+    while (solariTlvNext(&reader, &type, &value, &valueLength) == SOLARI_OK) {
+        if (type != TLV_REPORT_SESSION) continue;
+        TEST_ASSERT_EQUAL_UINT16(16, valueLength);
+        TEST_ASSERT_FALSE(found);
+        memcpy(session, value, 16);
+        found = true;
+    }
+    TEST_ASSERT_TRUE(found);
+}
+
+static void test_reporter_restart_has_distinct_identity(void)
+{
+    solariReporterOpts options;
+    solariReporter *reporter = NULL;
+    uint8_t first[16], second[16], restarted[16];
+    uint32_t seq;
+    memset(&options, 0, sizeof options);
+    options.primaryUrl = URL_LIVE;
+    options.nodeId = 42;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariReporterOpen(&options, &reporter));
+    reportSession(reporter, first, &seq);
+    TEST_ASSERT_EQUAL_UINT32(1, seq);
+    reportSession(reporter, second, &seq);
+    TEST_ASSERT_EQUAL_UINT32(2, seq);
+    TEST_ASSERT_EQUAL_MEMORY(first, second, 16);
+    solariReporterClose(reporter);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariReporterOpen(&options, &reporter));
+    reportSession(reporter, restarted, &seq);
+    TEST_ASSERT_EQUAL_UINT32(1, seq);
+    TEST_ASSERT_NOT_EQUAL(0, memcmp(first, restarted, 16));
+    solariReporterClose(reporter);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -203,5 +251,6 @@ int main(void)
     RUN_TEST(test_spool_then_drain);
     RUN_TEST(test_discovery_frame);
     RUN_TEST(test_topology_frame);
+    RUN_TEST(test_reporter_restart_has_distinct_identity);
     return UNITY_END();
 }

@@ -19,9 +19,7 @@
  *     the node's outcome TLVs (echoed verb + error magnitude, optional applied
  *     epoch) and fold it into per-node convergence via serverDbSetNodeApplied.
  *
- *   serverControlOnSurveyResp- consume an inbound SURVEY_RESP (0x21): parse it as
- *     a monitor report and hand it to serverMasterReconcile for authoritative
- *     state recomputation.
+ *   SURVEY_RESP uses the durable monitor-report path in serverIngest.c.
  *
  * The wire contract for CONTROL_RESULT mirrors what the monitor emits
  * (monitorControl.c): TLV_CTRL_VERB (u8) + TLV_ERROR_CODE (u16, 0 == success),
@@ -289,42 +287,5 @@ solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
                (unsigned long long)nodeId, (unsigned)res.verb,
                (unsigned)correlationId,
                (unsigned long long)res.appliedEpoch, lastResult);
-    return SOLARI_OK;
-}
-
-/* ------------------------------------------------- serverControlOnSurveyResp */
-
-solariStatus serverControlOnSurveyResp(serverContext *ctx, uint64_t nodeId,
-                                       const uint8_t *payload, size_t len)
-{
-    solariMonitorReport rep;
-    solariStatus        rc;
-
-    if (!ctx) return ERR_INVALID_ARG;
-    if (!payload && len > 0) return ERR_INVALID_ARG;
-
-    /* A SURVEY_RESP carries the same body as a MONITOR_REPORT - the node's
-     * immediate probe round. Parse it back into a report (the parser zeroes the
-     * struct, skips unknown TLVs, and drops overflow entries) and hand the
-     * authoritative reconciliation to master. */
-    rc = solariMsgParseMonitorReport(payload, len, &rep);
-    if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_WARN,
-                   "control: malformed SURVEY_RESP from node=0x%llx: %s",
-                   (unsigned long long)nodeId, solariStrError(rc));
-        return rc;
-    }
-
-    rc = serverMasterReconcile(ctx, nodeId, &rep);
-    if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_WARN,
-                   "control: reconcile SURVEY_RESP from node=0x%llx failed: %s",
-                   (unsigned long long)nodeId, solariStrError(rc));
-        return rc;
-    }
-
-    solariLogf(SOLARI_LOG_DEBUG,
-               "control: SURVEY_RESP node=0x%llx (%u probes) reconciled",
-               (unsigned long long)nodeId, (unsigned)rep.probeCount);
     return SOLARI_OK;
 }

@@ -178,7 +178,11 @@ static void serverDrainIngest(serverContext *ctx)
         rc = serverIngestValidate(ctx, &hdr, cn[0] ? cn : NULL);
         if (rc != SOLARI_OK) continue;  /* ERR_AUTH_ROLE / ERR_CONN_RETRY (dup) */
 
-        (void)serverIngestDispatch(ctx, &hdr, payload, plen);
+        rc = serverIngestDispatch(ctx, &hdr, payload, plen);
+        if (rc != SOLARI_OK)
+            solariLogf(SOLARI_LOG_ERROR, "ingest: dispatch failed src=0x%llx seq=%u: %s",
+                       (unsigned long long)hdr.sourceNodeId, (unsigned)hdr.seqNo,
+                       solariStrError(rc));
     }
 }
 

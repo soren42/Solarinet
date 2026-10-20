@@ -11,7 +11,7 @@
  *   SOLARI_DB_HOST  (default 127.0.0.1)   SOLARI_DB_PORT (default 13306)
  *   SOLARI_DB_NAME  (default solarinet)   SOLARI_DB_USER (default solari)
  *   SOLARI_DB_PASS  (default empty)
- * The target schema must already be applied (migrations 001 + 002).
+ * The target schema must include the complete monitoring stream through 021.
  */
 #include "unity.h"
 #include "solari/solariCommon.h"
@@ -88,6 +88,11 @@ static void test_client_report(void)
 {
     serverContext ctx;
     solariClientReport rep;
+    serverReportReceipt receipt;
+    uint64_t before;
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db),
+        "DELETE FROM reportReceipt WHERE nodeId=0x7e57c0de0001"));
+    before = liveCount("SELECT COUNT(*) FROM hostHistory WHERE nodeId=0x7e57c0de0001");
     memset(&ctx, 0, sizeof ctx);
     ctx.cfg = &g_cfg;
     ctx.db  = g_db;
@@ -101,9 +106,111 @@ static void test_client_report(void)
     rep.cpuLoadMilli[1] = 400;   /* 40.0% */
     rep.ramUsedKb  = 4ULL * 1024 * 1024;
     rep.ramTotalKb = 16ULL * 1024 * 1024;
+    memset(&receipt, 0, sizeof receipt);
+    memset(receipt.session, 0x42, sizeof receipt.session);
+    receipt.seqNo = 1;
+    receipt.msgType = SCP_MSG_CLIENT_REPORT;
 
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        serverDbWriteClientReport(&ctx, ITEST_NODE, &rep));
+        serverDbWriteClientReport(&ctx, ITEST_NODE, &rep, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(before + 1,
+        liveCount("SELECT COUNT(*) FROM hostHistory WHERE nodeId=0x7e57c0de0001"));
+
+    /* Reopen the DB handle: no process-local dedup state can protect this replay. */
+    serverDbClose(g_db);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbOpen(&g_cfg, &g_db));
+    ctx.db = g_db;
+    TEST_ASSERT_EQUAL_INT(ERR_CONN_RETRY,
+        serverDbWriteClientReport(&ctx, ITEST_NODE, &rep, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(before + 1,
+        liveCount("SELECT COUNT(*) FROM hostHistory WHERE nodeId=0x7e57c0de0001"));
+    receipt.session[0]++;                        /* sender restart, same seqNo */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbWriteClientReport(&ctx, ITEST_NODE, &rep, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(before + 2,
+        liveCount("SELECT COUNT(*) FROM hostHistory WHERE nodeId=0x7e57c0de0001"));
+    receipt.payloadHash[0]++;                    /* same identity, changed content */
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
+        serverDbWriteClientReport(&ctx, ITEST_NODE, &rep, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(before + 2,
+        liveCount("SELECT COUNT(*) FROM hostHistory WHERE nodeId=0x7e57c0de0001"));
+    receipt.session[0] = 0x42;
+    receipt.payloadHash[0] = 0;
+    for (receipt.seqNo = 2; receipt.seqNo < SERVER_DEDUP_WINDOW + 2; receipt.seqNo++) {
+        TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+            serverDbWriteClientReport(&ctx, ITEST_NODE, &rep, &receipt));
+    }
+    receipt.seqNo = 1;
+    TEST_ASSERT_EQUAL_INT(ERR_CONN_RETRY,
+        serverDbWriteClientReport(&ctx, ITEST_NODE, &rep, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(before + 2 + SERVER_DEDUP_WINDOW,
+        liveCount("SELECT COUNT(*) FROM hostHistory WHERE nodeId=0x7e57c0de0001"));
+}
+
+static void test_failed_report_does_not_poison_receipt(void)
+{
+    serverContext ctx;
+    solariClientReport report;
+    serverReportReceipt receipt;
+    memset(&ctx, 0, sizeof ctx);
+    memset(&report, 0, sizeof report);
+    memset(&receipt, 0x55, sizeof receipt);
+    receipt.msgType = SCP_MSG_CLIENT_REPORT;
+    ctx.cfg = &g_cfg;
+    ctx.db = g_db;
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db),
+        "DELETE FROM reportReceipt WHERE nodeId=0x7e57c0de0002"));
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db),
+        "DELETE FROM node WHERE nodeId=0x7e57c0de0002"));
+    TEST_ASSERT_EQUAL_INT(ERR_DB,
+        serverDbWriteClientReport(&ctx, ITEST_NODE + 1, &report, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(0,
+        liveCount("SELECT COUNT(*) FROM reportReceipt WHERE nodeId=0x7e57c0de0002"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbUpsertNode(g_db, ITEST_NODE + 1, ROLE_CLIENT,
+                           "retry.itest", "retry-cn", "linux", "x86_64", 1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbWriteClientReport(&ctx, ITEST_NODE + 1, &report, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(1,
+        liveCount("SELECT COUNT(*) FROM reportReceipt WHERE nodeId=0x7e57c0de0002"));
+}
+
+static void test_monitor_report_is_persisted_once(void)
+{
+    serverContext ctx;
+    solariMonitorReport report;
+    serverReportReceipt receipt;
+    uint64_t before;
+    memset(&ctx, 0, sizeof ctx);
+    memset(&report, 0, sizeof report);
+    memset(&receipt, 0x66, sizeof receipt);
+    ctx.cfg = &g_cfg;
+    ctx.db = g_db;
+    receipt.msgType = SCP_MSG_MONITOR_REPORT;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbUpsertNode(g_db, ITEST_NODE + 2, ROLE_MONITOR,
+                           "monitor.itest", "monitor-cn", "linux", "x86_64", 1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbUpsertProbeTarget(g_db,
+        "tcp:203.0.113.19:443", "203.0.113.19", 443, "tcp", 1,
+        "receipt test", NULL, 0, "tcp", NULL));
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db),
+        "DELETE FROM reportReceipt WHERE nodeId=0x7e57c0de0003"));
+    before = liveCount("SELECT COUNT(*) FROM probeHistory WHERE monitorNode=0x7e57c0de0003");
+    report.probeCount = 1;
+    report.probes[0].proto = 2;
+    report.probes[0].dstPort = 443;
+    report.probes[0].dstAddr[10] = report.probes[0].dstAddr[11] = 0xff;
+    report.probes[0].dstAddr[12] = 203;
+    report.probes[0].dstAddr[13] = 0;
+    report.probes[0].dstAddr[14] = 113;
+    report.probes[0].dstAddr[15] = 19;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbWriteMonitorReport(&ctx, ITEST_NODE + 2, &report, &receipt));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverMasterReconcile(&ctx, ITEST_NODE + 2, &report));
+    TEST_ASSERT_EQUAL_INT(ERR_CONN_RETRY,
+        serverDbWriteMonitorReport(&ctx, ITEST_NODE + 2, &report, &receipt));
+    TEST_ASSERT_EQUAL_UINT64(before + 1,
+        liveCount("SELECT COUNT(*) FROM probeHistory WHERE monitorNode=0x7e57c0de0003"));
 }
 
 /* ---- audit/alert row (ruleId 0, NULL targetId = host-scoped) ---- */
@@ -406,6 +513,8 @@ int main(void)
     RUN_TEST(test_open_ping);
     RUN_TEST(test_node_lifecycle);
     RUN_TEST(test_client_report);
+    RUN_TEST(test_failed_report_does_not_poison_receipt);
+    RUN_TEST(test_monitor_report_is_persisted_once);
     RUN_TEST(test_alert_event);
     RUN_TEST(test_lifecycle_transition_rolls_back_cascade);
     RUN_TEST(test_discovered);

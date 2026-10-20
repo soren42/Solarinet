@@ -43,9 +43,11 @@ WEAK solariStatus serverDbTouchNode(serverDb *db, uint64_t n, uint64_t w)
 WEAK solariStatus serverDbSetNodeState(serverDb *db, uint64_t n, const char *s)
 { (void)db;(void)n;(void)s; return ERR_DB; }
 WEAK solariStatus serverDbWriteClientReport(serverContext *c, uint64_t n,
-    const solariClientReport *r) { (void)c;(void)n;(void)r; return ERR_DB; }
+    const solariClientReport *r, const serverReportReceipt *receipt)
+{ (void)c;(void)n;(void)r;(void)receipt; return ERR_DB; }
 WEAK solariStatus serverDbWriteMonitorReport(serverContext *c, uint64_t n,
-    const solariMonitorReport *r) { (void)c;(void)n;(void)r; return ERR_DB; }
+    const solariMonitorReport *r, const serverReportReceipt *receipt)
+{ (void)c;(void)n;(void)r;(void)receipt; return ERR_DB; }
 WEAK solariStatus serverDbWriteAlertEvent(serverDb *db, int rid, uint64_t n,
     const char *t, const char *sev, const char *d, uint64_t f, const char *k,
     uint64_t opened, uint64_t asset, int tier, const char *disp, uint64_t *event)
@@ -119,8 +121,6 @@ WEAK solariStatus serverMasterAcceptHello(serverContext *c, const solariFrameHea
 { (void)c;(void)h;(void)hello;(void)cn;(void)o;(void)cap; if(ol)*ol=0; if(tc)*tc=0; return SOLARI_OK; }
 WEAK solariStatus serverControlOnResult(serverContext *c, uint64_t n, uint32_t cor,
     const uint8_t *p, size_t l) { (void)c;(void)n;(void)cor;(void)p;(void)l; return SOLARI_OK; }
-WEAK solariStatus serverControlOnSurveyResp(serverContext *c, uint64_t n,
-    const uint8_t *p, size_t l) { (void)c;(void)n;(void)p;(void)l; return SOLARI_OK; }
 WEAK solariStatus serverControlBuild(serverContext *c, uint64_t tn,
     solariCtrlVerb v, uint64_t te, const uint8_t *p, uint16_t pl,
     uint8_t *o, size_t cap, size_t *ol)

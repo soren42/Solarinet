@@ -280,20 +280,9 @@ solariStatus serverMasterReconcile(serverContext *ctx, uint64_t nodeId,
 
     if (!ctx || !ctx->db || !rep) return ERR_INVALID_ARG;
 
-    /* Persist this vantage's view first. probeCurrent is keyed
-     * (targetId, monitorNode), so writing the report records THIS monitor's
-     * per-target state without clobbering the other vantages' rows - that is
-     * the "merge overlapping reports" step: the merge is the keyed upsert, and
-     * the union across monitorNode rows is the multi-vantage matrix the
-     * dashboard reads. */
-    rc = serverDbWriteMonitorReport(ctx, nodeId, rep);
-    if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_ERROR,
-                   "master: reconcile write monitor=0x%llx (%u probes) failed: %s",
-                   (unsigned long long)nodeId, (unsigned)rep->probeCount,
-                   solariStrError(rc));
-        return rc;
-    }
+    /* Ingest has already persisted this vantage plus its durable receipt.
+     * Reconciliation only updates the derived node health; appending here used
+     * to write every monitor report to probeHistory twice. */
 
     /* Compute the fused derived health from the probes this vantage reported and
      * record it on the monitor node's row. (A link-only / empty report yields

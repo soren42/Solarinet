@@ -286,12 +286,22 @@ solariStatus serverDbCtlRequestGet(serverDb *db, unsigned long long reqId,
                                    char *detailOut, size_t detailCap);
 
 /* ---- report persistence (§9.1 representative writers, §10) ---- */
-/* Upsert hostCurrent + append hostHistory in one txn (§9.1). All time UTC. */
+typedef struct {
+    uint8_t session[16];
+    uint32_t seqNo;
+    uint8_t msgType;
+    uint8_t payloadHash[32];
+} serverReportReceipt;
+
+/* Receipt + hostCurrent + hostHistory in one txn. ERR_CONN_RETRY means the
+ * identical receipt already committed; changed content under one ID is rejected. */
 solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
-                                       const solariClientReport *rep);
-/* Upsert probeCurrent + append probeHistory per probe result, one txn. */
+                                       const solariClientReport *rep,
+                                       const serverReportReceipt *receipt);
+/* Receipt + probeCurrent + probeHistory, one txn; same duplicate semantics. */
 solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
-                                        const solariMonitorReport *rep);
+                                        const solariMonitorReport *rep,
+                                        const serverReportReceipt *receipt);
 
 /* ---- alerts / audit (§10 alertEvent) ---- */
 /* Append an alertEvent row (alerting + the decommission audit trail). targetId
@@ -541,9 +551,6 @@ solariStatus serverControlBuildSurvey(serverContext *ctx,
 solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
                                    uint32_t correlationId,
                                    const uint8_t *payload, size_t len);
-/* Handle an inbound SURVEY_RESP (0x21): hand off to master reconcile. */
-solariStatus serverControlOnSurveyResp(serverContext *ctx, uint64_t nodeId,
-                                       const uint8_t *payload, size_t len);
 
 /* ===================================================================== */
 /* serverProvision.c - enrollment + lifecycle (Handoff §7.3, §7.4)        */
