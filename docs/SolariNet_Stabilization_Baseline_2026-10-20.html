@@ -28,10 +28,10 @@
   .observed { color:#066174; } .inferred { color:var(--warn); } .unverified { color:var(--danger); }
   ol { padding-left:23px; } li { margin:5px 0; }
   footer { border-top:1px solid var(--line); padding-top:13px; color:var(--muted); font-size:.82rem; margin-top:30px; }
-  @page { size:Letter; margin:.50in .60in; }
+  @page { size:Letter; margin:.44in .55in; }
   @media print {
     html { background:#fff; }
-    body { max-width:none; padding:0; font-size:.94em; line-height:1.42; }
+    body { max-width:none; padding:0; font-size:.92em; line-height:1.40; }
     h2, h3 { break-after:avoid; }
     .callout, .note { break-inside:avoid; }
     thead { display:table-header-group; }
@@ -74,6 +74,7 @@
   <li><span class="tag observed">Observed</span> A service-worker harness proved that offline API requests reject instead of reading an old authenticated cache, and activation removes the prior v6 API cache.</li>
   <li><span class="tag observed">Observed</span> The F-11 control bridge candidate now requires a complete newline-terminated request within a 16 KiB cap and two-second deadline. The PHP and C clients loop on short writes and reject incomplete replies. A socket-pair test exercises fragmented, 8 KiB, and truncated requests; all 30 C suites and PHP parser checks pass.</li>
   <li><span class="tag observed">Observed</span> The F-08 SoR candidate confirms mandatory broker routing before checkpointing, acknowledges consumer deliveries only after successful primary target apply, and reconciles periodically. Nineteen fault and ownership tests pass. F-08 remains open: live broker/crash drills and durable retry for the steel DNS copy are outstanding.</li>
+  <li><span class="tag observed">Observed</span> The F-12 migration candidate installed 21 monitoring and 6 SoR files in disposable MariaDB 11.8 databases, then passed clean rechecks. It refused an untracked populated database and an interrupted ledger row. The former <code>--init-db</code> snapshot path now fails explicitly. Production adoption remains open; see the standalone migration runbook and PDF.</li>
 </ul>
 
 <h2>3. Priority sequence and executable gates</h2>
@@ -89,7 +90,7 @@
 
 <h2>4. Unverified and blocked</h2>
 <ul>
-  <li><span class="tag unverified">Unverified</span> Authenticated browser writes, an offline-to-online browser transition, queue cutover on xenon, RackWire iframe actions against live SolariNet, SoR propagation through all render targets, and restore from backups.</li>
+  <li><span class="tag unverified">Unverified</span> Authenticated browser writes, an offline-to-online browser transition, queue cutover on xenon, RackWire iframe actions against live SolariNet, SoR propagation through all render targets, migration adoption on current databases, and restore from backups.</li>
   <li><span class="tag unverified">Unverified</span> Current cross-build matrix, fleet-scale monitoring, three-monitor failover, public ACME challenge success, and complete manual/PDF parity across subprojects.</li>
   <li><span class="tag observed">Observed</span> Claude CLI cross-lab review could not run because its OAuth session had expired. Independent review is still an open release gate for the new security and integration work.</li>
 </ul>

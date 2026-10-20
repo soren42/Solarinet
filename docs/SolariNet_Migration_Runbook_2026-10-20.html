@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet migration runbook — 2026-10-20</title>
+<style>
+  :root { --ink:#14222d; --muted:#425664; --accent:#087a96; --line:#cbd6dc; }
+  * { box-sizing:border-box; }
+  html { font:16px/1.48 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:#e8eff2; }
+  body { max-width:960px; margin:auto; padding:32px 44px 48px; background:white; }
+  header { display:flex; align-items:center; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:16px; }
+  svg { width:56px; height:56px; flex:none; }
+  h1 { font-size:1.85rem; line-height:1.15; margin:0; }
+  h2 { color:#075a70; font-size:1.18rem; margin:27px 0 9px; border-bottom:1px solid var(--line); }
+  p, li { max-width:84ch; } li { margin:5px 0; }
+  pre { padding:12px 15px; background:#f1f6f7; overflow-wrap:anywhere; white-space:pre-wrap; }
+  code, pre { font-family:ui-monospace,Consolas,monospace; font-size:.9em; }
+  table { border-collapse:collapse; width:100%; } th,td { border:1px solid var(--line); padding:7px; text-align:left; vertical-align:top; }
+  th { background:#e8f2f5; } .warn { border-left:4px solid #9b2d34; background:#fff5f3; padding:9px 13px; }
+  .muted { color:var(--muted); } footer { border-top:1px solid var(--line); margin-top:28px; padding-top:10px; font-size:.82rem; }
+  @page { size:Letter; margin:.55in .64in; }
+  @media print { html { background:white; } body { max-width:none; padding:0; font-size:.92em; } h2 { break-after:avoid; } pre,tr { break-inside:avoid; } }
+</style>
+</head>
+<body>
+<header><svg viewBox="0 0 64 64" role="img" aria-label="Ordered migration ledger"><rect x="7" y="7" width="50" height="50" rx="8" fill="#e8f2f5" stroke="#087a96" stroke-width="2"/><path d="M17 22h30M17 32h30M17 42h30" stroke="#087a96" stroke-width="3"/><circle cx="23" cy="22" r="3" fill="#087a96"/><circle cx="23" cy="32" r="3" fill="#087a96"/><circle cx="23" cy="42" r="3" fill="#087a96"/></svg><div><h1>SolariNet migration runbook</h1><p class="muted">Candidate procedure · 20 October 2026 · monitoring DB and SoR</p></div></header>
+
+<div class="warn"><strong>Production gate:</strong> Current live databases have no <code>solari_migration_ledger</code>. The runner intentionally refuses them. Do not stamp their history from table presence alone; audit a backup and compare the actual schema against every historical migration first.</div>
+
+<h2>1. What the runner does</h2>
+<p><code>tools/migrate.py</code> applies full file IDs in order, including both distinct <code>016_*</code> monitoring migrations. It stores each SHA-256 checksum and an <code>applying</code> / <code>applied</code> state in the target database. It refuses edited or missing historical files, gaps, interrupted runs, and nonempty databases with no ledger. MariaDB DDL is not transactional; an interrupted file requires inspection rather than automatic replay.</p>
+<table><thead><tr><th>Stream</th><th>Initial input</th><th>Files proven on scratch DB</th></tr></thead><tbody><tr><td>Monitoring</td><td><code>db/migrations/001_baseline.sql</code> through <code>020_ctl_request_queue.sql</code></td><td>21 applied, including both 016 files</td></tr><tr><td>SoR</td><td><code>netdb/sor/schema.sql</code>, then its numbered migrations</td><td>6 applied through 021</td></tr></tbody></table>
+
+<h2>2. Clean installation</h2>
+<p>Create a new empty database with an account permitted to apply DDL. Supply credentials through a protected MariaDB option file, a local Unix socket account, or a process environment managed outside git. Run from any directory; the script resolves SQL paths from its own location.</p>
+<pre>python3 tools/migrate.py --database monitoring --db-name NEW_MONITORING_DB --check
+python3 tools/migrate.py --database monitoring --db-name NEW_MONITORING_DB
+python3 tools/migrate.py --database monitoring --db-name NEW_MONITORING_DB --check
+
+python3 tools/migrate.py --database sor --db-name NEW_SOR_DB --defaults-file /path/to/protected.cnf</pre>
+<p>The final <code>--check</code> should produce no <code>PENDING</code> lines. The deprecated <code>solariServer --init-db</code> now exits with code 2 and points to this runner; its old <code>db/schema.sql</code> snapshot had drifted beyond the numbered history.</p>
+
+<h2>3. Existing databases and failure recovery</h2>
+<ol><li>Back up the database and record the table, column, index, trigger, and view definitions. Confirm which migrations ran, including the two monitoring files numbered 016.</li><li>Compare the actual schema with the full ordered file set. Resolve any drift through a reviewed forward migration. Only then prepare an explicit adoption record with matching immutable file checksums.</li><li>If the runner reports <code>applying</code>, inspect which statements in that file committed. Repair or complete the partial DDL, then record the verified result. Do not delete a ledger row merely to retry the file.</li><li>Re-run <code>--check</code> before applying pending files. Stop if the ledger checksum differs from the checked-out file.</li></ol>
+
+<h2>4. Evidence and limits</h2>
+<p><strong>Observed:</strong> Disposable local MariaDB 11.8 databases accepted all 21 monitoring and 6 SoR files. Re-running checks produced no pending entries. An untracked populated database and a simulated interrupted ledger entry were both refused. The disposable databases were dropped after testing. Xenon has both 016 feature tables and lacks the candidate 020 queue table; this is a read-only observation, not a complete migration audit.</p>
+<p><strong>Unverified:</strong> Production adoption, restore/rollback, a staged upgrade, live SoR compatibility, and CI execution remain release gates. This candidate runner does not automatically adopt legacy schemas.</p>
+<footer>Standalone HTML manual with inline CSS and SVG. The matching PDF is generated from this file. No external assets or scripts are required.</footer>
+</body>
+</html>

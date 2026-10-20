@@ -222,4 +222,4 @@ else
 fi
 
 log "bootstrap complete. Binaries/tests in ./${BUILD_DIR}"
-log "next: provision MariaDB + apply db/schema.sql for the server tier (Phase 5)."
+log "next: provision an empty MariaDB database, then run tools/migrate.py --database monitoring --db-name NAME. Existing databases require a migration audit."

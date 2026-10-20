@@ -4,9 +4,9 @@
 -- state tables are upserted; history tables are append-only and partitioned by
 -- time for retention pruning. MariaDB / InnoDB. All time stored UTC.
 --
--- This file is the canonical full baseline. db/migrations/001_baseline.sql is
--- the same content as a numbered migration; db/migrations/002_c2_capabilities.sql
--- (Phase 3 Handoff §5) extends it additively.
+-- HISTORICAL SNAPSHOT ONLY. This file has drifted past 001_baseline.sql and
+-- overlaps later numbered migrations. Do not use it for a fresh install or
+-- --init-db. Use tools/migrate.py with the ordered db/migrations/*.sql stream.
 
 CREATE TABLE node (
   nodeId        BIGINT UNSIGNED PRIMARY KEY,   -- FNV-1a-64 (§5.5)

@@ -143,6 +143,17 @@ jobs:
           $MYSQL < netdb/sor/migrations/020_rackwire.sql
           echo "-- re-applying 020 to prove idempotency --"
           $MYSQL < netdb/sor/migrations/020_rackwire.sql
+      - name: Ledgered clean installs for monitoring and SoR
+        env:
+          MYSQL_PWD: rwci_scratch
+        run: |
+          mariadb -h127.0.0.1 -P3306 -uroot -e 'CREATE DATABASE monitoring_migration_ci; CREATE DATABASE sor_migration_ci;'
+          python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root
+          python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root
+          python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root --check
+          python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --check
+          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" = 21
+          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 6
       - name: Deploy script syntax
         run: |
           bash -n \

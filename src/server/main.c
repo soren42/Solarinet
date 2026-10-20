@@ -274,7 +274,7 @@ static void usage(const char *argv0)
     fprintf(stderr,
         "usage: %s [--config PATH] [--init-db] [-h]\n"
         "  --config PATH   load the server .conf (sec 13)\n"
-        "  --init-db       apply db/schema.sql then exit\n",
+        "  --init-db       retired; use tools/migrate.py --database monitoring\n",
         argv0);
 }
 
@@ -349,6 +349,13 @@ int main(int argc, char **argv)
         }
     }
 
+    if (initDb) {
+        fprintf(stderr, "--init-db is retired: db/schema.sql has drifted past "
+                "the numbered migrations. Use tools/migrate.py --database "
+                "monitoring --db-name NAME after auditing existing schemas.\n");
+        return 2;
+    }
+
     solariLogInit(SOLARI_LOG_SINK_STDERR, NULL, "solariServer");
 
     if (cfgPath) {
@@ -373,7 +380,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* The db is required for both --init-db and the run loop (lease, persistence,
+    /* The db is required for the run loop (lease, persistence,
      * convergence all flow through it). Fail closed rather than spin a server
      * that can never win the lease or persist a report. */
     rc = serverDbOpen(&cfg, &db);
@@ -384,16 +391,6 @@ int main(int argc, char **argv)
         return 1;
     }
     ctx.db = db;
-
-    if (initDb) {
-        rc = serverDbApplyScript(db, "db/schema.sql");
-        solariLogf(rc == SOLARI_OK ? SOLARI_LOG_INFO : SOLARI_LOG_FATAL,
-                   "init-db: %s", solariStrError(rc));
-        serverDbClose(db);
-        serverContextClose(&ctx);
-        solariLogShutdown();
-        return rc == SOLARI_OK ? 0 : 1;
-    }
 
     serverInstallSignals();
 
