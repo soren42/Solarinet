@@ -12,7 +12,8 @@
  *      be DEFINED somewhere in the bridge's `:root` blocks. A token used but
  *      never bridged would silently fall back to its hardcoded literal even
  *      when a dashboard theme value exists — exactly the regression D9 exists
- *      to prevent.
+ *      to prevent. Cable colors use separate `--rw-cable-*` brand literals and
+ *      must not be rethemed by the host.
  *
  * Run: node tests/dashboard/test_rackwire_ui.js   — exits non-zero on failure.
  */
@@ -96,14 +97,7 @@ console.log("\n[2] token bridge — every --sn-* token used is bridged to a dash
     });
     ok("bridge defines a non-trivial token set", defined.size >= 15, "got " + defined.size);
 
-    // Two tokens are intentionally literal (D9) rather than var()-mapped —
-    // still expected to be DEFINED in the :root block, just not to a var().
-    var LITERAL_TOKENS = ["--sn-signal-other", "--sn-signal-open"];
-    LITERAL_TOKENS.forEach(function (t) {
-      ok(t + " is defined (literal by design, D9)", defined.has(t));
-    });
-
-    // Every other defined token must actually BRIDGE to a dashboard token —
+    // Every --sn-* token must actually BRIDGE to a dashboard token —
     // var(--<dashboard-token>, <fallback>) — not just declare something.
     // A bare literal standing in for a real token (e.g. a hardcoded hex where
     // var(--accent, #22B8F0) belongs) would satisfy "is defined" but is
@@ -111,7 +105,6 @@ console.log("\n[2] token bridge — every --sn-* token used is bridged to a dash
     // declaration shape, not just its presence.
     var BRIDGE_RE = /^var\(\s*--[a-z][a-z0-9-]*\s*,\s*[\s\S]+\)$/;
     defined.forEach(function (vals, token) {
-      if (LITERAL_TOKENS.indexOf(token) !== -1) return;
       var unbridged = vals.filter(function (v) { return !BRIDGE_RE.test(v); });
       ok(token + " every declaration bridges via var(--<dashboard-token>, <fallback>)",
         unbridged.length === 0, unbridged.join(" | "));
@@ -136,6 +129,23 @@ console.log("\n[2] token bridge — every --sn-* token used is bridged to a dash
       if (!defined.has(t)) missing.push(t);
     });
     ok("every referenced --sn-* token is bridged", missing.length === 0, missing.join(", "));
+
+    // Brand Standards v1.1 and CONTRACT-RW D9 moved cable meaning out of the
+    // host bridge. Pin the literals so a dashboard theme cannot repaint them.
+    var cablePalette = {
+      "--rw-cable-net": "#22D3EE",
+      "--rw-cable-power": "#FB923C",
+      "--rw-cable-usb": "#2E6BE6",
+      "--rw-cable-other": "#74889D",
+      "--rw-cable-lighting": "#E879F9",
+      "--rw-cable-audio": "#A3E635",
+      "--rw-cable-open": "#FFE04D",
+    };
+    Object.keys(cablePalette).forEach(function (token) {
+      var match = styleBlock.match(new RegExp(token + "\\s*:\\s*([^;]+);"));
+      ok(token + " keeps the RackWire brand literal", !!match &&
+        match[1].trim().toUpperCase() === cablePalette[token].toUpperCase());
+    });
   }
 }
 
