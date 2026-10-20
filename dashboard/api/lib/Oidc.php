@@ -41,6 +41,20 @@ final class Oidc
 {
     /** Session keys for the in-flight transaction (state/nonce). */
     private const SESS_TX = 'solari_oidc_tx';
+    private const MAX_STATE_AGE_SEC = 600;
+
+    /** Accept a one-use callback only within ten minutes of its login request. */
+    public static function validTransaction(array $tx, string $state, int $now): bool
+    {
+        $saved = $tx['state'] ?? null;
+        $nonce = $tx['nonce'] ?? null;
+        $started = $tx['ts'] ?? null;
+        return is_string($saved) && $saved !== '' && $state !== ''
+            && is_string($nonce) && $nonce !== ''
+            && is_int($started) && $started <= $now
+            && $now - $started <= self::MAX_STATE_AGE_SEC
+            && hash_equals($saved, $state);
+    }
 
     // ------------------------------------------------------------------ config
 
@@ -148,7 +162,7 @@ final class Oidc
         $code  = (string) ($query['code'] ?? '');
         $state = (string) ($query['state'] ?? '');
         if ($code === '' || !is_array($tx)
-            || !hash_equals((string) ($tx['state'] ?? ''), $state)) {
+            || !self::validTransaction($tx, $state, time())) {
             self::fail('Invalid or expired SSO login attempt. Please try again.');
         }
 
@@ -224,29 +238,52 @@ final class Oidc
             self::fail('ID token signature verification failed.');
         }
 
-        // Standard claim checks.
-        $c   = self::config();
-        $iss = (string) ($claims['iss'] ?? '');
-        if (!hash_equals(rtrim((string) $c['issuer'], '/'), rtrim($iss, '/'))) {
-            self::fail('ID token issuer mismatch.');
-        }
-        $aud = $claims['aud'] ?? '';
-        $audOk = is_array($aud) ? in_array($c['clientId'], $aud, true) : ($aud === $c['clientId']);
-        if (!$audOk) {
-            self::fail('ID token audience mismatch.');
-        }
-        $now = time();
-        if (isset($claims['exp']) && $now >= ((int) $claims['exp'] + 60)) {
-            self::fail('ID token has expired.');
-        }
-        if (isset($claims['nbf']) && $now + 60 < (int) $claims['nbf']) {
-            self::fail('ID token not yet valid.');
-        }
-        if ($expectedNonce !== '' && !hash_equals($expectedNonce, (string) ($claims['nonce'] ?? ''))) {
-            self::fail('ID token nonce mismatch.');
-        }
+        $claimError = self::claimError($claims, self::config(), $expectedNonce, time());
+        if ($claimError !== null) self::fail($claimError);
 
         return $claims;
+    }
+
+    /** Return the first OIDC claim defect; pure so negative cases are testable. */
+    public static function claimError(array $claims, array $config,
+                                      string $expectedNonce, int $now): ?string
+    {
+        $issuer = $claims['iss'] ?? null;
+        if (!is_string($issuer) || $issuer === ''
+            || !hash_equals(rtrim((string) ($config['issuer'] ?? ''), '/'), rtrim($issuer, '/'))) {
+            return 'ID token issuer mismatch.';
+        }
+        $clientId = $config['clientId'] ?? null;
+        $aud = $claims['aud'] ?? null;
+        if (!is_string($clientId) || $clientId === ''
+            || !(is_string($aud) ? $aud === $clientId
+                : (is_array($aud) && in_array($clientId, $aud, true)))) {
+            return 'ID token audience mismatch.';
+        }
+        $azp = $claims['azp'] ?? null;
+        if ((is_array($aud) && count($aud) > 1 && $azp === null)
+            || ($azp !== null && $azp !== $clientId)) {
+            return 'ID token authorized party mismatch.';
+        }
+        if (!is_string($claims['sub'] ?? null) || $claims['sub'] === '') {
+            return 'ID token subject missing.';
+        }
+        $exp = $claims['exp'] ?? null;
+        $iat = $claims['iat'] ?? null;
+        if (!is_int($exp) || !is_int($iat) || $exp <= $iat
+            || $now >= $exp + 60 || $iat > $now + 60) {
+            return 'ID token lifetime invalid.';
+        }
+        if (array_key_exists('nbf', $claims)
+            && (!is_int($claims['nbf']) || $now + 60 < $claims['nbf'])) {
+            return 'ID token not yet valid.';
+        }
+        $nonce = $claims['nonce'] ?? null;
+        if ($expectedNonce === '' || !is_string($nonce)
+            || !hash_equals($expectedNonce, $nonce)) {
+            return 'ID token nonce mismatch.';
+        }
+        return null;
     }
 
     /** Find the JWKS key with the given kid and return it as a PEM public key. */

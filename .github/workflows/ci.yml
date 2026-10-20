@@ -113,6 +113,12 @@ jobs:
         run: find dashboard/api -name '*.php' -print | sort | xargs -n1 php -l
       - name: PHP bridge tests
         run: php tests/dashboard/test_solari_ctl.php
+      - name: Local login default-closed gate
+        run: php tests/dashboard/test_local_login_gate.php
+      - name: OIDC claims and session lifecycle
+        run: |
+          php tests/dashboard/test_oidc_claims.php
+          php tests/dashboard/test_auth_session.php
       - name: RackWire API route tests
         run: php tests/dashboard/test_rackwire_api.php
       - name: RackWire UI parse + token bridge tests

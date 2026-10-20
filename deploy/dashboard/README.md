@@ -6,8 +6,7 @@ single intranet host. Secrets (DB password, credential file, private keys) are
 the php-fpm pool config you fill in at install time.
 
 Stack: **MariaDB** ← **solariServer** (SCP + `solariCtl` bridge) ← **php-fpm**
-pool (API, runs as the repo owner) ← **Apache** vhost (HTTPS, serves the SPA and
-proxies `/api/`).
+pool (API) ← **Apache** vhost (HTTPS, serves the SPA and proxies `/api/`).
 
 ## 1. Database
 ```sh
@@ -17,11 +16,10 @@ CREATE USER IF NOT EXISTS 'solari'@'127.0.0.1' IDENTIFIED BY 'CHANGE_ME';
 GRANT SELECT,INSERT,UPDATE,DELETE ON solarinet.* TO 'solari'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
-sudo mariadb solarinet < db/schema.sql
-sudo mariadb solarinet < db/migrations/002_c2_capabilities.sql
-sudo mariadb solarinet < db/migrations/003_config_engine.sql
-# record the password for the server + fpm:
-printf 'export SOLARI_DB_PASS=CHANGE_ME\n' > run/db.env && chmod 600 run/db.env
+# The database must be EMPTY for an initial migration. Existing databases
+# require the audit described in docs/SolariNet_Migration_Runbook_2026-10-20.html.
+sudo python3 tools/migrate.py --database monitoring --db-name solarinet
+sudo python3 tools/migrate.py --database monitoring --db-name solarinet --check
 ```
 
 ## 2. TLS PKI (internal CA + server/dashboard certs)
@@ -38,6 +36,13 @@ sudo install -m640 run/pki/dashboard.key /etc/ssl/solarinet/dashboard.key
 ```sh
 php dashboard/api/tools/solari-passwd.php --user admin --random   # prints the password once
 ```
+Local password login is disabled unless the FPM pool explicitly sets both
+`SOLARI_LOCAL_LOGIN=1` and `SOLARI_AUTH_RATE_DIR` to a private writable directory
+(mode 0700) owned by the FPM account. This is a break-glass path; successful
+SSO does not require it. Five password attempts per source/account in 15 minutes
+are allowed. Disabling the switch revokes existing local sessions on their next
+request. OIDC sessions expire after one hour or 30 minutes idle; local sessions
+expire after eight hours or 30 minutes idle.
 
 ## 4. SCP server (systemd)
 ```sh

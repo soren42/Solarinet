@@ -348,7 +348,11 @@ if (getenv('RW_AUTH')) {
         ini_set('session.save_path', $sessionDir);
     }
     Auth::bootSession();
-    $_SESSION['solari'] = ['username' => 'tester', 'role' => (string) (getenv('RW_ROLE') ?: 'operator')];
+    $_SESSION['solari'] = ['username' => 'tester',
+                          'role' => (string) (getenv('RW_ROLE') ?: 'operator'),
+                          'source' => 'oidc'];
+    $_SESSION['solari_created_at'] = time();
+    $_SESSION['solari_seen_at'] = time();
 }
 
 $_GET = [];
