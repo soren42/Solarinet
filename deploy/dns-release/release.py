@@ -415,6 +415,9 @@ def activate(config, candidate, health=verifyServed):
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        bootstrapPath = root / "bootstrap.json"
+        if bootstrapPath.exists() and json.loads(bootstrapPath.read_text()).get("phase") != "applied":
+            raise RuntimeError("legacy include cutover requires bootstrap recovery first")
         state = recoverPending(config, health)
         previousPath, previous = currentGeneration(config)
         destination, desired = normalizedGeneration(config, candidate, previousPath, previous, state)
@@ -449,9 +452,173 @@ def activate(config, candidate, health=verifyServed):
         return state
 
 
+def readRegular(path):
+    """Read a bounded config/zone snapshot without following a final symlink."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 4 * 1024 * 1024:
+            raise ValueError("legacy input must be a bounded regular file")
+        content = source.read(4 * 1024 * 1024 + 1)
+    if len(content) > 4 * 1024 * 1024:
+        raise ValueError("legacy input changed beyond its size limit")
+    return content, info
+
+
+def writeAtomicFile(path, content, mode=0o600, uid=None, gid=None):
+    """Replace a config while preserving its recorded ownership and mode."""
+    fd, temporary = tempfile.mkstemp(prefix=".cutover-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(content)
+            output.flush()
+            if uid is not None:
+                os.fchown(output.fileno(), uid, gid)
+            os.fchmod(output.fileno(), mode)
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        syncDirectory(path.parent)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def restoreBootstrap(config, journal, health=verifyServed):
+    """Restore the exact legacy parent include after an interrupted cutover."""
+    root = pathlib.Path(config["releaseRoot"])
+    if not re.fullmatch(r"[0-9a-f]{64}", journal.get("generation", "")):
+        raise ValueError("invalid bootstrap journal generation")
+    backup, _ = readRegular(root / ".bootstrap-parent.backup")
+    if hashlib.sha256(backup).hexdigest() != journal["beforeHash"]:
+        raise ValueError("bootstrap backup checksum mismatch")
+    writeAtomicFile(pathlib.Path(config["includeParent"]), backup,
+                    journal["mode"], journal["uid"], journal["gid"])
+    runCommand(config, "reloadCommand")
+    manifest = loadManifest(root / journal["generation"])
+    health(config, manifest)
+    link = pathlib.Path(config["currentLink"])
+    if link.is_symlink() and link.resolve() == root / journal["generation"]:
+        link.unlink()
+        syncDirectory(link.parent)
+    elif link.exists() or link.is_symlink():
+        raise ValueError("bootstrap recovery found an unrelated current pointer")
+    journal.update(phase="recovered", error="legacy include restored")
+    writeJson(root / "bootstrap.json", journal)
+    return journal
+
+
+def bootstrap(config, health=verifyServed):
+    """Seed an equivalent baseline, then atomically convert the legacy includes.
+
+    Stop the legacy copy-based writer first. Existing legacy files stay intact;
+    only their parent include is replaced, with a private durable backup.
+    """
+    root = pathlib.Path(config["releaseRoot"])
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        journalPath = root / "bootstrap.json"
+        journal = json.loads(journalPath.read_text()) if journalPath.exists() else {}
+        if journal.get("phase") in ("pending", "rollbackFailed"):
+            restoreBootstrap(config, journal, health)
+        runtimeCurrent = config.get("runtimeCurrentLink", config["currentLink"])
+        if not re.fullmatch(r"/[A-Za-z0-9_./-]+", runtimeCurrent):
+            raise ValueError("invalid runtime current path")
+        include = f'include "{runtimeCurrent}/named.conf.managed";\n'
+        parent = pathlib.Path(config["includeParent"])
+        parentBytes, parentInfo = readRegular(parent)
+        parentText = parentBytes.decode("utf-8")
+        if journal.get("phase") == "applied":
+            if include.strip() not in parentText:
+                raise ValueError("completed bootstrap include has drifted")
+            _, current = currentGeneration(config)
+            health(config, current)
+            return journal
+        link = pathlib.Path(config["currentLink"])
+        if link.exists() or link.is_symlink():
+            raise ValueError("bootstrap refuses an existing unmanaged current pointer")
+        sourceRoot = pathlib.Path(config["legacyZoneRoot"])
+        runtimeRoot = pathlib.PurePosixPath(config.get("runtimeLegacyZoneRoot", str(sourceRoot)))
+        desiredParent = parentText
+        snapshots = {parent: hashlib.sha256(parentBytes).hexdigest()}
+        with tempfile.TemporaryDirectory(prefix=".bootstrap-", dir=root) as temporary:
+            temporary = pathlib.Path(temporary)
+            origins = set()
+            for item in config["legacyIncludes"]:
+                pattern = re.compile(r'(?m)^[ \t]*include\s+"' + re.escape(item["runtimePath"]) +
+                                     r'"\s*;[ \t]*(?://[^\n]*)?(?:\n|$)')
+                desiredParent, count = pattern.subn("", desiredParent)
+                if count != 1:
+                    raise ValueError("legacy include must occur exactly once in its parent")
+                declarations, _ = readRegular(pathlib.Path(item["hostPath"]))
+                snapshots[pathlib.Path(item["hostPath"])] = hashlib.sha256(declarations).hexdigest()
+                text = declarations.decode("utf-8")
+                for name, start, end in zoneBlocks(text):
+                    if name in origins:
+                        raise ValueError("legacy includes contain duplicate managed origins")
+                    origins.add(name)
+                    block = text[start:end]
+                    if not re.search(r"\btype\s+(?:primary|master)\s*;", block):
+                        raise ValueError("legacy managed include contains a non-primary zone")
+                    files = re.findall(r'\bfile\s+"([^"]+)"\s*;', block)
+                    if len(files) != 1:
+                        raise ValueError("legacy zone must reference exactly one file")
+                    relative = pathlib.PurePosixPath(files[0]).relative_to(runtimeRoot)
+                    if len(relative.parts) != 1 or relative.name in (".", ".."):
+                        raise ValueError("legacy zone file escapes its configured directory")
+                    content, _ = readRegular(sourceRoot / relative.name)
+                    snapshots[sourceRoot / relative.name] = hashlib.sha256(content).hexdigest()
+                    zoneText = content.decode("utf-8")
+                    if not re.search(r"(?mi)^\s*\$ORIGIN\s", zoneText):
+                        zoneText = f"$ORIGIN {name}.\n" + zoneText
+                    (temporary / relative.name).write_text(zoneText, encoding="utf-8")
+            if not origins:
+                raise ValueError("legacy include set contains no managed zones")
+            destination, baseline = stageGeneration(config, temporary, trusted=True)
+        if {zone["name"] for zone in baseline["zones"]} != origins:
+            raise ValueError("legacy filenames do not match their declared origins")
+        desiredParent = (desiredParent.rstrip() + "\n" + include).encode("utf-8")
+        validateGeneration(config, baseline, baseline)
+        health(config, baseline)                # prove the snapshot matches legacy serving
+        for path, expected in snapshots.items():
+            observed, _ = readRegular(path)
+            if hashlib.sha256(observed).hexdigest() != expected:
+                raise ValueError("legacy inputs changed during cutover preparation; stop the old writer")
+        writeAtomicFile(root / ".bootstrap-parent.backup", parentBytes)
+        journal = {"phase": "pending", "generation": destination.name,
+                   "beforeHash": hashlib.sha256(parentBytes).hexdigest(),
+                   "afterHash": hashlib.sha256(desiredParent).hexdigest(),
+                   "mode": stat.S_IMODE(parentInfo.st_mode), "uid": parentInfo.st_uid,
+                   "gid": parentInfo.st_gid}
+        writeJson(journalPath, journal)
+        try:
+            switchLink(config, destination)
+            writeAtomicFile(parent, desiredParent, journal["mode"], journal["uid"], journal["gid"])
+            validateGeneration(config, baseline, baseline)
+            runCommand(config, "reloadCommand")
+            health(config, baseline)
+        except Exception as failure:
+            try:
+                restoreBootstrap(config, journal, health)
+            except Exception as rollback:
+                journal.update(phase="rollbackFailed", error=str(rollback))
+                writeJson(journalPath, journal)
+                raise RuntimeError("bootstrap and legacy restore failed") from failure
+            raise
+        state = {"phase": "applied", "desired": destination.name, "applied": destination.name,
+                 "lastSuccess": datetime.datetime.now(datetime.timezone.utc).isoformat(), "error": None}
+        rememberSerials(state, baseline)
+        writeJson(root / "state.json", state)
+        journal.update(phase="applied", error=None)
+        writeJson(journalPath, journal)
+        return journal
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("candidate")
+    parser.add_argument("candidate", nargs="?")
+    parser.add_argument("--bootstrap", action="store_true",
+                        help="convert configured legacy includes after stopping the old writer")
     parser.add_argument("--config", default="/etc/solarinet/dns-release.json")
     args = parser.parse_args()
     fd = os.open(args.config, os.O_RDONLY | os.O_NOFOLLOW)
@@ -460,21 +627,31 @@ def main():
         if os.geteuid() != 0 or info.st_uid != 0 or info.st_mode & 0o022:
             parser.error("release helper requires root and a root-owned non-writable configuration")
         config = json.load(source)
-    incoming = pathlib.Path(config["incomingRoot"]).resolve(strict=True)
-    candidate = pathlib.Path(args.candidate).resolve(strict=True)
-    if candidate == incoming or not candidate.is_relative_to(incoming):
-        parser.error("candidate must be a private generation inside incomingRoot")
-    config["_candidateUid"] = pwd.getpwnam(config["candidateUser"]).pw_uid
-    info = candidate.stat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != config["_candidateUid"] or info.st_mode & 0o077:
-        parser.error("candidate directory must be private and owned by candidateUser")
     for value in (config["releaseRoot"], str(pathlib.Path(config["currentLink"]).parent)):
         directory = pathlib.Path(value)
         directory.mkdir(parents=True, exist_ok=True)
         info = directory.stat()
         if directory.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
             parser.error("release directories must be root-owned and not writable by other accounts")
-    result = activate(config, candidate)
+    if args.bootstrap:
+        if args.candidate:
+            parser.error("bootstrap does not accept a candidate directory")
+        _, info = readRegular(pathlib.Path(config["includeParent"]))
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            parser.error("legacy include parent must be root-owned and not writable by other accounts")
+        result = bootstrap(config)
+    else:
+        if not args.candidate:
+            parser.error("activation requires a candidate directory")
+        incoming = pathlib.Path(config["incomingRoot"]).resolve(strict=True)
+        candidate = pathlib.Path(args.candidate).resolve(strict=True)
+        if candidate == incoming or not candidate.is_relative_to(incoming):
+            parser.error("candidate must be a private generation inside incomingRoot")
+        config["_candidateUid"] = pwd.getpwnam(config["candidateUser"]).pw_uid
+        info = candidate.stat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != config["_candidateUid"] or info.st_mode & 0o077:
+            parser.error("candidate directory must be private and owned by candidateUser")
+        result = activate(config, candidate)
     print(json.dumps(result, sort_keys=True))
 
 

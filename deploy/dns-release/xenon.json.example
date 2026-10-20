@@ -4,6 +4,12 @@
   "currentLink": "/etc/bind/solarinet-current",
   "incomingRoot": "/var/lib/solarinet-dns/incoming",
   "candidateUser": "jason",
+  "includeParent": "/etc/bind/named.conf.local",
+  "legacyZoneRoot": "/etc/bind/zones",
+  "legacyIncludes": [
+    {"hostPath": "/etc/bind/named.conf.akoria", "runtimePath": "/etc/bind/named.conf.akoria"},
+    {"hostPath": "/etc/bind/named.conf.bare", "runtimePath": "/etc/bind/named.conf.bare"}
+  ],
   "transfer": ["10.1.0.10", "10.0.0.11"],
   "checkZoneCommand": ["/usr/bin/named-checkzone"],
   "expandCommand": ["/usr/bin/named-checkconf", "-p", "/etc/bind/named.conf"],

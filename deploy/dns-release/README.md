@@ -20,9 +20,10 @@ and failed rollback are retried from the recorded rollback generation.
 
 ## Current boundary
 
-This is a tested candidate, **not installed on the live DNS services**. It
-requires a seeded release and one managed include before activation. The
-initial legacy include conversion and SoR/steel adapter are still pending.
+This is a tested candidate, **not installed on the live DNS services**.
+`--bootstrap` creates a baseline from the configured legacy includes, proves
+that its SOAs/records match the running server, then replaces their parent
+include atomically. SoR/steel adapter integration is still pending.
 Do not point the existing copy-based applier at the release directories.
 
 The intended live include is:
@@ -42,6 +43,28 @@ must be owned by `candidateUser`; ownership is checked on the opened descriptor
 with symlinks refused. The examples retain the observed legacy `jason` account.
 The dedicated service-account cutover remains part of F-04 before release.
 
+## Initial include conversion
+
+Stop and verify the old copy-based writer before cutover. The helper checks
+source hashes again after validation, but its release lock cannot lock a legacy
+writer that does not participate in that protocol. Review the explicit host /
+container path mapping and `legacyIncludes`; the helper refuses missing,
+duplicate, or non-primary declarations and leaves legacy zone files intact.
+
+After installing the reviewed root-owned artifact and configuration:
+
+```sh
+sudo /usr/local/libexec/solarinet-dns-release --bootstrap \
+  --config /etc/solarinet/dns-release.json
+```
+
+The parent include backup and cutover journal are private and durable.
+Reload/health failure restores the exact parent contents, mode, and ownership.
+An interrupted cutover blocks new activation until `--bootstrap` recovers it.
+Re-running a completed bootstrap verifies the current served generation.
+The initial conversion keeps the same record data and serials, so a failed
+conversion does not need the forward-serial rollback used for later data changes.
+
 The state file distinguishes `pending`, `applied`, `failed`, `rollbackFailed`,
 and `recovered`; `applied` is written only after served-data verification.
 Keep previous releases and serial history until a reviewed retention policy
@@ -53,7 +76,7 @@ accounts for every secondary and replay source.
 python3 -m unittest discover -s deploy/dns-release -p test_release.py -v
 ```
 
-Ten tests run a private copy of the installed BIND binary on temporary loopback
+Sixteen tests run a private copy of the installed BIND binary on temporary loopback
 ports. They exercise activation, removal of retired zones, protection of
 unmanaged zones, invalid input, candidate symlinks, reload/health failures,
 crash recovery, rollback retries, and serial history across reintroduction.

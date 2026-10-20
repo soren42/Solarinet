@@ -21,7 +21,7 @@ def zoneText(origin, serial, address):
             f"@ IN NS ns.{origin}.\n@ IN A {address}\nns IN A 127.0.0.1\n")
 
 
-class ReleaseTest(unittest.TestCase):
+class BindFixture(unittest.TestCase):
     def setUp(self):
         for command in ("named", "named-checkconf", "named-checkzone", "dig"):
             if shutil.which(command) is None:
@@ -55,6 +55,7 @@ class ReleaseTest(unittest.TestCase):
             'controls {};\n'
             f'include "{self.link}/named.conf.managed";\n'
             f'zone "external.test" {{ type primary; file "{unmanaged}"; notify no; allow-transfer {{ none; }}; }};\n')
+        self.prepareInitialLayout()
         self.log = (self.folder / "named.log").open("w")
         # Debian/Ubuntu attach AppArmor to /usr/sbin/named and deny temporary
         # config paths. A private unprivileged test copy leaves that profile and
@@ -81,6 +82,9 @@ class ReleaseTest(unittest.TestCase):
                 self.process.wait(timeout=5)
         self.log.close()
 
+    def prepareInitialLayout(self):
+        pass
+
     def candidate(self, label, serial, address, obsolete=False):
         directory = self.folder / label
         directory.mkdir()
@@ -96,6 +100,7 @@ class ReleaseTest(unittest.TestCase):
         self.assertTrue(release.newerSerial(zone["serial"], 2026102002))
         release.verifyServed(self.config, manifest)
 
+class ReleaseTest(BindFixture):
     def test_activate_proves_serving_and_removes_retired_zone(self):
         candidate = self.candidate("next", 2026102002, "192.0.2.2")
         result = release.activate(self.config, candidate)
@@ -204,6 +209,119 @@ class ReleaseTest(unittest.TestCase):
         result = release.recoverPending(self.config)
         self.assertEqual(rollback, result["applied"])
         self.assertRollbackServing()
+
+
+class BootstrapTest(BindFixture):
+    def prepareInitialLayout(self):
+        self.legacyRoot = self.folder / "legacy-zones"
+        self.legacyRoot.mkdir()
+        includes = []
+        for bare, label in ((False, "akoria"), (True, "bare")):
+            declarations = []
+            for zone in self.previousManifest["zones"]:
+                if zone["bare"] != bare:
+                    continue
+                content = (self.previous / "zones" / zone["file"]).read_text()
+                if bare:
+                    content = "\n".join(content.splitlines()[1:]) + "\n"
+                file = self.legacyRoot / zone["file"]
+                file.write_text(content)
+                declarations.append(f'zone "{zone["name"]}" {{ type master; file "{file}"; notify no; }};')
+            path = self.folder / ("named.conf." + label)
+            path.write_text("\n".join(declarations) + "\n")
+            includes.append({"hostPath": str(path), "runtimePath": str(path)})
+        self.parent = self.folder / "named.conf.local"
+        self.parent.write_text("// Preserve this unmanaged comment.\n" +
+                              "".join(f'include "{item["runtimePath"]}";\n' for item in includes))
+        self.parent.chmod(0o640)
+        self.originalParent = self.parent.read_bytes()
+        self.originalZones = {path.name: path.read_bytes() for path in self.legacyRoot.iterdir()}
+        text = self.main.read_text().replace(f'include "{self.link}/named.conf.managed";',
+                                            f'include "{self.parent}";')
+        self.main.write_text(text)
+        self.link.unlink()
+        self.config.update(includeParent=str(self.parent), legacyZoneRoot=str(self.legacyRoot),
+                           legacyIncludes=includes)
+
+    def assertLegacyRestored(self):
+        self.assertEqual(self.originalParent, self.parent.read_bytes())
+        self.assertFalse(self.link.exists())
+        self.assertEqual(0o640, self.parent.stat().st_mode & 0o777)
+        release.verifyServed(self.config, self.previousManifest)
+
+    def test_bootstrap_preserves_legacy_data_and_is_idempotent(self):
+        result = release.bootstrap(self.config)
+        self.assertEqual("applied", result["phase"])
+        self.assertEqual(0o640, self.parent.stat().st_mode & 0o777)
+        self.assertIn("Preserve this unmanaged comment.", self.parent.read_text())
+        self.assertIn(str(self.link) + "/named.conf.managed", self.parent.read_text())
+        for name, content in self.originalZones.items():
+            self.assertEqual(content, (self.legacyRoot / name).read_bytes())
+        _, manifest = release.currentGeneration(self.config)
+        release.verifyServed(self.config, manifest)
+        self.assertEqual(result, release.bootstrap(self.config))
+
+    def test_bootstrap_reload_failure_restores_exact_parent(self):
+        original = release.runCommand
+        calls = []
+        def command(config, key, arguments=()):
+            if key == "reloadCommand":
+                calls.append(key)
+                if len(calls) == 1:
+                    raise RuntimeError("injected cutover reload failure")
+            return original(config, key, arguments)
+        with mock.patch.object(release, "runCommand", side_effect=command):
+            with self.assertRaises(RuntimeError):
+                release.bootstrap(self.config)
+        self.assertLegacyRestored()
+
+    def test_bootstrap_serving_failure_restores_exact_parent(self):
+        calls = []
+        def health(config, manifest):
+            calls.append(manifest["generation"])
+            release.verifyServed(config, manifest)
+            if len(calls) == 2:
+                raise RuntimeError("injected cutover serving failure")
+        with self.assertRaises(RuntimeError):
+            release.bootstrap(self.config, health)
+        self.assertEqual(3, len(calls))
+        self.assertLegacyRestored()
+
+    def test_interrupted_cutover_blocks_activation_until_recovered(self):
+        original = release.runCommand
+        def crash(config, key, arguments=()):
+            if key == "reloadCommand":
+                raise KeyboardInterrupt("simulated process death")
+            return original(config, key, arguments)
+        with mock.patch.object(release, "runCommand", side_effect=crash):
+            with self.assertRaises(KeyboardInterrupt):
+                release.bootstrap(self.config)
+        candidate = self.candidate("blocked", 2026102002, "192.0.2.2")
+        with self.assertRaises(RuntimeError):
+            release.activate(self.config, candidate)
+        journal = json.loads((self.root / "bootstrap.json").read_text())
+        self.assertEqual("pending", journal["phase"])
+        release.restoreBootstrap(self.config, journal)
+        self.assertLegacyRestored()
+        self.assertEqual("applied", release.bootstrap(self.config)["phase"])
+
+    def test_missing_legacy_include_fails_before_cutover(self):
+        self.parent.write_text("// no managed includes\n")
+        with self.assertRaises(ValueError):
+            release.bootstrap(self.config)
+        self.assertEqual("// no managed includes\n", self.parent.read_text())
+        self.assertFalse(self.link.exists())
+
+    def test_concurrent_legacy_change_fails_before_cutover(self):
+        def health(config, manifest):
+            release.verifyServed(config, manifest)
+            with (self.legacyRoot / "db.example.test").open("a") as output:
+                output.write("; concurrent legacy writer\n")
+        with self.assertRaises(ValueError):
+            release.bootstrap(self.config, health)
+        self.assertEqual(self.originalParent, self.parent.read_bytes())
+        self.assertFalse(self.link.exists())
+        self.assertFalse((self.root / "bootstrap.json").exists())
 
 
 if __name__ == "__main__":
