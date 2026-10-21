@@ -72,7 +72,7 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 21 October 2026</h2>
     <p>The integration candidate is not released: as of this snapshot, the local branch is
-    20 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    21 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
     at <code>5e8d688</code>. The worktree is clean. Neither remote has a release tag, and no
     candidate release or deployment has been made.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
@@ -115,10 +115,13 @@
       role awaits console redeployment.</li>
       <li><strong>Network discovery:</strong> operators can start a bounded asynchronous scan;
       the native worker records live results as reviewable Discovery candidates, which remain
-      separate from physical inventory until explicitly handled. RackWire links to the dashboard
-      discovery workflow. Browser-to-worker loopback acceptance and a single-address scan of
-      directly connected gateway <code>10.0.0.1/32</code> passed against scratch databases; that
-      gateway became a scratch-only candidate. Full subnet-scale scanning and deployed worker
+      separate from physical inventory until explicitly handled. The dashboard polls worker
+      progress every second and refreshes candidate rows every 2.5 seconds while a scan runs, so
+      new hosts appear before completion. RackWire links to the same Discovery workflow. The
+      authenticated native-worker browser acceptance and the single-address scan of directly
+      connected gateway <code>10.0.0.1/32</code> passed against scratch databases; results stayed
+      scratch-only. A UI acceptance also verified that a candidate appears before its controlled
+      scan fixture reaches a terminal state. Full subnet-scale scanning and deployed worker
       behavior remain unverified. Adoption mirrors a host and address into monitoring and SoR;
       it does not create a physical asset.</li>
       <li><strong>Inventory:</strong> scanner export, dashboard import, and transactional SoR

@@ -2197,3 +2197,28 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   `5e8d688`, no release tags, and the status refresh commit's **20-commit**
   lead. The RackWire gitlink is committed locally, while the GitHub mirror and
   scanner-ingest remote are still absent.
+
+## 2026-10-21 — realtime Discovery candidate visibility
+
+- Updated the Discovery page to fetch the durable candidate list immediately
+  when a scan enters `running`, then every 2.5 seconds until it completes. Scan
+  status continues polling each second. This exposes each host after the worker
+  commits it, while the scan is still in progress.
+- Extended `tests/browser/test_scanner_import_e2e.cjs` with a controlled scan
+  fixture. It proves a newly ingested candidate becomes visible before the
+  fixture reports terminal completion, and confirms the page has no scan
+  completion state at that point.
+- Re-ran that full Chromium browser acceptance against a fresh MariaDB 11.8.6
+  container populated from the current SoR schema snapshot. Scanner import,
+  RackWire profile creation, barcode lookup, plan persistence, scan admission,
+  progress across navigation, and live candidate visibility passed. The
+  browser's SoR rows and the disposable database/container were removed.
+- Re-ran `node --check`, `git diff --check`, and generated the paired scanner
+  import guide PDF from its single-file HTML source. The guide now documents
+  the scan bounds, progress cadence, live candidate refresh, and the distinction
+  between network host adoption and physical asset import. It records that the
+  browser uses a controlled candidate fixture; separate actual-worker coverage
+  is limited to a loopback listener, while full lab-subnet scanning remains
+  **UNVERIFIED**.
+- No deployment, push, or release occurred. Cross-lab review remains an open
+  gate because the configured Claude Code OAuth session is expired.

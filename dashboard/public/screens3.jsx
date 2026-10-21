@@ -210,6 +210,26 @@
     }, [scanJob && scanJob.requestId, scanJob && scanJob.scanId,
         scanJob && scanJob.status]);
     useEffect(function () {
+      if (!scanJob || scanJob.status !== "running") return;
+      const a = api();
+      if (!a || !a.listDiscovered) return;
+      let live = true;
+      let inFlight = false;
+      function refreshCandidates() {
+        if (inFlight) return;
+        inFlight = true;
+        a.listDiscovered("all").then(function (list) {
+          if (live && Array.isArray(list)) setRows(list);
+        }).catch(function () { /* keep the last candidate snapshot on transient errors */ })
+          .finally(function () { inFlight = false; });
+      }
+      // Scan results are committed per host. Refresh the candidate table while
+      // the worker is still running so operators can review arrivals immediately.
+      refreshCandidates();
+      const timer = window.setInterval(refreshCandidates, 2500);
+      return function () { live = false; window.clearInterval(timer); };
+    }, [scanJob && scanJob.status, scanJob && scanJob.scanId]);
+    useEffect(function () {
       if (!scanJob || scanJob.status !== "completed") return;
       const a = api();
       if (!a || !a.listDiscovered) return;
@@ -297,6 +317,7 @@
         : scanSweepComplete
           ? "Scan running · Host sweep complete · finalizing candidate records · " + scanCandidateCount
           : "Scan " + scanJob.status + " · " + scanHostsDone + "/" + (scanHostsTotal || "?") + " hosts checked · " + scanCandidateCount)
+        + (scanJob.status === "running" ? " · New candidates update live" : "")
       : scanJob ? "Last scan " + scanJob.status + (scanJob.error ? " · " + scanJob.error : "") : "";
 
     // ---- filter → search → sort pipeline ----

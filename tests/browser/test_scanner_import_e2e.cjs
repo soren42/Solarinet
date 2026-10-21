@@ -119,6 +119,16 @@ if ($path === '/api/discovery/scans/941') {
         'hostsFound' => in_array($scanPhase, ['candidate-done', 'scan-done'], true) ? 1 : 0],
         'ts' => time()]); exit;
 }
+if ($path === '/api/discovery' && ($_GET['status'] ?? '') === 'all') {
+    $scanPhase = is_file(${JSON.stringify(scanStatePath)})
+        ? file_get_contents(${JSON.stringify(scanStatePath)}) : '';
+    $rows = in_array($scanPhase, ['candidate-done', 'scan-done'], true)
+        ? [['discId' => 1901, 'host' => 'live-scan-fixture', 'ip' => '192.0.2.7',
+            'kind' => 'host', 'via' => 'portscan', 'services' => ['http:80'],
+            'status' => 'new', 'seenCount' => 1]] : [];
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'data' => $rows, 'ts' => time()]); exit;
+}
 if (is_string($path) && str_starts_with($path, '/api/')) {
     $actual = $path === '/api/auth/whoami' || $path === '/api/inventory'
         || (is_string($path) && (str_starts_with($path, '/api/inventory/')
@@ -425,6 +435,9 @@ async function main() {
       return job && job.status === 'running' && job.hostsFound === 1
         && status && status.textContent.includes('1 candidate saved');
     });
+    await page.getByText('live-scan-fixture', { exact: true }).waitFor({ timeout: 5000 });
+    assert.equal(await page.locator('.page-head').getByText('Last scan completed', { exact: false }).count(), 0,
+      'a candidate must appear in Discovery before the scan reaches its terminal state');
     await context.request.get(`${base}/__finish_scan`);
     await page.waitForFunction(() => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
