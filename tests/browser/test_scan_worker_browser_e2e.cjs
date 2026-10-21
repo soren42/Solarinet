@@ -278,6 +278,15 @@ async function main() {
       return job && job.scanId > 0 && ['running', 'completed'].includes(job.status);
     });
 
+    if (NETWORK_SCAN) {
+      await page.waitForFunction((target) => {
+        const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+        const candidateVisible = Array.from(document.querySelectorAll('tr'))
+          .some((row) => row.innerText.includes(target));
+        return job && job.status === 'running' && candidateVisible;
+      }, SCAN_TARGET, { timeout: 45000 });
+    }
+
     await page.waitForFunction((expectedHosts) => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
       return job && job.status === 'completed' && job.hostsTotal === expectedHosts && job.hostsFound > 0;
@@ -302,7 +311,7 @@ async function main() {
     assert(Number(scanFound) > 0, 'native worker must find at least one host');
     const candidates = sql(db, `SELECT COUNT(*) FROM discovered WHERE ip=${quote(SCAN_TARGET)} AND kind='host' AND via='portscan' AND status='new'`);
     assert.equal(candidates, '1', 'native worker must create one reviewable discovery candidate');
-    console.log(`RackWire-to-native-worker browser E2E passed: ${SCAN_CIDR}, ${scanDone}/${scanTotal} hosts, ${scanFound} candidates, embedded discovery handoff, live status polling, navigation recovery, and candidate ingest.`);
+    console.log(`RackWire-to-native-worker browser E2E passed: ${SCAN_CIDR}, ${scanDone}/${scanTotal} hosts, ${scanFound} candidates, embedded discovery handoff, live status polling, navigation recovery, and candidate ingest${NETWORK_SCAN ? ' before terminal completion' : ''}.`);
   } finally {
     if (browser) await browser.close();
     await stop(php);

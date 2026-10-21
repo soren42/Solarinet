@@ -2222,3 +2222,30 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   **UNVERIFIED**.
 - No deployment, push, or release occurred. Cross-lab review remains an open
   gate because the configured Claude Code OAuth session is expired.
+
+## 2026-10-21 — direct lab `/24` scan acceptance
+
+- Rechecked the opt-in LAN test preconditions: `10.0.0.20` is assigned to
+  `enp1s0`, and `10.0.0.254` routes directly through that interface without a
+  gateway hop. The test bound its temporary listeners to the local address and
+  retained the configured `/24` route guard.
+- Created a disposable MariaDB 11.8.6 instance and applied all 33 monitoring
+  migrations with `tools/migrate.py`. The real C scan worker and C control
+  bridge then accepted the authenticated dashboard scan for `10.0.0.0/24`.
+  The worker processed **254/254** addresses and ingested **12** reviewable
+  candidates. The browser saw the local listener candidate in Discovery while
+  the scan job was still running, then verified completion and progress through
+  navigation away and back. The database container was removed after the test.
+- After adding an explicit pre-completion browser assertion, repeated the direct
+  `/24` acceptance. It again completed **254/254** and found **14** candidates;
+  the browser observed the local listener row while the persisted job status was
+  still `running`. This verifies realtime candidate ingestion through the native
+  worker and authenticated UI on the directly connected lab range.
+- This is direct-route lab discovery traffic. Scan job state and candidate rows
+  lived only in the disposable database; no live SolariNet or SoR database was
+  used. The scan does not establish coverage for larger ranges, repeated
+  production polling, or the deployed worker unit; those remain
+  **UNVERIFIED**.
+- Updated the operator guide and status page, regenerated both paired PDFs, and
+  checked that the guide describes the `/24` result while preserving the
+  larger-range and deployment limits.
