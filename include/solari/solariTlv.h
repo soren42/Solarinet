@@ -66,6 +66,7 @@ enum solariTlvType {
     TLV_LIFE_CONFIRM      = 0x3201,  /* uint64: echo token the server must match to */
                                      /* authorize a destructive decommission        */
     TLV_LIFE_WIPE_SCOPE   = 0x3202,  /* uint8 bitfield: config|certs|spool|logs|unit */
+    TLV_LIFE_GENERATION   = 0x3203,  /* uint64 challenge generation / result identity */
     /* --- error (0xFFxx) --- */
     TLV_ERROR_CODE        = 0xFF01,  /* uint16 (Appendix A)                */
     TLV_ERROR_DETAIL      = 0xFF02   /* utf8                               */

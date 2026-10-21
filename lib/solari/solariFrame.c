@@ -16,12 +16,47 @@
  */
 #include "solari/solariFrame.h"
 #include "solari/solariCrypto.h"
+#include "solari/solariTlv.h"
 #include "solariEndian.h"
 
 #include <string.h>
 
 #define FRAME_LEN_PREFIX 4u   /* uint32 frameLen at the very front */
 #define FRAME_CRC_LEN    4u   /* uint32 crc32 trailer             */
+
+static solariStatus frameValidateHeader(const solariFrameHeader *hdr)
+{
+    if (hdr->magic[0] != SCP_MAGIC_0 || hdr->magic[1] != SCP_MAGIC_1) {
+        return ERR_FRAME_BAD_MAGIC;
+    }
+    if (hdr->protoVersion != SCP_PROTO_VERSION) {
+        return ERR_PROTO_VERSION;
+    }
+    if (hdr->reserved != 0 || (hdr->flags & (uint8_t)~(SCP_FLAG_ACK_REQ |
+            SCP_FLAG_SPOOL_REPLAY | SCP_FLAG_URGENT)) != 0) {
+        return ERR_FRAME_BAD_ENVELOPE;
+    }
+    return SOLARI_OK;
+}
+
+static solariStatus frameValidatePayload(const solariFrameHeader *hdr,
+                                         const uint8_t *payload,
+                                         size_t payloadLen)
+{
+    solariTlvReader reader;
+    uint16_t count = 0;
+    solariStatus st;
+
+    solariTlvReaderInit(&reader, payload, payloadLen);
+    while ((st = solariTlvNext(&reader, NULL, NULL, NULL)) == SOLARI_OK) {
+        if (count == UINT16_MAX) return ERR_FRAME_BAD_ENVELOPE;
+        count++;
+    }
+    if (st != ERR_TLV_END || count != hdr->tlvCount) {
+        return ERR_FRAME_BAD_ENVELOPE;
+    }
+    return SOLARI_OK;
+}
 
 solariStatus solariFramePackHeader(const solariFrameHeader *hdr,
                                    uint8_t *buf, size_t bufLen)
@@ -67,13 +102,7 @@ solariStatus solariFrameUnpackHeader(const uint8_t *buf, size_t bufLen,
     hdr->seqNo          = solariGetU32(buf + 24);
     hdr->correlationId  = solariGetU32(buf + 28);
 
-    if (hdr->magic[0] != SCP_MAGIC_0 || hdr->magic[1] != SCP_MAGIC_1) {
-        return ERR_FRAME_BAD_MAGIC;
-    }
-    if (hdr->protoVersion != SCP_PROTO_VERSION) {
-        return ERR_PROTO_VERSION;   /* hdr still filled for diagnostics */
-    }
-    return SOLARI_OK;
+    return frameValidateHeader(hdr); /* still filled for diagnostics on error */
 }
 
 solariStatus solariFrameBuild(const solariFrameHeader *hdr,
@@ -88,12 +117,16 @@ solariStatus solariFrameBuild(const solariFrameHeader *hdr,
     if (!hdr || !out || (payloadLen > 0 && !payload)) {
         return ERR_INVALID_ARG;
     }
+    if (payloadLen > (size_t)SOLARI_MAX_FRAME - SOLARI_FRAME_HEADER_LEN) {
+        return ERR_INVALID_ARG;
+    }
+    st = frameValidateHeader(hdr);
+    if (st != SOLARI_OK) return st;
+    st = frameValidatePayload(hdr, payload, payloadLen);
+    if (st != SOLARI_OK) return st;
     frameBody = (size_t)SOLARI_FRAME_HEADER_LEN + payloadLen;
     total = FRAME_LEN_PREFIX + frameBody + FRAME_CRC_LEN;
 
-    if (frameBody > SOLARI_MAX_FRAME) {
-        return ERR_INVALID_ARG;
-    }
     if (outCap < total) {
         return ERR_BUFFER_FULL;
     }
@@ -152,9 +185,16 @@ solariStatus solariFrameParse(const uint8_t *buf, size_t bufLen,
     }
 
     st = solariFrameUnpackHeader(buf + FRAME_LEN_PREFIX, SOLARI_FRAME_HEADER_LEN, hdr);
-    if (st != SOLARI_OK && st != ERR_PROTO_VERSION) {
-        return st;   /* bad magic etc. ERR_PROTO_VERSION still returns payload below */
+    if (st != SOLARI_OK) {
+        return st;
     }
+
+    /* Validate the declared TLV envelope before exposing its payload. Unknown
+     * types remain valid; count and byte structure must still agree. */
+    st = frameValidatePayload(hdr,
+        buf + FRAME_LEN_PREFIX + SOLARI_FRAME_HEADER_LEN,
+        (size_t)frameBody - SOLARI_FRAME_HEADER_LEN);
+    if (st != SOLARI_OK) return st;
 
     if (payload) {
         *payload = buf + FRAME_LEN_PREFIX + SOLARI_FRAME_HEADER_LEN;
@@ -165,5 +205,5 @@ solariStatus solariFrameParse(const uint8_t *buf, size_t bufLen,
     if (frameTotalLen) {
         *frameTotalLen = total;
     }
-    return st;   /* SOLARI_OK or ERR_PROTO_VERSION (caller decides) */
+    return SOLARI_OK;
 }

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SolariNet — Inventory API Reference</title>
+<style>
+:root{color-scheme:light;--ink:#17212b;--muted:#536576;--line:#d6e0e8;--paper:#fff;--wash:#f3f7fa;--blue:#087ca8;--green:#167451;--amber:#885c12;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",sans-serif}
+*{box-sizing:border-box}html{font:16px/1.58 var(--sans);color:var(--ink);background:#eaf0f4}body{max-width:900px;margin:30px auto;padding:54px 64px;background:var(--paper);box-shadow:0 8px 35px #18344a18}h1,h2,h3{line-height:1.2}h1{font-size:2.2rem;margin:.35rem 0 1rem}h2{font-size:1.35rem;margin:2.2rem 0 .7rem;border-bottom:1px solid var(--line);padding-bottom:.35rem}h3{font-size:1.05rem;margin:1.3rem 0 .45rem}.eyebrow{color:var(--blue);font-size:.77rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{font-size:1.12rem;color:var(--muted);max-width:68ch}.meta{color:var(--muted);font-size:.88rem}.callout{border-left:4px solid var(--amber);background:#fff9eb;padding:12px 16px;margin:1.1rem 0}.good{border-left-color:var(--green);background:#eef8f3}table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.93rem}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:8px 10px}th{background:var(--wash)}code,pre{font-family:var(--mono);font-size:.88em}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#12202c;color:#ecf4f8;padding:15px;border-radius:5px;line-height:1.5}.diagram{display:flex;align-items:center;gap:12px;padding:15px;background:var(--wash);border:1px solid var(--line);border-radius:5px;margin:1rem 0}.diagram svg{width:100%;height:auto;max-height:105px}.foot{border-top:1px solid var(--line);margin-top:3rem;padding-top:12px;color:var(--muted);font-size:.8rem}@media print{html{background:#fff}body{max-width:none;margin:0;padding:0;box-shadow:none;font-size:9.2pt;line-height:1.45}h2{break-after:avoid}pre,table,.callout,.diagram{break-inside:avoid}a{color:inherit;text-decoration:none}@page{size:Letter;margin:12mm 16mm 12mm}}
+</style>
+</head>
+<body>
+<header>
+<div class="eyebrow">SolariNet · System of Record</div>
+<h1>Inventory API Reference</h1>
+<p class="lede">HTTP contract for reading the inventory System of Record through the authenticated SolariNet dashboard API. This guide covers list pagination, filters, response metadata, and compatibility behavior.</p>
+<p class="meta">Revision 1.1 · 2026-10-21 · Source: integration candidate `integrate/stability-20261020` · Internal</p>
+</header>
+
+<div class="diagram" role="img" aria-label="Dashboard API reads paged inventory data from the SoR">
+<svg viewBox="0 0 760 90" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<rect x="4" y="12" width="205" height="66" rx="6" fill="#fff" stroke="#aebdca"/><text x="106" y="40" text-anchor="middle" font-family="system-ui" font-size="15" fill="#17212b">Inventory client</text><text x="106" y="61" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#536576">limit + offset</text>
+<path d="M220 45h85m-12-8 12 8-12 8" fill="none" stroke="#087ca8" stroke-width="3"/>
+<rect x="320" y="12" width="205" height="66" rx="6" fill="#fff" stroke="#aebdca"/><text x="422" y="40" text-anchor="middle" font-family="system-ui" font-size="15" fill="#17212b">Dashboard API</text><text x="422" y="61" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#536576">authenticated read</text>
+<path d="M536 45h85m-12-8 12 8-12 8" fill="none" stroke="#087ca8" stroke-width="3"/>
+<rect x="636" y="12" width="120" height="66" rx="6" fill="#fff" stroke="#aebdca"/><text x="696" y="40" text-anchor="middle" font-family="system-ui" font-size="15" fill="#17212b">SoR</text><text x="696" y="61" text-anchor="middle" font-family="ui-monospace,monospace" font-size="11" fill="#536576">MariaDB</text>
+</svg>
+</div>
+
+<h2>1. Authentication and transport</h2>
+<p>Use the dashboard’s normal same-origin HTTPS session and its configured API base. Reads require an authenticated dashboard session under the deployed authorization policy. A successful response uses the common envelope <code>{"ok":true,"data":…,"ts":"…"}</code>; failures use <code>{"ok":false,"error":{"code":"…","message":"…"}}</code>. Do not send database credentials to a browser client.</p>
+
+<h2>2. Paginated list endpoints</h2>
+<table>
+<thead><tr><th>GET path</th><th>Filters</th><th>List contents</th></tr></thead>
+<tbody>
+<tr><td><code>/api/inventory/components</code></td><td><code>stock_status</code>, <code>location_id</code>, <code>model_id</code>, <code>q</code></td><td>Hardware units joined to their model.</td></tr>
+<tr><td><code>/api/inventory/models</code></td><td><code>hw_type</code>, <code>q</code></td><td>Hardware model catalog.</td></tr>
+<tr><td><code>/api/inventory/receipts</code></td><td><code>vendor</code>, <code>q</code></td><td>Purchase receipt metadata.</td></tr>
+<tr><td><code>/api/inventory/projects</code></td><td><code>status</code>, <code>q</code></td><td>Live project records.</td></tr>
+<tr><td><code>/api/inventory/allocations</code></td><td><code>project_id</code>, <code>allocation</code></td><td>Live allocations belonging to live projects.</td></tr>
+<tr><td><code>/api/inventory/locations?flat=1</code></td><td>Pagination parameters</td><td>Flat location rows with parent IDs; use the ordinary path for the nested tree.</td></tr>
+</tbody></table>
+<p>Add <code>limit</code> and/or <code>offset</code> to request a page. The page size must be 1–5000; the offset must be 0–2147483647. If only one parameter is supplied, the other defaults to <code>limit=500</code> or <code>offset=0</code>. Results have a deterministic order within each list.</p>
+<pre>GET /api/inventory/models?hw_type=server&amp;limit=100&amp;offset=200</pre>
+<p>A paginated response places rows in <code>data.items</code> and returns:</p>
+<pre>{
+  "ok": true,
+  "data": {
+    "items": [{"id": 123, "make": "Example", "model": "Unit"}],
+    "page": {
+      "limit": 100,
+      "offset": 200,
+      "total": 237,
+      "hasMore": false,
+      "nextOffset": null
+    }
+  },
+  "ts": "2026-10-21T00:00:00Z"
+}</pre>
+<p>Continue while <code>page.hasMore</code> is true, using <code>page.nextOffset</code>. The total is the number of rows matching the same filters, before pagination. Inserts or deletes between requests can shift offset pages; clients that need a consistent export should use a stable snapshot workflow rather than assuming offset pages form a transaction.</p>
+
+<h2>3. Compatibility behavior</h2>
+<div class="callout"><strong>Important:</strong> Omitting both pagination parameters preserves the pre-existing response shape: <code>data</code> is an array. Components retain their existing default limit of 500; the other list routes remain unbounded in this compatibility mode.</div>
+<p>The combined <code>GET /api/inventory</code> endpoint retains its existing object shape—<code>models</code>, <code>units</code>, <code>locations</code>, <code>receipts</code>, <code>projects</code>, and <code>allocations</code>—for inventories with at most 500 rows in each collection. It executes bounded queries and returns HTTP 413 with <code>inventory_page_required</code> if any collection exceeds that threshold. It does not accept page parameters. Integrations that need larger inventories should call the individual paginated list paths above.</p>
+<p>The dashboard browser adapter now requests those collection paths at 1000 rows per page, validates page totals and boundaries, and assembles the complete inventory snapshot for existing cross-reference workflows. The Components table filters and sorts the full loaded collection but renders 100 rows per page; Receipts and Projects also render at most 100 entries per page. The location hierarchy opens top-level children and lets operators expand deeper branches on demand. The adapter keeps a five-second in-memory snapshot to avoid repeating the fan-out during bootstrap and screen mount. A collection larger than 100,000 rows, or a changed total/duplicate page boundary during the read, is surfaced as an inventory load error rather than silently truncated. Same-count field updates do not have transaction snapshot isolation; reload for a fresh view.</p>
+<div class="callout good"><strong>Migration advice:</strong> Request <code>?limit=500&amp;offset=0</code> explicitly, then consume <code>items</code> and page metadata. This makes the bounded response shape explicit and leaves legacy array consumers unchanged.</div>
+
+<h2>4. Validation and errors</h2>
+<table><thead><tr><th>Condition</th><th>HTTP</th><th>Meaning</th></tr></thead><tbody>
+<tr><td>Malformed, zero, or out-of-range page size</td><td>400</td><td><code>bad_request</code>; accepted page sizes are 1 through 5000.</td></tr>
+<tr><td>Malformed or out-of-range offset</td><td>400</td><td><code>bad_request</code>; accepted offsets are 0 through 2147483647.</td></tr>
+<tr><td>Invalid allocation enum or project identifier</td><td>400</td><td><code>bad_request</code>; supply a supported allocation state and positive integer ID.</td></tr>
+<tr><td>Missing/expired session or denied route</td><td>401/403</td><td>Authenticate through the dashboard and observe the deployment’s role policy.</td></tr>
+</tbody></table>
+<p>All list filters and pagination values are handled by the server. Do not interpolate user-provided values into SQL or treat a returned row as authorization to mutate it; write operations have separate authorization and CSRF checks.</p>
+
+<h2>5. Verification scope</h2>
+<p>The candidate’s HTTP integration test exercises list limits, page metadata, non-overlapping page boundaries, flat location pages, empty allocation pages, invalid zero limits, and the legacy aggregate’s 413 boundary against a disposable MariaDB instance. The browser adapter test traverses a two-page collection, checks stale-data behavior, and rejects over-limit and changing-total fixtures. Changed totals or duplicate IDs across pages fail the load and require a retry; page requests are not a database transaction, so same-count field updates may not be detected.</p>
+
+<footer class="foot">SolariNet · Inventory API Reference · Revision 1.1 · Generated as a single self-contained HTML file; print stylesheet is part of this document.</footer>
+</body>
+</html>

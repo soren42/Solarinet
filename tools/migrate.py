@@ -3,7 +3,9 @@
 
 Requires the MariaDB command-line client. Existing databases without a ledger
 are refused: their historical migration set must be audited and adopted by an
-operator before this tool can safely make changes.
+operator before this tool can safely make changes. Every target must also use
+the canonical utf8mb4/utf8mb4_unicode_ci database default so fresh schemas do
+not depend on the MariaDB server's version-specific defaults.
 """
 import argparse
 import hashlib
@@ -16,6 +18,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 LEDGER = "solari_migration_ledger"
+EXPECTED_CHARACTER_SET = "utf8mb4"
+EXPECTED_COLLATION = "utf8mb4_unicode_ci"
 
 
 def migrationFiles(stream):
@@ -59,11 +63,31 @@ def quote(value):
 
 
 def inventory(args):
-    """Return current table names, including any existing migration ledger."""
+    """Return table, view, routine, and event names in the target schema."""
     rows = mysqlCommand(args,
-        "SELECT TABLE_NAME FROM information_schema.TABLES "
-        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;")
+        "SELECT TABLE_NAME AS object_name FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA=DATABASE() UNION "
+        "SELECT ROUTINE_NAME AS object_name FROM information_schema.ROUTINES "
+        "WHERE ROUTINE_SCHEMA=DATABASE() UNION "
+        "SELECT EVENT_NAME AS object_name FROM information_schema.EVENTS "
+        "WHERE EVENT_SCHEMA=DATABASE() ORDER BY object_name;")
     return set(rows.splitlines())
+
+
+def validateDatabaseDefaults(args):
+    """Refuse server-dependent table defaults before running any migration."""
+    raw = mysqlCommand(args,
+        "SELECT DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME "
+        "FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE();")
+    fields = raw.strip().split("\t")
+    if len(fields) != 2:
+        raise RuntimeError("could not determine target database character set and collation")
+    characterSet, collation = fields
+    if characterSet != EXPECTED_CHARACTER_SET or collation != EXPECTED_COLLATION:
+        raise RuntimeError(
+            f"target database defaults are {characterSet}/{collation}; expected "
+            f"{EXPECTED_CHARACTER_SET}/{EXPECTED_COLLATION}. Set these explicitly "
+            "before applying migrations; existing tables are not changed by that setting")
 
 
 def ledgerRows(args):
@@ -81,6 +105,7 @@ def ledgerRows(args):
 def migrate(args):
     """Refuse unknown history, then apply and record one ordered SQL file at a time."""
     files = migrationFiles(args.database)
+    validateDatabaseDefaults(args)
     tables = inventory(args)
     if LEDGER not in tables and tables:
         raise RuntimeError("untracked nonempty database; audit and adopt its migration "
@@ -105,13 +130,17 @@ def migrate(args):
         correct = next(entry[2] for entry in files if entry[0] == fileId)
         if checksum != correct or state != "applied":
             raise RuntimeError(f"checksum mismatch or interrupted migration: {fileId}")
-    gap = False
+    pendingSeen = False
+    for fileId, _path, _checksum in files:
+        if fileId in existing:
+            if pendingSeen:
+                raise RuntimeError(f"out-of-order migration history before {fileId}")
+        else:
+            pendingSeen = True
+
     for fileId, path, checksum in files:
         if fileId in existing:
-            if gap:
-                raise RuntimeError(f"out-of-order migration history before {fileId}")
             continue
-        gap = True
         if args.check:
             print(f"PENDING {fileId} {checksum[:12]}")
             continue

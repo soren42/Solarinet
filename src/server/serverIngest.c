@@ -39,7 +39,9 @@
 #include "solari/solariTime.h"
 #include "solari/solariTlv.h"
 
+#include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 /* ------------------------------------------------------------- role matrix */
 
@@ -72,6 +74,38 @@ static serverIngestRole serverIngestRoleFromCn(const char *cn)
     if (labelLen == 7 && strncmp(cn, "monitor", 7) == 0) return INGEST_ROLE_MONITOR;
     if (labelLen == 6 && strncmp(cn, "server", 6) == 0)  return INGEST_ROLE_SERVER;
     return INGEST_ROLE_UNKNOWN;
+}
+
+/* A HELLO's self-declared identity must match the already-authenticated
+ * role.fqdn certificate identity. This prevents a valid node from changing the
+ * authoritative role or hostFqdn columns by sending a forged HELLO body. */
+bool serverIngestHelloMatchesIdentity(solariRole role, const char *hostFqdn,
+                                      const char *peerCertCn)
+{
+    const char *roleLabel;
+    const char *expectedHost;
+    const char *certHost;
+    const char *dot;
+    char expectedCn[SERVER_CN_MAX];
+    int n;
+
+    if (!hostFqdn || !hostFqdn[0] || !peerCertCn || !peerCertCn[0]) return false;
+    switch (role) {
+    case ROLE_CLIENT:  roleLabel = "client"; break;
+    case ROLE_MONITOR: roleLabel = "monitor"; break;
+    case ROLE_SERVER:  roleLabel = "server"; break;
+    default: return false;
+    }
+    n = snprintf(expectedCn, sizeof expectedCn, "%s.%s", roleLabel, hostFqdn);
+    if (n <= 0 || (size_t)n >= sizeof expectedCn) return false;
+    dot = strchr(expectedCn, '.');
+    if (!dot) return false;
+    expectedHost = dot + 1;
+    if (strncmp(expectedCn, peerCertCn, (size_t)(expectedHost - expectedCn)) != 0)
+        return false;  /* role label is case-sensitive */
+    certHost = peerCertCn + (expectedHost - expectedCn);
+    return certHost[0] != '\0' && strcasecmp(expectedHost, hostFqdn) == 0 &&
+           strcasecmp(expectedHost, certHost) == 0;
 }
 
 /* The authorization matrix: is msgType legal coming from a node presenting
@@ -221,6 +255,8 @@ solariStatus serverIngestValidate(serverContext *ctx,
 {
     serverIngestRole role;
     uint64_t nowMs;
+    bool identityMatches = false;
+    solariStatus identityStatus;
 
     if (!ctx || !hdr) return ERR_INVALID_ARG;
 
@@ -234,6 +270,20 @@ solariStatus serverIngestValidate(serverContext *ctx,
                    (unsigned)hdr->msgType,
                    (unsigned long long)hdr->sourceNodeId);
         return ERR_AUTH_ROLE;
+    }
+
+    /* The certificate role alone does not authorize a frame to claim another
+     * node's source ID. Bind the transport identity to the approved SoR-backed
+     * node record on every frame; a DB error or missing identity fails closed. */
+    if (!peerCertCn || !peerCertCn[0] || !ctx->db) return ERR_AUTH_ROLE;
+    identityStatus = serverDbNodeCertMatches(ctx->db, hdr->sourceNodeId,
+                                             peerCertCn, &identityMatches);
+    if (identityStatus != SOLARI_OK || !identityMatches) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest reject: cert identity does not match node src=0x%llx (%s)",
+                   (unsigned long long)hdr->sourceNodeId,
+                   identityStatus == SOLARI_OK ? "not enrolled" : "lookup failed");
+        return identityStatus == SOLARI_OK ? ERR_AUTH_ROLE : identityStatus;
     }
 
     /* 2. Replay: drop a frame whose (sourceNodeId, seqNo) we already processed.

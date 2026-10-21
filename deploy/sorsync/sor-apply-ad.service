@@ -4,6 +4,8 @@
 Description=SolariNet SoR sync — AD applier (sor.events -> akoria.org)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 [Service]
 Type=simple
 User=root
@@ -12,7 +14,5 @@ Environment=SORSYNC_CONF=/opt/solari-sorsync/sorsync.conf
 ExecStart=/opt/solari-sorsync/.venv/bin/python3 /opt/solari-sorsync/sor_apply_ad.py
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 [Install]
 WantedBy=multi-user.target

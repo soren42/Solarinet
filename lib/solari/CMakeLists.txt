@@ -87,9 +87,10 @@ if(SOLARI_WITH_IO)
   # mbedTLS is a transitive dependency of a TLS-enabled libnng, but link it
   # explicitly when available so static configurations resolve cleanly.
   if(TARGET mbedtls)
-    target_link_libraries(solari PUBLIC mbedtls mbedx509 mbedcrypto)
+    # Static link order follows the dependency chain: X.509 -> TLS -> crypto.
+    target_link_libraries(solari PUBLIC mbedx509 mbedtls mbedcrypto)
   else()
-    foreach(mb mbedtls mbedx509 mbedcrypto)
+    foreach(mb mbedx509 mbedtls mbedcrypto)
       find_library(MBED_${mb} NAMES ${mb})
       if(MBED_${mb})
         target_link_libraries(solari PUBLIC ${MBED_${mb}})

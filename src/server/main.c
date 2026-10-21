@@ -11,12 +11,12 @@
  *      Winning binds the ingest/control/pub listeners (serverApplyRole, driven
  *      from inside the tick); losing/erroring tears them down. Only the ACTIVE
  *      master touches the fleet.
- *   2. ingest (PULL)    - drain inbound CLIENT/MONITOR/WATCHDOG reports and
- *      DISCOVERY/TOPOLOGY/SURVEY_RESP/CONTROL_RESULT frames: parse, authorize by
- *      the presenting cert CN (serverIngestValidate), dispatch to persistence.
- *   3. control (REP)    - answer the request/response control link: a node's
- *      HELLO gets a WELCOME, a WHO_IS_PRIMARY gets a PRIMARY_IS. REP is lockstep,
- *      so every accepted request is answered (an ERROR frame on a bad request).
+ *   2. ingest (PULL)    - drain legacy/non-durable WATCHDOG, DISCOVERY,
+ *      TOPOLOGY, and CONTROL_RESULT frames: parse, authorize by the presenting
+ *      cert CN, and dispatch. This one-way link does not confirm persistence.
+ *   3. control (REP)    - answer HELLO and WHO_IS_PRIMARY requests, and process
+ *      durable CLIENT/MONITOR/SURVEY reports before returning an ACK. REP is
+ *      lockstep, so every accepted request is answered (ERROR on failure).
  *   4. operator bridge  - serverCtlPoll services pending dashboard requests on
  *      the Unix socket (non-blocking).
  *
@@ -30,6 +30,7 @@
 
 #include "solari/solariLog.h"
 #include "solari/solariTime.h"
+#include "solari/solariTlv.h"
 
 #include <signal.h>
 #include <stdio.h>
@@ -144,11 +145,45 @@ static void serverSendError(serverContext *ctx, uint32_t corr,
         (void)solariConnSend(ctx->control, frame, frameLen);
 }
 
+static solariStatus serverSendReportAck(serverContext *ctx,
+                                        const solariFrameHeader *request,
+                                        const uint8_t *payload, size_t payloadLen)
+{
+    solariTlvReader reader;
+    solariTlvWriter writer;
+    const uint8_t *value;
+    uint16_t type, valueLen;
+    uint8_t session[16], ackTlvs[32], frame[SERVER_REPLY_FRAME_MAX];
+    size_t ackLen = 0, frameLen = 0;
+    uint16_t ackCount = 0;
+    solariStatus rc;
+    bool found = false;
+
+    solariTlvReaderInit(&reader, payload, payloadLen);
+    while ((rc = solariTlvNext(&reader, &type, &value, &valueLen)) == SOLARI_OK) {
+        if (type != TLV_REPORT_SESSION) continue;
+        if (found || valueLen != sizeof session) return ERR_INVALID_ARG;
+        memcpy(session, value, sizeof session);
+        found = true;
+    }
+    if (rc != ERR_TLV_END || !found) return ERR_INVALID_ARG;
+
+    solariTlvWriterInit(&writer, ackTlvs, sizeof ackTlvs);
+    rc = solariTlvAppend(&writer, TLV_REPORT_SESSION, session, sizeof session);
+    if (rc != SOLARI_OK) return rc;
+    ackLen = writer.len;
+    ackCount = writer.count;
+    rc = serverBuildReplyFrame(ctx, SCP_MSG_ACK, request->seqNo, ackCount,
+                               ackTlvs, ackLen, frame, sizeof frame, &frameLen);
+    if (rc == SOLARI_OK) rc = solariConnSend(ctx->control, frame, frameLen);
+    return rc;
+}
+
 /* ------------------------------------------------------------ ingest (PULL) */
 
-/* Drain ready ingest frames, bounded per iteration so a flood cannot starve the
- * lease tick / control link. Each frame: parse, authorize by the presenting cert
- * CN, dispatch to persistence. The PULL link is one-way - no reply. */
+/* Drain ready one-way ingest frames, bounded per iteration so a flood cannot
+ * starve the lease tick / control link. This remains for watchdog and legacy or
+ * non-durable traffic. Durable reports use REP so persistence can be ACKed. */
 static void serverDrainIngest(serverContext *ctx)
 {
     int processed;
@@ -188,9 +223,9 @@ static void serverDrainIngest(serverContext *ctx)
 
 /* ----------------------------------------------------------- control (REP) */
 
-/* Service one request on the control REP link: HELLO -> WELCOME, WHO_IS_PRIMARY
- * -> PRIMARY_IS. REP is lockstep, so every accepted request is answered exactly
- * once (a structured ERROR frame when it cannot be served normally). */
+/* Service one request on the control REP link: HELLO -> WELCOME,
+ * WHO_IS_PRIMARY -> PRIMARY_IS, durable report -> post-persistence ACK. REP is
+ * lockstep, so every accepted request gets one response (ERROR on failure). */
 static void serverServiceControl(serverContext *ctx)
 {
     const uint8_t    *buf = NULL, *payload = NULL;
@@ -230,8 +265,33 @@ static void serverServiceControl(serverContext *ctx)
         serverSendError(ctx, hdr.seqNo, 2, "role not permitted");
         return;
     }
+    if (rc != SOLARI_OK && rc != ERR_CONN_RETRY) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "control: identity validation failed for src=0x%llx: %s",
+                   (unsigned long long)hdr.sourceNodeId, solariStrError(rc));
+        serverSendError(ctx, hdr.seqNo, 8, "identity validation failed");
+        return;
+    }
 
     switch (hdr.msgType) {
+    case SCP_MSG_CLIENT_REPORT:
+    case SCP_MSG_MONITOR_REPORT:
+    case SCP_MSG_SURVEY_RESP:
+        if ((hdr.flags & SCP_FLAG_ACK_REQ) == 0) {
+            serverSendError(ctx, hdr.seqNo, 7, "report ACK required");
+            return;
+        }
+        rc = serverIngestDispatch(ctx, &hdr, payload, plen);
+        if (rc != SOLARI_OK) {
+            serverSendError(ctx, hdr.seqNo, 8, "report persistence failed");
+            return;
+        }
+        rc = serverSendReportAck(ctx, &hdr, payload, plen);
+        if (rc != SOLARI_OK)
+            solariLogf(SOLARI_LOG_WARN, "control: report ACK send failed src=0x%llx seq=%u",
+                       (unsigned long long)hdr.sourceNodeId, (unsigned)hdr.seqNo);
+        break;
+
     case SCP_MSG_HELLO: {
         solariHello hello;
         rc = solariMsgParseHello(payload, plen, &hello);
@@ -287,6 +347,7 @@ static void usage(const char *argv0)
 static void serverRunLoop(serverContext *ctx, const serverConfig *cfg)
 {
     uint64_t nextLeaseMs = 0;   /* 0 -> claim/renew on the very first iteration */
+    uint64_t nextDecommissionRetryMs = 0;
 
     solariLogf(SOLARI_LOG_INFO,
                "solariServer nodeId=0x%llx entering main loop "
@@ -310,6 +371,10 @@ static void serverRunLoop(serverContext *ctx, const serverConfig *cfg)
         if (ctx->role == SRV_ACTIVE) {
             serverDrainIngest(ctx);      /* PULL reports + adverts          */
             serverServiceControl(ctx);   /* REP HELLO/WHO_IS_PRIMARY        */
+            if (now >= nextDecommissionRetryMs) {
+                serverProvisionRetryDecommissions(ctx, now);
+                nextDecommissionRetryMs = now + UINT64_C(5000);
+            }
         } else {
             solariSleepMs(SERVER_STANDBY_IDLE_MS);
         }

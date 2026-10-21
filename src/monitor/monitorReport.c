@@ -27,6 +27,7 @@ solariStatus monitorContextInit(monitorContext *ctx, const monitorConfig *cfg)
     memset(&o, 0, sizeof o);
     o.primaryUrl  = cfg->primaryUrl;
     o.failoverUrl = cfg->failoverUrl[0] ? cfg->failoverUrl : NULL;
+    o.ackUrl      = cfg->reportAckUrl[0] ? cfg->reportAckUrl : NULL;
     o.useTls      = cfg->useTls;
     o.caFile      = cfg->caFile[0]   ? cfg->caFile   : NULL;
     o.certFile    = cfg->certFile[0] ? cfg->certFile : NULL;
@@ -60,10 +61,10 @@ solariStatus monitorReportSend(monitorContext *ctx, const solariMonitorReport *r
         solariLogf(SOLARI_LOG_ERROR, "monitor report build failed: %s", solariStrError(rc));
         return rc;
     }
-    rc = solariReporterFrame(ctx->rep, SCP_MSG_MONITOR_REPORT, SCP_FLAG_NONE,
+    rc = solariReporterFrame(ctx->rep, SCP_MSG_MONITOR_REPORT, SCP_FLAG_ACK_REQ,
                              payload, plen, tc, frame, sizeof frame, &flen);
     if (rc != SOLARI_OK) return rc;
-    return solariReporterSend(ctx->rep, frame, flen);    /* push or durably spool */
+    return solariReporterSend(ctx->rep, frame, flen);    /* server-ack or durable spool */
 }
 
 solariStatus monitorDrainSpool(monitorContext *ctx)

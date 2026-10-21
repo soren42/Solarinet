@@ -4,6 +4,11 @@
 A corrective pass over the generated first identity, produced with the dashboard
 screenshots in hand. It assigns every colour, face, and glyph exactly one job.
 
+**Parallel PDF:** `SolariNet Interface Guide Rev2.pdf` (18 US Letter pages).
+The HTML contains inline CSS, JavaScript, and SVG. Its contrast matrix has
+initial static values for print and no-JavaScript reading; the inline script
+recomputes those values when the theme changes.
+
 Served at **`https://akoria.net/brand/`**.
 
 ## The keystone rule (Rev 2 §02)

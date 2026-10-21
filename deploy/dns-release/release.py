@@ -131,10 +131,17 @@ def inspectZone(path, expectedUid=None):
     soa = SOA.search(text)
     if soa is None or int(soa[1]) > 0xffffffff:
         raise ValueError("invalid candidate SOA serial")
+    # Prefer an address check when present; NS-only zones still need a served
+    # data proof, but must not weaken the more useful A/PTR check on other zones.
     record = re.search(r"(?m)^(\S+)\s+IN\s+(A|PTR)\s+(\S+)\s*$", text)
     if record is None:
-        raise ValueError("candidate needs an A or PTR record to verify after reload")
-    owner, kind, value = record.groups()
+        ns = re.search(r"(?m)^(\S+)\s+IN\s+NS\s+(\S+)\s*$", text)
+        if ns is None:
+            raise ValueError("candidate needs an A, PTR, or NS record to verify after reload")
+        owner, value = ns.groups()
+        kind = "NS"
+    else:
+        owner, kind, value = record.groups()
     checkName = origin if owner == "@" else (owner.rstrip(".") if owner.endswith(".") else owner + "." + origin)
     if not validName(checkName):
         raise ValueError("invalid check record owner")
@@ -207,7 +214,12 @@ def stageGeneration(config, candidate, trusted=False):
         return destination, manifest
     temporary = pathlib.Path(tempfile.mkdtemp(prefix=".stage-", dir=root))
     try:
-        (temporary / "zones").mkdir(mode=0o755)
+        zonesDirectory = temporary / "zones"
+        zonesDirectory.mkdir(mode=0o755)
+        # mkdir is filtered through the applier's umask. The DNS service account
+        # must be able to traverse root-owned release generations even when the
+        # applier runs with a restrictive umask such as 077.
+        zonesDirectory.chmod(0o755)
         for zone, content in inspected:
             path = temporary / "zones" / zone["file"]
             with path.open("wb") as output:
@@ -364,7 +376,7 @@ def validateGeneration(config, candidate, previous):
 
 
 def verifyServed(config, manifest):
-    """Require authoritative SOAs and one expected A/PTR record per zone."""
+    """Require authoritative SOAs and one expected A/PTR/NS record per zone."""
     deadline = time.monotonic() + config.get("healthTimeout", 30)
     command = config.get("digCommand", ["dig"])
     common = ["@" + config.get("queryAddress", "127.0.0.1"), "-p",

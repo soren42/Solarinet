@@ -58,12 +58,11 @@
  * call with no confirm token replies "OK confirm=<token>" without retiring the
  * node; the operator must re-POST with that token to finalize.
  *
- * Design note (testability, §17): the request parser, the per-verb argument
- * extraction, and the reply formatting are all pure static helpers over
- * caller-owned buffers (no I/O, no globals), so the full RBAC + confirm
- * state-machine can be exercised without a live socket, a live MariaDB, or a CA
- * key. The public entry points layer the AF_UNIX I/O + serverProvision/Control
- * dispatch on top of those helpers.
+ * Design note (testability, §17): parsing, argument extraction, peer ACL, and
+ * reply formatting are pure helpers over caller-owned buffers. The destructive
+ * confirmation transition is deliberately covered separately against a
+ * disposable MariaDB because its expiry, digest, single-use, and retirement
+ * guarantees are durable state, not parser behavior.
  *
  * CA / CSR signing: the real signer is mbedTLS x509 (the I/O layer's TLS dep,
  * §3). Where the mbedTLS x509 writer headers are present at build time the
@@ -110,6 +109,8 @@
  * top-level CMake brings mbedTLS transitively when third_party/mbedtls exists.
  * When it is absent the signing path degrades to fail-closed (ERR_TLS). */
 #if defined(SOLARI_HAVE_MBEDTLS_X509)
+#  include <mbedtls/asn1write.h>
+#  include <mbedtls/oid.h>
 #  include <mbedtls/x509_csr.h>
 #  include <mbedtls/x509_crt.h>
 #  include <mbedtls/pk.h>
@@ -124,7 +125,7 @@
 #define CTL_REQ_CAP   16384
 #define CTL_READ_TIMEOUT_MS 2000
 /* Largest reply line we assemble. */
-#define CTL_REPLY_CAP 16384   /* large enough to return a URL-encoded signed cert */
+#define CTL_REPLY_CAP 32768   /* enrollment reply may carry a leaf + CA PEM */
 /* Max accepted-but-unserviced backlog on the listening socket. */
 #define CTL_LISTEN_BACKLOG 8
 /* Cap on a held CSR / issued cert PEM threaded through the signer. */
@@ -149,6 +150,54 @@ struct serverCtl {
     uint32_t       dashboardUid;             /* dashboard/PHP uid; 0 = unset    */
     uint32_t       socketGid;                /* chown socket to this gid; 0=skip */
 };
+
+solariStatus serverCtlCaFingerprint(serverCtl *ctl, char out[65])
+{
+    if (out) out[0] = '\0';
+    if (!ctl || !out || !ctl->caFile[0]) return ERR_INVALID_ARG;
+#if defined(SOLARI_HAVE_MBEDTLS_X509)
+    {
+        mbedtls_x509_crt crt;
+        uint8_t digest[32];
+        int rc;
+        mbedtls_x509_crt_init(&crt);
+        rc = mbedtls_x509_crt_parse_file(&crt, ctl->caFile);
+        if (rc == 0 && crt.raw.p && crt.raw.len > 0) {
+            solariSha256(crt.raw.p, crt.raw.len, digest);
+            solariHexEncode(digest, sizeof digest, out, 65);
+            memset(digest, 0, sizeof digest);
+            mbedtls_x509_crt_free(&crt);
+            return strlen(out) == 64 ? SOLARI_OK : ERR_TLS;
+        }
+        mbedtls_x509_crt_free(&crt);
+        return ERR_TLS;
+    }
+#else
+    return ERR_TLS;
+#endif
+}
+
+/* Read the configured public CA certificate for the bootstrap response. */
+static int ctlReadCaPem(serverCtl *ctl, char *out, size_t cap)
+{
+    FILE *f;
+    size_t n;
+    int extra;
+    if (out && cap) out[0] = '\0';
+    if (!ctl || !out || cap < 2 || !ctl->caFile[0]) return -1;
+    f = fopen(ctl->caFile, "rb");
+    if (!f) return -1;
+    n = fread(out, 1, cap - 1, f);
+    extra = fgetc(f);
+    if (ferror(f) || extra != EOF || n == 0) {
+        fclose(f);
+        out[0] = '\0';
+        return -1;
+    }
+    fclose(f);
+    out[n] = '\0';
+    return strstr(out, "-----BEGIN CERTIFICATE-----") ? 0 : -1;
+}
 
 /* ===================================================================== */
 /* Pure helpers (no I/O) - unit-testable in isolation                     */
@@ -217,6 +266,91 @@ static size_t ctlPctEncode(const char *in, char *out, size_t cap)
     if (o >= cap) return 0;
     out[o] = '\0';
     return o;
+}
+
+/* Read cryptographic token material from the kernel CSPRNG. Never fall back to
+ * clocks, process ids, or the project SHA helper if the source is unavailable. */
+static int ctlRandomBytes(uint8_t *out, size_t len)
+{
+    int fd;
+    size_t off = 0;
+    if (!out || len == 0) return -1;
+    fd = open("/dev/urandom", O_RDONLY
+#ifdef O_CLOEXEC
+              | O_CLOEXEC
+#endif
+    );
+    if (fd < 0) return -1;
+    while (off < len) {
+        ssize_t n = read(fd, out + off, len - off);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { close(fd); return -1; }
+        off += (size_t)n;
+    }
+    close(fd);
+    return 0;
+}
+
+static void ctlEnrollmentTokenHash(const char *token, char out[65])
+{
+    uint8_t digest[32];
+    solariSha256(token, strlen(token), digest);
+    solariHexEncode(digest, sizeof digest, out, 65);
+    memset(digest, 0, sizeof digest);
+}
+
+static int ctlHashPresentedEnrollmentToken(const char *token, char out[65])
+{
+    const char *p;
+    if (!token || strlen(token) != 64) return 0;
+    for (p = token; *p; ++p)
+        if (!isxdigit((unsigned char)*p)) return 0;
+    ctlEnrollmentTokenHash(token, out);
+    return 1;
+}
+
+static int ctlValidEnrollmentHost(const char *host)
+{
+    const unsigned char *p = (const unsigned char *)host;
+    size_t labelLen = 0, total = 0;
+    int labels = 0, previousHyphen = 0;
+    if (!p || !*p) return 0;
+    for (; *p; ++p, ++total) {
+        if (total >= 253) return 0;
+        if (*p == '.') {
+            if (labelLen == 0 || previousHyphen) return 0;
+            labels++;
+            labelLen = 0;
+            previousHyphen = 0;
+        } else if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+                   (*p >= '0' && *p <= '9')) {
+            labelLen++;
+            previousHyphen = 0;
+            if (labelLen > 63) return 0;
+        } else if (*p == '-') {
+            if (labelLen == 0) return 0;
+            labelLen++;
+            previousHyphen = 1;
+            if (labelLen > 63) return 0;
+        } else {
+            return 0;
+        }
+    }
+    return labels > 0 && labelLen > 0 && !previousHyphen;
+}
+
+static int ctlValidEnrollmentFingerprint(const char *fp)
+{
+    size_t i;
+    if (!fp || strlen(fp) != 95) return 0;
+    for (i = 0; i < 95; ++i) {
+        if ((i + 1) % 3 == 0) {
+            if (fp[i] != ':') return 0;
+        } else if (!isxdigit((unsigned char)fp[i])) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static solariStatus ctlArgStr(const char *args, const char *key,
@@ -345,8 +479,11 @@ static bool ctlVerbIsDestructive(const char *verb)
      * FLEET_PROVISION stages a bare-metal OS install and FLEET_IMAGE builds a
      * bootable image; both mint enrollment certs, so they are gated the same. */
     return strcmp(verb, "DECOMMISSION") == 0 || strcmp(verb, "RETIRE") == 0 ||
-           strcmp(verb, "SIGN") == 0 || strcmp(verb, "DEPLOY") == 0 ||
+           strcmp(verb, "SIGN") == 0 || strcmp(verb, "REVOKE_CERT") == 0 ||
+           strcmp(verb, "DEPLOY") == 0 ||
            strcmp(verb, "FLEET_PROVISION") == 0 || strcmp(verb, "FLEET_IMAGE") == 0 ||
+           strcmp(verb, "DISCOVER") == 0 ||
+           strcmp(verb, "ENROLL_TOKEN") == 0 ||
            strcmp(verb, "ASSET_REMOVE") == 0 || strcmp(verb, "TARGET_REMOVE") == 0 ||
            strcmp(verb, "LIFECYCLE_SET") == 0 || strcmp(verb, "ASSET_PURGE") == 0 ||
            strcmp(verb, "POOL_DEL") == 0 || strcmp(verb, "RULE_DEL") == 0;
@@ -355,7 +492,8 @@ static bool ctlVerbIsDestructive(const char *verb)
 static bool ctlVerbRequiresOperator(const char *verb)
 {
     return ctlVerbIsDestructive(verb) || strcmp(verb, "ALERT_ACK") == 0 ||
-           strcmp(verb, "CRIT_SET") == 0;
+           strcmp(verb, "CRIT_SET") == 0 || strcmp(verb, "DISCOVER_STATUS") == 0 ||
+           strcmp(verb, "REQUEST_GET") == 0;
 }
 
 /* ===================================================================== */
@@ -386,7 +524,7 @@ typedef enum {
     CTL_VC_PRIVILEGED
 } ctlVerbClass;
 
-/* The dashboard-safe direct verbs: monitoring reads, discovery, and asset/pool/
+/* The dashboard-safe direct verbs: monitoring reads and asset/pool/
  * rule metadata the UI legitimately edits inline. Deliberately excludes every
  * cert/teardown/config-push/fleet-command verb. Keep this list conservative —
  * adding a verb here grants the (potentially compromised) dashboard uid the right
@@ -395,7 +533,7 @@ typedef enum {
 static bool ctlVerbIsDashboardOrdinary(const char *verb)
 {
     return strcmp(verb, "PING")      == 0 ||   /* liveness            */
-           strcmp(verb, "DISCOVER")  == 0 ||   /* trigger a scan      */
+           strcmp(verb, "DISCOVER_STATUS") == 0 || /* requester-scoped status */
            strcmp(verb, "SURVEY")    == 0 ||   /* request telemetry   */
            strcmp(verb, "ADOPT")     == 0 ||   /* discovered -> asset  */
            strcmp(verb, "ASSET_SET") == 0 ||   /* asset metadata      */
@@ -404,7 +542,9 @@ static bool ctlVerbIsDashboardOrdinary(const char *verb)
            strcmp(verb, "POOL_SET")  == 0 ||   /* edit a pool         */
            strcmp(verb, "RULE_SET")  == 0 ||   /* edit an alert rule  */
            strcmp(verb, "ALERT_ACK") == 0 ||   /* ack an alert        */
-           strcmp(verb, "CRIT_SET")  == 0;     /* set criticality tier */
+           strcmp(verb, "CRIT_SET")  == 0 ||   /* set criticality tier */
+           strcmp(verb, "ENROLL_SUBMIT") == 0 || /* bearer-authenticated CSR submission */
+           strcmp(verb, "ENROLL_ACK") == 0;      /* bearer-authenticated receipt */
 }
 
 static ctlVerbClass ctlVerbPrivClass(const char *verb)
@@ -581,7 +721,7 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
 
     /* ---- liveness ---- */
     if (strcmp(verb, "PING") == 0) {
-        return ctlReplyOk(replyOut, replyCap, "pong");
+        return ctlReplyOk(replyOut, replyCap, "pong decommissionInline=1");
     }
 
     /* ---- enqueue a privileged action for the server to execute (Task #1) ----
@@ -595,16 +735,23 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
      * by PHP so it survives as a single value; ctlArgStr decodes it once and we
      * store it verbatim for replay. */
     if (strcmp(verb, "REQUEST_SUBMIT") == 0) {
-        char inner[32], argsWire[CTL_REQ_CAP], idem[128], extra[64];
+        char inner[32], argsWire[CTL_REQ_CAP], idem[128], extra[64], confirm[64];
         unsigned long long reqId = 0;
         if (ctlArgStr(args, "verb", inner, sizeof inner) != SOLARI_OK || !inner[0])
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "verb required");
         if (ctlVerbPrivClass(inner) != CTL_VC_PRIVILEGED)
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG,
                                "only privileged verbs may be queued");
+        if (strcmp(inner, "ENROLL_TOKEN") == 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_AUTH_ROLE,
+                               "enrollment tokens must be issued directly to the operator");
         if (ctlArgStr(args, "op", operator_, sizeof operator_) != SOLARI_OK || !operator_[0])
             return ctlReplyErr(replyOut, replyCap, ERR_AUTH_ROLE, "operator required");
         if (ctlArgStr(args, "args", argsWire, sizeof argsWire) != SOLARI_OK) argsWire[0] = '\0';
+        if (strcmp(inner, "DECOMMISSION") == 0 &&
+            ctlArgStr(argsWire, "confirm", confirm, sizeof confirm) == SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG,
+                               "confirmation tokens may not be queued");
         if (ctlArgStr(args, "idem", idem,     sizeof idem)     != SOLARI_OK) idem[0]     = '\0';
         st = serverDbCtlRequestSubmit(ctl->ctx->db, inner, argsWire, operator_,
                                       (uint32_t)peerUid, idem[0] ? idem : NULL,
@@ -619,9 +766,9 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
     }
 
     /* ---- poll a queued request's status (Task #1) ----
-     *   REQUEST_GET request=<id>
-     * Returns the row's state and, once settled, its result or error. Read-only,
-     * so the dashboard peer is allowed it directly. */
+     *   REQUEST_GET request=<id> op=<authenticated user>
+     * Returns only that requester's state/result, preventing one operator from
+     * polling another operator's privileged action by guessing its id. */
     if (strcmp(verb, "REQUEST_GET") == 0) {
         char idStr[32], state[16], detail[CTL_PEM_CAP], extra[CTL_REPLY_CAP];
         unsigned long long reqId;
@@ -631,7 +778,7 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         reqId = strtoull(idStr, NULL, 10);
         /* detail is the raw result (state=done) or error (state=failed) text, or
          * empty while pending/claimed. */
-        st = serverDbCtlRequestGet(ctl->ctx->db, reqId, state, sizeof state,
+        st = serverDbCtlRequestGet(ctl->ctx->db, reqId, operator_, state, sizeof state,
                                    detail, sizeof detail);
         if (st != SOLARI_OK)
             return ctlReplyErr(replyOut, replyCap, st, "no such request");
@@ -647,17 +794,55 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         return ctlReplyOk(replyOut, replyCap, extra);
     }
 
-    /* ---- active discovery scan (non-destructive) ---- */
+    /* ---- active discovery scan admission; work runs in solariScanWorker ---- */
     if (strcmp(verb, "DISCOVER") == 0) {
-        char cidr[96], ports[256], extra[64];
-        size_t found = 0;
+        char cidr[96], ports[256], extra[96];
+        uint32_t hostsTotal = 0;
+        uint64_t scanId = 0;
+        if (!ctl->ctx || ctl->ctx->role != SRV_ACTIVE)
+            return ctlReplyErr(replyOut, replyCap, ERR_AUTH_ROLE,
+                               "active lease required");
         if (ctlArgStr(args, "cidr", cidr, sizeof cidr) != SOLARI_OK || !cidr[0])
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "cidr required");
         if (ctlArgStr(args, "ports", ports, sizeof ports) != SOLARI_OK) ports[0] = '\0';
-        st = serverScanRun(ctl->ctx, cidr, ports[0] ? ports : NULL, &found);
+        st = serverScanPlan(cidr, ports[0] ? ports : NULL, &hostsTotal);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "scan failed");
-        (void)snprintf(extra, sizeof extra, "found=%zu", found);
+            return ctlReplyErr(replyOut, replyCap, st, "invalid scan plan");
+        st = serverDbDiscoveryScanSubmit(ctl->ctx->db, ctl->ctx->nodeId,
+                                         ctl->ctx->epoch, operator_, cidr, ports,
+                                         hostsTotal, &scanId);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st,
+                               st == ERR_CONN_RETRY ? "scan already queued or running"
+                                                    : "scan submission failed");
+        (void)snprintf(extra, sizeof extra, "scan=%llu status=queued hosts=%u",
+                       (unsigned long long)scanId, (unsigned)hostsTotal);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    if (strcmp(verb, "DISCOVER_STATUS") == 0) {
+        char idStr[32], extra[512];
+        char errorEncoded[384];
+        serverDiscoveryScanJob job;
+        uint64_t scanId = 0;
+        int n;
+        if (ctlArgU64(args, "scan", &scanId) != SOLARI_OK || scanId == 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "scan id required");
+        (void)snprintf(idStr, sizeof idStr, "%llu", (unsigned long long)scanId);
+        st = serverDbDiscoveryScanGet(ctl->ctx->db, scanId, operator_, &job);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "scan not found for operator");
+        errorEncoded[0] = '\0';
+        if (job.errorText[0] && !ctlPctEncode(job.errorText, errorEncoded,
+                                               sizeof errorEncoded))
+            return ctlReplyErr(replyOut, replyCap, ERR_BUFFER_FULL, "scan error too long");
+        n = snprintf(extra, sizeof extra,
+                     "scan=%s status=%s done=%u total=%u found=%u errorCode=%d error=%s",
+                     idStr, job.status, (unsigned)job.hostsDone,
+                     (unsigned)job.hostsTotal, (unsigned)job.hostsFound,
+                     (int)job.errorCode, errorEncoded);
+        if (n < 0 || (size_t)n >= sizeof extra)
+            return ctlReplyErr(replyOut, replyCap, ERR_BUFFER_FULL, "scan status too large");
         return ctlReplyOk(replyOut, replyCap, extra);
     }
 
@@ -666,6 +851,7 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         char  *csr   = (char *)malloc(CTL_REQ_CAP);
         char  *cert  = (char *)malloc(8192);
         char  *extra = (char *)malloc(CTL_REPLY_CAP);
+        char leafFp[65], leafSerial[41], issuerFp[65];
         size_t ret;
         if (!csr || !cert || !extra) {
             free(csr); free(cert); free(extra);
@@ -675,7 +861,13 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
             free(csr); free(cert); free(extra);
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "csr required");
         }
-        st = serverCtlSignCsr(ctl, csr, cert, 8192);
+        leafFp[0] = leafSerial[0] = issuerFp[0] = '\0';
+        st = serverCtlSignCsr(ctl, csr, NULL, NULL, cert, 8192,
+                              leafFp, sizeof leafFp, leafSerial, sizeof leafSerial,
+                              issuerFp, sizeof issuerFp);
+        if (st == SOLARI_OK)
+            st = serverDbRecordIssuedCertificate(ctl->ctx ? ctl->ctx->db : NULL,
+                    issuerFp, leafSerial, leafFp, operator_, solariNowUnixMs());
         if (st == SOLARI_OK) {
             size_t n = (size_t)snprintf(extra, CTL_REPLY_CAP, "cert=");
             if (ctlPctEncode(cert, extra + n, CTL_REPLY_CAP - n) == 0) st = ERR_BUFFER_FULL;
@@ -808,6 +1000,174 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         return ctlReplyErr(replyOut, replyCap, st, "survey failed");
     }
 
+    /* ---- accept a token-authenticated enrollment CSR from the dashboard ---- */
+    if (strcmp(verb, "ENROLL_SUBMIT") == 0) {
+        char token[65], tokenHash[65], roleLabel[16], host[SOLARI_FQDN_MAX];
+        char certFp[96], *csr;
+        char cert[CTL_PEM_CAP], caPem[CTL_PEM_CAP];
+        char extra[CTL_REPLY_CAP];
+        serverEnrollment enrollment;
+        size_t used;
+        int n;
+        solariRole role;
+
+        csr = (char *)malloc(CTL_REQ_CAP);
+        if (!csr) return ctlReplyErr(replyOut, replyCap, ERR_PLATFORM, "oom");
+        if (ctlArgStr(args, "token", token, sizeof token) != SOLARI_OK ||
+            !ctlHashPresentedEnrollmentToken(token, tokenHash) ||
+            ctlArgStr(args, "role", roleLabel, sizeof roleLabel) != SOLARI_OK ||
+            ctlArgStr(args, "host", host, sizeof host) != SOLARI_OK ||
+            !ctlValidEnrollmentHost(host) ||
+            ctlArgStr(args, "certFp", certFp, sizeof certFp) != SOLARI_OK ||
+            !ctlValidEnrollmentFingerprint(certFp) ||
+            ctlArgStr(args, "csrPem", csr, CTL_REQ_CAP) != SOLARI_OK ||
+            !ctlLooksLikeCsr(csr)) {
+            memset(tokenHash, 0, sizeof tokenHash);
+            free(csr);
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG,
+                               "valid token, identity, fingerprint, and CSR required");
+        }
+        if (strcmp(roleLabel, "client") == 0) role = ROLE_CLIENT;
+        else if (strcmp(roleLabel, "monitor") == 0) role = ROLE_MONITOR;
+        else if (strcmp(roleLabel, "server") == 0) role = ROLE_SERVER;
+        else {
+            memset(tokenHash, 0, sizeof tokenHash);
+            free(csr);
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid role");
+        }
+        st = serverDbEnrollSubmitToken(ctl->ctx->db, tokenHash, host, role,
+                                       csr, certFp, solariNowUnixMs());
+        memset(csr, 0, strlen(csr));
+        free(csr);
+        if (st != SOLARI_OK) {
+            memset(tokenHash, 0, sizeof tokenHash);
+            return ctlReplyErr(replyOut, replyCap, st,
+                               "enrollment token or identity rejected");
+        }
+        memset(&enrollment, 0, sizeof enrollment);
+        cert[0] = caPem[0] = extra[0] = '\0';
+        st = serverDbEnrollGetByToken(ctl->ctx->db, tokenHash, &enrollment,
+                                      cert, sizeof cert);
+        memset(tokenHash, 0, sizeof tokenHash);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "enrollment lookup failed");
+        if (enrollment.status == ENROLL_PENDING)
+            return ctlReplyOk(replyOut, replyCap, "status=pending");
+        if (enrollment.status != ENROLL_APPROVED || !enrollment.nodeId || !cert[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_AUTH_ROLE,
+                               "enrollment is not ready for certificate pickup");
+        if (ctlReadCaPem(ctl, caPem, sizeof caPem) != 0) {
+            memset(cert, 0, sizeof cert);
+            return ctlReplyErr(replyOut, replyCap, ERR_TLS,
+                               "CA certificate unavailable for pickup");
+        }
+        n = snprintf(extra, sizeof extra, "status=approved nodeId=%llu cert=",
+                     (unsigned long long)enrollment.nodeId);
+        if (n < 0 || (size_t)n >= sizeof extra) st = ERR_BUFFER_FULL;
+        else {
+            used = (size_t)n;
+            n = (int)ctlPctEncode(cert, extra + used, sizeof extra - used);
+            if (n <= 0 || (size_t)n >= sizeof extra - used) st = ERR_BUFFER_FULL;
+            else {
+                used += (size_t)n;
+                if (used + 5 >= sizeof extra) st = ERR_BUFFER_FULL;
+                else {
+                    memcpy(extra + used, " ca=", 4);
+                    used += 4;
+                    if (ctlPctEncode(caPem, extra + used,
+                                     sizeof extra - used - 4) == 0)
+                        st = ERR_BUFFER_FULL;
+                    else st = SOLARI_OK;
+                }
+            }
+        }
+        memset(cert, 0, sizeof cert);
+        memset(caPem, 0, sizeof caPem);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "certificate reply too large");
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    if (strcmp(verb, "ENROLL_ACK") == 0) {
+        char token[65], tokenHash[65];
+        if (ctlArgStr(args, "token", token, sizeof token) != SOLARI_OK ||
+            !ctlHashPresentedEnrollmentToken(token, tokenHash))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "valid token required");
+        st = serverDbEnrollAckToken(ctl->ctx->db, tokenHash, solariNowUnixMs());
+        memset(tokenHash, 0, sizeof tokenHash);
+        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, "status=acknowledged");
+        return ctlReplyErr(replyOut, replyCap, st, "enrollment acknowledgement rejected");
+    }
+
+    /* ---- issue a one-time enrollment bearer (operator-only) ---- */
+    if (strcmp(verb, "ENROLL_TOKEN") == 0) {
+        serverEnrollment enrollment;
+        uint8_t random[32];
+        char token[65], tokenHash[65], role[16], host[SOLARI_FQDN_MAX];
+        char ip[SERVER_IP_MAX], extra[192], audit[256];
+        uint64_t enrId = 0, now = solariNowUnixMs(), ttlSec = 900;
+        uint64_t expires;
+        int n;
+
+        if (ctlArgStr(args, "role", role, sizeof role) != SOLARI_OK ||
+            ctlArgStr(args, "host", host, sizeof host) != SOLARI_OK ||
+            !ctlValidEnrollmentHost(host))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG,
+                               "role and host required");
+        if (ctlArgStr(args, "ip", ip, sizeof ip) != SOLARI_OK) ip[0] = '\0';
+        (void)ctlArgU64(args, "ttl", &ttlSec);
+        if (ttlSec < 60 || ttlSec > 86400)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG,
+                               "ttl must be between 60 and 86400 seconds");
+        if (strcmp(role, "client") != 0 && strcmp(role, "monitor") != 0 &&
+            strcmp(role, "server") != 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid role");
+        memset(&enrollment, 0, sizeof enrollment);
+        enrollment.role = strcmp(role, "monitor") == 0 ? ROLE_MONITOR
+                        : strcmp(role, "server") == 0 ? ROLE_SERVER : ROLE_CLIENT;
+        enrollment.status = ENROLL_TOKEN;
+        if (strlen(host) >= sizeof enrollment.host || strlen(ip) >= sizeof enrollment.ip)
+            return ctlReplyErr(replyOut, replyCap, ERR_BUFFER_FULL, "identity too long");
+        memcpy(enrollment.host, host, strlen(host) + 1);
+        memcpy(enrollment.ip, ip, strlen(ip) + 1);
+        if (now > UINT64_MAX - ttlSec * 1000u)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "ttl overflow");
+        expires = now + ttlSec * 1000u;
+        if (ctlRandomBytes(random, sizeof random) != 0)
+            return ctlReplyErr(replyOut, replyCap, ERR_PLATFORM,
+                               "secure random source unavailable");
+        solariHexEncode(random, sizeof random, token, sizeof token);
+        memset(random, 0, sizeof random);
+        ctlEnrollmentTokenHash(token, tokenHash);
+        st = serverDbEnrollCreateToken(ctl->ctx->db, &enrollment, tokenHash,
+                                       expires, now, &enrId);
+        memset(tokenHash, 0, sizeof tokenHash);
+        if (st != SOLARI_OK) {
+            memset(token, 0, sizeof token);
+            return ctlReplyErr(replyOut, replyCap, st, "token enrollment create failed");
+        }
+        (void)snprintf(audit, sizeof audit,
+                       "enrollment token issued for %.150s role=%.12s by %.48s",
+                       host, role, operator_);
+        if (serverDbWriteAlertEvent(ctl->ctx->db, 0, enrId, NULL, "info", audit,
+                                    now, "audit", 0, 0, 2, "suppress", NULL) != SOLARI_OK)
+            solariLogf(SOLARI_LOG_WARN,
+                       "ctl: enrollment token created but audit append failed (enr=%llu)",
+                       (unsigned long long)enrId);
+        n = snprintf(extra, sizeof extra, "token=%s enr=%llu expires=%llu",
+                     token, (unsigned long long)enrId,
+                     (unsigned long long)expires);
+        memset(token, 0, sizeof token);
+        if (n < 0 || (size_t)n >= sizeof extra)
+            return ctlReplyErr(replyOut, replyCap, ERR_BUFFER_FULL,
+                               "token reply too large");
+        solariLogf(SOLARI_LOG_INFO,
+                   "ctl: enrollment token created enr=%llu host=%s role=%s ttl=%llu op=%s",
+                   (unsigned long long)enrId, host, role,
+                   (unsigned long long)ttlSec, operator_);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
     /* ---- enrollment decisions ---- */
     if (strcmp(verb, "APPROVE") == 0 || strcmp(verb, "REJECT") == 0) {
         uint64_t enrId = 0;
@@ -841,6 +1201,12 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         serverAdoptOpts o;
         uint64_t hb = 1, assetId = 0;
         char extra[64];
+        /* Adoption writes an asset and its probe-target catalog, then dispatches
+         * those targets to the monitor. A standby has no active control transport;
+         * reject before the first DB write so it cannot leave a half-adopted row. */
+        if (!ctl->ctx || ctl->ctx->role != SRV_ACTIVE)
+            return ctlReplyErr(replyOut, replyCap, ERR_LEASE_LOST,
+                               "active server required for discovery adoption");
         memset(&o, 0, sizeof o);
         if (ctlArgU64(args, "disc", &o.discId) != SOLARI_OK || o.discId == 0)
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad disc id");
@@ -1137,32 +1503,22 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         haveConfirm = (ctlArgU64(args, "confirm", &confirm) == SOLARI_OK &&
                        confirm != 0);
 
-        /* Two-step explicit-confirm protocol (§7.3, §11): the first call issues
-         * the one-time token (the SCP_MSG_DECOMMISSION is sent, but the node
-         * will not act until it echoes the token, and we do NOT retire the node
-         * yet). The operator must re-POST with confirm=<token> to finalize. */
-        st = serverProvisionDecommission(ctl->ctx, nodeId, scope, operator_,
-                                         &issued);
-        if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "decommission failed");
-
         if (!haveConfirm) {
+            /* The challenge is persisted before the node is notified. A
+             * repeated confirmation call validates that exact token; it must
+             * never issue a replacement challenge as a side effect. */
+            st = serverProvisionDecommission(ctl->ctx, nodeId, scope, operator_,
+                                             &issued);
+            if (st != SOLARI_OK)
+                return ctlReplyErr(replyOut, replyCap, st, "decommission failed");
             (void)snprintf(extra, sizeof extra, "confirm=%llu",
                            (unsigned long long)issued);
             return ctlReplyOk(replyOut, replyCap, extra);
         }
-        /* A confirm token was supplied: it must match a freshly-derivable token
-         * for this exact request, proving the operator saw the first reply. */
-        if (confirm != issued) {
-            solariLogf(SOLARI_LOG_WARN,
-                       "ctl: decommission confirm mismatch for node %llu",
-                       (unsigned long long)nodeId);
-            return ctlReplyErr(replyOut, replyCap, ERR_AUTH_ROLE,
-                               "confirm token mismatch");
-        }
-        st = serverProvisionRetire(ctl->ctx, nodeId);
-        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, "retired=1");
-        return ctlReplyErr(replyOut, replyCap, st, "retire failed");
+        st = serverProvisionConfirmDecommission(ctl->ctx, nodeId, scope,
+                                                operator_, confirm);
+        if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, "accepted=1");
+        return ctlReplyErr(replyOut, replyCap, st, "confirmation rejected or expired");
     }
 
     /* ---- force-retire (RBAC enforced; an operator-driven terminal state) ---- */
@@ -1177,6 +1533,38 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
             solariLogf(SOLARI_LOG_WARN, "ctl: node retire alert cleanup failed node=%llu: %s",
                        (unsigned long long)nodeId, solariStrError(st));
         return ctlReplyOk(replyOut, replyCap, "retired=1");
+    }
+
+    /* ---- exact-leaf certificate revocation ledger (operator-gated) ---- */
+    if (strcmp(verb, "REVOKE_CERT") == 0) {
+        uint64_t nodeId = 0, confirm = 0, issued = 0;
+        char serialHex[41], leafCertFp[65], reason[32], extra[96];
+        bool haveConfirm;
+        st = ctlArgU64(args, "node", &nodeId);
+        if ((st != SOLARI_OK && st != ERR_TLV_END) ||
+            ctlArgStr(args, "serial", serialHex, sizeof serialHex) != SOLARI_OK ||
+            ctlArgStr(args, "fingerprint", leafCertFp, sizeof leafCertFp) != SOLARI_OK ||
+            ctlArgStr(args, "reason", reason, sizeof reason) != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG,
+                               "serial, fingerprint, and reason required; node is optional");
+        haveConfirm = ctlArgU64(args, "confirm", &confirm) == SOLARI_OK && confirm != 0;
+        if (!haveConfirm) {
+            st = serverProvisionIssueCertificateRevocation(ctl->ctx, nodeId,
+                    serialHex, leafCertFp, reason, operator_, &issued);
+            if (st != SOLARI_OK)
+                return ctlReplyErr(replyOut, replyCap, st,
+                                   "certificate identity stale, already revoked, or challenge failed");
+            (void)snprintf(extra, sizeof extra, "confirm=%llu",
+                           (unsigned long long)issued);
+            return ctlReplyOk(replyOut, replyCap, extra);
+        }
+        st = serverProvisionConfirmCertificateRevocation(ctl->ctx, nodeId,
+                serialHex, leafCertFp, reason, operator_, confirm);
+        if (st == SOLARI_OK)
+            return ctlReplyOk(replyOut, replyCap,
+                              "recorded=1 tls_effective=0");
+        return ctlReplyErr(replyOut, replyCap, st,
+                           "confirmation rejected, expired, or identity changed");
     }
 
     solariLogf(SOLARI_LOG_WARN, "ctl: unknown verb '%s'", verb);
@@ -1570,6 +1958,36 @@ solariStatus serverCtlQueuePoll(serverCtl *ctl)
 
     replyLen = ctlHandleLine(ctl, line, CTL_PEER_OPERATOR,
                              (uint32_t)geteuid(), reply, sizeof reply);
+    /* The dashboard queues only the intent marker. Keep the short lived token
+     * inside this process and persist only the final token-free result. */
+    if (strcmp(verb, "DECOMMISSION") == 0) {
+        char inlineFlag[8], second[CTL_REQ_CAP];
+        uint64_t token = 0, nodeId = 0;
+        uint32_t scope = 0;
+        inlineFlag[0] = '\0';
+        if (ctlArgStr(argsWire, "inlineConfirm", inlineFlag,
+                      sizeof inlineFlag) == SOLARI_OK &&
+            strcmp(inlineFlag, "1") == 0) {
+            if (replyLen && reply[replyLen - 1] == '\n') reply[--replyLen] = '\0';
+            if (replyLen < 3 || strncmp(reply, "OK ", 3) != 0 ||
+                ctlArgU64(reply + 3, "confirm", &token) != SOLARI_OK || token == 0 ||
+                ctlArgU64(argsWire, "node", &nodeId) != SOLARI_OK || nodeId == 0 ||
+                ctlArgU32Hex(argsWire, "scope", &scope) != SOLARI_OK ||
+                snprintf(second, sizeof second,
+                         "DECOMMISSION op=%s node=%llu scope=0x%x confirm=%llu",
+                         opEnc, (unsigned long long)nodeId, scope,
+                         (unsigned long long)token) >= (int)sizeof second) {
+                (void)snprintf(reply, sizeof reply,
+                               "ERR %d decommission confirmation failed\n", ERR_AUTH_ROLE);
+                replyLen = strlen(reply);
+            } else {
+                replyLen = ctlHandleLine(ctl, second, CTL_PEER_OPERATOR,
+                                         (uint32_t)geteuid(), reply, sizeof reply);
+            }
+            memset(second, 0, sizeof second);
+            token = 0;
+        }
+    }
     /* Trim the trailing newline the reply formatter adds so it stores cleanly. */
     if (replyLen && reply[replyLen - 1] == '\n') reply[--replyLen] = '\0';
     ok = (replyLen >= 2 && reply[0] == 'O' && reply[1] == 'K');
@@ -1589,11 +2007,102 @@ solariStatus serverCtlQueuePoll(serverCtl *ctl)
 /* CSR signing with the internal CA                                       */
 /* ===================================================================== */
 
+#if defined(SOLARI_HAVE_MBEDTLS_X509)
+static solariStatus ctlValidateEnrollmentCsr(const mbedtls_x509_csr *csr,
+                                             const char *expectedCn,
+                                             const char *expectedFqdn)
+{
+    const mbedtls_x509_name *name;
+    const mbedtls_x509_sequence *entry;
+    size_t cnCount = 0, sanCount = 0;
+    bool cnMatches = false, sanMatches = false;
+
+    if (!csr || !expectedCn || !expectedFqdn || !expectedCn[0] || !expectedFqdn[0])
+        return ERR_INVALID_ARG;
+    for (name = &csr->subject; name; name = name->next) {
+        if (MBEDTLS_OID_CMP(MBEDTLS_OID_AT_CN, &name->oid) == 0) {
+            cnCount++;
+            cnMatches = name->val.len == strlen(expectedCn) &&
+                        memcmp(name->val.p, expectedCn, name->val.len) == 0;
+        }
+    }
+    if (cnCount != 1 || !cnMatches) return ERR_AUTH_ROLE;
+
+    for (entry = &csr->subject_alt_names; entry && entry->buf.p;
+         entry = entry->next) {
+        mbedtls_x509_subject_alternative_name san;
+        if (mbedtls_x509_parse_subject_alt_name(&entry->buf, &san) != 0)
+            return ERR_TLS;
+        sanCount++;
+        if (san.type == MBEDTLS_X509_SAN_DNS_NAME &&
+            san.san.unstructured_name.len == strlen(expectedFqdn) &&
+            memcmp(san.san.unstructured_name.p, expectedFqdn,
+                   san.san.unstructured_name.len) == 0)
+            sanMatches = true;
+        mbedtls_x509_free_subject_alt_name(&san);
+    }
+    return sanCount == 1 && sanMatches ? SOLARI_OK : ERR_AUTH_ROLE;
+}
+
+/* Re-encode the parsed GeneralName entries as a DER GeneralNames SEQUENCE.
+ * mbedTLS parses each CSR SAN entry into tag/content fields; the certificate
+ * writer needs the complete extension value. Keep the entry order and cap it
+ * before writing so hostile CSRs cannot overrun a stack buffer. */
+static int ctlCopyCsrSubjectAltName(mbedtls_x509write_cert *crt,
+                                    const mbedtls_x509_csr *csr)
+{
+    const mbedtls_x509_sequence *items[64];
+    const mbedtls_x509_sequence *entry;
+    unsigned char encoded[4096];
+    unsigned char *p = encoded + sizeof encoded;
+    size_t count = 0, i, valueLen;
+    int rc;
+
+    if (!csr->subject_alt_names.buf.p) return 0;
+    for (entry = &csr->subject_alt_names; entry && entry->buf.p;
+         entry = entry->next) {
+        if (count == sizeof items / sizeof items[0]) return -1;
+        items[count++] = entry;
+    }
+    for (i = count; i > 0; --i) {
+        const mbedtls_x509_buf *buf = &items[i - 1]->buf;
+        rc = mbedtls_asn1_write_raw_buffer(&p, encoded, buf->p, buf->len);
+        if (rc < 0) return rc;
+        rc = mbedtls_asn1_write_len(&p, encoded, buf->len);
+        if (rc < 0) return rc;
+        rc = mbedtls_asn1_write_tag(&p, encoded, buf->tag);
+        if (rc < 0) return rc;
+    }
+    valueLen = (size_t)((encoded + sizeof encoded) - p);
+    rc = mbedtls_asn1_write_len(&p, encoded, valueLen);
+    if (rc < 0) return rc;
+    rc = mbedtls_asn1_write_tag(&p, encoded, MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE);
+    if (rc < 0) return rc;
+    return mbedtls_x509write_crt_set_extension(
+        crt, MBEDTLS_OID_SUBJECT_ALT_NAME, MBEDTLS_OID_SIZE(MBEDTLS_OID_SUBJECT_ALT_NAME),
+        0, p, (size_t)((encoded + sizeof encoded) - p));
+}
+#endif /* SOLARI_HAVE_MBEDTLS_X509 */
+
 solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
-                              char *certBuf, size_t cap)
+                              const char *expectedCn, const char *expectedFqdn,
+                              char *certBuf, size_t cap,
+                              char *leafCertFp, size_t leafCertFpCap,
+                              char *leafCertSerial, size_t leafCertSerialCap,
+                              char *leafIssuerFp, size_t leafIssuerFpCap)
 {
     if (certBuf && cap) certBuf[0] = '\0';
-    if (!ctl || !csrPem || !certBuf || cap == 0) return ERR_INVALID_ARG;
+    if (leafCertFp && leafCertFpCap) leafCertFp[0] = '\0';
+    if (leafCertSerial && leafCertSerialCap) leafCertSerial[0] = '\0';
+    if (leafIssuerFp && leafIssuerFpCap) leafIssuerFp[0] = '\0';
+    if (!ctl || !csrPem || !certBuf || cap == 0 ||
+        ((expectedCn == NULL) != (expectedFqdn == NULL)) ||
+        ((!leafCertFp) != (leafCertFpCap == 0)) ||
+        ((!leafCertSerial) != (leafCertSerialCap == 0)) ||
+        ((!leafIssuerFp) != (leafIssuerFpCap == 0)) ||
+        (leafCertFp && leafCertFpCap < 65) ||
+        (leafCertSerial && leafCertSerialCap < 2) ||
+        (leafIssuerFp && leafIssuerFpCap < 65)) return ERR_INVALID_ARG;
 
     /* Structural validation up front: reject anything that is not a PEM CSR
      * before touching the CA key. */
@@ -1626,11 +2135,16 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
         mbedtls_x509write_cert crt;
         mbedtls_pk_context    caKey;
         mbedtls_x509_crt      caCrt;
+        mbedtls_x509_crt      issuedCrt;
         mbedtls_ctr_drbg_context drbg;
         mbedtls_entropy_context  entropy;
         mbedtls_mpi serial;
         char  subjName[256];
         char  issName[256];
+        uint8_t serialBytes[20];
+        uint8_t certDigest[32];
+        uint8_t issuerDigest[32];
+        static const char serialHex[] = "0123456789ABCDEF";
         int   rc;
         solariStatus st = ERR_TLS;
         static const char *pers = "solariCtl-csr-sign";
@@ -1639,6 +2153,7 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
         mbedtls_x509write_crt_init(&crt);
         mbedtls_pk_init(&caKey);
         mbedtls_x509_crt_init(&caCrt);
+        mbedtls_x509_crt_init(&issuedCrt);
         mbedtls_ctr_drbg_init(&drbg);
         mbedtls_entropy_init(&entropy);
         mbedtls_mpi_init(&serial);
@@ -1650,7 +2165,13 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
             if (mbedtls_x509_csr_parse(&csr,
                                        (const unsigned char *)csrPem,
                                        strlen(csrPem) + 1) != 0) break;
+            if (expectedCn && ctlValidateEnrollmentCsr(&csr, expectedCn,
+                                                      expectedFqdn) != SOLARI_OK) {
+                st = ERR_AUTH_ROLE;
+                break;
+            }
             if (mbedtls_x509_crt_parse_file(&caCrt, ctl->caFile) != 0) break;
+            if (!caCrt.raw.p || caCrt.raw.len == 0) break;
 #if MBEDTLS_VERSION_MAJOR >= 3
             if (mbedtls_pk_parse_keyfile(&caKey, ctl->caKeyFile, NULL,
                                          mbedtls_ctr_drbg_random, &drbg) != 0) break;
@@ -1670,25 +2191,28 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
             if (mbedtls_x509write_crt_set_issuer_name(&crt, issName) != 0) break;
             mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
             mbedtls_x509write_crt_set_md_alg(&crt, MBEDTLS_MD_SHA256);
-            /* Serial: the first 20 bytes of SHA-256(CSR) (reproducible), forced
-             * positive and non-zero per RFC 5280. (A full 32-byte digest does
-             * not fit a 20-octet serial, which previously yielded a zero/invalid
-             * serial and an unparsable cert.) */
+            /* Each certificate issuance gets a unique positive serial. */
             {
-                uint8_t dg[32], sbin[20];
-                solariSha256(csrPem, strlen(csrPem), dg);
-                memcpy(sbin, dg, sizeof sbin);
-                sbin[0] &= 0x7F;                 /* clear sign bit -> positive */
-                if (sbin[0] == 0) sbin[0] = 0x01;/* no leading-zero / non-zero */
+                size_t i;
+                bool nonzero = false;
+                if (mbedtls_ctr_drbg_random(&drbg, serialBytes,
+                                            sizeof serialBytes) != 0) break;
+                serialBytes[0] &= 0x7F; /* positive DER INTEGER */
+                for (i = 0; i < sizeof serialBytes; ++i)
+                    if (serialBytes[i] != 0) { nonzero = true; break; }
+                if (!nonzero) serialBytes[sizeof serialBytes - 1] = 1;
 #if MBEDTLS_VERSION_MAJOR >= 3
-                if (mbedtls_x509write_crt_set_serial_raw(&crt, sbin, sizeof sbin) != 0) break;
+                if (mbedtls_x509write_crt_set_serial_raw(&crt, serialBytes,
+                                                         sizeof serialBytes) != 0) break;
 #else
-                if (mbedtls_mpi_read_binary(&serial, sbin, sizeof sbin) != 0) break;
+                if (mbedtls_mpi_read_binary(&serial, serialBytes,
+                                            sizeof serialBytes) != 0) break;
                 if (mbedtls_x509write_crt_set_serial(&crt, &serial) != 0) break;
 #endif
             }
             if (mbedtls_x509write_crt_set_validity(
                     &crt, "20260101000000", "20360101000000") != 0) break;
+            if (ctlCopyCsrSubjectAltName(&crt, &csr) != 0) break;
 
             rc = mbedtls_x509write_crt_pem(&crt, (unsigned char *)certBuf, cap,
                                            mbedtls_ctr_drbg_random, &drbg);
@@ -1697,12 +2221,42 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
                          ? ERR_BUFFER_FULL : ERR_TLS;
                 break;
             }
+            if (leafCertFp || leafCertSerial) {
+                if (mbedtls_x509_crt_parse(&issuedCrt,
+                        (const unsigned char *)certBuf, strlen(certBuf) + 1) != 0 ||
+                    !issuedCrt.raw.p || issuedCrt.raw.len == 0) break;
+                if (leafCertFp) {
+                    solariSha256(issuedCrt.raw.p, issuedCrt.raw.len, certDigest);
+                    solariHexEncode(certDigest, sizeof certDigest, leafCertFp,
+                                    leafCertFpCap);
+                    memset(certDigest, 0, sizeof certDigest);
+                    if (strlen(leafCertFp) != 64) break;
+                }
+                if (leafCertSerial) {
+                    size_t i, serialLen = issuedCrt.serial.len;
+                    if (!issuedCrt.serial.p || serialLen == 0 || serialLen > 20 ||
+                        serialLen * 2 + 1 > leafCertSerialCap) break;
+                    for (i = 0; i < serialLen; ++i) {
+                        leafCertSerial[2 * i] = serialHex[issuedCrt.serial.p[i] >> 4];
+                        leafCertSerial[2 * i + 1] = serialHex[issuedCrt.serial.p[i] & 0x0F];
+                    }
+                    leafCertSerial[serialLen * 2] = '\0';
+                }
+            }
+            if (leafIssuerFp) {
+                solariSha256(caCrt.raw.p, caCrt.raw.len, issuerDigest);
+                solariHexEncode(issuerDigest, sizeof issuerDigest, leafIssuerFp,
+                                leafIssuerFpCap);
+                memset(issuerDigest, 0, sizeof issuerDigest);
+                if (strlen(leafIssuerFp) != 64) break;
+            }
             st = SOLARI_OK;
         } while (0);
 
         mbedtls_mpi_free(&serial);
         mbedtls_entropy_free(&entropy);
         mbedtls_ctr_drbg_free(&drbg);
+        mbedtls_x509_crt_free(&issuedCrt);
         mbedtls_x509_crt_free(&caCrt);
         mbedtls_pk_free(&caKey);
         mbedtls_x509write_crt_free(&crt);
@@ -1710,6 +2264,9 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
 
         if (st != SOLARI_OK) {
             certBuf[0] = '\0';
+            if (leafCertFp) leafCertFp[0] = '\0';
+            if (leafCertSerial) leafCertSerial[0] = '\0';
+            if (leafIssuerFp) leafIssuerFp[0] = '\0';
             solariLogf(SOLARI_LOG_ERROR, "ctl: CSR sign failed (st=%d)", (int)st);
         } else {
             solariLogf(SOLARI_LOG_INFO, "ctl: CSR signed by internal CA");
@@ -1720,6 +2277,9 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
     /* No x509 backend compiled in: fail closed rather than emit an unsigned
      * cert. The CSR was structurally valid and the CA material is present, so
      * this is purely a build-capability gap, surfaced to the integrator. */
+    (void)leafCertFp; (void)leafCertFpCap;
+    (void)leafCertSerial; (void)leafCertSerialCap;
+    (void)leafIssuerFp; (void)leafIssuerFpCap;
     solariLogf(SOLARI_LOG_ERROR,
                "ctl: CSR sign unavailable; built without mbedTLS x509 "
                "(define SOLARI_HAVE_MBEDTLS_X509 with the vendored CA backend)");
@@ -1765,15 +2325,9 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
  *    solariCrypto/an I/O-tier CA module) so this bridge does not embed mbedTLS
  *    API surface directly.
  *
- * 4. Decommission confirm: this bridge implements the two-step explicit-confirm
- *    UX (first call issues the token, second call with confirm=<token>
- *    finalizes via serverProvisionRetire). It re-invokes
- *    serverProvisionDecommission on the confirm step and compares the supplied
- *    token to the freshly issued one; because serverProvision derives the token
- *    from per-call clock stamps, the two derivations differ across calls, so the
- *    confirm comparison here is necessarily best-effort within a single call's
- *    issue+echo. A durable confirm-token store (e.g. serverDb persisting the
- *    issued token against the node, checked on the confirm step) would let the
- *    operator confirm across separate POSTs robustly; recommend a
- *    serverDb confirm-token getter/clearer for a fully stateless PHP tier.
+ * 4. Decommission confirm: resolved. Step one generates a CSPRNG token,
+ *    stores only its SHA-256 digest with node/scope/operator and a ten-minute
+ *    expiry, then sends the token to the node. Step two verifies and consumes
+ *    that exact challenge and marks the node retired in one DB transaction.
+ *    Forced retirement cancels any pending challenge in the same transaction.
  */

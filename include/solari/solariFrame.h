@@ -78,16 +78,17 @@ SOLARI_STATIC_ASSERT(sizeof(uint64_t) == 8, u64_is_8);
 solariStatus solariFramePackHeader(const solariFrameHeader *hdr,
                                    uint8_t *buf, size_t bufLen);
 
-/* Inverse of the above. Validates magic and protoVersion; on version mismatch
- * returns ERR_PROTO_VERSION but still fills hdr for diagnostics. Returns
- * ERR_FRAME_BAD_MAGIC on sentinel mismatch, ERR_BUFFER_FULL if bufLen < 32. */
+/* Inverse of the above. Validates magic, version, reserved byte, and supported
+ * flags; on version mismatch returns ERR_PROTO_VERSION but still fills hdr for
+ * diagnostics. Returns ERR_FRAME_BAD_ENVELOPE for reserved/unsupported bits. */
 solariStatus solariFrameUnpackHeader(const uint8_t *buf, size_t bufLen,
                                      solariFrameHeader *hdr);
 
 /* Assemble a complete frame (len prefix + header + payload + crc32) into out.
  * *outLen is set to total bytes written. Computes crc32 internally. payload may
- * be NULL iff payloadLen == 0. Returns ERR_BUFFER_FULL if outCap is too small,
- * ERR_INVALID_ARG if the total would exceed SOLARI_MAX_FRAME. */
+ * be NULL iff payloadLen == 0. Validates the header and complete TLV envelope;
+ * returns ERR_BUFFER_FULL if outCap is too small, ERR_INVALID_ARG if the body
+ * exceeds SOLARI_MAX_FRAME, or the corresponding frame/protocol error. */
 solariStatus solariFrameBuild(const solariFrameHeader *hdr,
                               const uint8_t *payload, size_t payloadLen,
                               uint8_t *out, size_t outCap, size_t *outLen);
@@ -96,7 +97,8 @@ solariStatus solariFrameBuild(const solariFrameHeader *hdr,
  * hdr, points *payload into buf (zero-copy) with *payloadLen, and sets
  * *frameTotalLen to the number of bytes this frame occupied (so a caller can
  * advance a stream cursor). Returns ERR_FRAME_INCOMPLETE if buf holds less than
- * one full frame, ERR_FRAME_BAD_CRC / ERR_FRAME_BAD_MAGIC on corruption. Any of
+ * one full frame, ERR_FRAME_BAD_CRC / ERR_FRAME_BAD_MAGIC on corruption, or
+ * ERR_FRAME_BAD_ENVELOPE for malformed TLVs/count mismatch/unsupported flags. Any of
  * payload/payloadLen/frameTotalLen may be NULL if not wanted. */
 solariStatus solariFrameParse(const uint8_t *buf, size_t bufLen,
                               solariFrameHeader *hdr,

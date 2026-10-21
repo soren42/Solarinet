@@ -39,5 +39,6 @@ Use `--source yaml` for the offline fixture. A fresh output directory contains
 only the desired zone set, including removal of retired files. Five tests cover
 serial reuse, changes, wrap, corrupt previous state, isolated output, and CNAME
 cycles; generated zones and the combined config pass BIND's validation tools.
-The live applier still needs atomic release switching, served-data verification,
-rollback, and independent steel retry before F-17/F-08 can close.
+The candidate applier uses the atomic helper in `deploy/dns-release/` and retries
+each configured target independently. The live cutover, full-chain fault drills,
+and steel verification are still required before F-17/F-08 can close.

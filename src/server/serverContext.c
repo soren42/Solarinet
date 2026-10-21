@@ -43,14 +43,18 @@
 
 /* ------------------------------------------------------------------ helpers */
 
-/* Bounded copy that always NUL-terminates (strncpy leaves no terminator when
- * the source fills the buffer). Used for every cfg string field. */
+/* Bounded, overlap-safe copy that always NUL-terminates. Configuration getters
+ * commonly return the destination field itself as the fallback when a key is
+ * absent; strncpy has undefined behavior for that same-buffer case. */
 static void serverStrCpy(char *dst, size_t cap, const char *src)
 {
+    size_t len = 0;
+
     if (!dst || cap == 0) return;
     if (!src) { dst[0] = '\0'; return; }
-    strncpy(dst, src, cap - 1);
-    dst[cap - 1] = '\0';
+    while (len < cap - 1 && src[len] != '\0') len++;
+    memmove(dst, src, len);
+    dst[len] = '\0';
 }
 
 /* Best-effort fully-qualified hostname, mirroring monitorHostFqdn: prefer a
@@ -298,8 +302,6 @@ solariStatus serverConfigFromFile(const char *path, serverConfig *out)
 uint64_t serverNodeId(const serverConfig *cfg)
 {
     char fqdn[SOLARI_FQDN_MAX];
-    char buf[SOLARI_FQDN_MAX + 8];
-    int  n;
 
     if (cfg && cfg->nodeId) return cfg->nodeId;     /* enrolled id wins */
 
@@ -308,8 +310,7 @@ uint64_t serverNodeId(const serverConfig *cfg)
     } else {
         serverHostFqdn(fqdn, sizeof fqdn);
     }
-    n = snprintf(buf, sizeof buf, "%s|%d", fqdn, (int)ROLE_SERVER);   /* §5.5 */
-    return solariFnv1a64(buf, (size_t)(n > 0 ? n : 0));
+    return solariNodeIdFromFqdnRole(fqdn, ROLE_SERVER);
 }
 
 /* ----------------------------------------------------------- context wiring */

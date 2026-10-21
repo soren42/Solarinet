@@ -82,11 +82,19 @@ The CRC-32 is verified **before any field is trusted**; unknown TLV types are sk
 
 | Port | Pattern | Purpose |
 |---|---|---|
-| 7701 | PUSH / PULL | Ingest: client & monitor reports → server |
-| 7702 | SURVEYOR / RESPONDENT **and** REQ / REP | HELLO / WHO_IS_PRIMARY survey **and** CONTROL request/reply |
+| 7701 | PUSH / PULL | Best-effort ingest: watchdog and non-durable adverts/results → server |
+| 7702 | SURVEYOR / RESPONDENT **and** REQ / REP | HELLO / WHO_IS_PRIMARY, CONTROL request/reply, and durable report ACKs |
 | 7703 | PUB / SUB | Fleet control directives (server → monitors/clients) |
 
 > **Reviewer flag (confirmed by two independent C passes):** the code defaults **both** `surveyUrl` and `controlUrl` to the *identical literal string* `tls+tcp://0.0.0.0:7702` for **two different nng socket patterns** (SURVEYOR/RESPONDENT vs REQ/REP) — `serverContext.c:116-119`. These are hand-typed default-config values, not one field aliased from another: someone typed 7702 twice. What was **not** traced is whether the listener-bind path (in `serverMaster`/`serverLease`) actually binds both against this URL at runtime — so this is a confirmed config-default duplication and a strong candidate for a live bind conflict, but the runtime conflict itself is **unverified**. Called out again in §11 (BUG-C1).
+
+**Report-delivery candidate (2026-10-20):** CLIENT_REPORT, MONITOR_REPORT, and
+SURVEY_RESP now request an ACK through the authenticated REQ/REP control link.
+The server dispatches to durable receipt-backed handlers before returning ACK;
+sender spools are removed only after matching sequence and reporter-session
+values are validated. This is implemented on the integration branch and has
+loopback client/monitor tests, but is not yet proven against the real server
+handler's database commit failure, ACK loss, failover, or a deployed fleet.
 
 **Control-plane semantics** [Observed, map-core §1]: the server PUBs `SCP_MSG_CONTROL` with verbs `CTRL_SET_CONFIG` / `PROVISION` / `DECOMMISSION` / `ADOPT_TARGET`, addressed via `TLV_CTRL_TARGET_NODE` (0 = broadcast); nodes answer with `SCP_MSG_CONTROL_RESULT` correlated by `seqNo`. **Convergence is epoch-monotonic** — a node applies a directive only if its epoch exceeds the last one applied. This is the coordinator-free convergence primitive.
 
@@ -264,7 +272,7 @@ Coordinator-free target ownership [Observed, map-core §2, `src/monitor/monitorP
 | `/api/inventory/*` | `inventory.php` (1260 L) | physical asset/rack inventory |
 | `/api/inv-codes/*` | `inv_codes.php` (1039 L) | barcode/label codes (must load after inventory.php — reuses `Inv`) |
 | `/api/dns/*` | `dns.php` (561 L) | DNS zone views, fail-soft |
-| `/api/rackwire/*` | `rackwire.php` (1272 L) | connection planner; **writes `Sor::db()` directly** (exception, §5.3) |
+| `/api/rackwire/*` | `rackwire.php` (1272 L) | network, power, and interconnect planning; **writes `Sor::db()` directly** (exception, §5.3) |
 
 **Mutation layer (`routes_mutations.php`, POST + SSE):**
 
@@ -409,7 +417,7 @@ A separate ESP32/IDF password-manager/TOTP/BLE-HID device sharing the repo. Heav
 
 - **UniFi API:** `skip-verify` is the **default** (BUG-O2) — flagged for reviewers; also `unifipolld` has exception-handling gaps, a 60 s freshness overrun, and unverified TLS.
 - **RabbitMQ:** three uses (sor.events CDC, notify.events, alert bridge).
-- **Keycloak/authbroker:** `authbrokerd.py:288-291` — **HTTP auth open-by-default** (BUG-O1), the highest-severity ops finding.
+- **Keycloak/authbroker:** HTTP auth previously opened when the token was empty (BUG-O1); the current candidate rejects empty/example tokens at startup and denies requests without a matching bearer token. Production config and deployed service behavior remain unverified.
 - **Opie:** `opied.py` executes **LLM-triggered shell** (BUG-O3) — the AI on-call can run commands; the guardrails here need a hard look.
 - **MCP:** a **regex-based SQL guard** (BUG-O4) — regex is a weak boundary for SQL safety.
 - **DNS (netdb):** `load_source()` is the single seam between the SoR/YAML source of truth and `gen-zones.py` → BIND zones; **monotonic serial discipline** is required for AXFR (a serial-reset bug previously stopped secondaries from transferring). Secondaries: `radium` + `steel`.
@@ -494,7 +502,7 @@ Ranked by a blend of severity and blast radius. IDs are stable so reviewers can 
 | ID | Where | Issue |
 |---|---|---|
 | **C12** | `solariCtl.c:392-403` | RBAC is **attribution-only** — the C bridge audits but does not authorize. The dashboard's "solariCtl is the enforcement point" claim is not literally true; enforcement is really in PHP. Decide if that trust model holds. |
-| **O1** | `authbrokerd.py:288-291` | authbroker **HTTP auth open-by-default**. |
+| **O1** | `authbrokerd.py` HTTP token validation | **Fixed in current candidate:** empty/example token blocks startup; bearer checks fail closed. Deployment remains unverified. |
 | **O3** | `opied.py` | Opie executes **LLM-triggered shell** — review the guardrails. |
 | **C4** | `serverControl.c:238-246` | Missing `TLV_ERROR_CODE` in a CONTROL_RESULT is **treated as success** — fails open, should fail closed. |
 | **C3** | `serverControl.c:250-293` | CONTROL_RESULT **correlationId not validated**; with a static non-persisted `seqNo`, a restart can cause seqNo reuse and cross-talk. |

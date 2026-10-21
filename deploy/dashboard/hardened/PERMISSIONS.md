@@ -29,16 +29,19 @@ and every host secret is `0600 solari` (or `0640 solari:solari`).**
 
 | Path                                             | Mode | Owner              | www-solari can |
 |--------------------------------------------------|------|--------------------|----------------|
-| CA private key (`…/pki/ca.key`)                  | 0600 | solari:solari      | **no**         |
-| CA cert (`…/pki/ca.pem`)                         | 0644 | solari:solari      | read (public)  |
-| server TLS key (`…/pki/server.key`)             | 0600 | solari:solari      | **no**         |
+| PKI directory (`/var/lib/solarinet/pki`)        | 0755 | solari:solari      | traverse only  |
+| CA private key (`/var/lib/solarinet/pki/ca.key`) | 0600 | solari:solari      | **no**         |
+| CA cert (`/var/lib/solarinet/pki/ca.pem`)        | 0644 | solari:solari      | read (public)  |
+| server TLS key (`/var/lib/solarinet/pki/server.key`)| 0600 | solari:solari   | **no**         |
 | server env / DB pass (`/etc/solarinet/server.env`)| 0600 | solari:solari    | **no**         |
 | server config (`/etc/solarinet/server.conf`)    | 0640 | solari:solari      | **no**         |
 | ctl socket (`/run/solari/solariCtl.sock`)       | 0660 | solari:solari-ctl  | connect (group)|
 | socket dir (`/run/solari`)                      | 0751 | solari:solari      | traverse only¹ |
-| dashboard store (`…/solari-auth.json`)          | 0640 | www-solari:www-solari | read+write  |
+| dashboard store (`…/solari-auth.json`)          | 0600 | www-solari:www-solari | read+write  |
 | dashboard sessions dir                           | 0700 | www-solari:www-solari | read+write  |
-| dashboard code (`/var/www/solarinet`)           | 0755 | root:root          | read (exec)    |
+| active release (`/opt/solarinet/current`)         | 0755 | root:root          | read (exec)    |
+| release trees (`/opt/solarinet/releases/*`)       | 0755 | root:root          | read (exec)    |
+| dashboard uploads                                 | 0750 | www-solari:www-solari | read/write |
 
 ¹ `www-solari` traverses `/run/solari` to reach the socket by name because the
 dir is `0751` (`other` gets `--x`, traverse-only) and it opens the socket via its
@@ -131,16 +134,19 @@ peer ACL disengages and every peer is OPERATOR again (legacy behaviour).
 These came out of the cross-lab review. None blocks the boundary shipping as
 reviewable files; each has an owner and a trigger.
 
-- **F9 — route rewiring at cutover.** `dashboard/api/routes/control.php` today
-  calls `SolariCtl::call()` directly for the privileged verbs (PROVISION,
-  DECOMMISSION, RETIRE, DEPLOY, FLEET_PROVISION, FLEET_IMAGE). While
-  `enforcePeer=false` those still execute (legacy). The moment step 3 sets
-  `enforcePeer=true`, the bridge **refuses** them to the dashboard peer and the
-  routes break. So cutover step 3 MUST be paired with rewiring those routes to
-  `REQUEST_SUBMIT` (enqueue) + `REQUEST_GET` (poll) — the enqueue path is already
-  in `SolariCtl.php`. Until a host is cut over, the routes are intentionally left
-  on the direct call so nothing changes on un-migrated hosts. Owner: dashboard.
-  Trigger: same change window as `enforcePeer=true`.
+- **F9 — route rewiring completed in the candidate (2026-10-21).** The
+  privileged routes in `dashboard/api/routes/control.php` now use
+  `SolariCtl::callQueued()` for PROVISION, both DECOMMISSION steps, RETIRE,
+  DEPLOY, FLEET_PROVISION, and FLEET_IMAGE. Enrollment APPROVE and REJECT use
+  the same queue in `enrollments_mut.php`. The C peer-credential allowlist
+  refuses those verbs when called directly by `www-solari`; the queue records
+  the authenticated operator and the `solariServer` process executes the
+  privileged verb. C authorization, PHP bridge, route, and disposable
+  end-to-end boundary checks pass in the candidate. The queue path works with
+  `enforcePeer` enabled or disabled, so route rewiring is no longer a cutover
+  dependency. Production still requires the hardened service identities,
+  database grants, socket permissions, and `verify-boundary.sh` checks to be
+  installed and exercised together before enabling the boundary.
 
 - **F2 — accepted risk: no per-request operator-approval gate.** The queue binds
   the operator server-side from `requestedBy` and executes on claim; there is no

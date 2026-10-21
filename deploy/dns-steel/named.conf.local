@@ -1,4 +1,5 @@
 // akoria.net + reverse zones — secondary from xenon (10.0.0.20). Generated for steel.
+include "/etc/bind/named.conf.bare";
 zone "akoria.net" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.akoria.net"; };
 zone "0.0.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.0.10.in-addr.arpa"; };
 zone "0.1.10.in-addr.arpa" { type secondary; primaries { 10.0.0.20; }; file "/var/cache/bind/db.0.1.10.in-addr.arpa"; };

@@ -1,5 +1,13 @@
 # Work Plan — graceful shutdown → rework → graceful restart
 
+> **Historical plan — superseded operational facts (2026-10-21).** This July plan is retained
+> as a record of the proposed physical rework. Its service boot order, port maps, and DNS
+> topology are not a current runbook. In particular, Steel is the inventory-labeled ZimaBlade
+> at laboratory port 12 and is unreachable; it is not the active DNS secondary. The Khadas VIM4
+> `chlorine` now runs BIND as a secondary for `akoria.net` and generated reverse zones. See
+> [the current stabilization baseline](../SolariNet_Stabilization_Baseline_2026-10-20.html)
+> before using any operational sequence here.
+
 *Order matters: shut down dependents before dependencies; bring the foundation up first on the way back. **Halt, don't reboot.** Keep the router (chemistry) up until the very end and up first on return — it is DNS/DHCP for everything.*
 
 ---
@@ -12,7 +20,7 @@
 
 **B. Halt hosts — leaf → core (each: `sudo systemctl poweroff` / `shutdown -h now`)**
 3. **Workstations & clients** — Mac (hydrogen), MS-R1, KVMs, Home Assistant, Radio Pi, misc SBCs (amino, tungsten, quanta, photon, boson, plutonium, astatine, neutrino, NanoPi-R1, etc.).
-4. **Dependent servers** — nas-x, chlorine (CA), benzene (if up), steel (if up).
+4. **Dependent servers** — nas-x, chlorine (CA and BIND secondary), benzene (if up). Steel is currently unreachable and is not part of the shutdown sequence; handle it after console redeployment.
 5. **Core servers, in this order:** cesium (Forgejo/SoR) → radium (AD/DNS/SSO) → **xenon last** (monitoring/DNS primary — you'll lose your dashboard + local tooling when it goes).
 6. Confirm each is truly down (no ping) before pulling its power.
 
@@ -44,15 +52,15 @@ Physical build per **02-ideal-state.md**: mount the 3U rack under the pull-out (
 5. **xenon** — DNS primary (akoria.net) + dashboard. Then `sudo systemctl restart sor-apply-dns` once MQ is back (step 6).
 6. **benzene** — brings **RabbitMQ** back → SoR→DNS live sync resumes. Also the eGPU host.
 7. **cesium** — Forgejo + SoR MariaDB.
-8. **steel** — DNS secondary; it AXFRs akoria.net from xenon on boot (restores 2-resolver DNS + ad-block).
-9. **chlorine** (CA), **nas-x** (storage).
+8. **chlorine** — Khadas VIM4 at `10.7.0.10`; start its authoritative BIND secondary and verify zone transfers from xenon. It also hosts the internal CA.
+9. **nas-x** (storage). Do not enable or advertise Steel as DNS until its ZimaBlade has been redeployed and independently verified.
 
 **C. New provisioning**
 10. **Ryzen + Intel Arc eGPU** — fresh OS, enroll solariClient, join, name it.
 11. **tachyon** — provision, set as fleet NTP, point the notify service at it, re-enable `notify`.
 
 **D. Verify (dashboard is the scoreboard)**
-12. SolariNet dashboard `dashboard.akoria.net` green · both DNS resolvers answer (`dig akoria.net @10.0.0.20` and `@10.0.0.11`) · SSO login works · Forgejo up · RabbitMQ connected (no AMQP errors in `sor-apply-dns` log) · every UPS < ~70%.
+12. SolariNet dashboard `dashboard.akoria.net` green · primary DNS answers at xenon (`10.0.0.20`) and secondary DNS answers at chlorine (`10.7.0.10`) · SSO login works · Forgejo up · RabbitMQ connected (no AMQP errors in `sor-apply-dns` log) · every UPS < ~70%. Steel at laboratory switch port 12 is the inventory-labeled ZimaBlade; it is not currently reachable and is not a DNS resolver.
 
 ---
 

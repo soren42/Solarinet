@@ -9,7 +9,7 @@
 #   ./chemistry-fix-tonight.sh verify      # post-cut: clients migrated, internet up
 #   ./chemistry-fix-tonight.sh rollback    # re-enable radios from snapshot
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit
 set -a; source run/unifi.env 2>/dev/null; set +a
 export KEY="${UNIFI_API_KEY:-${UI_API_KEY:-${X_API_KEY:-}}}"
 BASE="${UNIFI_URL:-https://10.0.0.1}"

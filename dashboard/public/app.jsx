@@ -7,10 +7,20 @@
   const S = window.SOLARI;
   const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Inventory, CodesScreen, MaintenanceScreen, GitScreen, CaScreen, DnsScreen, PanelScreen, RackWireScreen } = window;
 
+    const partialSources = S.source === "live"
+      ? Object.values(S.freshness || {}).filter((source) => source.state !== "fresh")
+      : [];
+    const partialSummary = partialSources.map((source) => {
+      if (!source.lastSuccess) return `${source.label}: not loaded yet`;
+      const minutes = Math.max(0, Math.floor((Date.now() - source.lastSuccess) / 60_000));
+      const age = minutes < 1 ? "just now" : minutes < 60 ? `${minutes}m ago` : `${Math.floor(minutes / 60)}h ago`;
+      return `${source.label}: last success ${age}`;
+    }).join("; ");
+
   const PLANNED_LABEL = {
     reachability: ["Reachability Matrix", "Probe targets × monitor vantages — RTT, loss, and split-vantage divergence rendered as a live matrix."],
     topology: ["Topology Map", "Live C2 map of nodes and monitor→target assignment edges (HRW result) across every segment."],
-    discovery: ["Discovery", "Auto-found hosts & services (mDNS, ARP, SCP advert) staged for one-tap enrolment into monitoring."],
+    discovery: ["Discovery", "Review network observations and operator-run bounded scans; adopt selected hosts into monitoring."],
     provision: ["Provisioning", "Issue enrolment tokens, sign CSRs, and push binaries to new nodes."],
     settings: ["Config & Rules", "Global tolerances, retention, and per-node config overlays — managed centrally, pushed as SCP control frames."],
   };
@@ -41,6 +51,40 @@
           </div>
         </div>
       </div>
+    );
+  }
+
+  function CapabilityMaturity({ route }) {
+    const manifest = S.capabilityMaturity;
+    const capabilityId = manifest && manifest.routes && manifest.routes[route];
+    const capability = manifest && (manifest.capabilities || []).find((item) => item.id === capabilityId);
+    if (!capability) {
+      return (
+        <div className="maturity-banner maturity-banner--missing" role="alert">
+          <strong>MATURITY UNDECLARED</strong>
+          <span>This page needs a capability entry in the maturity manifest.</span>
+        </div>
+      );
+    }
+    const related = (manifest.capabilities || []).filter((item) => item.id !== capability.id && (item.routes || []).includes(route) && item.note);
+    const maturity = manifest.levels && manifest.levels[capability.maturity] || capability.maturity;
+    const description = manifest.levelDescriptions && manifest.levelDescriptions[capability.maturity];
+    return (
+      <section className="maturity-banner" aria-label="Capability maturity">
+        <div className="maturity-banner__primary">
+          <span className="maturity-badge">{maturity}</span>
+          <span className="maturity-banner__name">{capability.name}</span>
+          {description && <span className="maturity-banner__copy">{description}</span>}
+          {capability.note && <span className="maturity-banner__copy">{capability.note}</span>}
+        </div>
+        {related.length > 0 && (
+          <ul className="maturity-banner__details">
+            {related.map((item) => (
+              <li key={item.id}><strong>{item.name} · {manifest.levels[item.maturity] || item.maturity}:</strong> {item.note}</li>
+            ))}
+          </ul>
+        )}
+      </section>
     );
   }
 
@@ -177,7 +221,7 @@
         { id: "go-systems", group: "Navigate", label: "Systems", icon: "host", action: () => go("assets"), sub: `${S.summary.systems} systems` },
         { id: "go-inventory", group: "Navigate", label: "Inventory", icon: "inventory", action: () => go("inventory"), sub: `${((S.inventory && S.inventory.units) || []).length} components` },
         { id: "go-codes", group: "Navigate", label: "Tags & Scan", icon: "tag2", action: () => go("codes") },
-        { id: "go-rackwire", group: "Navigate", label: "RackWire", icon: "rackwire", action: () => go("rackwire"), sub: "connection planner · ports, power, PoE" },
+        { id: "go-rackwire", group: "Navigate", label: "RackWire", icon: "rackwire", action: () => go("rackwire"), sub: "network, power & interconnect planning" },
         { id: "go-disc", group: "Navigate", label: "Discovery", icon: "discovery", action: () => go("discovery"), sub: `${S.discovered.length} new` },
         { id: "go-prov", group: "Navigate", label: "Provisioning", icon: "provision", action: () => go("provision"), sub: `${S.enrollments.length} pending` },
         { id: "go-maint", group: "Navigate", label: "Maintenance", icon: "maintenance", action: () => go("maintenance"), sub: `${((S.maintenance || []).filter((w) => w.live || w.status === "active")).length} live` },
@@ -214,6 +258,11 @@
             ⚠ DATA STALE — last successful update {S.lastLiveAt ? Math.max(0, Math.floor((Date.now() - S.lastLiveAt) / 60_000)) + "m ago" : "unknown"}; actions paused while the live API is unavailable.
           </div>
         )}
+        {partialSources.length > 0 && (
+          <div className="data-state-banner" role="status" aria-live="polite" aria-atomic="true">
+            PARTIAL DATA — {partialSummary}. Core fleet data is current; these sections may be incomplete.
+          </div>
+        )}
         {!navHidden && window.innerWidth <= 980 && <div className="scrim" onClick={() => setNavHidden(true)} />}
         <Sidebar active={route.name === "node" ? "fleet" : route.name}
           onNav={go} collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} hidden={navHidden} summary={S.summary} activeCrit={S.activeCrit} activeWarn={S.activeWarn} />
@@ -222,12 +271,13 @@
             onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
             server={S.server} onSurvey={() => survey(null)} operator={S.operator} />
           <div className="content">
+            <CapabilityMaturity route={route.name} />
             {route.name === "fleet" && PoolCards && <PoolCards onOpen={() => go("assets")} />}
             {route.name === "fleet" && <FleetOverview onOpenNode={openNode} onNav={go} view={fleetView} setView={setFleetView} fleet={S.fleet || S.nodes} />}
             {route.name === "assets" && Assets && <Assets onOpenNode={openNode} />}
-            {route.name === "inventory" && Inventory && <Inventory toast={toast} />}
+            {route.name === "inventory" && Inventory && <Inventory toast={toast} onNavigate={go} />}
             {route.name === "codes" && CodesScreen && <CodesScreen toast={toast} />}
-            {route.name === "rackwire" && RackWireScreen && <RackWireScreen />}
+            {route.name === "rackwire" && RackWireScreen && <RackWireScreen onNavigate={go} />}
             {route.name === "node" && <NodeDetail node={route.node} onBack={() => setRoute({ name: "fleet" })} onSurvey={survey} />}
             {route.name === "asset" && AssetDetail && <AssetDetail assetId={route.assetId} onBack={() => setRoute({ name: "fleet" })} onOpenService={(tid) => openService(tid, { name: "asset", assetId: route.assetId })} toast={toast} />}
             {route.name === "service" && ServiceDetail && <ServiceDetail targetId={route.targetId} onBack={() => setRoute(route.backRoute)} />}

@@ -4,9 +4,9 @@
 [db]
 host = 127.0.0.1
 port = 3306
-user = solari
+user = solari-opie
 name = solarinet
-# Leave blank to use $SOLARI_DB_PASS (the systemd unit sources run/db.env).
+# Leave blank to use SOLARI_DB_PASS from the protected systemd environment file.
 password =
 
 [amqp]
@@ -26,8 +26,8 @@ model = claude-opus-4-8
 poll_interval_sec = 15
 batch = 50
 timeout_sec = 600          # per investigation
-probe_cmd = opie-probe     # must match the installed read-only probe (allowedTools)
-workdir = /home/jason/Code/Solarinet/deploy/opie
+mcp_config = /etc/solarinet/opie-mcp.json
+workdir = /opt/solarinet/opie
 
 [state]
-# file = /home/jason/Code/Solarinet/deploy/opie/opie.state.json
+file = /var/lib/solari-opie/opie.state.json

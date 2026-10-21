@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet backup and restore runbook — 2026-10-20</title>
+<style>
+  :root { --ink:#14222d; --muted:#425664; --accent:#087a96; --line:#cbd6dc; --wash:#f1f6f7; --warn:#8a4b00; }
+  * { box-sizing:border-box; }
+  html { font:16px/1.48 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:#e8eff2; }
+  body { max-width:960px; margin:auto; padding:32px 44px 48px; background:#fff; }
+  header { display:flex; align-items:center; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:16px; }
+  svg { width:58px; height:58px; flex:none; }
+  h1 { font-size:1.8rem; line-height:1.15; margin:0; }
+  h2 { color:#075a70; font-size:1.18rem; margin:26px 0 9px; border-bottom:1px solid var(--line); }
+  h3 { font-size:1rem; margin:18px 0 7px; color:#075a70; }
+  p, li { max-width:84ch; }
+  li { margin:5px 0; }
+  .meta { color:var(--muted); margin:5px 0 0; }
+  .notice { border-left:4px solid #9b2d34; background:#fff5f3; padding:10px 14px; margin:18px 0; }
+  .evidence { border-left:4px solid var(--accent); background:var(--wash); padding:10px 14px; margin:18px 0; }
+  pre { padding:12px 15px; background:var(--wash); overflow-wrap:anywhere; white-space:pre-wrap; }
+  code, pre { font-family:ui-monospace,Consolas,monospace; font-size:.9em; }
+  table { border-collapse:collapse; width:100%; margin:12px 0 18px; }
+  th,td { border:1px solid var(--line); padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:#e8f2f5; }
+  @page { size:Letter; margin:.55in .64in; }
+  @media print {
+    html { background:#fff; }
+    body { max-width:none; padding:0; font-size:.9em; line-height:1.32; }
+    h2,h3 { break-after:avoid; }
+    pre,table,tr,.notice,.evidence { break-inside:avoid; }
+    li { break-inside:avoid; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <svg viewBox="0 0 64 64" role="img" aria-label="Protected database backup">
+    <rect x="8" y="12" width="48" height="38" rx="7" fill="#e8f2f5" stroke="#087a96" stroke-width="2"/>
+    <ellipse cx="32" cy="18" rx="18" ry="6" fill="#fff" stroke="#087a96" stroke-width="2"/>
+    <path d="M14 18v22c0 4 8 7 18 7s18-3 18-7V18M14 29c0 4 8 7 18 7s18-3 18-7" fill="none" stroke="#087a96" stroke-width="2"/>
+    <path d="M25 54h14m-7-7v7" stroke="#087a96" stroke-width="3"/>
+  </svg>
+  <div><h1>SolariNet backup and restore runbook</h1><p class="meta">Operations manual · 20 October 2026 · MariaDB and Forgejo</p></div>
+</header>
+
+<div class="notice"><strong>Current release gate:</strong> Cesium's SoR backup is scheduled and has passed a local restore drill. Xenon's SolariNet database backup timer, per-host config, and installed runner are absent at the documented paths. Do not adopt or upgrade Xenon's monitoring schema until a backup target and restore drill are established.</div>
+
+<h2>1. Current coverage</h2>
+<table><thead><tr><th>Host</th><th>Database artifact</th><th>Observed status</th></tr></thead><tbody>
+<tr><td>Cesium</td><td><code>sor</code> → <code>/data/backups/sor-YYYY-MM-DD.sql.gz</code></td><td>Timer enabled and active. The 2026-10-21 archive (<code>sor-2026-10-21.sql.gz</code>, 31,297 compressed bytes) passed gzip validation and restored locally into disposable MariaDB; all 41 base tables passed <code>mariadb-check</code>. Four views and 24 triggers were present.</td></tr>
+<tr><td>Xenon</td><td><code>solarinet</code> → candidate NAS-X share directory <code>/mnt/solari-backups</code>, not provisioned</td><td>On 21 October, the timer was inactive, service config and installed runner were absent, and no target mount or matching archive existed on Xenon. The database is about 658 MiB; root NVMe has 372 GiB free. Existing <code>/var/backups/solarinet</code> is root-owned mode <code>0750</code> and contains a dashboard rollback file, so it is not the runner's isolated mode-<code>0700</code> target. A prior read-only NAS inspection confirmed Jason's private <code>personal_folder</code> share and mode-<code>0700</code> home directory; it had not found the candidate <code>SolariNetBackups</code> directory. NAS-X SSH timed out on the latest recheck, so current directory existence and CIFS effective permissions are unverified. Backup and restore remain unverified. Mounted CIFS <code>/nas/Shared</code> is unsuitable at <code>root:root</code> mode <code>0755</code>.</td></tr>
+</tbody></table>
+<div class="evidence"><strong>What the Cesium drill proves:</strong> one dated SoR archive is complete enough to restore its tables, views, and triggers into a disposable local database. It does not prove Xenon's backup path, Forgejo restore, coordinated database/file restore points, or disaster recovery.</div>
+
+<h2>2. Runner behavior and tests</h2>
+<p><code>deploy/backups/solari-backup.sh</code> requires a root-owned mode <code>0700</code> target, writes root-owned mode <code>0600</code> artifacts through unique checked temporary files, verifies the gzip stream contains SQL, and renames the finished artifact into place. It can run mysqldump under an optional local Unix account for socket authentication. Failure leaves an existing dated artifact untouched and triggers <code>solari-notify-failure@HOST.service</code>, which publishes a fail-soft warning through the configured notifier exchange. Retention removes only matching database dump names.</p>
+<p>Configuration and credentials are root-owned with mode <code>0600</code>. Keep passwords and credential paths out of Git. The templated systemd timer runs nightly at 03:30 with jitter; configure one instance per host. Forgejo dumps are optional and must be restored with repository/filesystem state from the same restore point.</p>
+<pre>sudo -n python3 -m unittest discover -s deploy/backups -p 'test_*.py' -v
+sudo systemctl status solari-backup@cesium.timer
+sudo systemctl list-timers --all solari-backup@cesium.timer</pre>
+<p>The hermetic suites exercise a valid compressed dump, empty-output rejection, refusal of a world-accessible target, dump execution as an unprivileged account, failed-dump preservation, Forgejo temporary-directory cleanup, atomic publication, safe retention, durable failure-event publication, missing-Pika fallback, and credential-safe error logging.</p>
+
+<h2>3. Configure a host</h2>
+<ol>
+  <li>Choose a durable target with enough free space and a recovery path independent of the database volume. Create it as root mode <code>0700</code>. Confirm filesystem, mount persistence, server-side access controls, ownership, and monitoring before enabling the timer.</li>
+  <li>Install the runner and unit files from <code>deploy/backups/</code>. Copy <code>backup.conf.example</code> to <code>/etc/solari-backup-HOST.conf</code>, set that host's database list and target, then set root ownership and mode <code>0600</code>.</li>
+  <li>Use a root-readable password file, protected environment file, MariaDB defaults file, or a local Unix account with socket authentication via <code>MYSQLDUMP_RUN_AS</code>. Never place credential material in the config example or command history.</li>
+  <li>Run the backup service once, verify the dated artifact, validate its gzip stream, and restore it into a disposable database before enabling the recurring timer.</li>
+  <li>Enable the timer and verify its next run. Monitor failure notifications and target capacity; a scheduled timer alone does not prove a usable backup exists.</li>
+</ol>
+<pre>sudo install -d -m 0755 /opt/solari-backups
+sudo install -m 0755 deploy/backups/solari-backup.sh /opt/solari-backups/solari-backup.sh
+sudo install -m 0755 deploy/backups/solari-notify-failure.py /opt/solari-backups/solari-notify-failure.py
+sudo install -m 0644 deploy/backups/solari-backup@.service deploy/backups/solari-backup@.timer deploy/backups/solari-notify-failure@.service /etc/systemd/system/
+sudo install -o root -g root -m 0600 /dev/null /etc/solari-notify-failure-HOST.conf
+sudo $EDITOR /etc/solari-notify-failure-HOST.conf
+sudo systemctl daemon-reload
+sudo systemctl start solari-backup@HOST.service
+sudo systemctl enable --now solari-backup@HOST.timer</pre>
+<p>The example targets Cesium's <code>sor</code> database and <code>/data/backups</code>, observed root-owned mode <code>0700</code>. Xenon's candidate off-host target is the dedicated <code>SolariNetBackups</code> directory under Jason's NAS-X personal share, mounted at <code>/mnt/solari-backups</code>. The candidate files are <code>deploy/backups/backup.conf.xenon.example</code>, <code>deploy/backups/mnt-solari\x2dbackups.mount</code>, and the Xenon-only unit drop-in example. The required NAS directory has not been provisioned, and effective CIFS ownership/modes, backup, and restore still require verification. Do not enable the target until those checks pass. Do not use Xenon's mounted <code>/nas/Shared</code> root.</p>
+<p>Install <code>/etc/solari-notify-failure-HOST.conf</code> as <code>root:root</code> mode <code>0600</code> with <code>SOLARI_NOTIFY_PYTHON</code> and <code>SOLARI_NOTIFY_CONFIG</code> for that host. Without Pika or a valid notifier config, delivery is skipped with a local warning; the backup unit still fails as expected.</p>
+
+<h2>4. Restore drill</h2>
+<ol>
+  <li>Select a dated artifact and verify the file name, size, ownership, and checksum if one is available. Run <code>gzip -t</code> before import.</li>
+  <li>Create a new disposable database on an isolated MariaDB instance. Stream the dump into it; do not overwrite the production database during a drill.</li>
+  <li>Run <code>mariadb-check</code>, compare expected table/view/trigger counts, and exercise application reads against the restored copy.</li>
+  <li>Record the artifact date, MariaDB version, restore duration, object checks, and any repair. Remove the disposable instance after verification.</li>
+  <li>For an actual production restore, first preserve the current database and application state, identify an approved recovery point, stop affected writers, restore into a separate database, validate it, and perform a reviewed cutover with a tested rollback. Coordinate Forgejo database and repository-file restores from the same recovery point.</li>
+</ol>
+<pre>sudo gzip -t /data/backups/sor-YYYY-MM-DD.sql.gz
+mariadb --defaults-file=/etc/solari-backup-test.cnf --protocol=tcp -h127.0.0.1 -P3307 -uroot \
+  -e 'CREATE DATABASE sor_restore_check'
+sudo gzip -dc /data/backups/sor-YYYY-MM-DD.sql.gz | \
+  mariadb --defaults-file=/etc/solari-backup-test.cnf --protocol=tcp -h127.0.0.1 -P3307 -uroot sor_restore_check
+mariadb-check --defaults-file=/etc/solari-backup-test.cnf --protocol=tcp -h127.0.0.1 -P3307 -uroot --check sor_restore_check</pre>
+<p>The defaults file must point to a disposable local/test MariaDB instance on port 3307, never the production socket. Replace the sample name only with a newly created scratch database. A production cutover is a separate operational action and is not part of the restore drill.</p>
+
+<h2>5. Evidence and remaining gates</h2>
+<p><strong>Observed · 2026-10-21:</strong> The latest Cesium SoR archive is <code>sor-2026-10-21.sql.gz</code>, 31,297 compressed bytes and 216,122 uncompressed bytes. It passed <code>gzip -t</code>, streamed directly into an isolated local MariaDB instance without a disk dump copy, and passed checks for all 41 base tables. The restored schema contains four views and 24 triggers. No production database was changed.</p>
+<p><strong>Open:</strong> Provision the NAS-X share directory; install the Xenon mount, config, runner and timer; verify effective ownership/modes; run and restore a Xenon artifact; verify the Forgejo backup/restore path; test retention and failure alerts on each host; and document coordinated recovery objectives. These remain required before production schema adoption and release.</p>
+<p class="meta">Standalone manual with inline CSS and SVG. No external assets or scripts are required. The paired PDF is generated from this file.</p>
+</body>
+</html>

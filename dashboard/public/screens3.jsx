@@ -161,6 +161,64 @@
     }
     const [cidr, setCidr] = useState("");
     const [scanning, setScanning] = useState(false);
+    const [scanJob, setScanJobState] = useState(function () {
+      try { return JSON.parse(window.sessionStorage.getItem("solari.activeScan") || "null"); }
+      catch (_) { return null; }
+    });
+    function setScanJob(job) {
+      setScanJobState(job);
+      try {
+        if (job) window.sessionStorage.setItem("solari.activeScan", JSON.stringify(job));
+        else window.sessionStorage.removeItem("solari.activeScan");
+      } catch (_) { /* scan continues even when browser storage is unavailable */ }
+    }
+    useEffect(function () {
+      if (!scanJob || ["completed", "failed", "cancelled"].indexOf(scanJob.status) >= 0) return;
+      const a = api();
+      if (!a) return;
+      let live = true;
+      function pollScan() {
+        const poll = scanJob.requestId
+          ? a.discoverScanRequest && a.discoverScanRequest(scanJob.requestId)
+          : a.discoverScanStatus && a.discoverScanStatus(scanJob.scanId);
+        if (!poll) return;
+        poll.then(function (s) {
+          if (!live) return;
+          if (scanJob.requestId) {
+            if (s.state === "done" && s.scanId) {
+              setScanJob(Object.assign({}, scanJob, { requestId: null, scanId: s.scanId,
+                hostsTotal: s.hostsTotal || 0, hostsDone: 0, hostsFound: 0, status: "queued" }));
+            } else if (s.state === "failed") {
+              setScanJob(Object.assign({}, scanJob, { status: "failed", error: s.error || "Scan admission failed." }));
+              toast("Scan failed: " + (s.error || "admission failed"), "close");
+            }
+          } else {
+            const next = Object.assign({}, scanJob, s);
+            setScanJob(next);
+            if (s.status === "completed") {
+              refresh();
+              toast("Scan complete — " + s.hostsFound + " host(s) found", "discovery");
+            }
+            else if (s.status === "failed" || s.status === "cancelled")
+              toast("Scan " + s.status + (s.error ? ": " + s.error : ""), "close");
+          }
+        }).catch(function () { /* transient poll failure; retain job and retry */ });
+      }
+      pollScan();
+      const timer = window.setInterval(pollScan, 1000);
+      return function () { live = false; window.clearInterval(timer); };
+    }, [scanJob && scanJob.requestId, scanJob && scanJob.scanId,
+        scanJob && scanJob.status]);
+    useEffect(function () {
+      if (!scanJob || scanJob.status !== "completed") return;
+      const a = api();
+      if (!a || !a.listDiscovered) return;
+      let live = true;
+      a.listDiscovered("all").then(function (list) {
+        if (live && Array.isArray(list)) setRows(list);
+      }).catch(function () { /* retain the current candidate view on transient errors */ });
+      return function () { live = false; };
+    }, [scanJob && scanJob.status, scanJob && scanJob.scanId]);
     const [adoptDisc, setAdoptDisc] = useState(null);   // discovered entity in the adopt dialog
 
     // ---- filter / search / sort state ----
@@ -220,12 +278,26 @@
       if (!a || !a.discoverScan) { toast("Scan unavailable (offline)", "close"); return; }
       setScanning(true);
       a.discoverScan(target).then(function (r) {
-        toast(`Scan complete — ${r && r.found != null ? r.found : "?"} host(s) found`, "discovery");
-        refresh();
+        setScanJob(Object.assign({ cidr: target, status: "queued", hostsDone: 0, hostsFound: 0 }, r || {}));
+        toast("Scan accepted — tracking progress in Discovery", "discovery");
       }).catch(function (e) {
         toast(`Scan failed: ${e && e.message || "error"}`, "close");
       }).finally(function () { setScanning(false); });
     }
+
+    const scanBusy = scanning || !!(scanJob && ["admission_pending", "queued", "running"].indexOf(scanJob.status) >= 0);
+    const scanHostsDone = Number(scanJob && scanJob.hostsDone) || 0;
+    const scanHostsTotal = Number(scanJob && scanJob.hostsTotal) || 0;
+    const scanCandidatesSaved = Number(scanJob && scanJob.hostsFound) || 0;
+    const scanSweepComplete = !!(scanJob && scanJob.status === "running"
+      && scanHostsTotal > 0 && scanHostsDone >= scanHostsTotal);
+    const scanCandidateCount = scanCandidatesSaved + " candidate" + (scanCandidatesSaved === 1 ? "" : "s") + " saved";
+    const scanProgress = scanJob && scanJob.status !== "completed" && scanJob.status !== "failed" && scanJob.status !== "cancelled"
+      ? (scanJob.status === "admission_pending" ? "Waiting for scan admission…"
+        : scanSweepComplete
+          ? "Scan running · Host sweep complete · finalizing candidate records · " + scanCandidateCount
+          : "Scan " + scanJob.status + " · " + scanHostsDone + "/" + (scanHostsTotal || "?") + " hosts checked · " + scanCandidateCount)
+      : scanJob ? "Last scan " + scanJob.status + (scanJob.error ? " · " + scanJob.error : "") : "";
 
     // ---- filter → search → sort pipeline ----
     const ql = q.trim().toLowerCase();
@@ -286,15 +358,22 @@
           <div><h1 className="page-title">Discovery</h1><div className="page-sub">{statusCounts.new} candidates · {rows.length} assets seen</div></div>
           <div className="page-head__right">
             <input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="192.168.1.0/24"
+              disabled={!canOp()}
               onKeyDown={(e) => { if (e.key === "Enter") scanNow(); }}
               style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13, width: 150 }} />
-            <button className="btn-primary" disabled={scanning} onClick={scanNow}>
-              <Icon name="discovery" size={14} />{scanning ? "Scanning…" : "Scan"}
+            <button className="btn-primary" disabled={scanBusy || !canOp()}
+              title={canOp() ? "Run an active network scan" : "Operator role required to run an active scan"}
+              onClick={scanNow}>
+              <Icon name="discovery" size={14} />{scanBusy ? "Scan active…" : "Scan"}
             </button>
             <div className="chip" onClick={toggleAuto}>
               <button className={"switch" + (auto ? " on" : "")} style={{ pointerEvents: "none" }}><i /></button>Auto-discover
             </div>
           </div>
+          {!canOp() ? <div className="page-sub" role="note" style={{ gridColumn: "1 / -1", textAlign: "right" }}>
+            Active scans are available to operators. You can still review discovered candidates here.
+          </div> : null}
+          {scanProgress ? <div className="page-sub" role="status" aria-live="polite" style={{ gridColumn: "1 / -1", textAlign: "right" }}>{scanProgress}</div> : null}
         </div>
 
         <div className="kpis">
@@ -706,9 +785,12 @@
     function approve(e) {
       const a = api();
       if (a && a.approveEnrollment && e.enrId != null) {
-        setEnr((list) => list.filter((x) => x.host !== e.host));   // optimistic
-        a.approveEnrollment(e.enrId).then(function () {
-          toast(`CSR signed — ${e.host} enrolled as ${e.role}`, "shield");
+        a.approveEnrollment(e.enrId).then(function (result) {
+          if (result && result.status === "queued") {
+            toast(`Approval queued — ${e.host}`, "provision");
+          } else {
+            toast(`CSR signed — ${e.host} enrolled as ${e.role}`, "shield");
+          }
           refresh();
         }).catch(function (err) {
           setEnr(S.enrollments);   // revert from model
@@ -723,9 +805,12 @@
     function deny(e) {
       const a = api();
       if (a && a.rejectEnrollment && e.enrId != null) {
-        setEnr((list) => list.filter((x) => x.host !== e.host));   // optimistic
-        a.rejectEnrollment(e.enrId).then(function () {
-          toast(`Enrollment denied — ${e.host}`, "close");
+        a.rejectEnrollment(e.enrId).then(function (result) {
+          if (result && result.status === "queued") {
+            toast(`Rejection queued — ${e.host}`, "provision");
+          } else {
+            toast(`Enrollment denied — ${e.host}`, "close");
+          }
           refresh();
         }).catch(function (err) {
           setEnr(S.enrollments);
@@ -1197,7 +1282,7 @@
       }
       const scope = WIPE_SCOPES.map((s) => s.id).filter((id) => wipe[id]);
       return a.decommission(node.nodeId, scope).then(function () {
-        toast(`Decommissioned → ${node.name} (wiped: ${scope.join(", ") || "nothing"} · retired)`, "close");
+        toast(`Decommission request accepted for ${node.name}; waiting for node acknowledgement`, "close");
         setConfirmKind(null); refresh(); onClose();
       }).catch(function (e) { toast(`Decommission failed: ${e && e.message || "error"}`, "close"); });
     }

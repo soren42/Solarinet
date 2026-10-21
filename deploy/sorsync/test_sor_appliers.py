@@ -1,6 +1,8 @@
 """Exercise target success semantics without touching DNS, AD, or Pi-hole."""
 import configparser
+import json
 import os
+import pathlib
 import sys
 import tempfile
 import types
@@ -84,28 +86,72 @@ class AdStateTest(unittest.TestCase):
 
 
 class TargetApplyTest(unittest.TestCase):
-    def test_dns_render_failure_is_not_success(self):
-        with mock.patch.object(sor_apply_dnsd, "render", return_value=False), \
-             mock.patch.object(sor_apply_dnsd, "deploy_if_changed") as deploy:
-            self.assertFalse(sor_apply_dnsd.apply(configparser.ConfigParser()))
-            deploy.assert_not_called()
+    def test_secondary_targets_are_named_unique_and_ipv4_validated(self):
+        cfg = configparser.ConfigParser()
+        cfg["dns.secondary.chlorine"] = {"address": "10.7.0.10",
+                                         "ssh_host": "jason@chlorine"}
+        cfg["dns.secondary.iron"] = {"address": "10.0.0.11",
+                                     "ssh_host": "jason@10.0.0.11"}
+        self.assertEqual(["chlorine", "iron"],
+                         [item["name"] for item in sor_apply_dnsd.secondary_targets(cfg)])
+        cfg["dns.secondary.iron"]["address"] = "10.7.0.10"
+        with self.assertRaisesRegex(ValueError, "unique"):
+            sor_apply_dnsd.secondary_targets(cfg)
 
-    def test_dns_retry_reloads_after_prior_reload_failure(self):
-        with tempfile.TemporaryDirectory() as directory:
-            src = os.path.join(directory, "src")
-            dst = os.path.join(directory, "dst")
-            os.mkdir(src)
-            os.mkdir(dst)
-            for folder in (src, dst):
-                with open(os.path.join(folder, "db.akoria.net"), "w", encoding="utf-8") as zone:
-                    zone.write("same rendered zone")
+    def test_missing_secondary_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "at least one DNS secondary"):
+            sor_apply_dnsd.secondary_targets(configparser.ConfigParser())
+
+    def test_secondary_refresh_uses_configured_host_and_propagates_failure(self):
+        cfg = configparser.ConfigParser()
+        cfg["dns"] = {"secondary_refresh_helper": "/usr/local/libexec/solari-dns-secondary-refresh",
+                      "primary_config": "/etc/bind/named.conf.akoria",
+                      "primary_additional_configs": "/etc/bind/named.conf.bare",
+                      "primary_address": "10.0.0.20"}
+        target = {"name": "chlorine", "address": "10.7.0.10",
+                  "ssh_host": "jason@chlorine",
+                  "update_helper": "/usr/local/sbin/solari-bind9-update-zones"}
+        ok = types.SimpleNamespace(returncode=0, stdout="chlorine serves current SOA serials")
+        with mock.patch.object(sor_apply_dnsd.subprocess, "run", return_value=ok) as run:
+            self.assertEqual("a" * 64,
+                             sor_apply_dnsd.refresh_secondary(cfg, target, "a" * 64))
+        command = run.call_args.args[0]
+        self.assertIn("10.7.0.10", command)
+        self.assertIn("jason@chlorine", command)
+        self.assertIn("/etc/bind/named.conf.bare", command)
+        failed = types.SimpleNamespace(returncode=1, stdout="", stderr="failed")
+        with mock.patch.object(sor_apply_dnsd.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(RuntimeError, "secondary refresh failed for chlorine"):
+                sor_apply_dnsd.refresh_secondary(cfg, target, "a" * 64)
+
+    def test_apply_keeps_target_pending_when_secondary_cannot_converge(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            incoming = root / "incoming"
+            state_dir = root / "state"
+            incoming.mkdir(mode=0o700)
+            state_dir.mkdir(mode=0o700)
             cfg = configparser.ConfigParser()
-            cfg["dns"] = {"zone_src_dir": src, "zone_dst_dir": dst,
-                          "named_conf_akoria": os.path.join(dst, "named.conf.akoria"),
-                          "reload_cmd": "sudo rndc reload"}
-            with mock.patch.object(sor_apply_dnsd.subprocess, "run") as run:
-                self.assertEqual([], sor_apply_dnsd.deploy_if_changed(cfg))
-                run.assert_called_once_with(["sudo", "rndc", "reload"], check=True, timeout=30)
+            cfg["dns"] = {"incoming_root": str(incoming),
+                          "target_state_file": str(state_dir / "targets.json")}
+            cfg["dns.secondary.chlorine"] = {"address": "10.7.0.10",
+                                             "ssh_host": "jason@chlorine"}
+
+            def render(_config, output):
+                (output / "db.example.invalid").write_text("zone", encoding="utf-8")
+                return True
+
+            with mock.patch.object(sor_apply_dnsd, "render", side_effect=render), \
+                 mock.patch.object(sor_apply_dnsd, "local_release", return_value="a" * 64), \
+                 mock.patch.object(sor_apply_dnsd, "refresh_secondary",
+                                   side_effect=RuntimeError("SOA did not converge")):
+                self.assertFalse(sor_apply_dnsd.apply(cfg))
+
+            state = json.loads((state_dir / "targets.json").read_text(encoding="utf-8"))
+            self.assertEqual("applied", state["targets"]["primary"]["phase"])
+            secondary = state["targets"]["secondary:chlorine"]
+            self.assertEqual("failed", secondary["phase"])
+            self.assertEqual("SOA did not converge", secondary["error"])
 
     def test_pihole_reload_failure_keeps_delivery_pending(self):
         cfg = configparser.ConfigParser()

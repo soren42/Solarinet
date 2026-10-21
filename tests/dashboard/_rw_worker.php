@@ -297,6 +297,18 @@ function rw_worker_scenario(string $name): array
                     ['id' => 11, 'source_id' => 99],
                 ]],
             ];
+        case 'groups-create':
+            return [
+                ['match' => 'FROM hardware_models WHERE id = :id AND deleted_at IS NULL', 'rows' => [['id' => 3]]],
+                $sourceRow,
+                ['match' => 'FROM rw_model_groups WHERE hardware_model_id = :mid AND deleted_at IS NULL', 'rows' => []],
+                ['match' => 'INSERT INTO rw_model_groups', 'rows' => [], 'affected' => 1, 'insertId' => 12],
+                ['match' => 'JOIN rw_model_groups g ON g.hardware_model_id = hm.id', 'rows' => [[
+                    'id' => 3, 'make' => 'Acme', 'model' => 'Switch S1', 'hw_type' => 'switch', 'notes' => null,
+                    'groups_json' => '[{"k":"ethernet","label":"Ethernet ×8","glyph":"rj45","count":8,"rows":1,"role":"lan","gbps":1,"domain":"net","conn":"rj45"}]',
+                    'device_json' => '{"name":"Acme Switch S1","kind":"switch","drawW":18}', 'unitCount' => 1,
+                ]]],
+            ];
         case 'commit-empty':
             return [$sourceRow];
         case 'commit-cables':

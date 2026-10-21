@@ -14,29 +14,84 @@ declare(strict_types=1);
 
 return static function (Router $router): void {
 
+    require_once __DIR__ . '/../lib/DiscoveryScanInput.php';
+
     // POST /api/discovery/scan  body: { cidr: "10.0.0.0/24", ports?: "22,80,443" }
-    // Triggers an active discovery scan (TCP connect-scan) via solariCtl; results
-    // land in `discovered` and are read back via GET /api/discovery.
+    // Validates a bounded IPv4 range and strict TCP port list before the control call.
+    // Enqueues an operator-authenticated durable scan. The server queue request
+    // is only used to cross the PHP/host privilege boundary; the returned scanId
+    // is the durable discoveryScanJob identity.
     $router->post('/api/discovery/scan', static function (): void {
+        $op = Operator::requireOperator();
         $body = solari_json_body();
         $cidr = isset($body['cidr']) ? (string) $body['cidr'] : '';
-        if (preg_match('#^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$#', $cidr) !== 1) {
-            Response::error('bad_request', 'cidr must be IPv4 CIDR, e.g. 192.168.1.0/24.', 400);
+        if (!DiscoveryScanInput::validCidr($cidr)) {
+            Response::error('bad_request', 'cidr must be a valid IPv4 range of at most 4096 hosts.', 400);
         }
         $args = ['cidr' => $cidr];
-        if (isset($body['ports'])) {
-            $ports = (string) $body['ports'];
-            if (preg_match('/^[0-9,]+$/', $ports) === 1) {
-                $args['ports'] = $ports;
+        if (array_key_exists('ports', $body)) {
+            if (!is_string($body['ports'])) {
+                Response::error('bad_request', 'ports must be a comma-separated list of TCP ports.', 400);
+            }
+            $ports = DiscoveryScanInput::ports($body['ports']);
+            if ($ports === null) {
+                Response::error('bad_request', 'ports must contain 1–64 unique TCP ports from 1 to 65535.', 400);
+            }
+            if ($ports !== []) {
+                $args['ports'] = implode(',', $ports);
             }
         }
-        $op = Operator::name();
-        if ($op !== '') {
-            $args['op'] = $op;
+        $idem = $_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? '';
+        if ($idem !== '' && preg_match('/^[A-Za-z0-9._-]{8,128}$/', $idem) !== 1) {
+            Response::error('bad_request', 'Idempotency-Key must be 8-128 chars of [A-Za-z0-9._-].', 400);
         }
-        $reply = SolariCtl::call('DISCOVER', $args);
-        Response::ok(['cidr' => $cidr, 'found' => isset($reply['found']) ? (int) $reply['found'] : null, 'status' => 'scanned']);
+        $reply = SolariCtl::callQueued('DISCOVER', $args, $op,
+            $idem !== '' ? $idem : null, 4.0);
+        if (($reply['status'] ?? '') === 'queued' && isset($reply['request'])) {
+            Response::ok(['cidr' => $cidr, 'status' => 'admission_pending',
+                          'requestId' => (int) $reply['request']], 202);
+        }
+        if (!isset($reply['scan']) || !ctype_digit((string) $reply['scan'])) {
+            Response::error('control_error', 'Operator bridge returned no discovery scan id.', 502);
+        }
+        Response::ok(['cidr' => $cidr, 'scanId' => (int) $reply['scan'],
+                      'hostsTotal' => isset($reply['hosts']) ? (int) $reply['hosts'] : null,
+                      'status' => 'queued'], 202);
     });
+
+    $router->get('/api/discovery/scan-requests/{requestId}', static function (array $p): void {
+        $requestId = self_scan_id($p['requestId'], 'requestId');
+        $op = Operator::requireOperator();
+        $reply = SolariCtl::poll((int) $requestId, $op);
+        $state = (string) ($reply['state'] ?? '');
+        $out = ['requestId' => (int) $requestId, 'state' => $state];
+        if ($state === 'done') {
+            $raw = (string) ($reply['result'] ?? '');
+            if (preg_match('/^OK scan=([1-9][0-9]*) status=queued hosts=([0-9]+)$/', $raw, $m) !== 1) {
+                Response::error('control_error', 'Discovery scan admission returned an invalid result.', 502);
+            }
+            $out['scanId'] = (int) $m[1];
+            $out['hostsTotal'] = (int) $m[2];
+        } elseif ($state === 'failed') {
+            $out['error'] = (string) ($reply['error'] ?? 'Scan admission failed.');
+        }
+        Response::ok($out);
+    }, ['auth' => 'operator']);
+
+    $router->get('/api/discovery/scans/{scanId}', static function (array $p): void {
+        $scanId = self_scan_id($p['scanId'], 'scanId');
+        $op = Operator::requireOperator();
+        $reply = SolariCtl::call('DISCOVER_STATUS', ['scan' => $scanId, 'op' => $op]);
+        Response::ok([
+            'scanId' => (int) ($reply['scan'] ?? $scanId),
+            'status' => (string) ($reply['status'] ?? 'unknown'),
+            'hostsDone' => (int) ($reply['done'] ?? 0),
+            'hostsTotal' => (int) ($reply['total'] ?? 0),
+            'hostsFound' => (int) ($reply['found'] ?? 0),
+            'errorCode' => (int) ($reply['errorCode'] ?? 0),
+            'error' => (string) ($reply['error'] ?? ''),
+        ]);
+    }, ['auth' => 'operator']);
 
     // POST /api/discovery/{discId}/adopt
     // body (all optional): { displayName, class, poolId, tags:[], notes,
@@ -115,6 +170,14 @@ function self_disc_id(string $raw): string
 {
     if (preg_match('/^\d+$/', $raw) !== 1 || $raw === '0') {
         Response::error('bad_request', 'discId must be a positive integer.', 400);
+    }
+    return $raw;
+}
+
+function self_scan_id(string $raw, string $name): string
+{
+    if (preg_match('/^[1-9][0-9]{0,18}$/', $raw) !== 1) {
+        Response::error('bad_request', "$name must be a positive integer.", 400);
     }
     return $raw;
 }

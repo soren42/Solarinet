@@ -4,6 +4,8 @@
 Description=SolariNet SoR sync — Pi-hole applier (sor.events -> custom.list)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,8 +16,6 @@ Environment=SORSYNC_CONF=/home/jason/Code/Solarinet/deploy/sorsync/sorsync.conf
 ExecStart=/home/jason/Code/Solarinet/deploy/sorsync/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/sorsync/sor_apply_pihole.py
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

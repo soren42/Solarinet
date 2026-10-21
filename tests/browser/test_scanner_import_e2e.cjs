@@ -1,0 +1,474 @@
+#!/usr/bin/env node
+'use strict';
+
+// Real dashboard → authenticated PHP routes → scratch SoR browser acceptance.
+// This test refuses a non-loopback or non-scratch database by construction.
+const assert = require('node:assert/strict');
+const { spawn, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
+const { chromium } = require('playwright');
+
+const ROOT = path.resolve(__dirname, '../..');
+const PUBLIC = path.join(ROOT, 'dashboard/public');
+const API_INDEX = path.join(ROOT, 'dashboard/api/index.php');
+const AUTH_LIB = path.join(ROOT, 'dashboard/api/lib/Auth.php');
+const DB_HOST = process.env.SOR_DB_HOST || '';
+const DB_PORT = process.env.SOR_DB_PORT || '3306';
+const DB_NAME = process.env.SOR_DB_NAME || '';
+const DB_USER = process.env.SOR_DB_USER || 'root';
+const DB_PASS = process.env.SOR_DB_PASS || '';
+
+function requireScratchDatabase() {
+  if (process.env.SOLARI_TEST_SOR_DB !== '1' ||
+      !['127.0.0.1', 'localhost'].includes(DB_HOST) ||
+      !/^solarinet_[a-z0-9_]+$/.test(DB_NAME) || !/^\d+$/.test(DB_PORT)) {
+    throw new Error('Set SOLARI_TEST_SOR_DB=1 and a loopback solarinet_* SOR_DB_* test database.');
+  }
+}
+
+function sql(query) {
+  const result = spawnSync('mariadb', [
+    '--no-defaults', '--protocol=tcp', `--host=${DB_HOST}`, `--port=${DB_PORT}`,
+    `--user=${DB_USER}`, '--batch', '--raw', '--skip-column-names', DB_NAME,
+    '-e', query,
+  ], { encoding: 'utf8', env: { ...process.env, MYSQL_PWD: DB_PASS } });
+  if (result.status !== 0) throw new Error('Scratch SoR fixture SQL failed: ' + (result.stderr || 'MariaDB client error').trim());
+  return result.stdout.trim();
+}
+
+function quote(value) {
+  return "'" + String(value).replaceAll("'", "''") + "'";
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close((error) => error ? reject(error) : resolve(port));
+    });
+  });
+}
+
+async function waitForServer(url, child) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (child.exitCode !== null) throw new Error(`PHP fixture exited before ready (${child.exitCode}).`);
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(500) });
+      if (response.ok) return;
+    } catch (_) { /* wait for PHP's local listener */ }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('PHP dashboard fixture did not become ready.');
+}
+
+function phpRouter(sessionUser, scanStatePath) {
+  return `<?php
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+if ($path === '/__health') { header('Content-Type: text/plain'); echo 'ok'; exit; }
+if ($path === '/__fixture_session') {
+    require_once ${JSON.stringify(AUTH_LIB)};
+    Auth::establishSession(['username' => ${JSON.stringify(sessionUser)}, 'role' => 'operator', 'source' => 'oidc']);
+    header('Content-Type: application/json'); echo json_encode(['ready' => true]); exit;
+}
+if ($path === '/api/discovery/scan' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+    $body = json_decode(file_get_contents('php://input') ?: '[]', true) ?: [];
+    http_response_code(202); header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'data' => ['cidr' => $body['cidr'] ?? '', 'requestId' => 940, 'status' => 'admission_pending'], 'ts' => time()]); exit;
+}
+if ($path === '/__finish_scan') {
+    file_put_contents(${JSON.stringify(scanStatePath)}, 'scan-done');
+    header('Content-Type: application/json'); echo '{"ok":true}'; exit;
+}
+if ($path === '/__finish_sweep') {
+    file_put_contents(${JSON.stringify(scanStatePath)}, 'sweep-done');
+    header('Content-Type: application/json'); echo '{"ok":true}'; exit;
+}
+if ($path === '/__finish_candidate') {
+    file_put_contents(${JSON.stringify(scanStatePath)}, 'candidate-done');
+    header('Content-Type: application/json'); echo '{"ok":true}'; exit;
+}
+if ($path === '/__finish_admission') {
+    file_put_contents(${JSON.stringify(scanStatePath)}, 'admission-done');
+    header('Content-Type: application/json'); echo '{"ok":true}'; exit;
+}
+if ($path === '/api/discovery/scan-requests/940') {
+    $state = is_file(${JSON.stringify(scanStatePath)})
+        && in_array(file_get_contents(${JSON.stringify(scanStatePath)}), ['admission-done', 'sweep-done', 'candidate-done', 'scan-done'], true)
+        ? 'done' : 'pending';
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'data' => ['requestId' => 940, 'state' => $state,
+        'scanId' => $state === 'done' ? 941 : null, 'hostsTotal' => $state === 'done' ? 16 : null],
+        'ts' => time()]); exit;
+}
+if ($path === '/api/discovery/scans/941') {
+    $scanPhase = is_file(${JSON.stringify(scanStatePath)})
+        ? file_get_contents(${JSON.stringify(scanStatePath)}) : '';
+    $finished = $scanPhase === 'scan-done';
+    $sweepComplete = in_array($scanPhase, ['sweep-done', 'candidate-done', 'scan-done'], true);
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'data' => ['scanId' => 941,
+        'status' => $finished ? 'completed' : 'running',
+        'hostsDone' => $sweepComplete ? 16 : 4, 'hostsTotal' => 16,
+        'hostsFound' => in_array($scanPhase, ['candidate-done', 'scan-done'], true) ? 1 : 0],
+        'ts' => time()]); exit;
+}
+if (is_string($path) && str_starts_with($path, '/api/')) {
+    $actual = $path === '/api/auth/whoami' || $path === '/api/inventory'
+        || (is_string($path) && (str_starts_with($path, '/api/inventory/')
+            || str_starts_with($path, '/api/rackwire/')));
+    if ($actual) { require ${JSON.stringify(API_INDEX)}; exit; }
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'data' => [], 'ts' => time()]); exit;
+}
+return false;
+?>`;
+}
+
+async function main() {
+  requireScratchDatabase();
+  const suffix = crypto.randomBytes(6).toString('hex');
+  const locationName = `Browser Fixture ${suffix}`;
+  const itemId = crypto.randomUUID();
+  const assetId = crypto.randomUUID();
+  const tag = `BROWSER-SCAN-${suffix.toUpperCase()}`;
+  const serial = `BROWSER-SER-${suffix.toUpperCase()}`;
+  const make = `Browser Scanner ${suffix}`;
+  const model = `Temporary unit ${suffix}`;
+  const sessionUser = `scanner-browser-${suffix}`;
+  const actor = `dashboard:${sessionUser}`;
+  const sourceExistedBefore = sql(`SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1`);
+  const manualSource = sql("SELECT id FROM sources WHERE slug='manual' LIMIT 1");
+  const rackwireSource = sql("SELECT id FROM sources WHERE slug='rackwire' AND deleted_at IS NULL LIMIT 1");
+  assert(manualSource, 'scratch SoR schema must contain the manual provenance source');
+  assert(rackwireSource, 'scratch SoR schema must contain the RackWire provenance source');
+  const rackwirePlanName = `RackWire Browser ${suffix}`;
+  const rackwirePlanNote = `CSRF persistence proof ${suffix}`;
+  let rackwirePlanId = null;
+
+  let locationIds = [];
+  let child = null;
+  let browser = null;
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'solarinet-scanner-browser-'));
+  const sessions = path.join(temp, 'sessions');
+  fs.mkdirSync(sessions, { mode: 0o700 });
+  const routerPath = path.join(temp, 'router.php');
+  const scanStatePath = path.join(temp, 'scan-state');
+  let failure = null;
+  let phpErrors = '';
+  let browserDiagnostics = '';
+
+  try {
+    sql(`INSERT INTO locations (name,loc_type,source_id,asserted_kind,asserted_at)
+         VALUES (${quote(locationName)},'site',${manualSource},'human',NOW()),
+                (${quote(locationName)},'site',${manualSource},'human',NOW())`);
+    locationIds = sql(`SELECT id FROM locations WHERE name=${quote(locationName)} AND deleted_at IS NULL ORDER BY id`).split(/\s+/).filter(Boolean);
+    assert.equal(locationIds.length, 2, 'scratch SoR must contain two duplicate-name location choices');
+    const selectedLocation = Number(locationIds[1]);
+
+    const seedNote = `seed ${suffix}`;
+    const initialRackwirePlan = JSON.stringify({ devices: [], cables: [], racks: [], notes: [{ uid: `seed-${suffix}`, text: seedNote, x: 0, y: 0 }], codeMap: {} });
+    sql(`INSERT INTO rw_plans (name,slug,plan_json,device_count,cable_count,updated_by,source_id,asserted_kind,asserted_at)
+         VALUES (${quote(rackwirePlanName)},${quote(`rackwire-browser-${suffix}`)},${quote(initialRackwirePlan)},0,0,${quote(actor)},${Number(rackwireSource)},'human',NOW())`);
+    rackwirePlanId = Number(sql(`SELECT id FROM rw_plans WHERE slug=${quote(`rackwire-browser-${suffix}`)} AND deleted_at IS NULL LIMIT 1`));
+    assert(Number.isSafeInteger(rackwirePlanId) && rackwirePlanId > 0, 'scratch RackWire plan must be created');
+
+    fs.writeFileSync(routerPath, phpRouter(sessionUser, scanStatePath), { mode: 0o600 });
+    const port = await freePort();
+    const base = `http://127.0.0.1:${port}`;
+    const childEnv = {
+      ...process.env,
+      SOR_DB_HOST: DB_HOST, SOR_DB_PORT: DB_PORT, SOR_DB_NAME: DB_NAME,
+      SOR_DB_USER: DB_USER, SOR_DB_PASS: DB_PASS,
+    };
+    child = spawn('php', ['-d', `session.save_path=${sessions}`, '-S', `127.0.0.1:${port}`,
+      '-t', PUBLIC, routerPath], { cwd: ROOT, env: childEnv, stdio: ['ignore', 'ignore', 'pipe'] });
+    child.stderr.on('data', (data) => { phpErrors = (phpErrors + data.toString()).slice(-4000); });
+    await waitForServer(`${base}/__health`, child);
+
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox'],
+      ...(process.env.SOLARI_CHROMIUM_EXECUTABLE ? { executablePath: process.env.SOLARI_CHROMIUM_EXECUTABLE } : {}),
+    });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const pageErrors = [];
+    const browserConsole = [];
+    const externalRequests = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') browserConsole.push(message.text());
+    });
+    page.on('request', (request) => {
+      if (!request.url().startsWith(base + '/') && !request.url().startsWith('file://')) externalRequests.push(request.url());
+    });
+
+    await page.goto(`${base}/__fixture_session`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${base}/`, { waitUntil: 'load' });
+    const inventoryNav = page.locator('.nav-item').filter({ hasText: /^Inventory$/ });
+    try {
+      await inventoryNav.waitFor({ timeout: 15000 });
+    } catch (error) {
+      browserDiagnostics = `\nURL: ${page.url()}\nbody: ${(await page.locator('body').innerText()).slice(0, 1200)}\npage errors: ${pageErrors.join(' | ')}\nPHP: ${phpErrors}`;
+      throw error;
+    }
+    assert.equal(await page.evaluate(() => window.SOLARI && window.SOLARI.source), 'live', 'dashboard must boot in live mode');
+    await inventoryNav.click();
+    await page.getByRole('button', { name: 'Scanner import', exact: true }).click();
+    await page.getByRole('heading', { name: 'Import a scanner-ingest export' }).waitFor();
+
+    const snapshot = {
+      schema_version: 1,
+      exported_at: new Date().toISOString(),
+      items: [{ id: itemId, name: model, manufacturer: make, model, category: 'scanner', barcode: `PRODUCT-${suffix}`, notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
+      assets: [{ id: assetId, item_id: itemId, tag, serial, location: 'Nook', status: 'in_stock', notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
+    };
+    await page.getByLabel('Scanner JSON export').setInputFiles({
+      name: 'scanner-fixture.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(snapshot)),
+    });
+    await page.getByText('scanner-fixture.json: 1 catalog items, 1 assets.').waitFor();
+    assert(await page.getByRole('note').getByText('Some SoR locations share a name').isVisible(),
+      'duplicate SoR names should be called out');
+    const locationSelect = page.getByLabel('Nook');
+    await locationSelect.selectOption(String(selectedLocation));
+
+    const before = await context.request.get(`${base}/api/inventory`);
+    assert.equal(before.status(), 200);
+    const beforeData = (await before.json()).data;
+    assert(!beforeData.units.some((unit) => unit.assetTag === tag), 'preview fixture asset must not exist before apply');
+
+    await page.getByRole('button', { name: 'Preview import' }).click();
+    const preview = page.getByRole('status').filter({ hasText: 'Preview ready' });
+    await preview.waitFor();
+    await preview.getByText(`insert hardware units`, { exact: false }).waitFor();
+    await preview.getByText(`#${selectedLocation} · ${locationName}`, { exact: false }).waitFor();
+    const afterPreview = await context.request.get(`${base}/api/inventory`);
+    const afterPreviewData = (await afterPreview.json()).data;
+    assert(!afterPreviewData.units.some((unit) => unit.assetTag === tag), 'preview must leave SoR inventory unchanged');
+
+    await page.getByRole('button', { name: 'Apply import' }).click();
+    await page.getByRole('status').filter({ hasText: 'Import complete' }).waitFor();
+    const afterApply = await context.request.get(`${base}/api/inventory`);
+    assert.equal(afterApply.status(), 200);
+    const appliedData = (await afterApply.json()).data;
+    const imported = appliedData.units.find((unit) => unit.assetTag === tag);
+    assert(imported, 'applied scanner asset must be returned by the real SoR inventory route');
+    assert.equal(Number(imported.locationId), selectedLocation, 'mapped SoR location ID must be committed');
+    await page.getByRole('button', { name: 'Configure RackWire profiles', exact: true }).click();
+    const importedRow = page.locator('tr').filter({ hasText: tag });
+    await importedRow.getByText(locationName, { exact: true }).waitFor();
+    const profileModel = page.getByLabel('SoR hardware model');
+    await profileModel.waitFor();
+    await page.waitForFunction((id) => Array.from(document.querySelectorAll('select[aria-label="SoR hardware model"] option')).some((option) => option.value === String(id)), imported.modelId);
+    await profileModel.selectOption(String(imported.modelId));
+    await page.getByLabel('Planner label').fill(`${make} ${model}`);
+    await page.getByLabel('Port group 1 label').fill('Ethernet');
+    await page.getByLabel('Port group 1 count').fill('8');
+    const profileResponseWait = page.waitForResponse((response) =>
+      response.url().includes(`/api/rackwire/library/${imported.modelId}/groups`) && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Save RackWire profile', exact: true }).click();
+    const profileResponse = await profileResponseWait;
+    assert.equal(profileResponse.status(), 201, 'the inventory profile editor must save through the guarded RackWire SoR API');
+    const profileBody = profileResponse.request().postDataJSON();
+    assert.equal(profileBody.groups[0].count, 8, 'profile editor must persist the reviewed port count');
+    const profileHeaders = await profileResponse.request().allHeaders();
+    assert(typeof profileHeaders['x-solari-csrf'] === 'string' && profileHeaders['x-solari-csrf'].length > 20,
+      'RackWire profile write must carry the dashboard CSRF token');
+    await page.getByRole('status').filter({ hasText: 'Profile saved' }).waitFor();
+    await page.getByRole('button', { name: 'Open RackWire planner', exact: true }).click();
+
+    // The embedded planner has a separate document and its own CSRF cache.
+    // Drive the real same-origin frame against the real guarded RackWire route;
+    // a missing X-Solari-CSRF header previously made every autosave fail 403.
+    await page.evaluate(({ id, name }) => {
+      localStorage.setItem('rackwire.project.v2.planId', String(id));
+      localStorage.setItem('rackwire.project.v2.planName', name);
+    }, { id: rackwirePlanId, name: rackwirePlanName });
+    const frameSelector = 'iframe[title="RackWire network, power, and interconnect planner"]';
+    await page.locator(frameSelector).waitFor();
+    await page.waitForFunction(({ model, count }) => {
+      const frame = document.querySelector('iframe[title="RackWire network, power, and interconnect planner"]');
+      try {
+        return frame && frame.contentWindow.RW && frame.contentWindow.RW.DEVICES.some((device) =>
+          device.model === model && device.groups.some((group) => group.glyph === 'rj45' && group.count === count));
+      } catch (_) { return false; }
+    }, { model, count: 8 }, { timeout: 15000 });
+    await page.waitForFunction((note) => {
+      const frame = document.querySelector('iframe[title="RackWire network, power, and interconnect planner"]');
+      try { return frame && frame.contentWindow.RackWire && frame.contentWindow.RackWire.getPlan().notes.some((item) => item.text === note); }
+      catch (_) { return false; }
+    }, seedNote, { timeout: 15000 });
+    const rackwireFrame = page.frameLocator(frameSelector);
+    try {
+      await page.getByRole('button', { name: 'Scan inventory barcode', exact: true }).click({ timeout: 5000 });
+    } catch (error) {
+      throw new Error('RackWire SCAN control was unavailable. Frame text: ' + (await rackwireFrame.locator('body').innerText()).slice(0, 1600) + '\nPage: ' + (await page.locator('body').innerText()).slice(0, 800) + '\nConsole: ' + browserConsole.join(' | ') + '\n' + error.message);
+    }
+    const barcodeInput = rackwireFrame.getByLabel('UPC, EAN, or model code');
+    try {
+      await barcodeInput.waitFor({ timeout: 5000 });
+    } catch (_) {
+      throw new Error('RackWire scan dialog did not open after SCAN. Frame text: ' + (await rackwireFrame.locator('body').innerText()).slice(0, 1600) + '\nConsole: ' + browserConsole.join(' | '));
+    }
+    await barcodeInput.fill(tag);
+    const barcodeLookupWait = page.waitForResponse((response) =>
+      response.url().includes('/api/inventory/codes/lookup') && response.request().method() === 'POST');
+    await rackwireFrame.getByRole('button', { name: 'Look up', exact: true }).click();
+    const barcodeLookup = await barcodeLookupWait;
+    assert.equal(barcodeLookup.status(), 200, 'RackWire barcode scan must resolve a scanner-imported inventory unit');
+    const lookupHeaders = await barcodeLookup.request().allHeaders();
+    assert(typeof lookupHeaders['x-solari-csrf'] === 'string' && lookupHeaders['x-solari-csrf'].length > 20,
+      'RackWire barcode lookup must carry the dashboard CSRF token');
+    await page.waitForFunction(({ assetTag, serial }) => {
+      const frame = document.querySelector('iframe[title="RackWire network, power, and interconnect planner"]');
+      try { return frame && frame.contentWindow.RackWire && frame.contentWindow.RackWire.getPlan().devices.some((device) => device.assetId === assetTag && device.serial === serial); }
+      catch (_) { return false; }
+    }, { assetTag: tag, serial }, { timeout: 10000 });
+    let scannerPlanSaved = false;
+    for (let attempt = 0; attempt < 40 && !scannerPlanSaved; attempt += 1) {
+      const saved = JSON.parse(sql(`SELECT plan_json FROM rw_plans WHERE id=${rackwirePlanId}`));
+      scannerPlanSaved = saved.devices.some((device) => device.assetId === tag && device.serial === serial);
+      if (!scannerPlanSaved) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert(scannerPlanSaved, 'RackWire should persist the scanned SoR asset tag and serial on the placed device');
+    const savedResponse = page.waitForResponse((response) =>
+      response.url().includes('/api/rackwire/plans') && response.request().method() === 'POST');
+    await page.locator(frameSelector).evaluate((element, { note }) => {
+      const plan = element.contentWindow.RackWire.getPlan();
+      plan.notes = [{ uid: 'browser-note', text: note, x: 0, y: 0 }];
+      element.contentWindow.RackWire.setPlan(plan);
+    }, { note: rackwirePlanNote });
+    const rackwireResponse = await savedResponse;
+    assert.equal(rackwireResponse.status(), 201, 'embedded RackWire autosave must pass the real API policy');
+    const rwHeaders = await rackwireResponse.request().allHeaders();
+    assert.equal(rwHeaders.origin, base, 'RackWire save must remain same-origin');
+    assert(typeof rwHeaders['x-solari-csrf'] === 'string' && rwHeaders['x-solari-csrf'].length > 20,
+      'embedded RackWire save must carry the authenticated dashboard CSRF token');
+    let storedPlan = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      storedPlan = JSON.parse(sql(`SELECT plan_json FROM rw_plans WHERE id=${rackwirePlanId}`));
+      if (storedPlan.notes.some((item) => item.text === rackwirePlanNote)) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.deepEqual(storedPlan.notes, [{ uid: 'browser-note', text: rackwirePlanNote, x: 0, y: 0 }], 'RackWire autosave must persist its edited plan to the SoR');
+    assert(storedPlan.devices.some((device) => device.assetId === tag && device.serial === serial),
+      'RackWire plan persistence must retain the SoR-linked scanned asset');
+
+    // RackWire's embedded network-discovery action returns to the dashboard's
+    // durable scan queue rather than calling the standalone RackWire backend.
+    await page.getByRole('button', { name: 'Network discovery', exact: true }).click();
+    await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
+    await page.getByPlaceholder('192.168.1.0/24').fill('192.0.2.0/24');
+    const pendingAdmissionResponse = page.waitForResponse((response) =>
+      response.url().includes('/api/discovery/scan-requests/940') && response.request().method() === 'GET');
+    const scanResponse = page.waitForResponse((response) =>
+      response.url().includes('/api/discovery/scan') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Scan', exact: true }).click();
+    const scanAccepted = await scanResponse;
+    assert.equal(scanAccepted.status(), 202, 'the embedded RackWire path must queue a bounded dashboard scan');
+    const scanHeaders = await scanAccepted.request().allHeaders();
+    assert(typeof scanHeaders['x-solari-csrf'] === 'string' && scanHeaders['x-solari-csrf'].length > 20,
+      'network scan admission must carry the dashboard CSRF token');
+    const pendingAdmission = await pendingAdmissionResponse;
+    assert.equal((await pendingAdmission.json()).data.state, 'pending',
+      'the UI must poll and retain a pending durable admission request');
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      const status = document.querySelector('[role="status"]');
+      return job && job.requestId === 940 && job.status === 'admission_pending'
+        && status && status.textContent.includes('Waiting for scan admission');
+    });
+    assert(await page.getByRole('button', { name: 'Scan active…', exact: true }).isDisabled(),
+      'the scan action must stay disabled while admission is pending');
+    await context.request.get(`${base}/__finish_admission`);
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      const status = document.querySelector('[role="status"]');
+      return job && job.scanId === 941 && job.status === 'running' && status
+        && status.textContent.includes('4/16 hosts checked') && status.textContent.includes('0 candidates saved');
+    });
+    assert(await page.getByRole('button', { name: 'Scan active…', exact: true }).isDisabled(),
+      'the scan action must stay disabled while the worker is running');
+
+    // The progress card is component state backed by sessionStorage. Leaving
+    // Discovery and returning should restore the same job and resume polling.
+    await page.locator('.nav-item').filter({ hasText: /^Inventory$/ }).click();
+    await page.getByRole('heading', { name: 'Inventory', exact: true }).waitFor();
+    await page.locator('.nav-item').filter({ hasText: /^Discovery$/ }).click();
+    await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      const status = document.querySelector('[role="status"]');
+      return job && job.scanId === 941 && job.status === 'running' && status
+        && status.textContent.includes('4/16 hosts checked');
+    });
+    await context.request.get(`${base}/__finish_sweep`);
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      const status = document.querySelector('[role="status"]');
+      return job && job.status === 'running' && job.hostsDone === 16 && job.hostsFound === 0
+        && status && status.textContent.includes('Host sweep complete')
+        && status.textContent.includes('0 candidates saved');
+    });
+    await context.request.get(`${base}/__finish_candidate`);
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      const status = document.querySelector('[role="status"]');
+      return job && job.status === 'running' && job.hostsFound === 1
+        && status && status.textContent.includes('1 candidate saved');
+    });
+    await context.request.get(`${base}/__finish_scan`);
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      const status = document.querySelector('[role="status"]');
+      return job && job.status === 'completed' && status
+        && status.textContent.includes('Last scan completed');
+    });
+
+    assert.deepEqual(pageErrors, [], 'browser reported no JavaScript errors');
+    assert.deepEqual(externalRequests, [], 'browser made no external requests');
+    console.log('Dashboard integration browser E2E passed: scanner import, RackWire profile creation, barcode-to-SoR resolution and plan persistence, and asynchronous scan admission, progress persistence across navigation, and completion in Discovery.');
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (browser) await browser.close();
+    if (child && child.exitCode === null) child.kill('SIGTERM');
+    if (child) await new Promise((resolve) => child.once('exit', resolve));
+    try {
+      const cleanup = `SET @source_id=(SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1);
+        SET @unit_id=(SELECT id FROM hardware_units WHERE asset_tag=${quote(tag)} LIMIT 1);
+        SET @model_id=(SELECT id FROM hardware_models WHERE make=${quote(make)} AND model=${quote(model)} LIMIT 1);
+        DELETE FROM audit_log WHERE actor_label=${quote(actor)};
+        DELETE FROM barcodes WHERE subject_table='hardware_units' AND subject_id=@unit_id;
+        DELETE FROM external_refs WHERE source_id=@source_id AND external_id IN (${quote(itemId)},${quote(assetId)});
+        DELETE FROM hardware_units WHERE id=@unit_id;
+        DELETE FROM hardware_models WHERE id=@model_id;
+        DELETE FROM locations WHERE id IN (${locationIds.map(Number).join(',') || '0'});
+        ${rackwirePlanId ? `DELETE FROM rw_plan_versions WHERE plan_id=${rackwirePlanId}; DELETE FROM rw_plans WHERE id=${rackwirePlanId};` : ''}
+        ${sourceExistedBefore ? '' : "DELETE FROM sources WHERE id=@source_id AND NOT EXISTS (SELECT 1 FROM external_refs WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_models WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_units WHERE source_id=@source_id);"}`;
+      sql(cleanup);
+    } catch (cleanupError) {
+      failure = failure || cleanupError;
+    }
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+  if (failure) {
+    // Include only the local PHP diagnostic tail; never print environment/config values.
+    failure.message += browserDiagnostics;
+    throw failure;
+  }
+}
+
+main().catch((error) => {
+  console.error(error && error.message ? error.message : String(error));
+  if (error && error.stack) console.error(error.stack);
+  process.exitCode = 1;
+});

@@ -4,13 +4,14 @@ declare(strict_types=1);
 /**
  * Lifecycle control mutations (§6, §7.3, §11) — all via solariCtl:
  *   POST /api/control/provision      bring a node up (PROVISION)
- *   POST /api/control/decommission   retire + wipe (DECOMMISSION, double-confirmed)
+ *   POST /api/control/decommission   request teardown (DECOMMISSION, double-confirmed)
  *   POST /api/control/survey         fleet survey now (SURVEY)
  *
  * PHP holds no CA material and writes no monitoring tables. provision/survey are
  * building/operational; decommission is irreversible and therefore demands an
  * operator role, an explicit confirm:true, and a non-empty wipeScope[] — and is
- * driven through the bridge's two-step confirm-token handshake.
+ * driven through the bridge's two-step confirm-token handshake. The queue
+ * consumer keeps the one-time token in memory; PHP and ctlRequest never receive it.
  */
 
 return static function (Router $router): void {
@@ -54,8 +55,8 @@ return static function (Router $router): void {
     //
     // Two distinct safety gates:
     //   (a) PHP: operator role + confirm:true + non-empty wipeScope[].
-    //   (b) Bridge: a one-time confirm token (first DECOMMISSION call returns it;
-    //       we immediately re-call with confirm=<token> to finalize the retire).
+    //   (b) Bridge: a one-time token is issued and consumed inside the privileged
+    //       queue consumer before it records a token-free result.
     $router->post('/api/control/decommission', static function (): void {
         $body   = solari_json_body();
         $op     = Operator::requireOperator();
@@ -67,47 +68,18 @@ return static function (Router $router): void {
         }
         $scope = ctrl_wipe_scope_to_hex($body['wipeScope'] ?? null);  // emits 400 if bad
 
-        // DECOMMISSION is PRIVILEGED: both steps of the bridge's two-step token
-        // handshake run through the queue (the dashboard peer cannot execute it
-        // directly). Each step is enqueued and consumed by the privileged server,
-        // which binds op= from the stored requestedBy — never pass op= in $args.
-        //
-        // The token still does its job across the queue: step 1's stored result
-        // carries confirm=<token> and step 2 must echo the exact value the server
-        // re-derives, so a forged echo without a real step-1 cannot finalize a wipe.
-        //
-        // Idempotency: a retried decommission must not launch a second handshake.
-        // The two stages need DISTINCT keys (same key would dedup step 2 against
-        // step 1), so suffix the client key per stage. Null when unkeyed.
-        $idem  = ctrl_idem_key();
-        $idem1 = $idem !== null ? $idem . '.1' : null;
-        $idem2 = $idem !== null ? $idem . '.2' : null;
-
-        // Step 1: issue the one-time confirm token (node not yet retired).
-        $issue = SolariCtl::callQueued('DECOMMISSION', [
-            'node'  => $nodeId,
-            'scope' => $scope,
-        ], $op, $idem1);
-        if (ctrl_is_queued($issue)) {
-            // Consumer backlogged past the poll budget: step 1 has not produced a
-            // token yet. Do NOT finalize — report queued so the operator retries.
+        // A queue row must never contain the one-time confirmation token. Require
+        // a bridge version that performs both handshake steps in memory.
+        $capabilities = SolariCtl::call('PING');
+        if (($capabilities['decommissionInline'] ?? '') !== '1') {
             Response::error('control_unavailable',
-                'Decommission is queued behind other operator work; retry shortly '
-                . '(request ' . $issue['request'] . ').', 503);
+                'Operator bridge must be upgraded before decommission can run.', 503);
         }
-        $token = $issue['confirm'] ?? '';
-        if ($token === '') {
-            Response::error('control_error',
-                'Operator bridge did not return a confirm token.', 502);
-        }
-
-        // Step 2: finalize with the echoed token (double-confirmed). The bridge
-        // retires the node and emits SCP_MSG_DECOMMISSION.
         $fin = SolariCtl::callQueued('DECOMMISSION', [
-            'node'    => $nodeId,
-            'scope'   => $scope,
-            'confirm' => $token,
-        ], $op, $idem2);
+            'node' => $nodeId,
+            'scope' => $scope,
+            'inlineConfirm' => 1,
+        ], $op, ctrl_idem_key());
 
         $out = [
             'nodeId'    => $nodeId,
@@ -115,11 +87,11 @@ return static function (Router $router): void {
             'decidedBy' => $op,
         ];
         if (ctrl_is_queued($fin)) {
-            // The wipe is enqueued but NOT confirmed done — never claim 'retired'.
+            // The directive is queued, not yet acknowledged by the node.
             $out['status']  = 'queued';
             $out['request'] = $fin['request'];
         } else {
-            $out['status'] = 'retired';
+            $out['status'] = 'awaiting_node';
         }
         Response::ok($out);
     });

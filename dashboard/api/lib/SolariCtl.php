@@ -35,7 +35,7 @@ final class SolariCtl
     private const TIMEOUT_SEC = 5;
 
     /** Largest reply line we will read (matches CTL_REPLY_CAP in solariCtl.c). */
-    private const REPLY_CAP = 16384;
+    private const REPLY_CAP = 32768;
     /** Largest request line accepted by solariCtl.c, including its newline. */
     private const REQUEST_CAP = 16384;
 
@@ -120,9 +120,9 @@ final class SolariCtl
      * @return array<string,string> ['request'=>id, 'state'=>pending|claimed|done|failed,
      *         and once terminal, 'result'=>… (done) or 'error'=>… (failed)]
      */
-    public static function poll(int $requestId): array
+    public static function poll(int $requestId, string $operator): array
     {
-        return self::call('REQUEST_GET', ['request' => $requestId]);
+        return self::call('REQUEST_GET', ['request' => $requestId, 'op' => $operator]);
     }
 
     /**
@@ -158,7 +158,7 @@ final class SolariCtl
 
         $deadline = microtime(true) + $waitSec;
         do {
-            $status = self::poll($reqId);
+            $status = self::poll($reqId, $operator);
             $state  = $status['state'] ?? '';
 
             if ($state === 'done') {
@@ -339,6 +339,13 @@ final class SolariCtl
      */
     private static function statusForCode(int $code, string $message): int
     {
+        // Lease/role changes are transient control-plane availability failures,
+        // not invalid operator input. Let clients retry after failover settles.
+        if (stripos($message, 'active server required') !== false
+            || stripos($message, 'not primary') !== false
+            || stripos($message, 'lease lost') !== false) {
+            return 503;
+        }
         // The bridge uses ERR_AUTH_ROLE for both "operator required" and a
         // confirm-token mismatch; surface those as 403 so the UI re-prompts.
         if (stripos($message, 'operator') !== false

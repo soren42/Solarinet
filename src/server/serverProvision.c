@@ -7,15 +7,11 @@
  * audit row, carried by SCP_MSG_DECOMMISSION), CTRL_ADOPT_TARGET dispatch, and
  * tracks build convergence for /api/builds.
  *
- * Design note (testability, §17): every wire payload this subsystem emits is
- * assembled by a small pure static builder over a caller-owned buffer (no I/O,
- * no globals); the public entry points layer DB access + transport on top of
- * those builders. The one-time decommission confirm token is derived by SHA-256
- * over the node id, both clocks, the wipe scope and the operator identity, then
- * folded to 64 bits - reproducible from its inputs (so a test can assert the
- * derivation) yet unguessable by a node that does not know the wall/monotonic
- * stamps the server used. No live MariaDB or CSPRNG is required to exercise the
- * pure layer.
+ * Design note (testability, §17): wire payloads use small builders; the
+ * decommission confirmation itself is a durable DB state transition. Its
+ * 64-bit wire token comes from the OS CSPRNG, expires after ten minutes, and is
+ * stored only as a SHA-256 digest. Confirmation consumes it and retires the
+ * node atomically.
  */
 #include "server.h"
 
@@ -28,6 +24,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /* The server's own protocol version stamp for frames it originates. The shared
  * header does not re-export SCP_PROTO_VERSION's numeric value through a server
@@ -47,42 +46,57 @@
 /* Cap for a CSR PEM held pending signature. */
 #define PROV_CSR_PEM_CAP 8192
 
+static uint64_t provNodeIdForIdentity(const char *hostFqdn, solariRole role)
+{
+    return solariNodeIdFromFqdnRole(hostFqdn, role);
+}
+
 /* ===================================================================== */
 /* Pure helpers (no I/O) - unit-testable in isolation                     */
 /* ===================================================================== */
 
-/* Derive the one-time decommission confirm token from the request inputs.
- * Stable for a fixed (nodeId, wipeScope, operator, wallMs, monoUs) tuple and
- * folded from a full SHA-256, so it is reproducible for tests but not
- * predictable to a node that lacks the two clock stamps. Never returns 0 (0 is
- * reserved to mean "no token"). */
-static uint64_t provDeriveConfirmToken(uint64_t nodeId, uint32_t wipeScope,
-                                       const char *operator_,
-                                       uint64_t wallMs, uint64_t monoUs)
+static solariStatus provRandomConfirmToken(uint64_t *token)
 {
-    solariSha256Ctx sc;
-    uint8_t digest[32];
-    uint8_t le[8];
-    uint64_t tok = 0;
+    int fd;
+    size_t off = 0;
+    uint8_t bytes[8];
     int i;
+    uint64_t value = 0;
 
-    solariSha256Init(&sc);
-    for (i = 0; i < 8; i++) le[i] = (uint8_t)(nodeId >> (i * 8));
-    solariSha256Update(&sc, le, 8);
-    for (i = 0; i < 8; i++) le[i] = (uint8_t)(wallMs >> (i * 8));
-    solariSha256Update(&sc, le, 8);
-    for (i = 0; i < 8; i++) le[i] = (uint8_t)(monoUs >> (i * 8));
-    solariSha256Update(&sc, le, 8);
-    for (i = 0; i < 4; i++) le[i] = (uint8_t)(wipeScope >> (i * 8));
-    solariSha256Update(&sc, le, 4);
-    if (operator_ && operator_[0]) {
-        solariSha256Update(&sc, operator_, strlen(operator_));
-    }
-    solariSha256Final(&sc, digest);
+    if (!token) return ERR_INVALID_ARG;
+    *token = 0;
+    fd = open("/dev/urandom", O_RDONLY
+#ifdef O_CLOEXEC
+              | O_CLOEXEC
+#endif
+    );
+    if (fd < 0) return ERR_PLATFORM;
+    do {
+        off = 0;
+        value = 0;
+        while (off < sizeof bytes) {
+            ssize_t n = read(fd, bytes + off, sizeof bytes - off);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) { close(fd); return ERR_PLATFORM; }
+            off += (size_t)n;
+        }
+        for (i = 0; i < 8; ++i) value = (value << 8) | bytes[i];
+    } while (value == 0);
+    close(fd);
+    memset(bytes, 0, sizeof bytes);
+    *token = value;
+    return SOLARI_OK;
+}
 
-    for (i = 0; i < 8; i++) tok = (tok << 8) | digest[i];
-    if (tok == 0) tok = 1;   /* keep 0 reserved for "none" */
-    return tok;
+static void provConfirmTokenHash(uint64_t token, char out[65])
+{
+    char text[24];
+    uint8_t digest[32];
+    (void)snprintf(text, sizeof text, "%llu", (unsigned long long)token);
+    solariSha256(text, strlen(text), digest);
+    solariHexEncode(digest, sizeof digest, out, 65);
+    memset(text, 0, sizeof text);
+    memset(digest, 0, sizeof digest);
 }
 
 /* Build a CTRL_PROVISION (verb 7) control payload: verb + target epoch + the
@@ -117,10 +131,11 @@ static solariStatus provBuildProvisionPayload(uint64_t targetNode,
     return SOLARI_OK;
 }
 
-/* Build the SCP_MSG_DECOMMISSION (0x32) payload: verb + the one-time confirm
- * token (TLV_LIFE_CONFIRM) + the wipe-scope bitfield (TLV_LIFE_WIPE_SCOPE).
- * Pure. */
-static solariStatus provBuildDecommissionPayload(uint64_t confirmToken,
+/* Build the SCP_MSG_DECOMMISSION (0x32) payload: verb + addressed node ID +
+ * challenge generation + wipe-scope bitfield. The target TLV is required
+ * because this frame is published to the fleet-wide SUB channel. */
+static solariStatus provBuildDecommissionPayload(uint64_t targetNode,
+                                                 uint64_t generation,
                                                  uint32_t wipeScope,
                                                  uint8_t *out, size_t cap,
                                                  size_t *outLen, uint16_t *count)
@@ -131,7 +146,9 @@ static solariStatus provBuildDecommissionPayload(uint64_t confirmToken,
     solariTlvWriterInit(&w, out, cap);
     if ((st = solariTlvAppendU8 (&w, TLV_CTRL_VERB, (uint8_t)CTRL_DECOMMISSION)) != SOLARI_OK)
         return st;
-    if ((st = solariTlvAppendU64(&w, TLV_LIFE_CONFIRM, confirmToken)) != SOLARI_OK)
+    if ((st = solariTlvAppendU64(&w, TLV_CTRL_TARGET_NODE, targetNode)) != SOLARI_OK)
+        return st;
+    if ((st = solariTlvAppendU64(&w, TLV_LIFE_GENERATION, generation)) != SOLARI_OK)
         return st;
     if ((st = solariTlvAppendU8 (&w, TLV_LIFE_WIPE_SCOPE,
                                  (uint8_t)(wipeScope & 0xFFu))) != SOLARI_OK)
@@ -258,6 +275,72 @@ static solariStatus provSendControl(serverContext *ctx,
     return st;
 }
 
+static uint64_t provDecommissionRetryDelayMs(uint32_t previousAttempts)
+{
+    if (previousAttempts >= 6) return UINT64_C(300000);
+    return UINT64_C(5000) << previousAttempts;
+}
+
+/* Publish one persisted decommission generation and advance its durable retry
+ * schedule before sending. If the process exits during publication, the saved
+ * deadline bounds the next attempt; an ack/cancel makes the row ineligible. */
+static solariStatus provDispatchDecommission(serverContext *ctx,
+                                             const serverDecommissionDelivery *job,
+                                             uint64_t now)
+{
+    uint8_t payload[PROV_PAYLOAD_CAP];
+    uint8_t frame[PROV_FRAME_CAP];
+    size_t payloadLen = 0, frameLen = 0;
+    uint16_t tlvCount = 0;
+    uint64_t delayMs;
+    uint64_t nextRetry;
+    solariStatus st;
+
+    if (!ctx || !ctx->db || !job || !job->nodeId || !job->generation || !now)
+        return ERR_INVALID_ARG;
+    delayMs = provDecommissionRetryDelayMs(job->deliveryAttempts);
+    nextRetry = now + delayMs;
+    st = provBuildDecommissionPayload(job->nodeId, job->generation,
+                                       job->wipeScope, payload, sizeof payload,
+                                       &payloadLen, &tlvCount);
+    if (st != SOLARI_OK) return st;
+    st = provAssembleFrame(ctx, SCP_MSG_DECOMMISSION, tlvCount,
+                           payload, payloadLen, frame, sizeof frame, &frameLen);
+    if (st != SOLARI_OK) return st;
+    st = serverDbDecommissionNoteAttempt(ctx->db, job->nodeId, job->generation,
+                                         now, nextRetry);
+    if (st != SOLARI_OK) return st;
+    return provSendControl(ctx, frame, frameLen);
+}
+
+void serverProvisionRetryDecommissions(serverContext *ctx, uint64_t nowUnixMs)
+{
+    enum { RETRY_BATCH = 16 };
+    serverDecommissionDelivery jobs[RETRY_BATCH];
+    size_t count = 0, i;
+    solariStatus st;
+
+    if (!ctx || !ctx->db || ctx->role != SRV_ACTIVE) return;
+    if (!nowUnixMs) nowUnixMs = solariNowUnixMs();
+    st = serverDbDecommissionListDue(ctx->db, nowUnixMs, jobs,
+                                     RETRY_BATCH, &count);
+    if (st != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "provision/decommission: retry scan failed: %s",
+                   solariStrError(st));
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        st = provDispatchDecommission(ctx, &jobs[i], nowUnixMs);
+        if (st != SOLARI_OK && st != ERR_CONN_RETRY)
+            solariLogf(SOLARI_LOG_WARN,
+                       "provision/decommission: retry failed node=%llu generation=%llu: %s",
+                       (unsigned long long)jobs[i].nodeId,
+                       (unsigned long long)jobs[i].generation,
+                       solariStrError(st));
+    }
+}
+
 /* ===================================================================== */
 /* Enrollment state machine (§7.3)                                        */
 /* ===================================================================== */
@@ -268,6 +351,11 @@ solariStatus serverProvisionApprove(serverContext *ctx, uint64_t enrId,
     serverEnrollment enr;
     char csrPem[PROV_CSR_PEM_CAP];
     char certPem[PROV_CERT_PEM_CAP];
+    char leafCertFp[65], leafCertSerial[41], leafIssuerFp[65];
+    char expectedCn[SERVER_CN_MAX];
+    const char *roleLabel;
+    int cnLen;
+    uint64_t nodeId;
     uint64_t now;
     solariStatus st;
 
@@ -302,42 +390,55 @@ solariStatus serverProvisionApprove(serverContext *ctx, uint64_t enrId,
                    "provision/approve: CA bridge (solariCtl) unavailable");
         return ERR_TLS;
     }
-    certPem[0] = '\0';
-    if ((st = serverCtlSignCsr(ctx->ctl, csrPem, certPem, sizeof certPem)) != SOLARI_OK) {
+    switch (enr.role) {
+    case ROLE_CLIENT:  roleLabel = "client"; break;
+    case ROLE_MONITOR: roleLabel = "monitor"; break;
+    case ROLE_SERVER:  roleLabel = "server"; break;
+    default:
         solariLogf(SOLARI_LOG_ERROR,
-                   "provision/approve: CA sign failed for enroll %llu: %s",
+                   "provision/approve: enrollment %llu has invalid role",
+                   (unsigned long long)enrId);
+        return ERR_AUTH_ROLE;
+    }
+    cnLen = snprintf(expectedCn, sizeof expectedCn, "%s.%s", roleLabel, enr.host);
+    if (cnLen < 0 || (size_t)cnLen >= sizeof expectedCn) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "provision/approve: enrollment %llu identity is too long",
+                   (unsigned long long)enrId);
+        return ERR_BUFFER_FULL;
+    }
+    nodeId = provNodeIdForIdentity(enr.host, enr.role);
+    if (!nodeId) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "provision/approve: enrollment %llu has invalid stable identity",
+                   (unsigned long long)enrId);
+        return ERR_INVALID_ARG;
+    }
+    certPem[0] = '\0';
+    leafCertFp[0] = leafCertSerial[0] = leafIssuerFp[0] = '\0';
+    if ((st = serverCtlSignCsr(ctx->ctl, csrPem, expectedCn, enr.host,
+                               certPem, sizeof certPem,
+                               leafCertFp, sizeof leafCertFp,
+                               leafCertSerial, sizeof leafCertSerial,
+                               leafIssuerFp, sizeof leafIssuerFp)) != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "provision/approve: CA sign or identity validation failed for enroll %llu: %s",
                    (unsigned long long)enrId, solariStrError(st));
         return st;
     }
 
     now = solariNowUnixMs();
 
-    /* Mark the decision first so an operator audit reflects intent even if a
-     * later step trips. */
-    if ((st = serverDbEnrollDecide(ctx->db, enrId, ENROLL_APPROVED,
-                                   operator_, now)) != SOLARI_OK) {
+    /* Persist the issued certificate, node identity, and approval together.
+     * The database compare-and-set prevents duplicate or stale approvals. */
+    if ((st = serverDbEnrollFinalize(ctx->db, enrId, nodeId, enr.role,
+                                     enr.host, expectedCn, certPem,
+                                     leafCertFp, leafCertSerial, leafIssuerFp,
+                                     operator_, now)) != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR,
-                   "provision/approve: decide(APPROVED) enroll %llu: %s",
+                   "provision/approve: atomic finalize enroll %llu: %s",
                    (unsigned long long)enrId, solariStrError(st));
         return st;
-    }
-
-    /* Materialize the node row from the now-trusted enrollment. The node will
-     * fully populate os/arch on its first HELLO; we seed identity here. The
-     * cert CN is the enrolled host (the CSR was issued for it). */
-    if ((st = serverDbUpsertNode(ctx->db, enrId, enr.role,
-                                 enr.host, enr.host, "", "", 0)) != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_ERROR,
-                   "provision/approve: upsert node for enroll %llu: %s",
-                   (unsigned long long)enrId, solariStrError(st));
-        return st;
-    }
-
-    /* The CSR PEM is held only until signed; drop it now (best-effort). */
-    if (serverDbEnrollClearCsr(ctx->db, enrId) != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_WARN,
-                   "provision/approve: failed to clear CSR for enroll %llu",
-                   (unsigned long long)enrId);
     }
 
     /* Audit the approval alongside the alert/audit trail. */
@@ -345,8 +446,9 @@ solariStatus serverProvisionApprove(serverContext *ctx, uint64_t enrId,
                                   "enrollment approved", now, "audit", 0, 0, 2, "suppress", NULL);
 
     solariLogf(SOLARI_LOG_INFO,
-               "provision/approve: enroll %llu host=%s approved by %s, cert issued",
-               (unsigned long long)enrId, enr.host, operator_);
+               "provision/approve: enroll %llu host=%s node=0x%llx approved by %s, cert issued",
+               (unsigned long long)enrId, enr.host,
+               (unsigned long long)nodeId, operator_);
     return SOLARI_OK;
 }
 
@@ -469,11 +571,8 @@ solariStatus serverProvisionDecommission(serverContext *ctx, uint64_t nodeId,
                                          uint32_t wipeScope, const char *operator_,
                                          uint64_t *confirmToken)
 {
-    uint8_t payload[PROV_PAYLOAD_CAP];
-    uint8_t frame[PROV_FRAME_CAP];
-    size_t  payloadLen = 0, frameLen = 0;
-    uint16_t tlvCount = 0;
-    uint64_t token, now, mono;
+    uint64_t token, now;
+    char tokenHash[65];
     char detail[128];
     solariStatus st;
 
@@ -488,17 +587,17 @@ solariStatus serverProvisionDecommission(serverContext *ctx, uint64_t nodeId,
         return ERR_INVALID_ARG;
     }
 
-    now  = solariNowUnixMs();
-    mono = solariMonotonicMicros();
-    token = provDeriveConfirmToken(nodeId, wipeScope, operator_, now, mono);
+    if (!confirmToken || !operator_[0]) return ERR_INVALID_ARG;
+    now = solariNowUnixMs();
+    if ((st = provRandomConfirmToken(&token)) != SOLARI_OK) return st;
+    provConfirmTokenHash(token, tokenHash);
 
     /* Audit BEFORE the destructive directive leaves the server (§7.3): the
      * alertEvent row is the durable record that a teardown was authorized, and
      * it must exist even if the send or the node's wipe later fails. */
     (void)snprintf(detail, sizeof detail,
-                   "decommission authorized by %s scope=0x%02x token=%llu",
-                   operator_, (unsigned)(wipeScope & 0xFFu),
-                   (unsigned long long)token);
+                   "decommission authorized by %s scope=0x%02x",
+                   operator_, (unsigned)(wipeScope & 0xFFu));
     if ((st = serverDbWriteAlertEvent(ctx->db, 0, nodeId, NULL, "crit",
                                       detail, now, "audit", 0, 0, 2, "suppress", NULL)) != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR,
@@ -507,38 +606,142 @@ solariStatus serverProvisionDecommission(serverContext *ctx, uint64_t nodeId,
         return st;   /* refuse to proceed without the audit trail */
     }
 
-    /* Build SCP_MSG_DECOMMISSION carrying CTRL_DECOMMISSION + token + scope. */
-    if ((st = provBuildDecommissionPayload(token, wipeScope,
-                                           payload, sizeof payload,
-                                           &payloadLen, &tlvCount)) != SOLARI_OK) {
-        return st;
-    }
-    if ((st = provAssembleFrame(ctx, SCP_MSG_DECOMMISSION, tlvCount,
-                                payload, payloadLen,
-                                frame, sizeof frame, &frameLen)) != SOLARI_OK) {
+    /* Persist the challenge before returning it. No destructive directive is
+     * sent until a separate call consumes this exact challenge. */
+    st = serverDbDecommissionIssue(ctx->db, nodeId, wipeScope, operator_,
+                                  tokenHash, now, now + UINT64_C(600000), NULL);
+    memset(tokenHash, 0, sizeof tokenHash);
+    if (st != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "provision/decommission: challenge persistence failed for node %llu",
+                   (unsigned long long)nodeId);
         return st;
     }
 
-    st = provSendControl(ctx, frame, frameLen);
-    /* If the node is offline the intent is recorded; the teardown completes
-     * when it returns (or the operator force-retires). Surface the token
-     * regardless so the operator/dashboard can correlate the echo. */
-    if (st == ERR_CONN_RETRY) {
-        solariLogf(SOLARI_LOG_WARN,
-                   "provision/decommission: node %llu offline; intent recorded "
-                   "(token=%llu)", (unsigned long long)nodeId,
-                   (unsigned long long)token);
-        st = SOLARI_OK;
-    }
-
-    if (st == SOLARI_OK && confirmToken) *confirmToken = token;
+    *confirmToken = token;
 
     solariLogf(SOLARI_LOG_WARN,
-               "provision/decommission: node=%llu scope=0x%02x by=%s issued "
-               "(token=%llu)", (unsigned long long)nodeId,
-               (unsigned)(wipeScope & 0xFFu), operator_,
-               (unsigned long long)token);
-    return st;
+               "provision/decommission: node=%llu scope=0x%02x by=%s challenge issued",
+               (unsigned long long)nodeId,
+               (unsigned)(wipeScope & 0xFFu), operator_);
+    return SOLARI_OK;
+}
+
+solariStatus serverProvisionConfirmDecommission(serverContext *ctx,
+                                                uint64_t nodeId,
+                                                uint32_t wipeScope,
+                                                const char *operator_,
+                                                uint64_t confirmToken)
+{
+    serverDecommissionDelivery job;
+    char tokenHash[65];
+    uint64_t now;
+    solariStatus st;
+
+    if (!ctx || !ctx->db || nodeId == 0 || !operator_ || !operator_[0] ||
+        confirmToken == 0 || (wipeScope & 0x1Fu) == 0)
+        return ERR_INVALID_ARG;
+    provConfirmTokenHash(confirmToken, tokenHash);
+    now = solariNowUnixMs();
+    uint64_t generation = 0;
+    st = serverDbDecommissionConfirm(ctx->db, nodeId, wipeScope, operator_,
+                                     tokenHash, now, &generation);
+    memset(tokenHash, 0, sizeof tokenHash);
+    if (st != SOLARI_OK) return st;
+    /* Confirmation consumes the challenge. The durable retry worker owns
+     * delivery from this point, and retirement waits for a matching ack. */
+    memset(&job, 0, sizeof job);
+    job.nodeId = nodeId;
+    job.wipeScope = wipeScope;
+    job.generation = generation;
+    st = provDispatchDecommission(ctx, &job, now);
+    (void)serverDbWriteAlertEvent(ctx->db, 0, nodeId, NULL, "warn",
+                                  st == SOLARI_OK
+                                      ? "decommission confirmed; directive published; awaiting node ack"
+                                      : "decommission confirmed; delivery retry scheduled",
+                                  now, "audit", 0, 0, 2,
+                                  "suppress", NULL);
+    solariLogf(SOLARI_LOG_INFO,
+               "provision/decommission: node=%llu generation=%llu confirmation consumed; retry scheduled%s",
+               (unsigned long long)nodeId,
+               (unsigned long long)generation,
+               st == SOLARI_OK ? "" : " after initial delivery failure");
+    /* Persistence of the consumed challenge is the acceptance boundary. Even
+     * if this immediate attempt failed, the active-server loop will retry it. */
+    return SOLARI_OK;
+}
+
+static bool provCertificateRevocationReasonValid(const char *reason)
+{
+    return reason &&
+        (strcmp(reason, "unspecified") == 0 ||
+         strcmp(reason, "keyCompromise") == 0 ||
+         strcmp(reason, "affiliationChanged") == 0 ||
+         strcmp(reason, "superseded") == 0 ||
+         strcmp(reason, "cessationOfOperation") == 0);
+}
+
+solariStatus serverProvisionIssueCertificateRevocation(
+    serverContext *ctx, uint64_t nodeId, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *operator_,
+    uint64_t *confirmToken)
+{
+    char issuerFp[65], tokenHash[65];
+    uint64_t token = 0, now, resolvedNodeId = 0;
+    solariStatus st;
+
+    if (confirmToken) *confirmToken = 0;
+    if (!ctx || !ctx->db || !serialHex ||
+        !serialHex[0] || strlen(serialHex) > 40 || !leafCertFp ||
+        strlen(leafCertFp) != 64 || !provCertificateRevocationReasonValid(reason) ||
+        !operator_ || !operator_[0] || !confirmToken)
+        return ERR_INVALID_ARG;
+    st = serverDbGetLeafCertificateIssuer(ctx->db, nodeId, serialHex,
+                                          leafCertFp, issuerFp, &resolvedNodeId);
+    if (st != SOLARI_OK) return st;
+    if ((st = provRandomConfirmToken(&token)) != SOLARI_OK) return st;
+    provConfirmTokenHash(token, tokenHash);
+    now = solariNowUnixMs();
+    st = serverDbCertificateRevocationIssue(ctx->db, resolvedNodeId, issuerFp,
+            serialHex, leafCertFp, reason, operator_, tokenHash,
+            now, now + UINT64_C(600000));
+    memset(tokenHash, 0, sizeof tokenHash);
+    if (st != SOLARI_OK) return st;
+    *confirmToken = token;
+    solariLogf(SOLARI_LOG_WARN,
+               "provision/revoke-cert: confirmation issued node=%llu serial=%s by=%s",
+               (unsigned long long)nodeId, serialHex, operator_);
+    return SOLARI_OK;
+}
+
+solariStatus serverProvisionConfirmCertificateRevocation(
+    serverContext *ctx, uint64_t nodeId, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *operator_,
+    uint64_t confirmToken)
+{
+    char issuerFp[65], tokenHash[65];
+    solariStatus st;
+    uint64_t now, resolvedNodeId = 0;
+
+    if (!ctx || !ctx->db || !serialHex ||
+        !serialHex[0] || strlen(serialHex) > 40 || !leafCertFp ||
+        strlen(leafCertFp) != 64 || !provCertificateRevocationReasonValid(reason) ||
+        !operator_ || !operator_[0] || confirmToken == 0)
+        return ERR_INVALID_ARG;
+    st = serverDbGetLeafCertificateIssuer(ctx->db, nodeId, serialHex,
+                                          leafCertFp, issuerFp, &resolvedNodeId);
+    if (st != SOLARI_OK) return st;
+    provConfirmTokenHash(confirmToken, tokenHash);
+    now = solariNowUnixMs();
+    st = serverDbCertificateRevocationConfirm(ctx->db, resolvedNodeId, issuerFp,
+            serialHex, leafCertFp, reason, operator_, tokenHash, now);
+    memset(tokenHash, 0, sizeof tokenHash);
+    if (st != SOLARI_OK) return st;
+    solariLogf(SOLARI_LOG_WARN,
+               "provision/revoke-cert: durable ledger updated node=%llu serial=%s by=%s; "
+               "CRL publication and peer activation are not implemented",
+               (unsigned long long)nodeId, serialHex, operator_);
+    return SOLARI_OK;
 }
 
 solariStatus serverProvisionRetire(serverContext *ctx, uint64_t nodeId)
@@ -548,7 +751,7 @@ solariStatus serverProvisionRetire(serverContext *ctx, uint64_t nodeId)
 
     if (!ctx || !ctx->db || nodeId == 0) return ERR_INVALID_ARG;
 
-    if ((st = serverDbSetNodeState(ctx->db, nodeId, "retired")) != SOLARI_OK) {
+    if ((st = serverDbRetireNode(ctx->db, nodeId)) != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR,
                    "provision/retire: set state 'retired' for node %llu: %s",
                    (unsigned long long)nodeId, solariStrError(st));
@@ -757,13 +960,7 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
  *    relies on serverControl.c calling serverDbSetNodeApplied() when a node's
  *    CONTROL_RESULT lands. No extra query was needed here.
  *
- * 3. serverProvisionApprove uses enrId as the new node's id when upserting the
- *    node row (the enrollment carries host/ip/role but no pre-assigned nodeId,
- *    and serverDbUpsertNode requires one). If the schema instead derives the
- *    nodeId from the FQDN (serverNodeId-style FNV), swap the first argument to
- *    that derivation once a shared helper for ROLE-scoped host ids is exposed.
- *
- * 4. SCP_PROTO_VERSION's numeric value is pinned locally (default 1) because it
+ * 3. SCP_PROTO_VERSION's numeric value is pinned locally (default 1) because it
  *    is not re-exported through a server symbol; align with solariCommon.h if it
  *    bumps.
  */

@@ -60,6 +60,19 @@ log = logging.getLogger("authbrokerd")
 PROTO_VERSION = 1
 
 
+def http_token_authorized(token: str, authorization: str) -> bool:
+    """Authorize a bearer request only when a non-empty token is configured."""
+    if not token or not token.strip():
+        return False
+    return secrets.compare_digest(authorization, f"Bearer {token}")
+
+
+def validate_http_token(token: str) -> None:
+    """Refuse to start the HTTP service with an empty or example token."""
+    if not token or not token.strip() or token.strip() == "CHANGE_ME_LONG_RANDOM":
+        raise ValueError("[http] token must be set to a non-example secret")
+
+
 # --------------------------------------------------------------------------- #
 # Signing helpers (shared with the device simulator in loopback_test.py)
 # --------------------------------------------------------------------------- #
@@ -272,6 +285,7 @@ class Broker:
 
     # ---- HTTP -----------------------------------------------------------
     def serve(self, bind: str, port: int, token: str) -> None:
+        validate_http_token(token)
         broker = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -286,11 +300,8 @@ class Broker:
                 self.wfile.write(body)
 
             def _authorized(self) -> bool:
-                if not token:
-                    return True  # no token configured => open (dev only)
                 got = self.headers.get("Authorization", "")
-                want = f"Bearer {token}"
-                return secrets.compare_digest(got, want)
+                return http_token_authorized(token, got)
 
             def do_GET(self):  # noqa: N802
                 if self.path == "/healthz":
@@ -388,13 +399,17 @@ def main(argv=None) -> int:
     )
     cfg = load_config(args.config)
 
+    try:
+        validate_http_token(cfg["http_token"])
+    except ValueError as exc:
+        ap.error(str(exc))
+
     if args.check:
         print(f"OK: {len(cfg['devices'])} enrolled device(s): "
               f"{', '.join(cfg['devices']) or '(none)'}")
         print(f"    MQTT {cfg['host']}:{cfg['port']} "
               f"topic '{cfg['topic_prefix']}/*'")
-        print(f"    HTTP {cfg['http_bind']}:{cfg['http_port']} "
-              f"token={'set' if cfg['http_token'] else 'OPEN (dev)'}")
+        print(f"    HTTP {cfg['http_bind']}:{cfg['http_port']} token=set")
         return 0
 
     if not cfg["devices"]:

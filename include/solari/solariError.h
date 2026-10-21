@@ -20,6 +20,7 @@ enum solariError {
     ERR_FRAME_BAD_MAGIC   = -11,  /* Sentinel mismatch.                           */
     ERR_FRAME_BAD_CRC     = -12,  /* CRC-32 verification failed.                  */
     ERR_PROTO_VERSION     = -13,  /* Unsupported protocol version.                */
+    ERR_FRAME_BAD_ENVELOPE = -14, /* Reserved bits, flags, or TLV envelope invalid. */
 
     ERR_TLV_END           = -20,  /* Reader reached end of payload (loop term).   */
     ERR_TLV_TRUNCATED     = -21,  /* TLV length exceeds remaining bytes.          */

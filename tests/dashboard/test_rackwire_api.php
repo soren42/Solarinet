@@ -314,6 +314,16 @@ echo "\n[5] source ownership on writes\n";
         'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'groups-foreign']);
     rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'conflict',
         'groups upsert over foreign-owned port geometry -> 409 conflict', $r['raw']);
+
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/library/3/groups',
+        'RW_BODY' => json_encode(['name' => 'Acme Switch S1', 'kind' => 'switch', 'drawW' => 18,
+            'groups' => [['k' => 'ethernet', 'label' => 'Ethernet ×8', 'glyph' => 'rj45', 'count' => 8,
+                'rows' => 1, 'role' => 'lan', 'gbps' => 1, 'domain' => 'net', 'conn' => 'rj45']]]),
+        'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'groups-create']);
+    $profile = $r['body']['data'] ?? [];
+    rw_test_ok($r['status'] === 201 && ($profile['id'] ?? null) === '3'
+        && ($profile['groups'][0]['count'] ?? null) === 8 && ($profile['drawW'] ?? null) === 18,
+        'operator can save and read back a SoR device connection profile', $r['raw']);
 }
 
 // ===========================================================================

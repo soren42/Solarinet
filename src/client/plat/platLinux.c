@@ -8,6 +8,14 @@
  */
 #define _GNU_SOURCE
 
+/* glibc's ISO C23 const-correct string macros expand to _Generic even when
+ * this translation unit is intentionally compiled as C99. Clang diagnoses
+ * that libc implementation detail under -Wpedantic; keep the suppression
+ * local to this Linux PAL file rather than weakening warnings project-wide. */
+#if defined(__clang__)
+# pragma clang diagnostic ignored "-Wc11-extensions"
+#endif
+
 #include "../platOS.h"
 
 #include <ctype.h>

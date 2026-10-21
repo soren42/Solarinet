@@ -208,7 +208,8 @@ def run():
                 ch.queue_bind(exchange=exchange, queue=queue, routing_key=k)
             log(f"consuming {queue} (debounce={debounce}s, reconcile={reconcile_interval}s)")
             consume_after_apply(ch, queue, debounce, reconcile_interval,
-                                lambda: reconcile(c), lambda: _run)
+                                lambda: reconcile(c), lambda: _run,
+                                maintain_connection=lambda: conn.process_data_events(time_limit=0.25))
         except Exception as e:  # noqa: BLE001
             log(f"error: {e!r}; reconnecting in {reconnect}s")
             if _run:

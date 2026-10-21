@@ -83,6 +83,7 @@ pre.cmd b{color:var(--color-accent-700);font-weight:600}
   .chrome{display:none}
   .stack{padding:0;gap:0}
   .page{box-shadow:none;break-after:page}
+  *{min-width:0!important}
 }
 </style>
 </head>
@@ -119,7 +120,8 @@ pre.cmd b{color:var(--color-accent-700);font-weight:600}
   </div>
   <div style="flex:1;padding:36px 60px 36px;display:flex;flex-direction:column">
     <div style="font:600 19px/1.35 var(--font-display);max-width:52ch">Four staged, reversible cutover stages, then the three procedures that keep the certificates honest for as long as the panel hangs on the wall.</div>
-    <p class="d" style="margin-top:14px;max-width:64ch">This runbook executes CONTRACT-SW v1.0 phase P5: issue the mTLS identities on chlorine, deploy the <span class="mono">solariPanel</span> listener on xenon, provision the panel over USB, and retire lithium from the chain. Every stage names its verification and its rollback before the next stage begins. Nothing in this document is standing consent &mdash; each stage is run deliberately, by the operator.</p>
+    <p class="d" style="margin-top:14px;max-width:64ch">This runbook describes the proposed CONTRACT-SW v1.0 phase P5: issue the mTLS identities on chlorine, deploy the <span class="mono">solariPanel</span> listener on xenon, provision the panel over USB, and retire lithium from the chain. Every stage names its verification and its rollback before the next stage begins. Nothing in this document is standing consent &mdash; each stage is run deliberately, by the operator.</p>
+    <div class="hl warn" style="margin-top:14px"><p><b>Status checked 21 October 2026.</b> This is a proposed cutover procedure, not evidence that phase P5 was executed. Verify the currently installed panel daemon, listener, certificates, and lithium role before following it; live panel state was not checked for this edition.</p></div>
     <div class="hl warn" style="margin-top:14px"><p><b>Secrets discipline (red line).</b> Key material lives on chlorine, in the panel's flash, and transiently on the provisioning bench under <span class="mono">0600</span> paths. It never enters git, never a handoff packet, never a log line. This document references every secret by path only.</p></div>
     <div style="margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
       <div class="spec"><div class="r"><span>Version</span><span>1.0.0</span></div><div class="r"><span>Date</span><span>2026-08-17</span></div></div>

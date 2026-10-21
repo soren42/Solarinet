@@ -1,0 +1,4 @@
+# Pinned SoR sync and DNS renderer dependencies; exercised 2026-10-21.
+pika==1.4.1
+PyMySQL==1.2.0
+PyYAML==6.0.3

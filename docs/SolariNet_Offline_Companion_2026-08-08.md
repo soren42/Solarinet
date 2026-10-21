@@ -3,6 +3,16 @@
 `For: the Claude phone app while the whole network is torn down · Author: Claude (Fable 5, Lead) · 2026-08-08`
 `Operator: Jason C. Kay (he/him) · Homelab: SolariNet / Akoria · Naming: periodic table`
 
+> **Historical field guide; verify before operating (status refresh 2026-10-21).** The port maps,
+> power plan, host availability, and boot order below are the August 8 snapshot and have not been
+> revalidated as a complete set. Steel is the inventory-labeled ZimaBlade on laboratory port 12;
+> it booted without useful services and did not answer SSH. Do not use it as a DNS server until it
+> is redeployed. The separate Khadas VIM4 `chlorine` (`10.7.0.10`) now runs authoritative BIND
+> secondary zones for `akoria.net` and the generated reverse zones. The ZimaBoard and ZimaBoard 2
+> are separate devices whose inventory mapping is still pending. See the
+> [current stabilization baseline](Solarinet_Stabilization_Baseline_2026-10-20.html) for verified
+> October host and service status.
+
 > **What this is.** A self-contained brief so a fresh Claude instance on your phone — online via cellular, blind to the LAN — can help you troubleshoot, sequence, and sanity-check while everything is unplugged, inventoried, and re-cabled. It contains **no secrets** (it lives in a cloud-synced app). Passwords, API keys, and the OIDC client secret are on the workstation, referenced by path only.
 >
 > **How to use it.** Paste or attach this file to the phone app before you start pulling cables. Then ask it plainly: "cesium won't come back up, here's what I see" / "what order do I power things on?" / "is it safe to move X off the daisy chain?" It has the topology, the port maps, the power plan, the boot order, and the failure modes below.
@@ -39,7 +49,7 @@
 | **chlorine** | 10.7.0.10 | VIM4-provisioned | **Internal CA** (step-ca: X.509 + S/MIME + ACME + SSH CA) | Issues the Akoria certs. |
 | **nitrogen** | 10.5.2.20 | Raspberry Pi (`dev-family-pi01`) | dev / family services | Leaf. |
 | **benzene** | 10.5.2.50 | x86 server | RabbitMQ (MQ broker) + fleet provisioning (PXE) | **Unreachable since 2026-08-06 storm** — no route from xenon. Needs console/switch-port attention. |
-| **steel** | 10.0.0.11 | ZimaBlade | DNS secondary (Docker BIND9, AXFR from xenon) + Docker host | **Down since storm.** MAC 00:e0:4c:40:59:df. |
+| **steel** | 10.0.0.11 | ZimaBlade (operator confirmed, 2026-10-21) | Inventory label Steel; on laboratory switch port 12; future tertiary DNS after redeployment | **Booted with no useful service observed; network/SSH unreachable.** The separate Khadas VIM4 is `chlorine` (10.7.0.10), now running the authoritative BIND secondary. The operator confirms three separate Zima devices: one ZimaBlade, one ZimaBoard, and one ZimaBoard 2; mapping the other two to records is pending. |
 | **tungsten** | 10.5.0.5 | x86 (dev) | dev churn box | **Excluded from DR** (untraced ~48h hard-resets). SSH timed out during sweep. |
 | **valence** | 10.6.0.20 | monitoring outpost | solariMonitor outpost | Permission denied during sweep (no current creds). |
 | **lithium** | 10.6.4.33 (wired) | Arduino UNO Q | **Status panel host** (Galactic Unicorn LED panel) | Panel firmware d86f11e3, asleep. Also a stray DHCP lease 10.6.102.248 may linger. |
@@ -66,7 +76,7 @@ TEROW 10-port PoE (8×1G PoE, 120W) · TP-Link SG116 (16×1G) · TP-Link SG108 (
 
 ### 2.4 Endpoints / peripherals seen on ports (no shutdown needed — they follow their switch)
 
-toymaker (Pi, chemistry p2) · Home Assistant (laboratory p14) · starship (laboratory p12) · platinum (Test Tube p1) · Family-room Google TV (Test Tube p3) · NanoPi-R1 (Test Tube p5) · Samsung device (Test Tube p7) · glkvm/silver (slide p2) · transporter (slide p7) · Google/Chromecast (slide p5) · ASIX USB-Ethernet adapter (pipette p2) · Pi-hole 1 (10.0.0.254, decommissioned) · Pi-hole 2 (10.0.0.253, decommissioned).
+toymaker (Pi, chemistry p2) · Home Assistant (laboratory p14) · **Steel ZimaBlade (laboratory p12; operator-confirmed; currently no network response)** · platinum (Test Tube p1) · Family-room Google TV (Test Tube p3) · NanoPi-R1 (Test Tube p5) · Samsung device (Test Tube p7) · glkvm/silver (slide p2) · transporter (slide p7) · Google/Chromecast (slide p5) · ASIX USB-Ethernet adapter (pipette p2) · Pi-hole 1 (10.0.0.254, decommissioned) · Pi-hole 2 (10.0.0.253, decommissioned). The older `starship` assignment to laboratory port 12 is stale; its current port is unverified.
 
 ---
 
@@ -89,13 +99,15 @@ toymaker (Pi, chemistry p2) · Home Assistant (laboratory p14) · starship (labo
 | 1 | 1G | 1G | `nas-x` |
 | 2–10 | 1G | down | **FREE (9 ports)** |
 | 11 | 1G | 1G | **?? identify** |
-| 12 | 1G | 1G | `starship` |
+| 12 | 1G* | unverified | **Steel ZimaBlade** (operator-confirmed; no network response) |
 | 13 | 2.5G | 1G | **?? identify** |
 | 14 | 2.5G | 1G | Home Assistant |
 | 15 | 2.5G | 1G | `xenon` |
 | 16 | 2.5G | 1G | `radium` |
 | 17 | SFP+ | 10G | `cyclotron` (capped 2.5G by injector) |
 | 18 | SFP+ | 10G | → **chemistry** (10G backbone) |
+
+\* The 1G rate is from the older port snapshot and has not been rechecked since the ZimaBlade was connected.
 
 ### Test Tube (USW 8-PoE)
 | Port | Now | PoE | Attached |
@@ -154,7 +166,7 @@ Treat the current patchwork as disposable. Targets:
 5. **Swap cyclotron's 2.5G injector for the 10G injector** during teardown to unlock full 10G on SFP+17.
 6. **Move cesium off the floor** into the 3U under-desk rack (with laboratory + a 1U power strip).
 
-**DNS end-state:** collapse toward a clean 2-tier authoritative setup — xenon primary `.net` with **steel** + radium as secondaries (AXFR), radium primary `.org`; **retire both Pi-holes** (UniFi does resolve/filter, or steel takes the resolver role); repoint UniFi DHCP `dns_1/2` off the Pi-holes → steel + a second resolver. **Serial bug is fixed** (monotonic) so secondaries AXFR correctly. NAS-X name-resolution fix (DHCP `domain_name=akoria.net`) is already applied.
+**Historical DNS target (2026-08-08; not current):** this plan proposed xenon primary `.net` with steel + radium as secondaries and retiring the Pi-holes. Current verified deployment differs: chlorine is a secondary for the forward zone and 17 generated reverse zones; radium serves the forward zone only; steel is offline and not advertised. Bare-zone and RPZ replication to chlorine remain open. Treat any DHCP resolver changes below as unverified until separately checked. The monotonic serial fix and NAS-X DHCP domain-name change were recorded as applied in the original snapshot.
 
 **HA/DR end-state:** two idle Pi 5s become DR peers — DR-1 (DNS secondary + MariaDB arbiter), DR-2 (monitoring/dashboard warm-standby + MQ mirror). SoR replication: cesium → benzene replica → Pi5 arbiter. Capacity is abundant; this is a reallocation effort, **zero purchasing**. Power is not the failure mode — DR targets host/software/disk failure.
 
@@ -200,7 +212,7 @@ EcoFlow DELTA Pro 3 (8 kWh)  ── feeds the ENTIRE desk (shore-power replaceme
 | SoR (MariaDB) + Forgejo git | cesium | dashboard writes fail; git unreachable |
 | Internal CA (step-ca) | chlorine | cert issuance/renewal stops; existing certs valid until expiry |
 | MQ broker (RabbitMQ) | benzene | alert/notify pipeline can't publish |
-| DNS secondary | steel | redundancy only — not user-visible if xenon is up |
+| DNS secondary | chlorine (`akoria.net` + generated reverse zones); radium (`akoria.net` only) | redundancy; bare zones/RPZ are not replicated to chlorine |
 | Status panel | lithium | LED panel goes dark; nothing else affected |
 | Primary storage | nas-x | shared files unavailable |
 

@@ -17,10 +17,13 @@ SRC  = os.path.join(HERE, "akoria-hosts.yml")
 OUT  = os.path.join(HERE, "zones")
 HOSTMASTER = "hostmaster.akoria.net."
 ZONEDIR    = "/etc/bind/zones"          # where the files land on the BIND host
-# Authoritative nameservers for akoria.net (must be real A-record hosts, never
-# CNAMEs). xenon = primary/master, radium = secondary (plain-BIND AXFR works).
-NS_HOSTS   = ["xenon", "radium"]
-SECONDARIES = ["10.1.0.10", "10.0.0.11"]  # radium + steel (ZimaBlade) = akoria.net secondaries
+# Authoritative nameservers must be real A-record hosts, never CNAMEs. Radium
+# serves the forward zone; chlorine serves both forward and generated reverse
+# zones. It does not serve the reverse zones, so it must not be listed there.
+NS_HOSTS = ["xenon", "radium", "chlorine"]
+REVERSE_NS_HOSTS = ["xenon", "chlorine"]
+FORWARD_SECONDARIES = ["10.1.0.10", "10.7.0.10"]
+REVERSE_SECONDARIES = ["10.7.0.10"]
 # Zone-apex A records: the bare domain (e.g. https://akoria.net/) resolves to a
 # host IP. akoria.net -> xenon (10.0.0.20), the web / service-directory host.
 APEX_A = {"akoria.net": "10.0.0.20"}
@@ -41,7 +44,8 @@ def load_source(path=SRC):
         sys.path.insert(0, os.path.join(HERE, "sor"))
         from source_sor import load_source as sor_load_source
         return sor_load_source()
-    d = yaml.safe_load(open(path))
+    with open(path, encoding="utf-8") as source:
+        d = yaml.safe_load(source)
     return d["domain"], d["hosts"], d.get("ifaces", {}), d["cnames"]
 
 
@@ -88,7 +92,7 @@ def reverses(domain, hosts, ifaces):
     for net, recs in by24.items():
         o = net.split(".")
         rev = f"{o[2]}.{o[1]}.{o[0]}.in-addr.arpa"
-        L = _soa(rev) + [f"@ IN NS {h}.akoria.net." for h in NS_HOSTS] + [""]
+        L = _soa(rev) + [f"@ IN NS {h}.akoria.net." for h in REVERSE_NS_HOSTS] + [""]
         for last, name in sorted(recs):
             L.append(f"{last:<4} IN PTR {name}.{domain}.")
         out[rev] = "\n".join(L) + "\n"
@@ -96,12 +100,13 @@ def reverses(domain, hosts, ifaces):
 
 
 def named_conf(domain, revs):
-    xfer = "; ".join(f"{ip}" for ip in SECONDARIES)
+    forward_xfer = "; ".join(FORWARD_SECONDARIES)
     L = [f'zone "{domain}" {{ type primary; file "{ZONEDIR}/db.{domain}"; '
-         f'allow-transfer {{ {xfer}; }}; also-notify {{ {xfer}; }}; notify yes; }};']
+         f'allow-transfer {{ {forward_xfer}; }}; also-notify {{ {forward_xfer}; }}; notify yes; }};']
+    reverse_xfer = "; ".join(REVERSE_SECONDARIES)
     for rev in sorted(revs):
         L.append(f'zone "{rev}" {{ type primary; file "{ZONEDIR}/db.{rev}"; '
-                 f'allow-transfer {{ {xfer}; }}; also-notify {{ {xfer}; }}; notify yes; }};')
+                 f'allow-transfer {{ {reverse_xfer}; }}; also-notify {{ {reverse_xfer}; }}; notify yes; }};')
     return "\n".join(L) + "\n"
 
 

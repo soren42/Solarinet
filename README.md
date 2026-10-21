@@ -16,6 +16,32 @@ freezes new feature work until authorization, identity, durable delivery,
 schema, freshness, and fault-injection gates pass. The [October 2026 baseline](docs/SolariNet_Stabilization_Baseline_2026-10-20.html)
 records what was actually checked and what remains unverified.
 
+The standalone [`scanner-ingest`](../scanner-ingest/README.md) app is an
+authorized inventory-intake subproject tracked as integration workstream I5.
+The standalone app keeps its own SQLite capture store. Its export can be reviewed
+and imported through an operator-only dashboard flow with explicit mapping,
+preview, and a transactional insert-only apply into the SoR. This physical
+asset intake is separate from SolariNet's **real-time network discovery**:
+operators start a bounded asynchronous scan in Discovery, the native scan
+worker records reviewable host candidates, and an explicit adoption sends the
+host and address through monitoring and SoR. RackWire links to that discovery
+workflow and also uses the shared inventory catalog for planning. A discovered
+network host is not automatically a physical inventory asset. See the
+[scanner import guide](docs/SolariNet_Inventory_Scanner_Import.html) and its
+[Letter PDF](docs/SolariNet_Inventory_Scanner_Import.pdf), plus the
+[stabilization baseline](docs/SolariNet_Stabilization_Baseline_2026-10-20.html)
+for verification limits. No production deployment has occurred. A read-only
+live preview on 2026-10-20 found two scanner location labels without exact SoR
+matches and did not write records. The scanner app has a local Git repository,
+but no release remote is configured yet.
+
+The UniFi API integration continues to poll device health and rates for the
+monitoring panel. Its separate topology collector can now compare VLAN,
+network, subnet, and DHCP observations with the SoR in a read-only transaction;
+the observed controller `/8` versus SoR `/24` mismatch remains an import gate.
+See the [UniFi topology guide](docs/SolariNet_UniFi_Topology_Discovery.html)
+and its [Letter PDF](docs/SolariNet_UniFi_Topology_Discovery.pdf).
+
 ## Building
 
 The core and its test suite have **no external dependencies** and build with any C99 compiler. The full client, monitor, and server build uses nng, mbedTLS, SQLite, cJSON, and MariaDB Connector/C. CMake ≥ 3.16 drives the build; a thin `Makefile` wraps common invocations.
@@ -68,6 +94,26 @@ third_party/      vendored deps (nng, mbedTLS, SQLite, cJSON, Unity)
 cmake/toolchains/ cross-compile toolchain files
 docs/             self-contained HTML documentation
 ```
+
+## Database installation and schema snapshots
+
+For an empty database, use the ledgered migrator for the full monitoring or SoR
+stream. Create each target with the canonical character set and collation; the
+migrator refuses other defaults before it writes. Supply credentials with a
+protected MariaDB option file or local socket authentication; do not pass
+passwords on the command line.
+
+```sh
+mariadb -e 'CREATE DATABASE NEW_MONITORING_DB CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE NEW_SOR_DB CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
+python3 tools/migrate.py --database monitoring --db-name NEW_MONITORING_DB
+python3 tools/migrate.py --database sor --db-name NEW_SOR_DB --defaults-file /path/to/protected.cnf
+```
+
+Existing databases without a migration ledger are refused until their schema
+history is audited; follow [the migration runbook](docs/SolariNet_Migration_Runbook_2026-10-20.html).
+Regenerate the schema-only reference snapshots with `python3 tools/export_schema.py`
+and `python3 tools/export_schema.py --database sor`. Export creates and drops a
+temporary database. The generated snapshots are not an install or upgrade path.
 
 ## Protocol & tests
 

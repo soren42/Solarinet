@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "opie": {
+      "command": "/opt/solarinet/opie/.venv/bin/python3",
+      "args": ["/opt/solarinet/opie/opie_probe_mcp.py"],
+      "env": {
+        "OPIE_PROBE_CMD": "/usr/local/bin/opie-probe"
+      }
+    }
+  }
+}

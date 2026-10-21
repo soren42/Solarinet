@@ -1,0 +1,10 @@
+// Primary RPZ policy zone. Install as /etc/bind/named.conf.rpz and include
+// once from named.conf.local. Keep transfer targets aligned with the secondary
+// inventory: Khadas now, ZimaBlade after it is redeployed.
+zone "rpz.akoria" {
+    type primary;
+    file "/etc/bind/zones/db.rpz.akoria";
+    allow-transfer { 10.0.0.11; 10.7.0.10; };
+    also-notify { 10.0.0.11; 10.7.0.10; };
+    notify yes;
+};

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Operator and developer guide for importing scanner-ingest exports into the SolariNet inventory System of Record.">
+<title>SolariNet Inventory | Scanner Import Guide</title>
+<style>
+  :root { color-scheme: light; --ink:#15232c; --muted:#4d606b; --line:#cbd6dc; --wash:#f2f7f8; --teal:#087a96; --amber:#815000; --red:#9b2d34; }
+  * { box-sizing:border-box; }
+  html { background:#e8eff2; color:var(--ink); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  body { max-width:940px; margin:28px auto; padding:44px 54px 58px; background:#fff; }
+  header { display:flex; align-items:center; gap:20px; border-bottom:3px solid var(--teal); padding-bottom:20px; }
+  header svg { flex:none; width:62px; height:62px; }
+  h1 { margin:0; font-size:2rem; line-height:1.15; letter-spacing:-.03em; }
+  .meta { margin:6px 0 0; color:var(--muted); font-size:.92rem; }
+  h2 { margin:30px 0 10px; padding-bottom:5px; border-bottom:1px solid var(--line); color:#075a70; font-size:1.3rem; break-after:avoid; }
+  h3 { margin:20px 0 6px; font-size:1.04rem; break-after:avoid; }
+  p,li { max-width:82ch; }
+  li { margin:5px 0; }
+  .lede { font-size:1.08rem; }
+  .box { margin:18px 0; padding:12px 16px; border-left:4px solid var(--teal); background:var(--wash); break-inside:avoid; }
+  .state { border-left-color:var(--amber); background:#fff8e8; }
+  .danger { border-left-color:var(--red); background:#fff4f3; }
+  table { width:100%; margin:14px 0 22px; border-collapse:collapse; font-size:.92rem; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+  th { background:#e8f2f5; }
+  code,kbd { font: .91em ui-monospace,"SFMono-Regular",Consolas,monospace; overflow-wrap:anywhere; }
+  code { background:#f2f5f6; padding:1px 4px; border-radius:3px; }
+  .pill { display:inline-block; border:1px solid #8a9ca5; border-radius:999px; padding:1px 8px; font-size:.77rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase; }
+  .verified { color:#075a70; } .pending { color:var(--amber); }
+  .actions { display:flex; justify-content:flex-end; margin-bottom:18px; }
+  button { border:1px solid var(--teal); border-radius:5px; background:var(--teal); color:#fff; padding:9px 14px; font:inherit; cursor:pointer; }
+  button:focus-visible { outline:3px solid #5ab5cb; outline-offset:2px; }
+  footer { margin-top:34px; padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:.83rem; }
+  @page { size:Letter; margin:.55in .62in; }
+  @media print {
+    html { background:#fff; font-size:10pt; }
+    body { max-width:none; margin:0; padding:0; }
+    .actions { display:none; }
+    h2 { margin-top:20px; }
+    h2,h3 { break-after:avoid; }
+    table,tr,.box { break-inside:avoid; }
+    thead { display:table-header-group; }
+    a { color:inherit; text-decoration:none; }
+  }
+</style>
+</head>
+<body>
+<div class="actions"><button type="button" onclick="window.print()">Print or save as PDF</button></div>
+<header>
+  <svg viewBox="0 0 72 72" role="img" aria-label="SolariNet inventory mark"><rect x="7" y="7" width="58" height="58" rx="12" fill="#e8f2f5" stroke="#087a96" stroke-width="2"/><path d="M21 24h30v8H21zm0 16h21v8H21z" fill="none" stroke="#087a96" stroke-width="3" stroke-linejoin="round"/><circle cx="47" cy="44" r="5" fill="#087a96"/></svg>
+  <div><h1>Inventory scanner import</h1><p class="meta">SolariNet System of Record · Operator and developer guide · 21 October 2026</p></div>
+</header>
+<p class="lede">This guide covers the supported changeover from the standalone <code>scanner-ingest</code> app to the dashboard’s authenticated SoR inventory flow. The scanner remains the portable capture tool; the dashboard is the preferred write path into the shared inventory System of Record. A restricted local CLI maintenance path remains available.</p>
+
+<div class="box state"><strong>Release state:</strong> The dashboard upload and import code and the RackWire model-profile editor are implemented in the integration worktree. JSX, PHP syntax, route authorization, UI behavior, scratch-MariaDB transaction tests, authenticated HTTP routes, and the scanner-to-RackWire browser acceptance pass locally. Apply is bound to the preview plan fingerprint and rejects a stale preview. No scanner export has been applied to the live SoR; staged dashboard deployment and live operator verification remain pending.</div>
+
+<h2>1. Operator procedure</h2>
+<ol>
+  <li>In scanner-ingest, open <strong>Export &amp; backup</strong> and choose <strong>Download JSON</strong> under Migration data. Keep the downloaded file private as an inventory export.</li>
+  <li>Open the live SolariNet dashboard and sign in with an operator account. Open <strong>Inventory → Scanner import</strong>.</li>
+  <li>Select the downloaded JSON file. The dashboard accepts schema version 1 exports up to 4 MiB and shows the catalog item and asset counts before sending anything.</li>
+  <li>Review location matching. A unique byte-for-byte name match can be used automatically. The preview lists every source location and its resolved SoR ID and name. For duplicates or renamed locations, select the intended SoR location by its visible ID and name. Case or accent differences require an explicit mapping. For an unmatched location, either stop and fix the mapping or explicitly choose to preserve its source text in notes with no SoR location assigned.</li>
+  <li>Optionally match a scanner catalog item to an existing SoR model. Leave it unmatched to add or reuse the exact make/model. Optionally expand category mapping to override the automatic SoR hardware type for new models; categories that exactly match a type ignoring case map automatically, and unknown categories default to <code>other</code>. A category override does not change a model you matched to an existing SoR row. Review any assets marked <code>repair</code>; choose whether they should enter SoR as <code>in_stock</code> or <code>retired</code>. No repair default is selected.</li>
+  <li>Choose <strong>Preview import</strong>. Check the insert/reuse/skip counts and warnings. Preview performs reads only and writes no inventory.</li>
+  <li>Choose <strong>Apply import</strong> after checking the preview. Apply replans against the current SoR state and compares a plan fingerprint with the preview. If relevant inventory state changed, apply stops and asks you to preview again. A matching plan commits in one transaction or rolls back. On success, the dashboard refreshes its inventory view.</li>
+  <li>To place an imported device in a connection plan, open <strong>Inventory → Components → RackWire device profiles</strong>. Select its SoR model, define connector groups, port counts, link speeds, PoE capability and budget, and device/port power values supported by the hardware, then save. Confirm the hardware specifications before using the profile for design decisions. Open RackWire and place the model; scan its barcode to resolve the unit from shared inventory.</li>
+</ol>
+
+<div class="box danger"><strong>Location identity matters.</strong> The SoR may contain more than one location with the same display name. Select by location ID after confirming the physical destination. Do not map a scanner label to a similarly named location by guesswork.</div>
+
+<h3>Realtime network discovery and host ingest</h3>
+<p>For network-attached systems, open <strong>Discovery</strong> in the dashboard, enter an authorized IPv4 range, and start a bounded scan. SolariNet queues the scan and displays progress and results; it does not hold the dashboard request open while probes run. Review each discovered candidate, correct its name or class where needed, then choose <strong>Adopt</strong> to add it to monitoring. Adoption also mirrors the host name and IP address into the SoR network entity/address records, where normal SoR synchronization can publish supported network facts.</p>
+<div class="box state"><strong>Keep the two ingest paths distinct.</strong> Network discovery identifies and monitors reachable hosts. Adoption does not create a physical <code>hardware_units</code> asset, barcode, purchase/location record, or verified RackWire model profile. Use scanner-ingest import or the inventory editor for physical equipment; then scan its barcode in RackWire to link the planned device to the SoR asset. A scan can be queued and reviewed in the candidate build, but a real lab-subnet scan and authenticated adoption have not been verified in this browser test.</div>
+
+<div class="box state"><strong>Live mapping check · read-only · 21 October 2026.</strong> The scanner source has 2 catalog items and 2 assets, with one asset at <code>Bin #5</code> and one at <code>Nook</code>. The live SoR has two active location rows, IDs <code>9103</code> and <code>9104</code>, both named <code>Painted Fern</code>; a direct live query confirms both are root-level <code>site</code> rows with no parent path to distinguish them. Neither scanner label has a byte-exact match. Map each by physical destination before applying, or explicitly keep its source label in notes with no SoR location. No inventory rows were written by this check.</div>
+
+<h2>2. Import behavior</h2>
+<table>
+  <thead><tr><th>Scanner data</th><th>SoR behavior</th><th>Operator consequence</th></tr></thead>
+  <tbody>
+    <tr><td>Catalog item</td><td>Reuses an existing exact make/model or inserts a hardware model. The scanner UUID is retained in <code>external_refs</code>; original item fields are preserved in notes.</td><td>Use an explicit model match only when the destination model is the same product.</td></tr>
+    <tr><td>Physical asset</td><td>Inserts one <code>hardware_units</code> row with its tag, serial, mapped location, quantity 1, stock state, and scanner provenance.</td><td>An existing asset tag/serial collision stops the entire transaction for reconciliation.</td></tr>
+    <tr><td>Asset tag and serial</td><td>Creates per-unit <code>barcodes</code> records where values are present. Original scanner details remain in notes.</td><td>A code already assigned elsewhere is a conflict; no code or unit is overwritten.</td></tr>
+    <tr><td>Archived source rows</td><td>Archived catalog items and assets are skipped. Active assets cannot refer to an archived item.</td><td>Restore or correct source records in scanner-ingest before export if they should be active.</td></tr>
+    <tr><td>Repair status</td><td>Requires an explicit choice of <code>in_stock</code> or <code>retired</code>.</td><td>Resolve physical condition before applying; SoR has no repair stock state.</td></tr>
+  </tbody>
+</table>
+<p>Each imported fact is stamped with the <code>scanner-ingest</code> source and a dashboard operator audit entry. Repeating the same export is idempotent: unchanged rows are reused. If a previously imported row differs from its SoR state, the import stops and leaves existing data unchanged. Reconcile the discrepancy in the SoR or correct the source record before retrying.</p>
+
+<h2>3. Failure and recovery</h2>
+<table>
+  <thead><tr><th>Message or condition</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>Wrong schema, malformed JSON, or file too large</td><td>Export JSON again from scanner-ingest. The importer accepts only schema version 1 and caps the upload at 4 MiB.</td></tr>
+    <tr><td>No unique SoR location / ambiguous location</td><td>Choose a destination by ID, or deliberately preserve the source label in notes. Verify the physical room or bin first.</td></tr>
+    <tr><td>Repair status needs a decision</td><td>Inspect the asset and choose <code>in_stock</code> or <code>retired</code> before previewing again.</td></tr>
+    <tr><td>Existing inventory collision or changed prior import</td><td>Stop and reconcile the matching asset/model in the SoR. The importer is insert-only and does not repair existing rows.</td></tr>
+    <tr><td>SoR unavailable or transaction failed</td><td>No partial import is committed. Restore dashboard-to-SoR availability, then preview again.</td></tr>
+  </tbody>
+</table>
+<p>The importer serializes concurrent applies with a MariaDB advisory lock shared with the standalone CLI. The lock is released after success or failure. The dashboard session, operator role, and CSRF policy protect both preview and apply routes. The standalone scanner app remains loopback-bound by default and does not need to be exposed to the LAN.</p>
+<p>Preview returns a SHA-256 fingerprint over the normalized insert plan, counts, warnings, and resolved locations. Apply recomputes it after acquiring the shared import lock and refuses a mismatch. The database timestamp is excluded from the fingerprint because it is generated when rows are inserted.</p>
+
+<h2>4. Developer contract</h2>
+<ul>
+  <li><code>dashboard/api/lib/ScannerImport.php</code> validates the portable snapshot, inspects destination schema and enum constraints, builds bounded lookup indexes for the fields it matches, confirms candidates with SoR collation rules, and executes one insert-only plan transactionally. Preview and apply share the planner.</li>
+  <li><code>POST /api/inventory/scanner-import/preview</code> and <code>POST /api/inventory/scanner-import/apply</code> are operator routes registered through the existing inventory policy. Payload: <code>{snapshot, mapping, repairStatus, unmappedLocation}</code>; apply also requires the preview's 64-character <code>expectedFingerprint</code>.</li>
+  <li>Supported mapping keys are <code>locations</code> (scanner label → SoR location ID), <code>models</code> (scanner item UUID → SoR model ID), and <code>categories</code> (scanner category → SoR hardware type). The UI exposes all three. Category matching defaults to a case-insensitive exact hardware-type name, then <code>other</code>; an explicit category choice only affects newly created models.</li>
+  <li>Snapshot bounds: at most 1,000 items and 5,000 assets; request body at most 4 MiB. The byte cap accommodates realistic exports at the full row limit while remaining below PHP's standard 8 MiB post body limit. Source IDs must be canonical lowercase UUIDs, matching scanner-ingest exports; uppercase variants are rejected because SoR external-reference keys use a case-insensitive collation. Archived state and version are validated before DB access.</li>
+  <li>Destination tables must use InnoDB and match the required columns from SoR migrations 014 and 015, including <code>external_refs</code>, <code>barcodes</code>, and <code>audit_log</code>. Length, enum, soft-delete, collation, reference, and uniqueness checks fail closed.</li>
+  <li>The scanner app’s JSON export is the interface. No direct browser call to its unauthenticated local API, remote DB credential, LAN listener, or server-side JavaScript is introduced.</li>
+</ul>
+
+<h3>Restricted local CLI maintenance path</h3>
+<p><code>scanner-ingest/export_sor.py</code> remains available for a named operator on a controlled host when the dashboard path cannot be used. It connects directly to MariaDB and is not the default changeover path. Use a restricted database account, the verified SoR TLS CA, and an approved import window. The CLI preview is read-only; applying requires the explicit <code>--apply</code> flag and a single transaction. It does not grant access to the scanner's LAN service or copy its database credentials into the dashboard.</p>
+<ul>
+  <li>It reads SQLite in read-only/query-only mode and imports only active catalog items and assets. Archived rows are skipped; it does not infer SoR deletion or archive actions.</li>
+  <li>CLI preview returns a plan fingerprint; <code>--apply</code> requires that fingerprint and rejects a changed plan. The dashboard and CLI share the same MariaDB advisory lock.</li>
+  <li>Use an explicit mapping file for scanner locations, model IDs, or categories that do not match the SoR. Repair state needs an explicit <code>--repair-status in_stock</code> or <code>--repair-status retired</code>; unmatched locations stop unless <code>--unmapped-location notes</code> is deliberately selected.</li>
+  <li>UUID references make repeated unchanged imports idempotent. Existing inventory is never overwritten; changed source rows, barcode collisions, soft-deleted references, and destination length violations stop for reconciliation.</li>
+  <li><code>scanner-ingest/sor-importer-role.sql</code> defines the CLI role: SELECT on <code>sources</code>, <code>hardware_models</code>, <code>hardware_units</code>, <code>locations</code>, <code>external_refs</code>, and <code>barcodes</code>; INSERT on those write tables plus <code>audit_log</code>. It grants no UPDATE, DELETE, DDL, or audit-log reads. Provision a dedicated account with a host restriction and protected secret outside Git; do not reuse the broad SoR synchronization account.</li>
+  <li>Live SoR preview on 21 October 2026 found an insert plan for two catalog items and two assets. Both source location names were deliberately retained only in notes because neither matched a live SoR location. Preview was read-only. The available synchronization account has broader privileges than the CLI needs, so no live apply or role provisioning has been performed.</li>
+  <li>The role definition and preview/apply/replay path passed all 15 database-backed exporter tests on disposable MariaDB 11.8.6, including denial checks for UPDATE and DELETE. The tests must never target production.</li>
+</ul>
+<p>See <code>scanner-ingest/EXPORT-SOR.md</code> for the full command contract and field mapping. Keep the dashboard flow as the normal operator path after its release is deployed.</p>
+
+<h3>Verification and release gate</h3>
+<table>
+  <thead><tr><th>Check</th><th>Current evidence</th></tr></thead>
+  <tbody>
+    <tr><td>Dashboard JSX parse</td><td><span class="pill verified">Passed</span> Vendored Babel parses all 16 dashboard JSX files, including <code>screens4.jsx</code>.</td></tr>
+    <tr><td>PHP syntax and route authorization</td><td><span class="pill verified">Passed</span> Import class and route file lint clean; route audit reports all writes operator/admin gated.</td></tr>
+    <tr><td>Scanner importer and duplicate-name UI</td><td><span class="pill verified">Passed · 21 Oct 2026</span> <code>tests/dashboard/test_scanner_import.php</code> ran against a temporary local MariaDB 11.8 database using SoR migrations 001, 014, 015, and 020. It covers preview-only behavior, byte-exact location matching, rejection of uppercase source UUIDs, stale-plan rejection after concurrent SoR change, apply, repeat import, no-overwrite conflict, and full rollback on collision; fixture rows were removed. <code>tests/dashboard/test_scanner_import_ui.js</code> uses two same-name location rows (#9103 and #9104), verifies both IDs are visible, selects #9104, and checks that preview sends and displays that exact ID. It also chooses a category override and verifies the request carries that SoR hardware type. The standalone scanner-ingest suite ran 63 tests: all passed, including the optional ZXing decoder and all 15 MariaDB exporter cases against a disposable MariaDB 11.8.6 schema. On 21 Oct 2026, the dashboard import planner, UI, authenticated HTTP routes, and browser flow also passed against separate migrated loopback SoR fixtures. The browser test uploads a schema-conformant export fixture. Additionally, the running local scanner app's actual schema-v1 JSON export (2 items, 2 assets) was exercised against a fresh disposable SoR with explicit location mappings: preview left all inventory counts unchanged; apply created 2 models, 2 units, 4 external references, and 2 barcodes; an identical preview-bound replay created no duplicates, and both location IDs read back. The disposable database was stopped and its port closed. No live SoR write occurred. The production dashboard remains undeployed and unverified.</td></tr>
+    <tr><td>Current SoR inventory scale</td><td><span class="pill verified">Observed · 21 Oct 2026</span> A read-only transaction through the deployed SoR service account returned aggregate counts only: 37 active hardware models, 40 active physical units, and zero active receipts, projects, or project allocations. No inventory rows or credentials were emitted. <strong>Inference:</strong> the combined inventory read is modest at the current scale; revisit pagination if the catalog or asset count grows materially.</td></tr>
+    <tr><td>Authenticated scanner HTTP routes</td><td><span class="pill verified">Passed · 21 Oct 2026</span> <code>tests/dashboard/test_scanner_import_http.php</code> exercised the real PHP front controller over loopback against a disposable MariaDB 11.8 schema. Both preview and apply reject anonymous and viewer sessions; missing CSRF is rejected on both endpoints, and apply requires the preview fingerprint. Valid preview/apply passed, including an explicit category-to-hardware-type override; stale fingerprint conflicted; a fresh preview plus apply replayed idempotently. The suite also verifies 5,000-asset preview fits under the 4 MiB request limit without writing inventory. Temporary inventory rows and the database container were removed. The check is wired into dashboard CI.</td></tr>
+    <tr><td>Scanner, SoR, RackWire, and discovery browser flow</td><td><span class="pill verified">Passed · 21 Oct 2026</span> <code>tests/browser/test_scanner_import_e2e.cjs</code> ran through the actual dashboard in Chromium against a fresh loopback SoR schema. It created a RackWire device profile, resolved a barcode to the imported SoR asset, persisted the device plan, submitted an asynchronous network scan, and verified progress survived navigation before completion appeared in Discovery. Scanner/SoR/plan fixtures, the temporary database account, and the schema were removed; cleanup was verified. No production data was involved.</td></tr>
+    <tr><td>Deployed dashboard / live SoR verification</td><td><span class="pill pending">Unverified</span> The browser acceptance used the local candidate and a disposable database. A staged dashboard deployment and operator-session verification against the intended SoR remain pending before production changeover.</td></tr>
+  </tbody>
+</table>
+<p>Run the database-backed tests (<code>test_sor_transactions.php</code>, <code>test_scanner_import.php</code>, <code>test_scanner_import_http.php</code>, and <code>test_scanner_import_e2e.cjs</code>) only against a disposable local database named <code>solarinet_*</code>, with <code>SOLARI_TEST_SOR_DB=1</code> and loopback <code>SOR_DB_HOST</code>. Each harness refuses a non-loopback host or non-scratch database name. The HTTP and browser tests start private local services and synthetic operator sessions; none reads or writes the live SoR. The browser acceptance also removes its temporary database user and schema.</p>
+
+<h2>5. UI style decisions</h2>
+<p>The import is embedded in Inventory and follows the dashboard’s existing dark, compact administrative UI. The workflow has one primary action at each stage: select the file, review mappings, preview, then apply. Advanced model and category mapping are collapsed by default. The category section states the automatic mapping and fallback; location IDs stay visible where duplicate names need distinction. Errors are announced in an alert region, asynchronous results use status text, controls remain keyboard reachable, and no motion is required to understand the state.</p>
+
+<footer>SolariNet candidate integration documentation. This guide describes the implementation in the local integration worktree; it does not assert deployment or live database application. Source app: <code>~/Code/scanner-ingest</code>. SoR schema: migrations 014 and 015.</footer>
+<script>document.addEventListener("keydown",function(e){if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="p"){e.preventDefault();window.print();}});</script>
+</body>
+</html>

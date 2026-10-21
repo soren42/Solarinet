@@ -16,6 +16,21 @@
 
 #include <string.h>
 
+static uint64_t g_expectedNodeId;
+static const char *g_expectedCertCn;
+static solariStatus g_identityLookupStatus;
+
+solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t nodeId,
+                                     const char *certCn, bool *matches)
+{
+    if (!db || !matches) return ERR_INVALID_ARG;
+    *matches = false;
+    if (g_identityLookupStatus != SOLARI_OK) return g_identityLookupStatus;
+    *matches = nodeId == g_expectedNodeId && certCn && g_expectedCertCn &&
+               strcmp(certCn, g_expectedCertCn) == 0;
+    return SOLARI_OK;
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -26,6 +41,9 @@ static void test_role_from_cn(void)
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_CLIENT,  serverIngestRoleFromCn("client.akoria.net"));
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_MONITOR, serverIngestRoleFromCn("monitor.akoria.net"));
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_SERVER,  serverIngestRoleFromCn("server.akoria.net"));
+    /* Enrollment uses the same dotted-role form; colon subjects are rejected. */
+    TEST_ASSERT_EQUAL_INT(INGEST_ROLE_MONITOR, serverIngestRoleFromCn("monitor.beryl.akoria.net"));
+    TEST_ASSERT_EQUAL_INT(INGEST_ROLE_UNKNOWN, serverIngestRoleFromCn("monitor:beryl.akoria.net"));
     /* bare labels (no dot) are honoured */
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_CLIENT,  serverIngestRoleFromCn("client"));
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_MONITOR, serverIngestRoleFromCn("monitor"));
@@ -35,6 +53,28 @@ static void test_role_from_cn(void)
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_UNKNOWN, serverIngestRoleFromCn(NULL));
     /* a prefix that merely starts with "client" but is a different label */
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_UNKNOWN, serverIngestRoleFromCn("clienthost.x"));
+}
+
+static void test_hello_identity_matches_authenticated_certificate(void)
+{
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "node.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_MONITOR, "monitor-1.akoria.net", "monitor.monitor-1.akoria.net"));
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_SERVER, "xenon.akoria.net", "server.xenon.akoria.net"));
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "NODE.AKORIA.NET", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "other.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_MONITOR, "node.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        (solariRole)99, "node.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "node.akoria.net", NULL));
 }
 
 /* ---- authorization matrix ---- */
@@ -145,17 +185,31 @@ static void test_report_validation_never_marks_before_commit(void)
     solariFrameHeader header;
     memset(&ctx, 0, sizeof ctx);
     memset(&header, 0, sizeof header);
+    ctx.db = (serverDb *)1; /* test stub models the approved node lookup */
     header.msgType = SCP_MSG_CLIENT_REPORT;
     header.sourceNodeId = 42;
     header.seqNo = 7;
+    g_expectedNodeId = 42;
+    g_expectedCertCn = "client.test";
+    g_identityLookupStatus = SOLARI_OK;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
+    header.sourceNodeId = 43;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &header, "client.test"));
+    header.sourceNodeId = 42;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &header, "client.other"));
+    g_identityLookupStatus = ERR_DB;
+    TEST_ASSERT_EQUAL_INT(ERR_DB,
+        serverIngestValidate(&ctx, &header, "client.test"));
 }
 
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_role_from_cn);
+    RUN_TEST(test_hello_identity_matches_authenticated_certificate);
     RUN_TEST(test_matrix_client);
     RUN_TEST(test_matrix_monitor_is_superset);
     RUN_TEST(test_matrix_server_and_unknown);

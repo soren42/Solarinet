@@ -40,9 +40,9 @@ SupplementaryGroups=solari-ctl
 ; remains the real gate.
 RuntimeDirectory=solari
 RuntimeDirectoryMode=0751
-WorkingDirectory=/opt/solarinet
+WorkingDirectory=/opt/solarinet/current
 EnvironmentFile=/etc/solarinet/server.env
-ExecStart=/opt/solarinet/bin/solariServer --config /etc/solarinet/server.conf
+ExecStart=/opt/solarinet/current/bin/solariServer --config /etc/solarinet/server.conf
 Restart=on-failure
 RestartSec=2
 

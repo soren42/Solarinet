@@ -25,6 +25,16 @@ option(SOLARI_BUILD_TESTS  "Build the Unity test suites"            ON)
 option(SOLARI_WITH_IO      "Build the nng/mbedTLS transport layer"  OFF)
 option(SOLARI_WITH_SQLITE  "Build the SQLite store-and-forward spool" OFF)
 option(SOLARI_WITH_JSON    "Enable the cJSON config overlay"        OFF)
+option(SOLARI_BUILD_FUZZERS "Build Clang/libFuzzer protocol parser targets" OFF)
+
+if(SOLARI_BUILD_FUZZERS)
+  if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "SOLARI_BUILD_FUZZERS requires Clang with libFuzzer support")
+  endif()
+  if(NOT SOLARI_BUILD_TESTS)
+    message(FATAL_ERROR "SOLARI_BUILD_FUZZERS requires SOLARI_BUILD_TESTS=ON")
+  endif()
+endif()
 
 # ---- vendored deps (only when the I/O layer is on) -----------------------
 if(SOLARI_WITH_IO)
@@ -41,6 +51,16 @@ endif()
 
 # ---- libsolari (always) --------------------------------------------------
 add_subdirectory(lib/solari)
+
+# Instrument the shared protocol parser code for coverage-guided fuzzing.
+# `fuzzer-no-link` leaves normal test executables without libFuzzer's main;
+# the dedicated fuzzer target supplies it at link time.
+if(SOLARI_BUILD_FUZZERS)
+  target_compile_options(solari PRIVATE
+    -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
+  target_link_options(solari INTERFACE
+    -fsanitize=fuzzer-no-link,address,undefined)
+endif()
 
 # ---- components (only when enabled and their entry point exists) ---------
 # Client/monitor are Linux-first; the client self-skips on an OS whose PAL is

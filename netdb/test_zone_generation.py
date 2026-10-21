@@ -52,7 +52,9 @@ class GenerationTest(unittest.TestCase):
                         "--previous", str(previous)], check=True, capture_output=True, text=True)
         subprocess.run([sys.executable, str(ROOT / "deploy/dns-bare/gen-bare.py"),
                         str(output / "db.akoria.net"), str(output),
-                        "--previous", str(previous)], check=True, capture_output=True, text=True)
+                        "--previous", str(previous), "--transfer", "10.7.0.10",
+                        "--transfer", "10.0.0.11"],
+                       check=True, capture_output=True, text=True)
 
     def test_isolated_generations_match_and_do_not_copy_removed_files(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -60,6 +62,23 @@ class GenerationTest(unittest.TestCase):
             first, second = folder / "first", folder / "second"
             self.render(first, folder / "absent")
             original = {path.name: path.read_bytes() for path in first.iterdir()}
+            forward_zone = (first / "db.akoria.net").read_text(encoding="utf-8")
+            reverse_zone = (first / "db.0.7.10.in-addr.arpa").read_text(encoding="utf-8")
+            primary_config = (first / "named.conf.akoria").read_text(encoding="utf-8")
+            self.assertIn("@              IN NS    chlorine", forward_zone)
+            self.assertIn("@              IN NS    radium", forward_zone)
+            self.assertIn("@ IN NS chlorine.akoria.net.", reverse_zone)
+            self.assertNotIn("radium.akoria.net.", reverse_zone)
+            forward_decl = next(line for line in primary_config.splitlines() if 'zone "akoria.net"' in line)
+            reverse_decl = next(line for line in primary_config.splitlines() if 'zone "0.7.10.in-addr.arpa"' in line)
+            self.assertIn("10.1.0.10", forward_decl)
+            self.assertIn("10.7.0.10", forward_decl)
+            self.assertIn("10.7.0.10", reverse_decl)
+            self.assertNotIn("10.1.0.10", reverse_decl)
+            self.assertNotIn("10.0.0.11", primary_config)
+            bare_config = (first / "named.conf.bare").read_text(encoding="utf-8")
+            self.assertIn("allow-transfer { 10.0.0.11; 10.7.0.10; }", bare_config)
+            self.assertIn("also-notify { 10.0.0.11; 10.7.0.10; }", bare_config)
             (first / "db.bare-obsolete").write_text("old retired zone", encoding="utf-8")
             self.render(second, first)
             actual = {path.name: path.read_bytes() for path in second.iterdir()}

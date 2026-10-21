@@ -136,8 +136,41 @@
         throw ApiError("BAD_JSON", "HTTP " + r.status + " — non-JSON response");
       }).then(function (j) {
         if (!r.ok && !(j && "ok" in j)) throw ApiError("HTTP_" + r.status, "HTTP " + r.status);
-        return unwrap(j);
+        var value = unwrap(j);
+        if (isWrite && typeof path === "string" && path.indexOf("/api/inventory/") === 0
+            && path.indexOf("/scanner-import/preview") < 0) invalidateInventorySnapshot();
+        return value;
       });
+    });
+  }
+
+  // Optional integrations degrade independently so they cannot take the core
+  // fleet view offline. Keep their transport freshness beside the fallback
+  // value; retain the last good payload through an outage and never let an
+  // empty fallback look like a successful empty result.
+  var optionalLastSuccess = Object.create(null);
+  var optionalLastValue = Object.create(null);
+  function getOptionalJSON(key, path, fallback) {
+    var attemptedAt = Date.now();
+    var load = typeof path === "function" ? path : function () { return getJSON(path); };
+    return Promise.resolve().then(load).then(function (value) {
+      var succeededAt = Date.now();
+      optionalLastSuccess[key] = succeededAt;
+      optionalLastValue[key] = value;
+      return {
+        value: value,
+        freshness: { state: "fresh", lastSuccess: succeededAt, lastAttempt: attemptedAt },
+      };
+    }).catch(function () {
+      var lastSuccess = optionalLastSuccess[key] || null;
+      return {
+        value: lastSuccess ? optionalLastValue[key] : fallback,
+        freshness: {
+          state: lastSuccess ? "stale" : "unknown",
+          lastSuccess: lastSuccess,
+          lastAttempt: attemptedAt,
+        },
+      };
     });
   }
   // expose raw helpers for screens that want ad-hoc calls
@@ -171,6 +204,8 @@
     },
     discovery:    "/api/discovery",         // ?status=new|all
     discScan:     "/api/discovery/scan",     // POST {cidr, ports?}
+    discScanRequest: function (id) { return "/api/discovery/scan-requests/" + encodeURIComponent(id); },
+    discScanStatus: function (id) { return "/api/discovery/scans/" + encodeURIComponent(id); },
     discAdopt:    function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/adopt"; },
     discIgnore:   function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/ignore"; },
     enrollments:  "/api/enrollments",       // ?status=
@@ -210,11 +245,14 @@
     dnsRpz:         "/api/dns/rpz",      // standalone RPZ status (future use)
 
     // ---- inventory (SoR migration 014) ----
-    inventory:    "/api/inventory",          // combined read: {models,units,locations,receipts,projects,allocations}
+    inventory:    "/api/inventory",          // bounded legacy aggregate; browser adapter reads pages below
+    scannerImport: function (mode) { return "/api/inventory/scanner-import/" + (mode === "apply" ? "apply" : "preview"); },
     invUnits:     "/api/inventory/units",    // GET list / POST create
+    invComponents:"/api/inventory/components", // paginated hardware-unit list
     invUnit:      function (id) { return "/api/inventory/units/" + encodeURIComponent(id); },   // POST update
     invModels:    "/api/inventory/models",   // GET list / POST create
     invLocations: "/api/inventory/locations",// GET tree / POST create
+    invFlatLocations: "/api/inventory/locations?flat=1", // paginated flat location list
     invReceipts:  "/api/inventory/receipts", // GET list / POST create (multipart scan upload)
     invProjects:  "/api/inventory/projects", // GET list / POST create
     invProject:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id); },
@@ -236,6 +274,102 @@
     locContents:  function (id) { return "/api/inventory/locations/" + encodeURIComponent(id) + "/contents"; },
     projRollup:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id) + "/rollup"; },
   };
+
+  // Inventory data has to be complete for cross-references in the current UI,
+  // but it must not arrive as one unbounded response. Read each collection in
+  // validated pages; keep a short cache so bootstrap and the mounted inventory
+  // screen share one snapshot instead of repeating the same fan-out.
+  var INVENTORY_PAGE_SIZE = 1000;
+  var INVENTORY_MAX_ROWS = 100000;
+  var inventorySnapshot = null;
+  var inventorySnapshotAt = 0;
+  var inventorySnapshotLoad = null;
+  var inventorySnapshotGeneration = 0;
+  function invalidateInventorySnapshot() {
+    inventorySnapshotGeneration++;
+    inventorySnapshot = null;
+    inventorySnapshotAt = 0;
+    inventorySnapshotLoad = null;
+  }
+  function getInventoryList(path) {
+    var rows = [];
+    var seen = Object.create(null);
+    var expectedTotal = null;
+    var offset = 0;
+    var pages = 0;
+    function readPage() {
+      if (++pages > Math.ceil(INVENTORY_MAX_ROWS / INVENTORY_PAGE_SIZE)) {
+        return Promise.reject(ApiError("INVENTORY_TOO_LARGE", "Inventory exceeds the dashboard’s 100,000-row collection limit."));
+      }
+      var separator = path.indexOf("?") >= 0 ? "&" : "?";
+      var requestPath = path + separator + "limit=" + INVENTORY_PAGE_SIZE + "&offset=" + offset;
+      return getJSON(requestPath).then(function (result) {
+        var page = result && result.page;
+        var items = result && result.items;
+        if (!Array.isArray(items) || !page || page.limit !== INVENTORY_PAGE_SIZE
+            || page.offset !== offset || !Number.isInteger(page.total) || page.total < 0
+            || typeof page.hasMore !== "boolean") {
+          throw ApiError("BAD_INVENTORY_PAGE", "Inventory returned invalid pagination metadata.");
+        }
+        if (page.total > INVENTORY_MAX_ROWS) {
+          throw ApiError("INVENTORY_TOO_LARGE", "Inventory exceeds the dashboard’s 100,000-row collection limit.");
+        }
+        if (expectedTotal !== null && expectedTotal !== page.total) {
+          throw ApiError("INVENTORY_CHANGED", "Inventory changed during paging. Reload to retry.");
+        }
+        if (expectedTotal === null) expectedTotal = page.total;
+        if (items.length > INVENTORY_PAGE_SIZE || page.hasMore !== (offset + items.length < page.total)
+            || page.nextOffset !== (page.hasMore ? offset + items.length : null)
+            || (page.hasMore && items.length === 0)) {
+          throw ApiError("BAD_INVENTORY_PAGE", "Inventory returned inconsistent pagination metadata.");
+        }
+        items.forEach(function (item) {
+          if (item && item.id != null) {
+            var id = String(item.id);
+            if (seen[id]) throw ApiError("INVENTORY_CHANGED", "Inventory changed during paging. Reload to retry.");
+            seen[id] = true;
+          }
+          rows.push(item);
+        });
+        if (page.hasMore) {
+          offset = page.nextOffset;
+          return readPage();
+        }
+        if (rows.length !== page.total) throw ApiError("INVENTORY_CHANGED", "Inventory changed during paging. Reload to retry.");
+        return rows;
+      });
+    }
+    return readPage();
+  }
+  function fetchInventorySnapshot(force) {
+    if (inventorySnapshotLoad) return inventorySnapshotLoad;
+    if (!force && inventorySnapshot && Date.now() - inventorySnapshotAt < 5000) {
+      return Promise.resolve(inventorySnapshot);
+    }
+    var load = Promise.all([
+      getInventoryList(EP.invModels),
+      getInventoryList(EP.invComponents),
+      getInventoryList(EP.invFlatLocations),
+      getInventoryList(EP.invReceipts),
+      getInventoryList(EP.invProjects),
+      getInventoryList(EP.invAllocations),
+    ]).then(function (lists) {
+      return { models: lists[0], units: lists[1], locations: lists[2], receipts: lists[3], projects: lists[4], allocations: lists[5] };
+    });
+    var generation = inventorySnapshotGeneration;
+    inventorySnapshotLoad = load.then(function (value) {
+      if (generation === inventorySnapshotGeneration) {
+        inventorySnapshot = value;
+        inventorySnapshotAt = Date.now();
+        inventorySnapshotLoad = null;
+      }
+      return value;
+    }, function (error) {
+      if (generation === inventorySnapshotGeneration) inventorySnapshotLoad = null;
+      throw error;
+    });
+    return inventorySnapshotLoad;
+  }
 
   // =====================================================================
   // mappers: wire row -> the SOLARI shape data.jsx exposes
@@ -620,24 +754,24 @@
       getJSON(EP.netgear),
       // new operator-config reads; tolerate failure so they never force the
       // whole dashboard into the offline fixture.
-      getJSON(EP.pools).catch(function () { return []; }),
-      getJSON(EP.assets).catch(function () { return []; }),
+      getOptionalJSON("pools", EP.pools, []),
+      getOptionalJSON("assets", EP.assets, []),
       // whoami — identity chip in the TopBar. Never let it break the boot:
       // an auth-gated deployment already 401s on the reads above.
-      getJSON(EP.whoami).catch(function () { return null; }),
+      getOptionalJSON("operator", EP.whoami, null),
       // Opie / Analysis reports — never let a missing panel break the boot.
-      getJSON(EP.opie + "?status=all").catch(function () { return []; }),
+      getOptionalJSON("analysis", EP.opie + "?status=all", []),
       // Inventory (SoR migration 014) — tolerate absence so it never forces the
       // whole dashboard offline; the Inventory screen also re-reads on mount.
-      getJSON(EP.inventory).catch(function () { return null; }),
+      getOptionalJSON("inventory", function () { return fetchInventorySnapshot(true); }, null),
       // Maintenance windows — the whole set (active/upcoming/past) so the screen
       // AND the in-maintenance badges (which cross-reference active windows) have
       // the data client-side. Tolerate absence so it never forces the fixture.
-      getJSON(EP.maintenance + "?status=all").catch(function () { return []; }),
+      getOptionalJSON("maintenance", EP.maintenance + "?status=all", []),
       // Git (Forgejo) + CA/PKI read-only integrations — tolerate absence so a
       // missing token / unreachable CA never forces the whole dashboard offline.
-      getJSON(EP.forgejo).catch(function () { return null; }),
-      getJSON(EP.ca).catch(function () { return null; }),
+      getOptionalJSON("forgejo", EP.forgejo, null),
+      getOptionalJSON("certificates", EP.ca, null),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -655,22 +789,23 @@
       var buildsW = (res[8] && Array.isArray(res[8].builds)) ? res[8].builds : A(res[8]);
       var configW = res[9] || {};
       var gearW = A(res[10]);
-      var poolsW = A(res[11]);
-      var assetsW = A(res[12]);
-      var opieW = A(res[14]);
-      var maintW = A(res[16]);
+      var poolsW = A(res[11].value);
+      var assetsW = A(res[12].value);
+      var opieW = A(res[14].value);
+      var maintW = A(res[16].value);
       // Git (Forgejo) + CA/PKI — mapped (null-tolerant) integration payloads.
-      var git = mapForgejo(res[17]);
-      var ca = mapCa(res[18]);
-      // inventory — combined read; normalise each list, tolerate a null/partial payload.
-      var invW = res[15] && typeof res[15] === "object" ? res[15] : {};
+      var git = mapForgejo(res[17].value);
+      var ca = mapCa(res[18].value);
+      // inventory — validated paginated collection reads, tolerant of API absence.
+      var invResult = res[15].value;
+      var invW = invResult && typeof invResult === "object" ? invResult : {};
       var inventory = {
         models: A(invW.models), units: A(invW.units), locations: A(invW.locations),
         receipts: A(invW.receipts), projects: A(invW.projects), allocations: A(invW.allocations),
         seq: (FIXTURE.inventory && FIXTURE.inventory.seq) || { unit: 100, location: 100, receipt: 100, project: 100, allocation: 100, model: 100 },
       };
       // whoami -> S.operator {name, role, displayName, source, directoryEnabled}
-      var whoW = res[13];
+      var whoW = res[13].value;
       var operator = (whoW && whoW.operator) ? {
         name: whoW.operator,
         role: whoW.role || "viewer",
@@ -787,6 +922,16 @@
         pools: poolsW, assets: assetsW,
         inventory: inventory,
         git: git, ca: ca,
+        freshness: {
+          pools: Object.assign({ label: "Network pools" }, res[11].freshness),
+          assets: Object.assign({ label: "Monitored assets" }, res[12].freshness),
+          operator: Object.assign({ label: "Operator identity" }, res[13].freshness),
+          analysis: Object.assign({ label: "Analysis reports" }, res[14].freshness),
+          inventory: Object.assign({ label: "Inventory" }, res[15].freshness),
+          maintenance: Object.assign({ label: "Maintenance windows" }, res[16].freshness),
+          forgejo: Object.assign({ label: "Forgejo" }, res[17].freshness),
+          certificates: Object.assign({ label: "Certificates" }, res[18].freshness),
+        },
         systemNodes: systemNodes, fleet: allFleet,
         monitors: monitors,
         server: server,
@@ -898,6 +1043,8 @@
         .then(function (w) { return (Array.isArray(w) ? w : []).map(mapDiscovered); });
     },
     discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
+    discoverScanRequest: function (id) { return getJSON(EP.discScanRequest(id)); },
+    discoverScanStatus: function (id) { return getJSON(EP.discScanStatus(id)); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
     ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },
     // pools + assets (operator config; writes go to the C bridge server-side)
@@ -950,7 +1097,10 @@
 
     // ---- inventory (SoR migration 014) ----
     // Combined read → {models,units,locations,receipts,projects,allocations}.
-    inventory:        function () { return getJSON(EP.inventory); },
+    inventory:        function (force) { return fetchInventorySnapshot(!!force); },
+    scannerImport:    function (mode, body) { return post(EP.scannerImport(mode), body || {}); },
+    rackwireLibrary:  function () { return getJSON("/api/rackwire/library"); },
+    saveRackwireProfile: function (modelId, body) { return post("/api/rackwire/library/" + encodeURIComponent(modelId) + "/groups", body || {}); },
     // components (hardware_units)
     createUnit:       function (body) { return post(EP.invUnits, body || {}); },
     updateUnit:       function (id, body) { return post(EP.invUnit(id), body || {}); },

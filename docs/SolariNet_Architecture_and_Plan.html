@@ -93,6 +93,48 @@
   @media(max-width:760px){.twocol{grid-template-columns:1fr}}
   .footnote{font-size:13.5px;color:var(--ink-dim)}
   ::selection{background:rgba(124,92,255,.35)}
+  @page{size:Letter;margin:.52in .58in}
+  @media print{
+    html,body{background:#fff!important;color:#17212b!important;font-size:9.5pt;line-height:1.34}
+    body{margin:0;-webkit-font-smoothing:grayscale}
+    .wrap{max-width:none;padding:0}
+    .cover{min-height:0;display:block;padding:.65in 0 .35in;background:#fff!important;border-bottom:2px solid #087a96;break-after:page}
+    h1.title{font-size:34pt;line-height:1.05;color:#14222d}
+    h1.title .sub{color:#425664}
+    .kicker,.h2num,.note .lbl{color:#075a70}
+    .lead{color:#243746}
+    section{padding:.22in 0;border-color:#ccd5dc}
+    h2{font-size:21pt;color:#075a70}
+    h3{font-size:13pt;color:#14222d;margin:18px 0 6px}
+    h4{font-size:9pt;color:#075a70;margin:14px 0 5px}
+    p,li{orphans:3;widows:3}
+    li{margin:2px 0}
+    strong{color:#14222d}
+    em{color:#425664}
+    a{color:#075a70;border:0;text-decoration:none}
+    code{background:#f1f4f7;color:#243b53;padding:0 2px}
+    pre,.diagram,nav.toc,.note,.phase,.meta-grid,table{break-inside:avoid}
+    pre,.diagram{background:#f4f6f8!important;color:#14222d!important;border-color:#cbd6dc;white-space:pre-wrap;overflow-wrap:anywhere}
+    pre{font-size:7.5pt;line-height:1.25;padding:8px}
+    .diagram pre{color:#243b53!important}
+    pre .c{color:#526274}
+    pre .k{color:#244f9e}
+    pre .s{color:#28733b}
+    pre .n{color:#8a4b00}
+    pre .t{color:#126b67}
+    pre .f{color:#80581c}
+    .note,.phase,nav.toc,.meta-grid div,td,th{background:#f7f9fa!important;color:#14222d!important;border-color:#cbd6dc}
+    .meta-grid{display:grid;grid-template-columns:repeat(2,1fr);background:#cbd6dc}
+    .meta-grid .k,.footnote{color:#425664}
+    .meta-grid .v,nav.toc a{color:#14222d}
+    .twocol{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    table{font-size:8pt;margin:8px 0 12px}
+    th,td{padding:4px 5px}
+    th{color:#075a70!important}
+    nav.toc ol{column-count:2}
+    .pill,.tag{color:#075a70!important;border-color:#9eb8c2;background:#eef4f6}
+    hr.soft{border-color:#9eb8c2}
+  }
 </style>
 </head>
 <body>
@@ -105,11 +147,11 @@
     </h1>
     <div class="meta-grid">
       <div><div class="k">Document</div><div class="v">Architecture &amp; Implementation Plan</div></div>
-      <div><div class="k">Version</div><div class="v">1.0 · Build Spec</div></div>
+      <div><div class="k">Version</div><div class="v">1.0 · Architecture reference · 2026-10-20</div></div>
       <div><div class="k">Author</div><div class="v">Jason C. Kay</div></div>
       <div><div class="k">Language</div><div class="v">ANSI/ISO C99, K&amp;R-style, functions only</div></div>
-      <div><div class="k">Audience</div><div class="v">Autonomous coding agent (Claude Code / Codex)</div></div>
-      <div><div class="k">Status</div><div class="v">Ready for implementation</div></div>
+      <div><div class="k">Audience</div><div class="v">Operator and engineering teams</div></div>
+      <div><div class="k">Status</div><div class="v">Implementation built; stabilization gates open</div></div>
     </div>
   </div>
 </header>
@@ -118,13 +160,14 @@
 
 <section id="howto">
   <h2><span class="h2num">§ 0</span>How to use this document</h2>
-  <p class="lead">This is a complete, self-contained build specification. An autonomous coding agent should be able to implement the entire system from this document with no further design input.</p>
-  <p>The document proceeds from <strong>strategy</strong> (why) to <strong>architecture</strong> (shape) to <strong>scaffolding</strong> (exact headers, signatures, schema, build files) to a <strong>phased task plan</strong> (the worklist). Read it in order once; thereafter §§5–12 are the implementation reference and §16 is the execution checklist.</p>
+  <p class="lead">This is SolariNet's architecture and implementation reference. The main codebase and several subprojects now exist; this document records the intended system contracts and design decisions.</p>
+  <div class="note warn"><span class="lbl">Current status · 2026-10-20</span>The original phase breakdown below is a historical build plan, not the current release checklist. Stabilization, integration, scanner-ingest I5, verification, and release gates live in <a href="SolariNet_Stabilization_Integration_Workflow_2026-08-09.md">the active workflow</a> and <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">the current baseline</a>. A passing local build does not close those gates.</div>
+  <p>The document proceeds from <strong>strategy</strong> (why) to <strong>architecture</strong> (shape) to <strong>scaffolding</strong> (headers, signatures, schema, build files) to the original <strong>phased task plan</strong>. Use the active workflow for remaining work and the baseline for verified state.</p>
   <div class="note pick">
     <span class="lbl">Agent instructions</span>
-    Implement strictly in <strong>C99</strong> using only functions and plain <code>struct</code>s — no C++, no object orientation, no opaque OOP emulation beyond the documented handle pattern. Honor the coding standards in §17 (camelCase identifiers, K&amp;R brace style, doc-comment headers). Build each module behind its published header (§§6–9) so components remain independently testable. Where a function body is not given, the signature plus its doc-comment is the contract — implement to it. Do not introduce Node.js, server-side JavaScript, or any npm-based tooling anywhere in the toolchain. The only non-C runtime is PHP 8.x for the dashboard (§11), reading the same MariaDB the server writes (§10).
+    Keep the monitoring server core strictly in <strong>C99</strong> using functions and plain <code>struct</code>s — no C++, no object orientation, and no opaque OOP emulation beyond the documented handle pattern. Honor §17 coding conventions. The dashboard uses PHP 8.x; Python supports operational automation and standalone integrations. Do not introduce Node.js, server-side JavaScript, or an npm build tool into components that do not already use one.
   </div>
-  <p>The dashboard's <em>visual</em> design is intentionally out of scope here — it is produced separately in Claude Design. §11 specifies only the data contract (REST/JSON endpoints, auth, payload shapes) the dashboard binds to, so the two efforts compose cleanly.</p>
+  <p>The dashboard's original visual and data-contract intent is included here; the implemented UI, APIs, SoR, RackWire boundary, and subproject integration are tracked and verified separately in the active workflow.</p>
 
   <nav class="toc">
     <h3>Contents</h3>
@@ -279,7 +322,7 @@
       </tr>
       <tr>
         <td>Tier-to-tier messaging</td><td><strong>nng</strong> (nanomsg-next-gen)</td><td class="pill ok">MPL-2.0</td>
-        <td>Single, portable C library implementing the exact scalability patterns we need: <code>PUSH/PULL</code> (client/monitor → server ingest), <code>SURVEYOR/RESPONDENT</code> (server polls monitor fleet), <code>PUB/SUB</code> (server → dashboards/notifications). Handles reconnect, backpressure, and message framing so we don't hand-roll it badly. MPL-2.0 is file-level copyleft — links cleanly into our C without infecting our source. <em>Rejected:</em> ZeroMQ (LGPL + C++ core, heavier), raw sockets for the control plane (we'd reinvent nng's reconnection/poll logic), gRPC (drags in C++/protobuf, violates the no-heavy-runtime tenet).</td>
+        <td>Single, portable C library implementing the exact scalability patterns we need: <code>PUSH/PULL</code> (best-effort ingest), <code>REQ/REP</code> (control plus durable-report ACKs), <code>SURVEYOR/RESPONDENT</code> (server polls monitor fleet), and <code>PUB/SUB</code> (server → dashboards/notifications). Handles reconnect, backpressure, and message framing so we don't hand-roll it badly. MPL-2.0 is file-level copyleft — links cleanly into our C without infecting our source. <em>Rejected:</em> ZeroMQ (LGPL + C++ core, heavier), raw sockets for the control plane (we'd reinvent nng's reconnection/poll logic), gRPC (drags in C++/protobuf, violates the no-heavy-runtime tenet).</td>
       </tr>
       <tr>
         <td>TLS</td><td><strong>mbedTLS</strong></td><td class="pill ok">Apache-2.0</td>
@@ -295,7 +338,7 @@
       </tr>
       <tr>
         <td>Local spool / store-and-forward</td><td><strong>SQLite</strong> (amalgamation)</td><td class="pill ok">Public domain</td>
-        <td>Single-file amalgamation compiled directly in. Each client/monitor spools reports locally when the server is unreachable, then drains on reconnect — this is what makes monitors "fully fault tolerant." Public domain, zero license friction.</td>
+        <td>Single-file amalgamation compiled directly in. Each client/monitor retains durable reports in SQLite until the authenticated server ACKs the matching sequence and reporter session; reconnect replay is deduplicated through transactional receipts. Public domain, zero license friction.</td>
       </tr>
       <tr>
         <td>Dashboard runtime</td><td><strong>PHP 8.x on Apache</strong></td><td>—</td>
@@ -451,12 +494,13 @@ solarinet/
     <thead><tr><th>Flag</th><th>Value</th><th>Meaning</th></tr></thead>
     <tbody>
       <tr><td><code>SCP_FLAG_NONE</code></td><td>0x00</td><td>No flags.</td></tr>
-      <tr><td><code>SCP_FLAG_ACK_REQ</code></td><td>0x01</td><td>Sender wants an <code>SCP_MSG_ACK</code> with matching <code>correlationId</code>.</td></tr>
-      <tr><td><code>SCP_FLAG_COMPRESSED</code></td><td>0x02</td><td>TLV payload is DEFLATE-compressed (large batched reports).</td></tr>
+      <tr><td><code>SCP_FLAG_ACK_REQ</code></td><td>0x01</td><td>Sender wants an <code>SCP_MSG_ACK</code> with matching <code>correlationId</code>. Durable reports also require the ACK TLV to echo <code>TLV_REPORT_SESSION</code>; the server ACKs only after report persistence.</td></tr>
+      <tr><td><code>SCP_FLAG_COMPRESSED</code></td><td>0x02</td><td>Reserved for DEFLATE payloads; protocol v1 receivers reject it because compression is not implemented.</td></tr>
       <tr><td><code>SCP_FLAG_SPOOL_REPLAY</code></td><td>0x04</td><td>Frame is a store-and-forward replay; server should dedup by <code>(sourceNodeId, seqNo)</code>.</td></tr>
       <tr><td><code>SCP_FLAG_URGENT</code></td><td>0x08</td><td>Bypass normal batching; evaluate alert rules immediately.</td></tr>
     </tbody>
   </table>
+  <p>Protocol v1 receivers require the reserved header byte to be zero, reject unsupported flag bits, and verify that the payload is a complete TLV sequence whose element count matches <code>tlvCount</code>. Unknown TLV types remain forward-compatible and count as elements.</p>
 
   <h3>5.4 Message types</h3>
   <table>
@@ -464,22 +508,23 @@ solarinet/
     <tbody>
       <tr><td><code>SCP_MSG_HELLO</code></td><td>0x01</td><td>node → server</td><td>Session open; declares role, version, capabilities.</td></tr>
       <tr><td><code>SCP_MSG_WELCOME</code></td><td>0x02</td><td>server → node</td><td>Accepts session; returns assigned schedule &amp; config epoch.</td></tr>
-      <tr><td><code>SCP_MSG_CLIENT_REPORT</code></td><td>0x10</td><td>client → server</td><td>Local host metrics snapshot (5.6).</td></tr>
-      <tr><td><code>SCP_MSG_MONITOR_REPORT</code></td><td>0x11</td><td>monitor → server</td><td>Probe results batch (5.7).</td></tr>
+      <tr><td><code>SCP_MSG_CLIENT_REPORT</code></td><td>0x10</td><td>client ↔ server</td><td>Local host metrics snapshot. ACK_REQ uses the authenticated control REQ/REP endpoint; ACK follows durable receipt and report persistence.</td></tr>
+      <tr><td><code>SCP_MSG_MONITOR_REPORT</code></td><td>0x11</td><td>monitor ↔ server</td><td>Probe results batch. ACK_REQ uses the authenticated control REQ/REP endpoint; ACK follows durable receipt and report persistence.</td></tr>
       <tr><td><code>SCP_MSG_WATCHDOG</code></td><td>0x12</td><td>watchdog → server</td><td>Liveness heartbeat for a supervised client.</td></tr>
       <tr><td><code>SCP_MSG_SURVEY</code></td><td>0x20</td><td>server → fleet</td><td>SURVEYOR: demand an immediate report round.</td></tr>
-      <tr><td><code>SCP_MSG_SURVEY_RESP</code></td><td>0x21</td><td>node → server</td><td>RESPONDENT: report produced in answer to a survey.</td></tr>
+      <tr><td><code>SCP_MSG_SURVEY_RESP</code></td><td>0x21</td><td>node ↔ server</td><td>RESPONDENT report; ACK_REQ uses the authenticated control REQ/REP endpoint and follows durable persistence.</td></tr>
       <tr><td><code>SCP_MSG_CONTROL</code></td><td>0x30</td><td>server → node</td><td>Config change / deploy directive (5.8).</td></tr>
       <tr><td><code>SCP_MSG_CONTROL_RESULT</code></td><td>0x31</td><td>node → server</td><td>Outcome of a control directive.</td></tr>
       <tr><td><code>SCP_MSG_WHO_IS_PRIMARY</code></td><td>0x40</td><td>node → server</td><td>Failover discovery query.</td></tr>
       <tr><td><code>SCP_MSG_PRIMARY_IS</code></td><td>0x41</td><td>server → node</td><td>Names the current lease holder.</td></tr>
-      <tr><td><code>SCP_MSG_ACK</code></td><td>0x50</td><td>any → any</td><td>Acknowledgement (when <code>ACK_REQ</code> set).</td></tr>
+      <tr><td><code>SCP_MSG_ACK</code></td><td>0x50</td><td>server → node</td><td>Durable-report acknowledgment. Correlation echoes report seqNo; <code>TLV_REPORT_SESSION</code> echoes the reporter session.</td></tr>
       <tr><td><code>SCP_MSG_ERROR</code></td><td>0x51</td><td>any → any</td><td>Structured error (code in TLV, see Appendix A).</td></tr>
     </tbody>
   </table>
 
   <h3>5.5 Node identity</h3>
-  <p><code>sourceNodeId</code> is a stable 64-bit id derived once at enrollment: <code>FNV-1a-64(hostFqdn || roleByte || enrollmentNonce)</code>, persisted in the node's config. It is independent of IP/MAC so it survives re-addressing. The mapping <code>nodeId ↔ (fqdn, role, cert CN)</code> lives in the server's <code>node</code> table (§10).</p>
+  <p><strong>Decision — retain the deployed deterministic node ID contract.</strong> Canonical node IDs use <code>FNV-1a-64("hostFqdn|roleNumber")</code>, implemented by <code>solariNodeIdFromFqdnRole()</code>. A read-only production query on 2026-10-21 confirmed that all nine deployed node IDs match this formula. The proposed nonce input has no established lifecycle or persisted value in the current enrollment system; introducing it would change IDs and require a coordinated migration. Remove the nonce from the architecture target unless a future design defines that lifecycle and a compatibility migration. Node IDs remain identifiers, not credentials: mutual TLS authenticates peers and server-side identity checks bind them to the enrolled node.</p>
+  <p><strong>Certificate name migration remains open.</strong> The same production query found all nine database <code>certCn</code> values are host-only, while the candidate enrollment and ingest contract now requires role-prefixed names such as <code>monitor.hostFqdn</code>. This is a database observation, not independent validation of each certificate's subject or SAN. Do not deploy the stricter candidate path until existing certificates are re-enrolled or a reviewed compatibility transition is in place. Preserve role-prefixed CN enforcement for new enrollment and authenticated frame binding.</p>
 
   <h3>5.6 TLV payload</h3>
   <p>Payloads are sequences of Type-Length-Value triples. This is what lets the protocol evolve without version bumps: unknown TLV types are skipped, not fatal.</p>
@@ -524,6 +569,10 @@ solarinet/
     TLV_CTRL_VERB           = <span class="n">0x3001</span>,  <span class="c">/* uint8: setConfig|deploy|restart|...  */</span>
     TLV_CTRL_PAYLOAD        = <span class="n">0x3002</span>,  <span class="c">/* opaque blob (e.g. new config, hash)  */</span>
     TLV_CTRL_TARGET_EPOCH   = <span class="n">0x3003</span>,  <span class="c">/* uint64 config epoch to converge to   */</span>
+    <span class="c">/* --- lifecycle (0x32xx) --- */</span>
+    TLV_LIFE_CONFIRM        = <span class="n">0x3201</span>,  <span class="c">/* uint64 one-time operator challenge    */</span>
+    TLV_LIFE_WIPE_SCOPE     = <span class="n">0x3202</span>,  <span class="c">/* uint8 selected teardown scope         */</span>
+    TLV_LIFE_GENERATION     = <span class="n">0x3203</span>,  <span class="c">/* uint64 generation-bound ack identity  */</span>
     <span class="c">/* --- error (0xFFxx) --- */</span>
     TLV_ERROR_CODE          = <span class="n">0xFF01</span>,  <span class="c">/* uint16, Appendix A                   */</span>
     TLV_ERROR_DETAIL        = <span class="n">0xFF02</span>   <span class="c">/* utf8 string                          */</span>
@@ -789,7 +838,7 @@ solariStatus solariSpoolNack  (solariSpool *s, <span class="t">uint64_t</span> r
     <li><strong>Catalogue (slow-changing):</strong> hostname/FQDN, OS &amp; version, hardware, architecture (armv7/arm64/x86/x86_64/ppc/…), network addresses, total RAM/swap/disk. Sent on HELLO and when changed.</li>
     <li><strong>Sample (fast-changing):</strong> per-core CPU load, RAM/swap used, free disk per mount, NIC throughput vs. capacity, USB-bus throughput vs. capacity.</li>
     <li><strong>Watch key software:</strong> for a configured set of processes — running state, count of open files (incl. network sockets), RSS; plus log-file monitoring (size deltas + regex match counts).</li>
-    <li><strong>Report:</strong> assemble an <code>SCP_MSG_CLIENT_REPORT</code> and push to the active server; spool locally on failure.</li>
+    <li><strong>Report:</strong> send an <code>SCP_MSG_CLIENT_REPORT</code> with <code>ACK_REQ</code> to the authenticated control REQ/REP endpoint; keep it in the SQLite spool until the server ACK echoes its sequence and reporter session after durable persistence.</li>
     <li><strong>Watchdog:</strong> a tiny sibling process that supervises the client, emits independent <code>SCP_MSG_WATCHDOG</code> heartbeats, and re-execs the client if it dies.</li>
   </ul>
 
@@ -889,7 +938,7 @@ solariStatus clientReportDrainSpool(clientContext *ctx);
     <li><strong>Service probing:</strong> for each configured target, run TCP connect / UDP echo / ICMP echo probes, recording RTT, jitter, packet loss permille, throughput vs. capacity, and outcome (ok/timeout/refused/unreachable).</li>
     <li><strong>Stationary service metadata:</strong> where a probe can cheaply learn it, capture service version/vendor/config banners (the "stationary" metadata in the brief).</li>
     <li><strong>Peer &amp; network-wide metrics:</strong> peer-to-peer reachability among monitors, transit time, bandwidth vs. capacity, connection speed, overhead, dropped packets.</li>
-    <li><strong>Report &amp; survive:</strong> push <code>SCP_MSG_MONITOR_REPORT</code>; spool on failure; answer server <code>SCP_MSG_SURVEY</code> on demand.</li>
+    <li><strong>Report &amp; survive:</strong> send <code>SCP_MSG_MONITOR_REPORT</code> with <code>ACK_REQ</code>; spool until durable server ACK. The current build still needs a verified survey-response sender before the monitor can answer <code>SCP_MSG_SURVEY</code> on demand.</li>
   </ul>
 
   <h3>8.2 Redundancy &amp; fault tolerance model</h3>
@@ -954,7 +1003,7 @@ solariStatus monitorPeerGossip(monitorContext *ctx);
   <table>
     <thead><tr><th>File</th><th>Subsystem</th><th>Role</th></tr></thead>
     <tbody>
-      <tr><td><code>serverIngest.c</code></td><td>Ingest</td><td>Binds PULL + RESPONDENT sockets, validates frames (role auth via cert CN), dedups <code>(nodeId,seqNo)</code>, hands parsed reports to the DB writer.</td></tr>
+      <tr><td><code>serverIngest.c</code></td><td>Ingest</td><td>Validates report identities and role; writes transactional receipts with report data. Durable report ACKs are emitted by the control REP handler only after dispatch succeeds.</td></tr>
       <tr><td><code>serverLease.c</code></td><td>Failover</td><td>Renews/claims the <code>serverLease</code> row; transitions active↔standby; answers <code>WHO_IS_PRIMARY</code>.</td></tr>
       <tr><td><code>serverDb.c</code></td><td>Persistence</td><td>MariaDB Connector/C; prepared-statement upserts for master records, append-only history, lease ops. Connection pool.</td></tr>
       <tr><td><code>serverMaster.c</code></td><td>Reconciliation</td><td>Merges overlapping monitor reports, maintains authoritative per-node/per-target current state, computes derived health.</td></tr>
@@ -1256,6 +1305,8 @@ hostFqdn    = hydrogen.akoria.net
 [server]
 primaryUrl  = tls+tcp://argon.akoria.net:7701
 failoverUrl = tls+tcp://neon.akoria.net:7701
+<span class="c"># Optional if not the matching primaryUrl port + 1 (default 7702)</span>
+reportAckUrl = tls+tcp://argon.akoria.net:7702
 
 [tls]
 caFile   = /etc/solari/ca.pem
@@ -1282,6 +1333,8 @@ nodeId   = <span class="c"># enrollment</span>
 [server]
 primaryUrl  = tls+tcp://argon.akoria.net:7701
 failoverUrl = tls+tcp://neon.akoria.net:7701
+<span class="c"># Optional if not the matching primaryUrl port + 1 (default 7702)</span>
+reportAckUrl = tls+tcp://argon.akoria.net:7702
 
 [probe]
 target = tcp:hydrogen.akoria.net:443 : web
@@ -1427,7 +1480,7 @@ WantedBy=multi-user.target
     <div class="pnum">Phase 5 · Server <span class="tag">depends: P1–P4, schema</span></div>
     <h3>solariServer ingest, failover, persistence</h3>
     <ul>
-      <li>Apply <code>db/schema.sql</code>; <code>serverDb.c</code> (MariaDB Connector/C, prepared stmts, pool).</li>
+      <li>Apply the ordered monitoring migrations with <code>tools/migrate.py</code>; <code>db/schema.sql</code> is a generated reference snapshot. <code>serverDb.c</code> provides MariaDB Connector/C, prepared statements, and the pool.</li>
       <li><code>serverLease.c</code> (election) + <code>serverIngest.c</code> (validate/dedup/dispatch) + <code>serverMaster.c</code> (reconcile overlaps).</li>
       <li><code>serverAlert.c</code> (rule eval → PUB) + <code>serverControl.c</code> (config/deploy push, epoch tracking).</li>
       <li><code>solariCtl.c</code> Unix-socket operator bridge.</li>
@@ -1489,6 +1542,7 @@ WantedBy=multi-user.target
       <tr><td><code>ERR_FRAME_BAD_MAGIC</code></td><td>-11</td><td>Sentinel mismatch.</td></tr>
       <tr><td><code>ERR_FRAME_BAD_CRC</code></td><td>-12</td><td>CRC-32 verification failed.</td></tr>
       <tr><td><code>ERR_PROTO_VERSION</code></td><td>-13</td><td>Unsupported protocol version.</td></tr>
+      <tr><td><code>ERR_FRAME_BAD_ENVELOPE</code></td><td>-14</td><td>Nonzero reserved byte, unsupported flag, malformed TLV sequence, or TLV count mismatch.</td></tr>
       <tr><td><code>ERR_TLV_END</code></td><td>-20</td><td>Reader reached end of payload (loop terminator, not fatal).</td></tr>
       <tr><td><code>ERR_TLV_TRUNCATED</code></td><td>-21</td><td>TLV length exceeds remaining bytes.</td></tr>
       <tr><td><code>ERR_CONN_RETRY</code></td><td>-30</td><td>Transient send/recv failure; caller should spool/retry.</td></tr>
@@ -1506,8 +1560,8 @@ WantedBy=multi-user.target
   <table>
     <thead><tr><th>Port</th><th>Purpose</th><th>Pattern</th></tr></thead>
     <tbody>
-      <tr><td>7701/tcp</td><td>Server ingest (client/monitor reports)</td><td>PULL ← PUSH, TLS</td></tr>
-      <tr><td>7702/tcp</td><td>Survey channel</td><td>SURVEYOR → RESPONDENT, TLS</td></tr>
+      <tr><td>7701/tcp</td><td>Best-effort server ingest (watchdog, adverts, control results)</td><td>PULL ← PUSH, TLS</td></tr>
+      <tr><td>7702/tcp</td><td>Survey, HELLO/primary lookup, durable report ACK</td><td>SURVEYOR/RESPONDENT + REQ/REP, TLS</td></tr>
       <tr><td>7703/tcp</td><td>Event publish (dashboard/notifiers)</td><td>PUB → SUB, TLS</td></tr>
       <tr><td>unix sock</td><td><code>solariCtl</code> operator bridge</td><td>REQ/REP, local only</td></tr>
     </tbody>
@@ -1530,8 +1584,8 @@ WantedBy=multi-user.target
 
 <footer style="padding:50px 0 80px;color:var(--ink-dim);font-size:13.5px">
   <hr class="soft">
-  <p><strong style="color:var(--ink)">SolariNet Monitoring</strong> — Architecture &amp; Implementation Plan · v1.0 Build Spec · prepared for autonomous implementation by Claude Code / Codex, with the C2 dashboard layout to be developed in Claude Design against the §11 contract.</p>
-  <p>This document is the single source of truth for the build. Where it is silent, prefer the simplest portable C99 solution consistent with the design tenets in §1.</p>
+  <p><strong style="color:var(--ink)">SolariNet Monitoring</strong> — Architecture &amp; Implementation Plan · v1.0 architecture reference · updated 2026-10-20.</p>
+  <p>This document records the architecture and implementation contracts. The active stabilization workflow and dated baseline linked above define current work and release status. Where implementation details differ, reconcile them against those current artifacts and update this reference.</p>
 </footer>
 
 </div>

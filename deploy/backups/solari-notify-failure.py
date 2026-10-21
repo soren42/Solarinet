@@ -47,11 +47,11 @@ def load_config(explicit_path):
                 return cfg, path
         except FileNotFoundError:
             continue
-        except OSError as exc:
-            warn(f"config unreadable: {path}: {exc}")
+        except OSError:
+            warn(f"config unreadable: {path}")
             continue
-        except configparser.Error as exc:
-            warn(f"config invalid: {path}: {exc}")
+        except configparser.Error:
+            warn(f"config invalid: {path}")
             continue
     raise RuntimeError(f"config not found/readable; tried: {', '.join(tried)}")
 
@@ -120,13 +120,14 @@ def publish_failure(unit, config_path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--unit", required=True, help="failed systemd unit name")
-    parser.add_argument("--config", help="path to notify.conf")
+    parser.add_argument("--config", default=os.environ.get("SOLARI_NOTIFY_CONFIG"), help="path to notify.conf")
     args = parser.parse_args()
 
     try:
         publish_failure(args.unit, args.config)
-    except Exception as exc:
-        warn(str(exc))
+    except Exception:
+        # AMQP exceptions may echo the connection URI, including its password.
+        warn("notification attempt failed; details suppressed")
     return 0
 
 

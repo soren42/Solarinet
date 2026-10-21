@@ -184,9 +184,11 @@ typedef struct {
     uint8_t  verb;          /* echoed solariCtrlVerb (0 if absent)           */
     uint16_t errCode;       /* error magnitude, 0 == success                 */
     uint64_t appliedEpoch;  /* epoch the node now reports applied            */
+    uint64_t lifeGeneration;/* decommission challenge identity              */
     bool     haveVerb;
     bool     haveErr;
     bool     haveEpoch;
+    bool     haveLifeGeneration;
 } serverControlResult;
 
 /* Parse a CONTROL_RESULT payload into res. Tolerant of unknown/extra TLVs and of
@@ -222,6 +224,10 @@ static solariStatus serverControlParseResult(const uint8_t *payload, size_t len,
         case TLV_CTRL_TARGET_EPOCH:
             if (solariTlvReadU64(val, vlen, &res->appliedEpoch) == SOLARI_OK)
                 res->haveEpoch = true;
+            break;
+        case TLV_LIFE_GENERATION:
+            if (solariTlvReadU64(val, vlen, &res->lifeGeneration) == SOLARI_OK)
+                res->haveLifeGeneration = true;
             break;
         default:
             break;                        /* skip unknown TLVs (§5.6) */
@@ -268,6 +274,38 @@ solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
 
     serverControlFormatResult(&res, lastResult, sizeof lastResult);
     whenMs = solariNowUnixMs();
+
+    /* Decommission generation is a lifecycle identity, not a config epoch.
+     * Do not feed it into applied-epoch convergence. Only a successful,
+     * generation-matched result from this TLS-authenticated node retires it. */
+    if (res.haveVerb && res.verb == CTRL_DECOMMISSION) {
+        if (!res.haveErr || !res.haveLifeGeneration || res.lifeGeneration == 0) {
+            solariLogf(SOLARI_LOG_WARN,
+                       "control: incomplete decommission result from node=0x%llx (corr=%u)",
+                       (unsigned long long)nodeId, (unsigned)correlationId);
+            return ERR_INVALID_ARG;
+        }
+        if (res.errCode != 0) {
+            solariLogf(SOLARI_LOG_WARN,
+                       "control: node=0x%llx reported decommission failure code=%u generation=%llu",
+                       (unsigned long long)nodeId, (unsigned)res.errCode,
+                       (unsigned long long)res.lifeGeneration);
+            return ERR_PLATFORM;
+        }
+        rc = serverDbDecommissionAck(ctx->db, nodeId, res.lifeGeneration);
+        if (rc != SOLARI_OK) {
+            solariLogf(SOLARI_LOG_WARN,
+                       "control: ignored stale or unmatched decommission ack from node=0x%llx generation=%llu",
+                       (unsigned long long)nodeId,
+                       (unsigned long long)res.lifeGeneration);
+            return rc;
+        }
+        solariLogf(SOLARI_LOG_INFO,
+                   "control: node=0x%llx decommission generation=%llu acknowledged (corr=%u)",
+                   (unsigned long long)nodeId,
+                   (unsigned long long)res.lifeGeneration, (unsigned)correlationId);
+        return SOLARI_OK;
+    }
 
     /* Record convergence. If the node did not report an applied epoch we still
      * record the outcome (epoch 0 leaves the stored applied epoch logically

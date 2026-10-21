@@ -8,6 +8,17 @@ target_include_directories(unity PUBLIC ${CMAKE_SOURCE_DIR}/third_party/unity)
 # the u64 TLV/frame round-trip tests with "Unity 64-bit Support Disabled".
 target_compile_definitions(unity PUBLIC UNITY_SUPPORT_64)
 
+if(SOLARI_BUILD_FUZZERS)
+  add_executable(fuzz_protocol fuzz/fuzz_protocol.c)
+  target_link_libraries(fuzz_protocol PRIVATE solari)
+  target_compile_options(fuzz_protocol PRIVATE
+    -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
+  target_link_options(fuzz_protocol PRIVATE -fsanitize=fuzzer,address,undefined)
+  add_test(NAME fuzz_protocol_smoke COMMAND fuzz_protocol
+    -runs=20000 -seed=20261020 -max_len=4096
+    -dict=${CMAKE_CURRENT_SOURCE_DIR}/fuzz/protocol.dict)
+endif()
+
 set(SOLARI_UNIT_TESTS
   test_crypto
   test_tlv
@@ -30,6 +41,24 @@ if(SOLARI_WITH_SQLITE)
   target_link_libraries(test_spool PRIVATE solari unity)
   target_include_directories(test_spool PRIVATE ${CMAKE_SOURCE_DIR}/include)
   add_test(NAME test_spool COMMAND test_spool)
+endif()
+
+# End-to-end enrollment installer validation against a local mock HTTP service.
+# Requires the same host utilities as the production installer.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+find_program(SOLARI_OPENSSL_EXECUTABLE openssl)
+find_program(SOLARI_JQ_EXECUTABLE jq)
+find_program(SOLARI_CURL_EXECUTABLE curl)
+if(Python3_Interpreter_FOUND AND SOLARI_OPENSSL_EXECUTABLE)
+  add_test(NAME test_certificate_backfill
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/test_backfill_certificate_issuance.py)
+  add_test(NAME test_crl_generator
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/deploy/crl/test_generate_crl.py)
+endif()
+if(Python3_Interpreter_FOUND AND SOLARI_OPENSSL_EXECUTABLE AND
+   SOLARI_JQ_EXECUTABLE AND SOLARI_CURL_EXECUTABLE)
+  add_test(NAME test_enroll_install
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/integration/test_enroll_install.py)
 endif()
 
 # Transport loopback - only when the nng/mbedTLS I/O layer is built.
@@ -120,7 +149,8 @@ if(TARGET monitorcore AND SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
 
   add_executable(test_gossip integration/test_gossip.c)
   target_link_libraries(test_gossip PRIVATE monitorcore unity)
-  add_test(NAME test_gossip COMMAND test_gossip)
+  add_test(NAME test_gossip
+    COMMAND bash ${CMAKE_SOURCE_DIR}/tests/integration/test_gossip.sh $<TARGET_FILE:test_gossip>)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -140,11 +170,26 @@ if(TARGET servercore)
     test_server_topology
     test_server_topo_snmp
     test_server_discovery
+    test_server_scan
     test_server_ctl
   )
   foreach(t ${SOLARI_SERVER_UNIT_TESTS})
     add_executable(${t} unit/${t}.c unit/server_stubs.c)
     target_compile_definitions(${t} PRIVATE _GNU_SOURCE)
+    if(t STREQUAL "test_server_scan")
+      # Exercise the optional process-backed enrichment path with hermetic fake
+      # tools; the production servercore option remains off by default.
+      target_compile_definitions(${t} PRIVATE
+        SOLARI_WITH_DISCOVERY_TOOLS=1 SCAN_TOOL_TIMEOUT_MS=500)
+      target_sources(${t} PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/server/serverDiscoveryEnrich.c
+        ${CMAKE_SOURCE_DIR}/src/server/serverOui.c)
+    endif()
+    if(t STREQUAL "test_server_topo_snmp")
+      # Exercise the production LLDP CLI driver with a fake snmpbulkwalk in the
+      # test fixture; never query a real device from unit tests.
+      target_compile_definitions(${t} PRIVATE SOLARI_WITH_SNMP=1)
+    endif()
     target_include_directories(${t} PRIVATE
       ${CMAKE_SOURCE_DIR}/include
       ${CMAKE_SOURCE_DIR}/src/server
@@ -153,6 +198,18 @@ if(TARGET servercore)
       $<TARGET_PROPERTY:servercore,INTERFACE_LINK_LIBRARIES>)
     add_test(NAME ${t} COMMAND ${t})
   endforeach()
+
+  # Exercise the production mbedTLS enrollment signer with generated CA/CSR
+  # material. This covers identity rejection and preserves the SAN in the leaf.
+  if(SOLARI_WITH_IO AND SOLARI_HAVE_MBEDTLS_CSR_SAN_API)
+    add_executable(test_server_csr_sign integration/test_server_csr_sign.c)
+    target_include_directories(test_server_csr_sign PRIVATE
+      ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src/server)
+    target_link_libraries(test_server_csr_sign PRIVATE servercore)
+    add_test(NAME test_server_csr_sign
+      COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/integration/test_server_csr_sign.sh
+                   $<TARGET_FILE:test_server_csr_sign>)
+  endif()
 
   # Live-DB integration suite: links the real servercore library and drives the
   # actual prepared statements. Self-skips (exit 0) unless SOLARI_TEST_DB is set,
@@ -164,6 +221,21 @@ if(TARGET servercore)
     ${CMAKE_SOURCE_DIR}/src/server)
   target_link_libraries(test_server_db_live PRIVATE servercore unity)
   add_test(NAME test_server_db_live COMMAND test_server_db_live)
+
+  # A real C control-socket process used by the authenticated dashboard
+  # discovery acceptance test. It is launched only against that test's
+  # dedicated monitoring schema; no live transport or monitor is attached.
+  add_executable(test_ctl_adopt_bridge integration/test_ctl_adopt_bridge.c)
+  target_include_directories(test_ctl_adopt_bridge PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/server)
+  target_link_libraries(test_ctl_adopt_bridge PRIVATE servercore)
+
+  if(Python3_Interpreter_FOUND AND TARGET solariCtlClient)
+    add_test(NAME test_ctl_cli
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/integration/test_ctl_cli.py
+              $<TARGET_FILE:solariCtlClient>)
+  endif()
 
   # Pure SNMP IF-MIB parse/merge (serverSnmp.c). Links servercore for the
   # symbols; touches no DB or SNMP backend at runtime.

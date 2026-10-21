@@ -3,7 +3,7 @@
 Build as reviewable files; NOTHING deployed to xenon. Mirror Phase-0 pattern
 (pure decision core + thin effect shim + tests + config).
 
-## Verified current state (the hole)
+## Verified historical state (the hole)
 - `solariCtl.c:1043-1063` binds the AF_UNIX socket, **no fchmod / no group** →
   world-connectable per umask; `accept(fd,NULL,NULL)` at 1128 **discards the
   peer — no SO_PEERCRED**.
@@ -13,6 +13,8 @@ Build as reviewable files; NOTHING deployed to xenon. Mirror Phase-0 pattern
   (solarinet-server.service:22) → **same uid**; PHP reads CA key/auth file
   directly, socket irrelevant. (Prod systemd server = `solari`, but prod PHP
   pool still `jason`.)
+
+> **Current deployment gap (2026-10-21):** the candidate includes the hardened configs and a disposable boundary harness, but the primary `deploy/dashboard/README.md` previously selected the legacy same-uid templates. The README now points production operators to the hardened UID split. This is still a candidate change and has not been applied to Xenon.
 
 ## Design (4 parts)
 1. **Separate PHP uid** (config): dedicated `www-solari` user, member of group
@@ -58,6 +60,12 @@ Build as reviewable files; NOTHING deployed to xenon. Mirror Phase-0 pattern
      Co-locating the queue with its single consumer avoids a cross-host
      connection; the SoR stays the CMDB source of truth, this is operational
      state owned by the server. Home = db/migrations/020 + db/schema.sql. Flagged.
+
+5. **Durable discovery scans (migration 028):** `solariScanWorker` is a separate,
+   unprivileged systemd process. It has its own DB connection and no CA key or
+   ctl socket; the active lease fences job claims, progress, and discovered-row
+   commits. Install `solarinet-scan-worker.service` on both server hosts. This is
+   separate from the privileged `ctlRequest` consumer described above.
 
 ## Acceptance (observable) — STATUS
 - Unit (test_server_ctl.c, Unity): ALLOWLIST verb-class map (exhaustive ordinary

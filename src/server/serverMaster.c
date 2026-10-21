@@ -196,18 +196,24 @@ solariStatus serverMasterAcceptHello(serverContext *ctx,
     if (!ctx || !ctx->db || !hdr || !hello || !out || !outLen || !tlvCount)
         return ERR_INVALID_ARG;
 
+    if (!serverIngestHelloMatchesIdentity(hello->role, hello->hostFqdn,
+                                          peerCertCn)) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "master: reject HELLO identity src=0x%llx host=%s cert=%s",
+                   (unsigned long long)hdr->sourceNodeId,
+                   hello->hostFqdn[0] ? hello->hostFqdn : "(empty)",
+                   peerCertCn ? peerCertCn : "(none)");
+        return ERR_AUTH_ROLE;
+    }
+
     /* The node's stable id rides in the frame header (§5.5); the HELLO body
      * carries its declared identity. Both are needed: the header id keys the
      * node row, the body supplies fqdn/role/epoch. */
     nodeId = hdr->sourceNodeId;
 
-    /* serverDbUpsertNode requires a non-NULL fqdn and certCn. Prefer the HELLO
-     * fqdn; the cert CN is the authenticated identity (may be NULL if the caller
-     * could not resolve it - fall back to the declared fqdn so the upsert still
-     * records something stable rather than failing the whole handshake). */
-    fqdn   = hello->hostFqdn[0] ? hello->hostFqdn : "";
-    certCn = (peerCertCn && peerCertCn[0]) ? peerCertCn
-           : (fqdn[0] ? fqdn : "");
+    /* The authenticated role.fqdn CN and HELLO body now agree exactly. */
+    fqdn   = hello->hostFqdn;
+    certCn = peerCertCn;
 
     /* Upsert the node from the HELLO. HELLO does not carry os/arch (only client
      * reports do), so we pass NULL for them - the upsert leaves the existing

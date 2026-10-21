@@ -28,6 +28,7 @@ var RW_INDEX = path.join(PUB, "rackwire", "index.html");
 var SCREEN = "screens-rackwire.jsx";
 
 var pass = 0, fail = 0;
+var rackWireBabel = null;
 function ok(label, cond, extra) {
   if (cond) { pass++; console.log("  ok   - " + label); }
   else { fail++; console.log("  FAIL - " + label + (extra ? "  [" + extra + "]" : "")); }
@@ -46,13 +47,125 @@ console.log("[1] Babel parse — " + SCREEN);
   if (!Babel) {
     ok("vendor/babel.min.js exposes Babel", false);
   } else {
+    rackWireBabel = Babel;
     try {
       var src = fs.readFileSync(path.join(PUB, SCREEN), "utf8");
       Babel.transform(src, { presets: ["react"], filename: SCREEN });
       ok(SCREEN + " parses clean", true);
+      ok("view toggle is a named button group",
+        /className="seg" role="group" aria-label="Planner view"/.test(src));
+      ok("Map and Table expose their pressed state",
+        /aria-pressed=\{view === "map"\}/.test(src) &&
+        /aria-pressed=\{view === "table"\}/.test(src));
+      ok("planner readiness is announced as a polite status",
+        /role="status" aria-live="polite" aria-atomic="true"/.test(src) &&
+        /Planner ready\./.test(src));
+      ok("host requests the current plan and consumes its reply",
+        /send\("getPlan"\)/.test(src) &&
+        /m\.event === "reply" && m\.payload && m\.payload\.cmd === "getPlan"/.test(src));
+      ok("selected device chips show a readable name and preserve the ID",
+        /devNames\[uid\] \|\| uid/.test(src) &&
+        /title=\{`Device ID: \$\{uid\}`\}/.test(src));
+      ok("embedded planner is labeled for network, power, and interconnect work",
+        /title="RackWire network, power, and interconnect planner"/.test(src));
     } catch (e) {
       ok(SCREEN + " parses clean", false, String(e.message).split("\n")[0]);
     }
+  }
+}
+
+/* ------------------------------------------------------ [1b] bridge smoke --- */
+console.log("\n[1b] embedded selection labels — existing getPlan request/reply bridge");
+if (!rackWireBabel) {
+  ok("RackWire screen bridge loads", false, "Babel is unavailable");
+} else {
+  var slots = [], hookIndex = 0, effects = [], listeners = {}, sent = [];
+  var frameWindow = { postMessage: function (message) { sent.push(message); } };
+  var React = {
+    createElement: function (type, props) {
+      return { type: type, props: props || {}, children: Array.prototype.slice.call(arguments, 2) };
+    },
+    useRef: function (initial) {
+      var i = hookIndex++;
+      if (!slots[i]) slots[i] = { current: initial };
+      return slots[i];
+    },
+    useState: function (initial) {
+      var i = hookIndex++;
+      if (!(i in slots)) slots[i] = initial;
+      return [slots[i], function (next) { slots[i] = typeof next === "function" ? next(slots[i]) : next; }];
+    },
+    useCallback: function (callback) { hookIndex++; return callback; },
+    useEffect: function (effect) { hookIndex++; effects.push(effect); }
+  };
+  var win = {
+    location: { origin: "https://solarinet.test" },
+    addEventListener: function (name, callback) { listeners[name] = callback; },
+    removeEventListener: function (name) { delete listeners[name]; }
+  };
+  var doc = { documentElement: { getAttribute: function () { return "dark"; } } };
+  var bridge = { React: React, window: win, document: doc, console: console,
+    getComputedStyle: function () { return { getPropertyValue: function () { return ""; } }; },
+    MutationObserver: function () { this.observe = function () {}; this.disconnect = function () {}; } };
+  vm.createContext(bridge);
+  try {
+    var transformed = rackWireBabel.transform(fs.readFileSync(path.join(PUB, SCREEN), "utf8"),
+      { presets: ["react"], filename: SCREEN }).code;
+    vm.runInContext(transformed, bridge, { filename: SCREEN });
+    hookIndex = 0;
+    var navRequests = [];
+    var screenProps = { onNavigate: function (route) { navRequests.push(route); } };
+    win.RackWireScreen(screenProps);
+    slots[0].current = { contentWindow: frameWindow };
+    effects.forEach(function (effect) { effect(); });
+    listeners.message({ origin: win.location.origin, source: frameWindow,
+      data: { source: "rackwire", event: "ready", payload: { version: "1.0" } } });
+    ok("ready handshake requests the current plan", sent.some(function (m) { return m.cmd === "getPlan"; }));
+    listeners.message({ origin: win.location.origin, source: frameWindow,
+      data: { source: "rackwire", event: "reply", payload: { cmd: "getPlan", value: {
+        devices: [{ uid: "dev-17", name: "Laboratory switch" }]
+      } } } });
+    listeners.message({ origin: win.location.origin, source: frameWindow,
+      data: { source: "rackwire", event: "select", payload: ["dev-17"] } });
+    listeners.message({ origin: win.location.origin, source: frameWindow,
+      data: { source: "rackwire", event: "navigate", payload: { route: "discovery" } } });
+    hookIndex = 0;
+    var tree = win.RackWireScreen(screenProps);
+    function findChip(node) {
+      if (!node) return null;
+      if (Array.isArray(node)) {
+        for (var i = 0; i < node.length; i++) { var hit = findChip(node[i]); if (hit) return hit; }
+        return null;
+      }
+      if (typeof node !== "object") return null;
+      if (node.type === "button" && node.props.className === "chip") return node;
+      return findChip(node.children);
+    }
+    var chip = findChip(tree);
+    ok("selection chip displays the plan device name", !!chip && chip.children[0] === "Laboratory switch");
+    ok("selection chip retains its UID in the title", !!chip && chip.props.title === "Device ID: dev-17");
+    ok("embedded discovery navigation reaches the dashboard route", navRequests.indexOf("discovery") >= 0);
+    var navButtons = [];
+    var scanButton = null;
+    (function walk(node) {
+      if (!node) return;
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (typeof node !== "object") return;
+      if (node.type === "button" && (node.children || []).some(function (child) { return child === "Network discovery" || child === "Inventory"; })) navButtons.push(node);
+      if (node.type === "button" && (node.children || []).some(function (child) { return child === "Scan inventory barcode"; })) scanButton = node;
+      walk(node.children);
+    })(tree);
+    ok("RackWire exposes cross-links to Network discovery and Inventory", navButtons.length === 2);
+    ok("embedded RackWire exposes a barcode scan action", !!scanButton);
+    if (scanButton) {
+      scanButton.props.onClick();
+      ok("barcode scan action uses the guarded iframe bridge command", sent.some(function (m) { return m.cmd === "openScan"; }));
+    }
+    navButtons.forEach(function (button) { button.props.onClick(); });
+    ok("RackWire cross-links navigate only to the intended dashboard sections", navRequests.indexOf("inventory") >= 0 && navRequests.filter(function (route) { return route === "discovery" || route === "inventory"; }).length === 3);
+    ok("dashboard embed explicitly selects the SolariNet discovery bridge", /rackwire\/index\.html\?embed=1&solarinet=1/.test(fs.readFileSync(path.join(PUB, SCREEN), "utf8")));
+  } catch (e) {
+    ok("embedded selection label bridge completes", false, String(e.message).split("\n")[0]);
   }
 }
 
@@ -62,6 +175,8 @@ console.log("\n[2] token bridge — every --sn-* token used is bridged to a dash
   var html;
   try {
     html = fs.readFileSync(RW_INDEX, "utf8");
+  ok("standalone toolbar states RackWire's broad planning scope",
+    /NETWORK · POWER · INTERCONNECT PLANNING/.test(html));
   } catch (e) {
     if (e && e.code === "ENOENT") {
       ok("dashboard/public/rackwire/index.html missing -> token-bridge checks skipped for checkouts without RackWire submodule", true);
@@ -72,6 +187,13 @@ console.log("\n[2] token bridge — every --sn-* token used is bridged to a dash
   }
 
   if (html !== null) {
+    var lookupStart = html.indexOf('async lookupCode(code)');
+    var lookupEnd = html.indexOf('\n  scanGo()', lookupStart);
+    var lookupBlock = lookupStart >= 0 && lookupEnd > lookupStart ? html.slice(lookupStart, lookupEnd) : '';
+    ok("SoR barcode lookup sends the session-bound CSRF token",
+      /rwSessionCsrf\(false\)/.test(lookupBlock) && /X-Solari-CSRF/.test(lookupBlock));
+    ok("SoR barcode lookup refreshes an expired CSRF token once",
+      /r\.status === 403[\s\S]*?rwSessionCsrf\(true\)/.test(lookupBlock));
     // Isolate the token-bridge <style> block's :root sections (D9's home),
     // so "defined" only counts real custom-property declarations, not every
     // var(--sn-x) usage further down the same block.

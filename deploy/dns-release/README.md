@@ -2,9 +2,15 @@
 
 `release.py` stages a complete managed generation, validates every zone and the
 full BIND configuration, atomically switches one `current` symlink, reloads,
-and requires authoritative SOAs plus an expected A/PTR record per zone.
+and requires authoritative SOAs plus an expected A/PTR record per zone, or an
+NS answer for an NS-only zone. A/PTR checks take priority when available.
 Unmanaged zones stay outside the release. BIND views are refused until ownership
 can be represented per view.
+
+Generation and `zones/` directory modes are set explicitly so the DNS service
+account can traverse root-owned releases even when the applier's umask is `077`.
+Zone data and generated declarations are mode `0644`; candidate data is still
+validated before it enters a generation.
 
 The helper generates declarations from validated regular zone files. Candidate
 configuration files are ignored. Root configuration supplies argv arrays; no
@@ -23,7 +29,8 @@ and failed rollback are retried from the recorded rollback generation.
 This is a tested candidate, **not installed on the live DNS services**.
 `--bootstrap` creates a baseline from the configured legacy includes, proves
 that its SOAs/records match the running server, then replaces their parent
-include atomically. SoR/steel adapter integration is still pending.
+include atomically. The SoR adapter now calls the helpers and records independent
+target status; live cutover and steel's actual container adapter remain unverified.
 Do not point the existing copy-based applier at the release directories.
 
 The intended live include is:
@@ -38,6 +45,10 @@ configuration and release directories. `xenon.json.example` describes the
 observed primary layout. `steel.json.example` is an **unverified adapter**:
 steel was unreachable during this audit; confirm container mounts, user mapping,
 PID 1 signal handling, command paths, and DNS listeners before using it.
+Its bootstrap expects `named.conf.local` to include the legacy
+`named.conf.bare` exactly once. The repository's steel candidate config now
+carries that include, and `deploy/dns-steel/test_config.py` checks the include
+chain with local BIND. This does not verify steel's offline runtime or files.
 Candidates must be private directories beneath `incomingRoot`, and each zone
 must be owned by `candidateUser`; ownership is checked on the opened descriptor
 with symlinks refused. The examples retain the observed legacy `jason` account.
@@ -76,7 +87,7 @@ accounts for every secondary and replay source.
 python3 -m unittest discover -s deploy/dns-release -p test_release.py -v
 ```
 
-Sixteen tests run a private copy of the installed BIND binary on temporary loopback
+Seventeen tests run a private copy of the installed BIND binary on temporary loopback
 ports. They exercise activation, removal of retired zones, protection of
 unmanaged zones, invalid input, candidate symlinks, reload/health failures,
 crash recovery, rollback retries, and serial history across reintroduction.

@@ -101,6 +101,25 @@ class BindFixture(unittest.TestCase):
         release.verifyServed(self.config, manifest)
 
 class ReleaseTest(BindFixture):
+    def test_ns_only_zone_is_verified_after_activation(self):
+        candidate = self.folder / "ns-only"
+        candidate.mkdir()
+        (candidate / "db.ns-only.test").write_text(
+            "$ORIGIN ns-only.test.\n$TTL 60\n"
+            "@ IN SOA ns.ns-only.test. hostmaster.ns-only.test. ( 2026102102 60 60 300 60 )\n"
+            "@ IN NS ns.external.test.\n")
+        previous_mask = os.umask(0o077)
+        try:
+            result = release.activate(self.config, candidate)
+        finally:
+            os.umask(previous_mask)
+        self.assertEqual("applied", result["phase"])
+        manifest = release.loadManifest(self.link.resolve())
+        zone = next(item for item in manifest["zones"] if item["name"] == "ns-only.test")
+        self.assertEqual("NS", zone["checkType"])
+        self.assertEqual(0o755, (self.link.resolve() / "zones").stat().st_mode & 0o777)
+        release.verifyServed(self.config, manifest)
+
     def test_activate_proves_serving_and_removes_retired_zone(self):
         candidate = self.candidate("next", 2026102002, "192.0.2.2")
         result = release.activate(self.config, candidate)

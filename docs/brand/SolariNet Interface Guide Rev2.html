@@ -59,8 +59,8 @@ p.d{color:var(--color-dim)}
 .card p{font-size:12px;line-height:1.4;color:var(--color-dim)}
 .tbl{display:grid;width:100%;font-size:12px}
 .tbl .hd{font:700 12px/1.1 var(--font-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--color-faint);padding:7px 9px;border-bottom:2px solid var(--color-divider-strong)}
-.tbl.tight .cl{padding:4px 9px}
-.tbl.tight .hd{padding:5px 9px}
+.tbl.tight .cl{padding:2px 9px}
+.tbl.tight .hd{padding:3px 9px}
 .tbl .cl{padding:7px 9px;border-bottom:1px solid var(--color-divider);font:400 12px/1.35 var(--font-body);display:flex;align-items:center;gap:7px}
 .tbl .cl.m{font-family:var(--font-mono);font-size:12px;color:var(--color-dim)}
 .dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px;display:inline-block}
@@ -112,6 +112,13 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 .co .box{border:1px solid var(--color-divider);border-radius:6px;padding:9px 10px;background:var(--color-surface)}
 .co .box .lab{font:700 12px/1.1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}
 .co .box p{font-size:12px;line-height:1.38}
+[data-contrast-matrix]{table-layout:fixed;font-size:11px}
+[data-contrast-matrix] th,[data-contrast-matrix] td{border-bottom:1px solid var(--color-divider);padding:6px 5px;text-align:left;font:400 11px/1.25 var(--font-body)}
+[data-contrast-matrix] thead th{border-bottom:2px solid var(--color-divider-strong);font:700 10px/1.15 var(--font-mono);letter-spacing:.04em;color:var(--color-faint)}
+[data-contrast-matrix] tbody th{font-weight:600}
+[data-contrast-matrix] tbody td:not(:last-child){font-family:var(--font-mono);color:var(--color-ok)}
+[data-contrast-matrix] tbody tr:nth-child(3) td:nth-child(4){color:var(--color-warn)}
+[data-contrast-matrix] tbody td:last-child{font-family:var(--font-mono);font-size:10px;color:var(--color-dim)}
 @media print{
   @page{size:letter;margin:0}
   body{background:#fff}
@@ -165,7 +172,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
 
 <!-- ============ E02 CONTENTS ============ -->
 <section class="page" data-label="E02 Contents">
-  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 00</div><h1 class="t">Contents</h1><div class="sub">Sixteen pages. Each settles one question and states the rule a developer applies without asking.</div></div></div>
+  <div class="ph"><div class="bar"></div><div><div class="eyebrow">Section 00</div><h1 class="t">Contents</h1><div class="sub">Eighteen pages. Each settles one question and states the rule a developer applies without asking.</div></div></div>
   <div class="rule"></div>
   <div class="body">
     <div class="tbl" style="grid-template-columns:44px 1fr 1.5fr">
@@ -199,23 +206,23 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
   <div class="body" style="gap:8px">
     <h3 style="color:var(--color-crit)">Guide-level — the specification itself</h3>
     <div class="g2" style="gap:8px 18px">
-      <div class="find"><div class="n">G1</div><div><b>The specified font never loads</b><span><span class="mono">ds/styles.css</span> imports Archivo over the network; <span class="mono">index.html</span> then overrides both tokens to <span class="mono">IBM&nbsp;Plex&nbsp;Sans</span>, which is never imported. The guide renders in <span class="mono">system-ui</span>.</span></div></div>
+      <div class="find"><div class="n">G1</div><div><b>The specified font never loads</b><span><span class="mono">ds/styles.css</span> imports Archivo, then <span class="mono">index.html</span> overrides it to IBM Plex Sans without loading it; the guide falls back to <span class="mono">system-ui</span>.</span></div></div>
       <div class="find"><div class="n">G2</div><div><b>No monospace token exists</b><span>The product is predominantly monospace. The guide defines <span class="mono">--font-heading</span> and <span class="mono">--font-body</span> only, so the dominant face in the UI is ungoverned.</span></div></div>
       <div class="find"><div class="n">G3</div><div><b>No functional colour tier</b><span>The palette page ships three swatches — accent, ink, ground. No green, amber or red. A monitoring tool's entire vocabulary is undefined.</span></div></div>
       <div class="find"><div class="n">G4</div><div><b>One face presented as two</b><span>Heading and body resolve to the same family at different weights. The "two faces maximum" rule is satisfied by having effectively one.</span></div></div>
       <div class="find"><div class="n">G5</div><div><b>Template palette left in place</b><span>The underlying system still carries Modernist's vermilion ramp <span class="mono">#EC3013</span> and Archivo. Overrides sit on top rather than replacing it.</span></div></div>
-      <div class="find"><div class="n">G6</div><div><b>Deck format for a developer document</b><span>1920×1080 at a 24px floor suits presenting. Implementation specs — tokens, scales, component contracts — belong in the Letter document format.</span></div></div>
+      <div class="find"><div class="n">G6</div><div><b>Deck format for a developer document</b><span>1920×1080 and 24px suit presentations. Token, scale and component contracts belong on Letter pages.</span></div></div>
     </div>
     <h3 style="color:var(--color-crit);margin-top:2px">Interface-level — what reached the screen</h3>
     <div class="g2" style="gap:8px 18px">
-      <div class="find"><div class="n">01</div><div><b>Brand colour sits on the status hue</b><span>Chrome teal <span class="mono">#35E0D0</span> and healthy mint <span class="mono">#2FE6A0</span> are neighbours. Logo, active nav, focus and "up" read as one signal.</span></div></div>
-      <div class="find"><div class="n">02</div><div><b>Monospace on human language</b><span>Nav, buttons, chips, KPI captions and group headings are all mono — the direct consequence of G2.</span></div></div>
-      <div class="find"><div class="n">03</div><div><b>Glow on nominal states</b><span>Every KPI card carries a glowing underline and halo. Six competing glows leave no focal point for the one that matters.</span></div></div>
-      <div class="find"><div class="n">04</div><div><b>Colour without meaning</b><span>Pool cards glow teal while holding zero systems. <span class="mono">MONITORS 0/0</span> is violet, a hue with no assigned role.</span></div></div>
+      <div class="find"><div class="n">01</div><div><b>Brand colour sits on the status hue</b><span>Teal chrome and healthy mint sit too close; logo, focus and “up” read as one state.</span></div></div>
+      <div class="find"><div class="n">02</div><div><b>Monospace on human language</b><span>Navigation, buttons, chips and headings all use mono, following G2.</span></div></div>
+      <div class="find"><div class="n">03</div><div><b>Glow on nominal states</b><span>Every KPI card glows; six halos leave no focal point for faults.</span></div></div>
+      <div class="find"><div class="n">04</div><div><b>Colour without meaning</b><span>Teal pool cards show zero systems; <span class="mono">MONITORS 0/0</span> is violet without a defined role.</span></div></div>
       <div class="find"><div class="n">05</div><div><b>A card contradicts itself</b><span><span class="mono">DOWN 1</span> in red above the caption <span class="mono">0 critical alerts</span>. One card, opposite conclusions.</span></div></div>
       <div class="find"><div class="n">06</div><div><b>Hostnames truncate</b><span><span class="mono">chlori… nitrog… tungst…</span> Identity is the one field that must never clip; tiles are too narrow.</span></div></div>
       <div class="find"><div class="n">07</div><div><b>Two tile designs in one grid</b><span>Some tiles carry a sparkline, others the literal word <span class="mono">SYSTEM</span> over an empty bar.</span></div></div>
-      <div class="find"><div class="n">08</div><div><b>Machine identifiers in chrome</b><span><span class="mono">ACTIVE C2 7211776717853820412</span> spends the most valuable strip in the app on a value no human reads.</span></div></div>
+      <div class="find"><div class="n">08</div><div><b>Machine identifiers in chrome</b><span><span class="mono">ACTIVE C2</span> shows a 19-digit ID where operators need a hostname.</span></div></div>
       <div class="find"><div class="n">09</div><div><b>Placeholders shipped as content</b><span>A group heading rendered as <span class="mono">—</span>, a version as <span class="mono">V—</span>. These read as defects, not absence.</span></div></div>
       <div class="find"><div class="n">10</div><div><b>Counts disagree across views</b><span>Header says 18 systems; sidebar and Systems page say 9. The operator cannot tell which is right.</span></div></div>
       <div class="find"><div class="n">11</div><div><b>Status drawn as a control</b><span>Heartbeat uses an on/off switch — it invites a tap that does nothing and reads as operator state.</span></div></div>
@@ -318,9 +325,26 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
   <div class="rule"></div>
   <div class="body">
     <h3>Approved pairings · dark theme</h3>
-    <table data-contrast-matrix style="width:100%;border-collapse:collapse"
+    <table data-contrast-matrix aria-label="Approved foreground contrast ratios against the void, surface, and raised backgrounds" style="width:100%;border-collapse:collapse"
       data-palette='[{"name":"Ink","hex":"#DFE8F2"},{"name":"Ink dim","hex":"#9DB0C4"},{"name":"Ink faint","hex":"#6E8399"},{"name":"Azure","hex":"#22B8F0"},{"name":"Operational","hex":"#3DD68C"},{"name":"Degraded","hex":"#F5A623"},{"name":"Down","hex":"#FF4D5E"},{"name":"Maintenance","hex":"#9B87FF"}]'
-      data-grounds='[{"name":"Void #070A0F","hex":"#070A0F"},{"name":"Surface #0E151D","hex":"#0E151D"},{"name":"Raised #16202C","hex":"#16202C"}]'></table>
+      data-grounds='[{"name":"Void #070A0F","hex":"#070A0F"},{"name":"Surface #0E151D","hex":"#0E151D"},{"name":"Raised #16202C","hex":"#16202C"}]'>
+      <thead><tr>
+        <th scope="col" style="border-bottom:2px solid var(--color-divider-strong);padding:6px 8px;text-align:left">Foreground</th>
+        <th scope="col" style="border-bottom:2px solid var(--color-divider-strong);padding:6px 8px;text-align:left">Void #070A0F</th>
+        <th scope="col" style="border-bottom:2px solid var(--color-divider-strong);padding:6px 8px;text-align:left">Surface #0E151D</th>
+        <th scope="col" style="border-bottom:2px solid var(--color-divider-strong);padding:6px 8px;text-align:left">Raised #16202C</th>
+        <th scope="col" style="border-bottom:2px solid var(--color-divider-strong);padding:6px 8px;text-align:left">Verdict</th>
+      </tr></thead><tbody>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Ink</th><td>16.0:1</td><td>14.8:1</td><td>13.3:1</td><td>AAA body</td></tr>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Ink dim</th><td>8.9:1</td><td>8.3:1</td><td>7.4:1</td><td>AAA body</td></tr>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Ink faint</th><td>5.1:1</td><td>4.7:1</td><td>4.2:1</td><td>AA large / chrome</td></tr>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Azure</th><td>8.7:1</td><td>8.0:1</td><td>7.2:1</td><td>AAA body</td></tr>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Operational</th><td>10.6:1</td><td>9.8:1</td><td>8.8:1</td><td>AAA body</td></tr>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Degraded</th><td>9.8:1</td><td>9.1:1</td><td>8.1:1</td><td>AAA body</td></tr>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Down</th><td>6.1:1</td><td>5.7:1</td><td>5.1:1</td><td>AA body</td></tr>
+        <tr><th scope="row" style="padding:6px 8px;text-align:left">Maintenance</th><td>6.9:1</td><td>6.4:1</td><td>5.7:1</td><td>AA body</td></tr>
+      </tbody>
+    </table>
     <div class="g2" style="margin-top:2px">
       <div class="card"><h4>Thresholds applied</h4><p><b>≥ 7:1</b> body text at any size.<br><b>≥ 4.5:1</b> body text 14px and above.<br><b>≥ 3:1</b> icons, chrome, 19px+ or bold 14px+.<br><b>&lt; 3:1</b> prohibited — struck through above.</p></div>
       <div class="card"><h4>Rules that follow</h4><p>Ink-faint is licensed for uppercase mono labels at 10px and above only, never for prose. Status hues are legible as text on all three grounds but are used as fills and dots first, text second.</p></div>
@@ -866,9 +890,9 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
   <div class="rule"></div>
   <div class="body" style="gap:10px">
     <div class="g3">
-      <div class="card" style="border-color:var(--color-crit)"><h4>G1 · Load the fonts</h4><p>Drop the Archivo <span class="mono">@import</span>. Self-host Plex Sans and Plex Mono as WOFF2 <span class="mono">@font-face</span> subsets. Until this ships, every measurement in the guide and app is <span class="mono">system-ui</span>.</p></div>
-      <div class="card" style="border-color:var(--color-crit)"><h4>G2 · Add a mono token</h4><p>Introduce <span class="mono">--font-mono</span> and govern it. The dominant face in the product currently has no entry in the system.</p></div>
-      <div class="card" style="border-color:var(--color-crit)"><h4>G3 · Add the functional tier</h4><p>Define ok, degraded, down, maintenance and unknown as tokens. Remove the leftover Modernist vermilion ramp rather than overriding it.</p></div>
+      <div class="card" style="border-color:var(--color-crit)"><h4>G1 · Load the fonts</h4><p>Remove Archivo. Self-host Plex Sans and Mono as WOFF2 subsets; otherwise the guide and app use <span class="mono">system-ui</span>.</p></div>
+      <div class="card" style="border-color:var(--color-crit)"><h4>G2 · Add a mono token</h4><p>Define <span class="mono">--font-mono</span>; the product's dominant face currently has no system token.</p></div>
+      <div class="card" style="border-color:var(--color-crit)"><h4>G3 · Add the functional tier</h4><p>Define status tokens for ok, degraded, down, maintenance and unknown. Remove the old vermilion ramp instead of overriding it.</p></div>
     </div>
     <div class="tbl tight" style="grid-template-columns:26px 1.25fr 1.5fr .5fr">
       <div class="hd">#</div><div class="hd">Change</div><div class="hd">Touches</div><div class="hd">Size</div>
@@ -893,7 +917,7 @@ ul.cl2 li b{color:var(--color-text);font-weight:600}
       <div class="card"><h4>Assets to produce</h4><p>Mark as SVG in four lockups, no baked glow; favicon 16/32; PWA icons 192/512 plus maskable 512; Plex Sans and Plex Mono self-hosted as WOFF2 subsets. All under SIL OFL 1.1 and ISC — no licence blockers.</p></div>
       <div class="card"><h4>Not settled here</h4><p>Trademark and usage restrictions on the SolariNet name are the owner's to state; this guide specifies visual construction only. Motion timings remain unspecified pending a decision on live-tick animation.</p></div>
     </div>
-    <div class="hl"><p><b>Standing rule.</b> When this guide does not cover a case, apply the test that produced it: does this pixel tell the operator something they did not already know? Decoration that survives that question is fine. Decoration that cannot answer it comes out.</p></div>
+    <div class="hl"><p><b>Standing rule.</b> When the guide is silent, ask whether a pixel tells the operator something new. Keep useful decoration; remove the rest.</p></div>
   </div>
   <div class="foot"><span>SolariNet · Rev 2.0.0</span><span>18</span></div>
 </section>

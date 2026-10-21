@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """loopback_test.py — live round-trip test of authbrokerd against real Mosquitto.
 
-Exercises the whole approval path over the REAL broker (default 10.5.2.50:1883,
-user 'solari') with a simulated Tab5:
+Exercises the whole approval path over a broker supplied by the operator, using
+a simulated Tab5. Defaults are loopback and anonymous MQTT so the test cannot
+silently contact the live broker:
 
   1. mint an ephemeral ECDSA-P256 "device" keypair
   2. start a Broker that trusts that device's public key
@@ -12,10 +13,8 @@ user 'solari') with a simulated Tab5:
 No dashboard, no HTTP, no real Tab5 needed — it proves the MQTT contract and the
 signature scheme end to end. Run twice (approve + deny) to check both verdicts.
 
-    python3 loopback_test.py                       # approve, default broker
-    python3 loopback_test.py --decision deny
-    python3 loopback_test.py --host 10.5.2.50 --port 1883 \
-        --username solari --password '...'
+    python3 loopback_test.py --host 127.0.0.1 --port 18883  # approve
+    python3 loopback_test.py --host 127.0.0.1 --port 18883 --decision deny
 """
 from __future__ import annotations
 
@@ -88,15 +87,19 @@ class DeviceSim:
         self.c.disconnect()
 
 
-def main() -> int:
+def parse_args(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="10.5.2.50")
+    ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=1883)
-    ap.add_argument("--username", default="solari")
-    ap.add_argument("--password", default="Mqtt-solari-n136hko4!9")
+    ap.add_argument("--username", default="")
+    ap.add_argument("--password", default="")
     ap.add_argument("--decision", default="approve", choices=["approve", "deny"])
     ap.add_argument("--device-id", default="tab5-loopback")
-    args = ap.parse_args()
+    return ap.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
 
     if authbrokerd.ec is None or mqtt is None:
         print("need paho-mqtt + cryptography installed", file=sys.stderr)

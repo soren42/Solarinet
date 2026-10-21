@@ -364,6 +364,18 @@ console.log("\n[8] Discovery reappearance notice — tombstone shapes (screens3.
   ok("partial tombstone raises the notice", partial.includes("not re-adopted"), partial.slice(0, 160));
   ok("...but never claims a lifecycle the server did not send",
     !partial.includes("deleted") && !partial.includes("decommissioned"), partial.slice(0, 160));
+  const viewer = load("viewer", { screens3: true });
+  viewer.win.SOLARI.discovered = [];
+  const viewerTree = mount(viewer, viewer.React.createElement(viewer.win.Discovery, { onOpenNode: () => {} })).tree;
+  const scan = findAll(viewerTree, (n) => n.tag === "button" && textOf(n).trim() === "Scan")[0];
+  const cidr = findAll(viewerTree, (n) => n.tag === "input" && n.props && n.props.placeholder === "192.168.1.0/24")[0];
+  ok("viewer cannot start an active scan", !!scan && scan.props.disabled === true && !!cidr && cidr.props.disabled === true);
+  ok("viewer sees why the scan controls are disabled", textOf(viewerTree).includes("Active scans are available to operators"));
+  const operator = load("operator", { screens3: true });
+  operator.win.SOLARI.discovered = [];
+  const operatorTree = mount(operator, operator.React.createElement(operator.win.Discovery, { onOpenNode: () => {} })).tree;
+  const operatorScan = findAll(operatorTree, (n) => n.tag === "button" && textOf(n).trim() === "Scan")[0];
+  ok("operator can start an active scan", !!operatorScan && operatorScan.props.disabled !== true);
 }
 
 console.log("\n[9] Systems list — mutating affordances are gated too (screens3.jsx)");
@@ -392,6 +404,43 @@ console.log("\n[9] Systems list — mutating affordances are gated too (screens3
     findAll(vTree, (n) => n.props && /^Delete pool/.test(String(n.props.title || ""))).length === 0);
   ok("unresolved identity is treated as a viewer here too",
     !findAll(systems(null).tree, (n) => n.tag === "button").map(textOf).join("|").includes("New pool"));
+}
+
+console.log("\n[11] Enrollment decisions — queued work is not reported as complete");
+function enrollmentQueueBlock() {
+  const env = load("operator", { screens3: true });
+  env.win.SOLARI.enrollments = [{
+    enrId: 17, host: "beryl.akoria.net", ip: "10.0.0.31", role: "client",
+    fp: "ab:cd", status: "pending", requestedMin: 1,
+  }];
+  env.win.SOLARI.builds = [];
+  const calls = [];
+  env.win.SOLARI.api.approveEnrollment = (id) => {
+    calls.push(["approve", id]);
+    return Promise.resolve({ status: "queued", request: "42" });
+  };
+  env.win.SOLARI.api.rejectEnrollment = (id) => {
+    calls.push(["reject", id]);
+    return Promise.resolve({ status: "queued", request: "43" });
+  };
+  const el = env.React.createElement(env.win.Provisioning, { onOpenNode: () => {} });
+  const m = mount(env, el);
+  const sign = findAll(m.tree, (n) => n.tag === "button" && textOf(n).includes("Sign"))[0];
+  sign.props.onClick();
+  return new Promise((resolve) => setTimeout(resolve, 0)).then(function () {
+    ok("approval calls the adapter and identifies queued status truthfully",
+      calls[0] && calls[0][0] === "approve" && calls[0][1] === 17
+      && env.toasts.some((t) => t.msg === "Approval queued — beryl.akoria.net"),
+      JSON.stringify({ calls, toasts: env.toasts }));
+    const deny = findAll(m.rerender(), (n) => n.tag === "button" && textOf(n).includes("Deny"))[0];
+    deny.props.onClick();
+    return new Promise((r) => setTimeout(r, 0));
+  }).then(function () {
+    ok("rejection reports queued status without claiming it is complete",
+      calls[1] && calls[1][0] === "reject" && calls[1][1] === 17
+      && env.toasts.some((t) => t.msg === "Rejection queued — beryl.akoria.net"),
+      JSON.stringify({ calls, toasts: env.toasts }));
+  });
 }
 
 /* AssetDetail loads its record asynchronously, so this block runs the mount's
@@ -549,7 +598,7 @@ function giveUpBlock() {
   });
 }
 
-failureBlock().then(giveUpBlock).then(assetDetailBlock).then(done);
+failureBlock().then(giveUpBlock).then(assetDetailBlock).then(enrollmentQueueBlock).then(done);
 
 function done() {
   console.log("\n" + pass + " passed, " + fail + " failed\n");

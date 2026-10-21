@@ -3,6 +3,13 @@
 Database: **`sor`** on cesium (10.1.0.200, MariaDB 12.3, InnoDB, utf8mb4).
 DDL: [`schema.sql`](schema.sql) — validated end-to-end against a throwaway
 `sor_val` schema on cesium (full load, idempotent re-run, view smoke test).
+The current fully applied schema snapshot is [`schema.snapshot.sql`](schema.snapshot.sql),
+generated from `schema.sql` plus every SoR migration by
+`python3 tools/export_schema.py --database sor`. Install and upgrade through
+`tools/migrate.py`; the snapshot is not the ledgered migration path.
+Migrations 022–023 own the transactional outbox tables and CDC triggers used by
+`deploy/sorsync`; fresh schemas must not install those objects through the old
+standalone SQL bootstrap.
 
 The SoR is the authoritative store for the whole homelab: inventory,
 network, identity, configuration, and current state. It is **never populated
@@ -267,7 +274,8 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 
 ## 7. RackWire additions (`migrations/020_rackwire.sql`)
 
-RackWire is the browser-based connection planner (`dashboard/public/rackwire/`).
+RackWire is the browser-based network, power, and interconnect planner
+(`dashboard/public/rackwire/`); rack layouts are optional.
 Migration 020 gives it plan storage and gives the SoR a power model, per
 CONTRACT-RW v1.0 §1. Power deliberately reuses the existing shape rather than
 opening a parallel domain: **power ports are `interfaces` rows, power cords are

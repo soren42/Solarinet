@@ -1,5 +1,6 @@
 """Consumer fault tests: a target failure must leave its deliveries unacked."""
 import types
+import threading
 import unittest
 from unittest import mock
 
@@ -78,6 +79,51 @@ class DeliveryBoundaryTest(unittest.TestCase):
                                          lambda: calls.append(True) or True,
                                          lambda: True)
         self.assertEqual(2, len(calls))
+        self.assertEqual([], ch.acked)
+
+    def test_long_apply_keeps_broker_on_owner_thread_before_ack(self):
+        ch = FakeChannel([1, None])
+        owner = threading.get_ident()
+        started, proceed = threading.Event(), threading.Event()
+        calls = []
+        heartbeats = []
+        def apply():
+            self.assertNotEqual(owner, threading.get_ident())
+            calls.append(True)
+            if len(calls) == 2:
+                started.set()
+                self.assertTrue(proceed.wait(2))
+            return True
+        def maintain():
+            self.assertEqual(owner, threading.get_ident())
+            heartbeats.append(True)
+            if started.is_set():
+                self.assertEqual([], ch.acked)
+                proceed.set()
+        delivery.consume_after_apply(ch, "target", 1, 3600, apply, lambda: True,
+                                     maintain_connection=maintain)
+        self.assertTrue(heartbeats)
+        self.assertEqual([1], ch.acked)
+
+    def test_broker_loss_waits_for_inflight_apply_and_does_not_ack(self):
+        ch = FakeChannel([1, None])
+        started, finish, completed = threading.Event(), threading.Event(), threading.Event()
+        calls = []
+        def apply():
+            calls.append(True)
+            if len(calls) == 2:
+                started.set()
+                self.assertTrue(finish.wait(2))
+                completed.set()
+            return True
+        def maintain():
+            if started.is_set():
+                finish.set()
+                raise RuntimeError("broker connection lost")
+        with self.assertRaisesRegex(RuntimeError, "broker connection lost"):
+            delivery.consume_after_apply(ch, "target", 1, 3600, apply, lambda: True,
+                                         maintain_connection=maintain)
+        self.assertTrue(completed.is_set())
         self.assertEqual([], ch.acked)
 
 

@@ -21,7 +21,8 @@ client_id = authbrokerd
 [http]
 # The tiny HTTP API the dashboard calls. Keep it bound to localhost (or the
 # dashboard host) — it must NOT be internet-reachable. `token` is a shared
-# bearer secret the dashboard sends in `Authorization: Bearer <token>`.
+# bearer secret the dashboard sends in `Authorization: Bearer <token>`. The
+# daemon refuses to start if this is empty or left at the example value.
 bind = 127.0.0.1
 port = 9444
 token = CHANGE_ME_LONG_RANDOM

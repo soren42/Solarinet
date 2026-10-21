@@ -16,6 +16,7 @@
 
 #include <mbedtls/entropy.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,6 +27,8 @@
 struct solariReporter {
     char         primaryUrl[REP_URL_MAX];
     char         failoverUrl[REP_URL_MAX];
+    char         ackUrl[REP_URL_MAX];
+    char         ackFailoverUrl[REP_URL_MAX];
     bool         useTls;
     char         caFile[REP_PATH_MAX];
     char         certFile[REP_PATH_MAX];
@@ -36,6 +39,7 @@ struct solariReporter {
     uint8_t      session[16];       /* survives spool replay in each report TLV */
     int          activeUrl;          /* 0 primary, 1 failover */
     solariConn  *conn;
+    solariConn  *ackConn;
     solariSpool *spool;
 };
 
@@ -61,6 +65,24 @@ static void copyField(char *dst, size_t cap, const char *src, bool *present)
     }
 }
 
+static bool deriveAckUrl(const char *primary, char *out, size_t cap)
+{
+    const char *colon;
+    char *end;
+    unsigned long port;
+    size_t prefix;
+    if (!primary || !out || cap == 0) return false;
+    colon = strrchr(primary, ':');
+    if (!colon || !colon[1]) return false;
+    port = strtoul(colon + 1, &end, 10);
+    if (*end != '\0' || port == 0 || port >= 65535) return false;
+    prefix = (size_t)(colon - primary + 1);
+    if (prefix + 6 >= cap) return false;
+    memcpy(out, primary, prefix);
+    snprintf(out + prefix, cap - prefix, "%lu", port + 1);
+    return true;
+}
+
 solariStatus solariReporterOpen(const solariReporterOpts *opts, solariReporter **out)
 {
     solariReporter *r;
@@ -73,6 +95,20 @@ solariStatus solariReporterOpen(const solariReporterOpts *opts, solariReporter *
 
     copyField(r->primaryUrl,  sizeof r->primaryUrl,  opts->primaryUrl,  NULL);
     copyField(r->failoverUrl, sizeof r->failoverUrl, opts->failoverUrl, NULL);
+    if (opts->ackUrl && opts->ackUrl[0])
+        copyField(r->ackUrl, sizeof r->ackUrl, opts->ackUrl, NULL);
+    else if (opts->primaryUrl[0] &&
+             !deriveAckUrl(opts->primaryUrl, r->ackUrl, sizeof r->ackUrl)) {
+        free(r);
+        return ERR_INVALID_ARG;
+    }
+    if (opts->ackFailoverUrl && opts->ackFailoverUrl[0])
+        copyField(r->ackFailoverUrl, sizeof r->ackFailoverUrl, opts->ackFailoverUrl, NULL);
+    else if (r->failoverUrl[0] &&
+             !deriveAckUrl(r->failoverUrl, r->ackFailoverUrl, sizeof r->ackFailoverUrl)) {
+        free(r);
+        return ERR_INVALID_ARG;
+    }
     copyField(r->caFile,   sizeof r->caFile,   opts->caFile,   &r->hasCa);
     copyField(r->certFile, sizeof r->certFile, opts->certFile, &r->hasCert);
     copyField(r->keyFile,  sizeof r->keyFile,  opts->keyFile,  &r->hasKey);
@@ -97,6 +133,7 @@ void solariReporterClose(solariReporter *r)
 {
     if (!r) return;
     if (r->conn)  solariConnClose(r->conn);
+    if (r->ackConn) solariConnClose(r->ackConn);
     if (r->spool) solariSpoolClose(r->spool);
     free(r);
 }
@@ -115,6 +152,98 @@ static solariStatus dialUrl(solariReporter *r, const char *url, int idx)
     o.sendTimeoutMs = 2000;
     o.recvTimeoutMs = 2000;
     if (solariConnOpen(&o, &r->conn) == SOLARI_OK) { r->activeUrl = idx; return SOLARI_OK; }
+    return ERR_CONN_RETRY;
+}
+
+static solariStatus reporterDialAck(solariReporter *r, int idx)
+{
+    solariConnOpts o;
+    const char *url = idx == 1 ? r->ackFailoverUrl : r->ackUrl;
+    if (!url[0]) return ERR_CONN_RETRY;
+    if (r->ackConn) return SOLARI_OK;
+    memset(&o, 0, sizeof o);
+    o.url = url;
+    o.pattern = SOLARI_PATTERN_REQ;
+    o.useTls = r->useTls;
+    o.caFile = r->hasCa ? r->caFile : NULL;
+    o.certFile = r->hasCert ? r->certFile : NULL;
+    o.keyFile = r->hasKey ? r->keyFile : NULL;
+    o.dialTimeoutMs = 3000;
+    o.sendTimeoutMs = 2000;
+    o.recvTimeoutMs = 3000;
+    return solariConnOpen(&o, &r->ackConn);
+}
+
+static bool isDurableReport(uint8_t msgType)
+{
+    return msgType == SCP_MSG_CLIENT_REPORT ||
+           msgType == SCP_MSG_MONITOR_REPORT ||
+           msgType == SCP_MSG_SURVEY_RESP;
+}
+
+static solariStatus reporterSendConfirmed(solariReporter *r,
+                                          const uint8_t *frame, size_t len)
+{
+    const uint8_t *rx = NULL, *payload = NULL;
+    size_t rxLen = 0, payloadLen = 0;
+    solariFrameHeader sent, got;
+    char peerCn[256];
+    solariTlvReader reader;
+    const uint8_t *value;
+    uint16_t type, valueLen;
+    uint8_t session[16];
+    bool haveSession = false, haveAckSession = false;
+    solariStatus rc;
+
+    rc = solariFrameParse(frame, len, &sent, &payload, &payloadLen, NULL);
+    if (rc != SOLARI_OK || !isDurableReport(sent.msgType)) return ERR_INVALID_ARG;
+    solariTlvReaderInit(&reader, payload, payloadLen);
+    while ((rc = solariTlvNext(&reader, &type, &value, &valueLen)) == SOLARI_OK) {
+        if (type == TLV_REPORT_SESSION) {
+            if (haveSession || valueLen != sizeof session) return ERR_INVALID_ARG;
+            memcpy(session, value, sizeof session);
+            haveSession = true;
+        }
+    }
+    if (rc != ERR_TLV_END || !haveSession) return ERR_INVALID_ARG;
+    {
+        int first = (r->activeUrl == 1 && r->ackFailoverUrl[0]) ? 1 : 0;
+        int attempt;
+        for (attempt = 0; attempt < 2; attempt++) {
+            int idx = attempt == 0 ? first : 1 - first;
+            rc = reporterDialAck(r, idx);
+            if (rc == SOLARI_OK) rc = solariConnSend(r->ackConn, frame, len);
+            if (rc == SOLARI_OK) rc = solariConnRecv(r->ackConn, &rx, &rxLen);
+            if (rc == SOLARI_OK) {
+                if (r->useTls) {
+                    rc = solariConnPeerCn(r->ackConn, peerCn, sizeof peerCn);
+                    if (rc == SOLARI_OK &&
+                        strcmp(peerCn, "server") != 0 && strncmp(peerCn, "server.", 7) != 0)
+                        rc = ERR_AUTH_ROLE;
+                }
+                if (rc == SOLARI_OK)
+                    rc = solariFrameParse(rx, rxLen, &got, &payload, &payloadLen, NULL);
+                if (rc == SOLARI_OK && got.msgType == SCP_MSG_ACK &&
+                    got.correlationId == sent.seqNo) {
+                    solariTlvReaderInit(&reader, payload, payloadLen);
+                    while ((rc = solariTlvNext(&reader, &type, &value, &valueLen)) == SOLARI_OK) {
+                        if (type != TLV_REPORT_SESSION) continue;
+                        if (haveAckSession || valueLen != sizeof session ||
+                            memcmp(value, session, sizeof session) != 0) {
+                            rc = ERR_CONN_RETRY;
+                            break;
+                        }
+                        haveAckSession = true;
+                    }
+                    if (rc == ERR_TLV_END && haveAckSession) return SOLARI_OK;
+                }
+            }
+            if (r->ackConn) {
+                solariConnClose(r->ackConn);
+                r->ackConn = NULL;
+            }
+        }
+    }
     return ERR_CONN_RETRY;
 }
 
@@ -201,6 +330,28 @@ solariStatus solariReporterSend(solariReporter *r, const uint8_t *frame, size_t 
     solariStatus rc;
     if (!r || !frame) return ERR_INVALID_ARG;
 
+    {
+        solariFrameHeader h;
+        rc = solariFrameParse(frame, len, &h, NULL, NULL, NULL);
+        if (rc != SOLARI_OK) return rc;
+        if (isDurableReport(h.msgType)) {
+            rc = reporterSendConfirmed(r, frame, len);
+            if (rc == SOLARI_OK) {
+                (void)solariReporterDrain(r);
+                return SOLARI_OK;
+            }
+            if (r->spool) {
+                solariStatus qrc = solariSpoolPush(r->spool, frame, len);
+                if (qrc != SOLARI_OK) return qrc;
+                solariLogf(SOLARI_LOG_INFO,
+                           "report unacknowledged; retained in spool (depth=%zu)",
+                           solariSpoolDepth(r->spool));
+                return SOLARI_OK;
+            }
+            return rc;
+        }
+    }
+
     if (r->conn) {
         rc = solariConnSend(r->conn, frame, len);
         if (rc == SOLARI_OK) {
@@ -234,7 +385,7 @@ solariStatus solariReporterDrain(solariReporter *r)
 {
     int i;
     if (!r) return ERR_INVALID_ARG;
-    if (!r->spool || !r->conn) return SOLARI_OK;
+    if (!r->spool) return SOLARI_OK;
 
     for (i = 0; i < REP_DRAIN_MAX; i++) {
         uint64_t rowId = 0;
@@ -244,9 +395,24 @@ solariStatus solariReporterDrain(solariReporter *r)
         if (rc != SOLARI_OK) return rc;
         if (!f) return SOLARI_OK;                    /* queue empty */
 
-        rc = solariConnSend(r->conn, f, len);
-        if (rc == SOLARI_OK) { solariSpoolAck(r->spool, rowId); continue; }
-        solariSpoolNack(r->spool, rowId);
+        {
+            solariFrameHeader h;
+            rc = solariFrameParse(f, len, &h, NULL, NULL, NULL);
+            if (rc == SOLARI_OK && isDurableReport(h.msgType))
+                rc = reporterSendConfirmed(r, f, len);
+            else if (rc == SOLARI_OK && r->conn)
+                rc = solariConnSend(r->conn, f, len);
+            else if (rc == SOLARI_OK)
+                rc = ERR_CONN_RETRY;
+        }
+        if (rc == SOLARI_OK) {
+            rc = solariSpoolAck(r->spool, rowId);
+            if (rc != SOLARI_OK) return rc;
+            continue;
+        }
+        if (solariSpoolNack(r->spool, rowId) != SOLARI_OK)
+            solariLogf(SOLARI_LOG_ERROR, "spool nack failed for row=%llu",
+                       (unsigned long long)rowId);
         if (rc == ERR_CONN_FATAL) { solariConnClose(r->conn); r->conn = NULL; }
         return SOLARI_OK;                            /* stop; retry next cycle */
     }

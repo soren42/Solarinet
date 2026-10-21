@@ -236,8 +236,15 @@ ol.toc-list li.sub .ttitle{color:var(--dim);}
 .center{text-align:center;}
 hr.soft{border:none; border-top:1px solid var(--divider); margin:calc(var(--u)*2) 0;}
 </style>
+<style>
+.print-actions{max-width:1100px;margin:10px auto;padding:0 20px;text-align:right}
+.print-actions button{min-height:40px;padding:8px 13px;border:1px solid #718096;border-radius:6px;background:#153b50;color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer}
+.print-actions button:focus-visible{outline:3px solid #29b9d5;outline-offset:2px}
+@media print{.print-actions{display:none}}
+</style>
 </head>
 <body>
+<div class="print-actions"><button id="print-guide" type="button">Print or save as PDF</button></div>
 
 <!-- ============================================================ COVER === -->
 <section class="cover">
@@ -248,8 +255,9 @@ hr.soft{border:none; border-top:1px solid var(--divider); margin:calc(var(--u)*2
   <div class="cover-meta">
     <dl>
       <dt>Document</dt><dd>SolariNet_Developer_Reference</dd>
-      <dt>Revision</dt><dd>1.0 &nbsp;·&nbsp; 2026-09-17</dd>
-      <dt>Source branch</dt><dd>stabilize/phase-0-containment</dd>
+      <dt>Revision</dt><dd>1.1 &nbsp;·&nbsp; 2026-10-21</dd>
+      <dt>Source branch</dt><dd>integrate/stability-20261020</dd>
+      <dt>Source commit</dt><dd>1a71e8b</dd>
       <dt>Repository</dt><dd>github.com/soren42/Solarinet</dd>
     </dl>
     <div class="cover-badge">Internal</div>
@@ -265,12 +273,30 @@ hr.soft{border:none; border-top:1px solid var(--divider); margin:calc(var(--u)*2
   actually built on the <span class="m">akoria</span> homelab, alongside the architecture
   it is planned to become under the current stabilization program.</p>
 
+  <div class="callout note">
+    <span class="tag">Current candidate status · 2026-10-21</span>
+    <p>This document combines historical architecture and inventory material with newer
+    candidate and live-state notes. The current local integration candidate is branch
+    <span class="m">integrate/stability-20261020</span> at <span class="m">1a71e8b</span>,
+    18 commits ahead of <span class="m">main</span>; at baseline capture it had 131 tracked paths
+    modified and 47 untracked paths. It has not been published or deployed. The highest release
+    blockers from the current audit are the PHP/C privilege boundary, lease starvation during
+    long scans, and HA lease/standby behavior. A losing-claim epoch defect is corrected in the
+    candidate and passed the disposable live-DB suite, but remains unreviewed and unrehearsed.
+    Certificate identity enforcement and full manual coverage also remain incomplete. See the
+    <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">stabilization baseline</a>
+    for test and live-host evidence. The §5 host inventory is a dated snapshot and was not
+    refreshed by this revision.</p>
+  </div>
+
   <h3>How this was assembled</h3>
   <p>The contents were reconstructed from ground truth, not memory: the committed source
-  tree on branch <span class="m">stabilize/phase-0-containment</span>; the rendered
-  configuration live on the primary host <span class="m">xenon</span>; the DNS
-  source-of-truth <span class="m">netdb/akoria-hosts.yml</span>; and an authorized live
-  discovery pass across the homelab (host-liveness sweep plus read-only SSH fact-gathering).
+  tree on the branch and commit identified above; rendered configuration from the primary
+  host <span class="m">xenon</span>; the DNS source-of-truth
+  <span class="m">netdb/akoria-hosts.yml</span>; and an authorized live discovery pass
+  across the homelab (host-liveness sweep plus read-only SSH fact-gathering, captured
+  2026-09-17). Later candidate and live observations are dated in the current-state callout
+  and in the stabilization baseline.
   Network discovery on this infrastructure is routine, authorized administration of the
   operator's own network.</p>
 
@@ -286,7 +312,7 @@ hr.soft{border:none; border-top:1px solid var(--divider); margin:calc(var(--u)*2
     <span class="pill lab">Lab</span>&nbsp;
     <span class="pill prod">Production</span>&nbsp;
     <span class="pill auth">Authoritative</span>
-  </p>
+</p>
   <p class="small">A feature marked <span class="pill lab">Lab</span> works but is not
   trusted for unattended production use; several such capabilities are explicitly frozen
   (see §10).</p>
@@ -450,8 +476,13 @@ tracks the work (F-19/F-20) that is meant to make the claim true.</p>
 
 <h2>Two domains, one fabric</h2>
 <p>DNS is split by purpose. <span class="m">akoria.net</span> is the general forward zone,
-authoritative on <span class="m">xenon</span> (BIND primary) with secondaries on
-<span class="m">radium</span> and <span class="m">steel</span>. <span class="m">akoria.org</span>
+authoritative on <span class="m">xenon</span> (BIND primary); the forward zone
+has secondaries on <span class="m">radium</span> and <span class="m">chlorine</span>,
+while generated reverse zones use <span class="m">xenon</span> and <span class="m">chlorine</span>
+because radium does not serve those zones. The ZimaBlade
+still labeled <span class="m">steel</span> is offline and is not currently advertised
+as a nameserver; it is planned for a tertiary DNS role after redeployment.
+<span class="m">akoria.org</span>
 is the Active-Directory / Kerberos realm, authoritative on <span class="m">radium</span> (Samba
 DC, BIND9_DLZ), mirrored hourly from <span class="m">.net</span>. Hosts get an element name as
 their <span class="m">A</span> record; functions are layered on as <span class="m">CNAME</span>s
@@ -569,6 +600,38 @@ reply   : OK [k=v ...]\n  |  ERR &lt;code&gt; &lt;message&gt;\n</pre>
 additionally requires a two-step <span class="m">confirm=&lt;token&gt;</span> handshake — the first
 call returns a token without acting. The same module holds the internal CA/CSR signing material
 (mbedTLS x509), so <strong>the PHP dashboard never holds a server certificate or CA key</strong>.</p>
+
+<h3>First-boot enrollment token exchange</h3>
+<p>The operator issues a 256-bit token with <span class="m">solariCtlClient enroll-token</span>.
+Only its SHA-256 digest and expiry are stored in <span class="m">enrollment</span>; the raw
+token is returned once to the operator. The target creates its private key locally and posts
+its CSR to <span class="m">POST /api/enrollments</span> over HTTPS. This is an explicit
+bearer-authenticated public route: C rechecks the token digest, expiry, and prebound host and
+role before the CSR can become pending. The dashboard cannot issue tokens, sign CSRs, or write
+the monitoring database.</p>
+<div class="tbl-wrap"><table class="tbl">
+<caption>Enrollment lifecycle — migrations 023–024 and solariCtl</caption>
+<thead><tr><th>State / action</th><th>Authority</th><th>Durable effect</th></tr></thead>
+<tbody>
+<tr><td>Issue token</td><td>Operator peer; <span class="m">ENROLL_TOKEN</span></td><td>Creates a host/role-bound row; stores digest and 15-minute default expiry</td></tr>
+<tr><td>Submit CSR</td><td>Bearer token; <span class="m">ENROLL_SUBMIT</span></td><td>Moves token → pending; exact retries are idempotent by CSR fingerprint</td></tr>
+<tr><td>Approve</td><td>Operator approval queue</td><td>One transaction stores approved node, decision, signed certificate, leaf DER SHA-256 fingerprint, and certificate serial; clears CSR</td></tr>
+<tr><td>Pick up</td><td>Same bearer token</td><td>Repeated submission returns certificate + CA until the client acknowledges</td></tr>
+<tr><td>Acknowledge</td><td>Same bearer token; <span class="m">ENROLL_ACK</span></td><td>Records certificate acknowledgement and clears the token digest</td></tr>
+<tr><td>Reject</td><td>Operator approval queue</td><td>Marks rejected and clears the token digest and held CSR</td></tr>
+</tbody></table></div>
+<p>Migration 024 stores the issued leaf fingerprint and serial on the node in the same approval transaction. Ingest currently compares the authenticated certificate CN with the source node ID and approved record; the installed NNG 1.x API does not expose peer DER for a live leaf-fingerprint comparison.</p>
+<p><span class="m">deploy/enrollment/solari-enroll.sh</span> stages the returned PEM files,
+verifies the leaf against the returned CA, and checks that its public key matches the local
+private key before replacing installed material. Forced key renewal stays staged until
+the server returns a matching certificate; failure preserves the old key, leaf, and CA.
+If the certificate was installed but its
+server acknowledgement failed, <span class="m">--resume</span> retries with the same token only
+when the server returns the exact installed leaf; it never replaces identity material during
+recovery. Tests reject a changed leaf and preserve the installed certificate. The DB lifecycle
+and installer are tested against a disposable database and a local mock endpoint. The full
+HTTPS → PHP → solariCtl → MariaDB → CA path is exercised by
+<span class="m">tests/integration/test_enrollment_e2e.py</span> and runs in the full-server CI job.</p>
 
 <figure class="fig">
 <svg viewBox="0 0 720 400" role="img" aria-label="solariServer internal module view">
@@ -694,10 +757,10 @@ tracked below).</p>
 </dl>
 <div class="callout gap">
 <span class="tag">Known gap — F-08</span>
-<p>The CDC path can <strong>permanently lose events</strong> as built: publishes are not
-confirm-gated and consumers ack before applying. Phase-2 of the stabilization program adopts
-publisher-confirms, ack-after-apply, and a reconcile sweep. Until then, treat DNS/Pi-hole
-convergence from the SoR as <em>eventually-consistent-at-best</em>, not guaranteed.</p>
+<p>The current integration candidate enables publisher confirms for outbox delivery, requires
+mandatory routing before checkpointing, acknowledges consumer messages only after a successful
+apply, and reconciles missed state. These controls have local test coverage; production adoption
+and cross-lab review remain release gates. See the stabilization baseline for current evidence.</p>
 </div>
 </section>
 
@@ -731,7 +794,7 @@ administrative, not a security boundary.</p>
 
   <g font-family="'IBM Plex Mono'" font-size="7.5" fill="#0F1720">
     <!-- segment columns -->
-    <g><rect x="24" y="120" width="150" height="86" fill="#F4F7FA" stroke="#B3C1D0"/><text x="99" y="135" text-anchor="middle" font-weight="600" fill="#054B6B">10.0.0.0/24 core</text><text x="99" y="150" text-anchor="middle">xenon .20 · carbon .10</text><text x="99" y="163" text-anchor="middle">helium .254 · mercury .253</text><text x="99" y="176" text-anchor="middle">beaker/flask APs · silver</text><text x="99" y="189" text-anchor="middle">steel .11 · silicon .250</text><text x="99" y="201" text-anchor="middle" fill="#5C6E80">core svc + networking</text></g>
+    <g><rect x="24" y="120" width="150" height="86" fill="#F4F7FA" stroke="#B3C1D0"/><text x="99" y="135" text-anchor="middle" font-weight="600" fill="#054B6B">10.0.0.0/24 core</text><text x="99" y="150" text-anchor="middle">xenon .20 · carbon .10</text><text x="99" y="163" text-anchor="middle">helium .254 · mercury .253</text><text x="99" y="176" text-anchor="middle">beaker/flask APs · silver</text><text x="99" y="189" text-anchor="middle">steel .11 (ZimaBlade) · silicon</text><text x="99" y="201" text-anchor="middle" fill="#5C6E80">core svc + networking</text></g>
     <g><rect x="186" y="120" width="150" height="86" fill="#F4F7FA" stroke="#B3C1D0"/><text x="261" y="135" text-anchor="middle" font-weight="600" fill="#054B6B">10.1.0.0/24 prod</text><text x="261" y="150" text-anchor="middle">radium .10 (AD/SSO)</text><text x="261" y="163" text-anchor="middle">cesium .200 (git/SoR)</text><text x="261" y="176" text-anchor="middle">amino .100 (n8n)</text><text x="261" y="201" text-anchor="middle" fill="#5C6E80">production services</text></g>
     <g><rect x="348" y="120" width="150" height="86" fill="#F4F7FA" stroke="#B3C1D0"/><text x="423" y="135" text-anchor="middle" font-weight="600" fill="#054B6B">10.2.x IoT</text><text x="423" y="150" text-anchor="middle">sodium (HASS) · plutonium</text><text x="423" y="163" text-anchor="middle">ytterbium · phosphorus</text><text x="423" y="176" text-anchor="middle">soren · freon · tardis</text><text x="423" y="201" text-anchor="middle" fill="#5C6E80">home / media / vehicle</text></g>
     <g><rect x="510" y="120" width="150" height="86" fill="#F4F7FA" stroke="#B3C1D0"/><text x="585" y="135" text-anchor="middle" font-weight="600" fill="#054B6B">10.5–10.7 lab/mgmt</text><text x="585" y="150" text-anchor="middle">benzene .5.2.50 (db)</text><text x="585" y="163" text-anchor="middle">nitrogen .5.2.20 (dev)</text><text x="585" y="176" text-anchor="middle">quanta (grafana) · valence</text><text x="585" y="189" text-anchor="middle">chlorine .7.0.10 (CA)</text><text x="585" y="201" text-anchor="middle" fill="#5C6E80">workstations · mgmt · sec</text></g>
@@ -742,7 +805,7 @@ administrative, not a security boundary.</p>
   <line x1="585" y1="112" x2="585" y2="120" stroke="#5C6E80" stroke-width="1.2" marker-end="url(#n1)"/>
 
   <!-- DNS split -->
-  <rect x="120" y="240" width="220" height="70" fill="#E6F2F8" stroke="#0A7FB0"/><text x="230" y="258" text-anchor="middle" font-family="'IBM Plex Sans'" font-weight="600" font-size="9">akoria.net — forward zone</text><text x="230" y="274" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#054B6B">BIND primary: xenon (ns1)</text><text x="230" y="287" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#054B6B">secondaries: radium, steel</text><text x="230" y="300" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#5C6E80">+ Pi-hole helium/mercury</text>
+  <rect x="120" y="240" width="220" height="70" fill="#E6F2F8" stroke="#0A7FB0"/><text x="230" y="258" text-anchor="middle" font-family="'IBM Plex Sans'" font-weight="600" font-size="9">akoria.net — forward zone</text><text x="230" y="274" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#054B6B">BIND primary: xenon (ns1)</text><text x="230" y="287" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#054B6B">secondaries: radium, chlorine</text><text x="230" y="300" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#5C6E80">+ Pi-hole helium/mercury</text>
   <rect x="380" y="240" width="220" height="70" fill="#F1EEFB" stroke="#5B41C8"/><text x="490" y="258" text-anchor="middle" font-family="'IBM Plex Sans'" font-weight="600" font-size="9">akoria.org — AD realm</text><text x="490" y="274" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#5B41C8">Samba AD DC: radium (BIND9_DLZ)</text><text x="490" y="287" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#5B41C8">Kerberos / LDAP / Keycloak</text><text x="490" y="300" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#5C6E80">hourly AXFR mirror from .net</text>
   <line x1="340" y1="275" x2="378" y2="275" stroke="#5B41C8" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#n1)"/>
 
@@ -801,13 +864,13 @@ administrative, not a security boundary.</p>
   <line x1="336" y1="185" x2="358" y2="185" stroke="#5B41C8" stroke-width="1.3" marker-end="url(#f1)"/>
   <line x1="456" y1="185" x2="478" y2="185" stroke="#5B41C8" stroke-width="1.3" marker-end="url(#f1)"/>
   <line x1="590" y1="185" x2="612" y2="185" stroke="#5B41C8" stroke-width="1.3" marker-end="url(#f1)"/>
-  <text x="410" y="212" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7" fill="#C4172C">F-08: no publisher-confirms / ack-before-apply → events can be lost (Phase-2 fix)</text>
+  <text x="410" y="212" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7" fill="#C4172C">F-08: confirms, apply-then-ack and reconciliation implemented in candidate; deployment pending</text>
 
   <rect x="120" y="240" width="480" height="40" fill="#F4F7FA" stroke="#B3C1D0" stroke-dasharray="3 2"/>
   <text x="360" y="258" text-anchor="middle" font-family="'IBM Plex Sans'" font-size="8.5" fill="#5C6E80">Reverse path: discovery advertisements → serverDiscovery → sor-reconcile → SoR</text>
   <text x="360" y="272" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#5C6E80">closes the loop: observed reality folds back into the System of Record</text>
 </svg>
-<figcaption><b>Figure 4.2</b> — The three flows that define the system: a report inbound, a mutation outbound through double RBAC, and an SoR change propagating to DNS. <span class="obs">OBSERVED</span>; F-08 caveat flagged inline.</figcaption>
+<figcaption><b>Figure 4.2</b> — The three flows that define the system: a report inbound, a mutation outbound through double RBAC, and an SoR change propagating to DNS. <span class="obs">OBSERVED</span>; candidate delivery controls remain pending deployment.</figcaption>
 </figure>
 </section>
 
@@ -816,7 +879,8 @@ administrative, not a security boundary.</p>
 <h1 class="section" id="s5"><span class="num">SECTION 05</span><span class="stitle">System inventory</span></h1>
 <p class="lede">Every host on the fabric, by name, manufacturer, type, and network address. Rows fuse
 the committed System of Record (<span class="m">netdb/akoria-hosts.yml</span>) with a live
-discovery sweep from <span class="m">xenon</span> on 2026-09-17. Each row is flagged
+discovery sweep from <span class="m">xenon</span> captured on 2026-09-17. This historical snapshot
+has not been refreshed in this revision. Each row is flagged
 <span class="obs">OBS</span> where a fact was observed live and <span class="inf">SoT</span>
 where it comes only from the committed record.</p>
 
@@ -874,10 +938,10 @@ hosts in the current SoT — stale zones or an incomplete host list. <span class
 <tr class="hl"><td>xenon</td><td>10.0.0.20</td><td>youyeetoo</td><td>X1 SBC · Celeron N5095 · 16 GiB · Ubuntu 26.04</td><td>SolariNet server+dashboard+BIND primary · dashboard,monitor,solari,ns1</td><td>(self)</td><td><span class="obs">OBS✓ssh</span></td></tr>
 <tr class="hl"><td>carbon</td><td>10.0.0.10</td><td>UGREEN</td><td>DXP4800 <b>Plus</b> · Debian 12 · box-hostname "NAS-X"</td><td>NAS · nas,nas-x,c</td><td>6c:1f:f7:0c:76:0f</td><td><span class="obs">OBS✓ssh</span></td></tr>
 <tr><td>helium</td><td>10.0.0.254</td><td>Raspberry Pi</td><td>Raspberry Pi (model unspec.)</td><td>Pi-hole primary/resolver · ns2,hole,dns1,he</td><td>—</td><td><span class="inf">SoT</span></td></tr>
-<tr><td>mercury</td><td>10.0.0.253</td><td>IceWhale</td><td>ZimaBoard</td><td>Pi-hole secondary · ns3,hole2,dns2</td><td>—</td><td><span class="inf">SoT</span></td></tr>
-<tr><td>steel</td><td>10.0.0.11</td><td>IceWhale</td><td>ZimaBlade</td><td>akoria.net secondary NS (⚠ SoT still names it <b>iron</b>/db — drift)</td><td>—</td><td><span class="inf">SoT</span></td></tr>
+<tr><td>mercury</td><td>10.0.0.253</td><td>IceWhale</td><td>Zima (model unverified)</td><td>Pi-hole secondary · ns3,hole2,dns2. Operator confirms three Zima units total (Blade, Board, Board 2); physical mapping pending.</td><td>—</td><td><span class="inf">SoT / operator correction</span></td></tr>
+<tr><td>steel</td><td>10.0.0.11</td><td>IceWhale</td><td>ZimaBlade</td><td>Inventory-labeled Steel; on port 12 of laboratory. Booted without useful services; currently unreachable. Not advertised as a nameserver. Planned tertiary DNS role follows console access and redeployment.</td><td>—</td><td><span class="inf">operator correction</span></td></tr>
 <tr><td>silicon</td><td>10.0.0.250</td><td>Raspberry Pi</td><td>Raspberry Pi 4</td><td>edge proxy (Caddy auto-ACME)</td><td>—</td><td><span class="inf">SoT</span></td></tr>
-<tr><td>scandium</td><td>10.0.0.12</td><td>IceWhale</td><td>ZimaBoard</td><td>services (n8n/Uptime-Kuma) — offline/planned</td><td>—</td><td><span class="inf">SoT</span></td></tr>
+<tr><td>scandium</td><td>10.0.0.12</td><td>IceWhale</td><td>Zima (model unverified)</td><td>services (n8n/Uptime-Kuma) — offline/planned. Physical Zima model mapping pending.</td><td>—</td><td><span class="inf">SoT / operator correction</span></td></tr>
 <tr><td>halogen</td><td>10.0.0.2</td><td>Ubiquiti</td><td>UGC Max</td><td>old primary router (offline, minirack pending)</td><td>—</td><td><span class="inf">SoT</span></td></tr>
 <tr class="hl"><td>radium</td><td>10.1.0.10</td><td>Raspberry Pi</td><td>CM5 · Debian 13 · arm64</td><td>Samba AD DC + Keycloak + BIND9_DLZ/.org · ad,sso,ldap,kdc</td><td>2c:cf:67:b5:ab:7d</td><td><span class="obs">OBS✓ssh</span></td></tr>
 <tr class="hl"><td>cesium</td><td>10.1.0.200</td><td>Dell</td><td>PowerEdge R410 · openSUSE Tumbleweed</td><td>Forgejo + SoR/CMDB MariaDB · git,ad-backup</td><td>d4:ae:52:97:44:e9</td><td><span class="obs">OBS✓ssh</span></td></tr>
@@ -888,7 +952,7 @@ hosts in the current SoT — stale zones or an incomplete host list. <span class
 <tr><td>astatine</td><td>10.5.2.10</td><td>Argon41</td><td>OneUp SBC</td><td>SBC workstation · laptop</td><td>—</td><td><span class="inf">SoT</span></td></tr>
 <tr><td>quanta</td><td>10.6.0.10</td><td>Raspberry Pi</td><td>Pi 5</td><td>Grafana · grafana</td><td>—</td><td><span class="inf">SoT</span></td></tr>
 <tr><td>valence</td><td>10.6.0.20</td><td>FriendlyElec</td><td>NanoPi-R1 (armhf)</td><td>monitoring outpost</td><td>02:81:12:d7:eb:db <span class="inf">(locally-admin MAC)</span></td><td><span class="obs">OBS↑</span></td></tr>
-<tr class="hl"><td>chlorine</td><td>10.7.0.10</td><td>Khadas</td><td>VIM4 · Ubuntu 22.04 · arm64</td><td>internal CA/key server (step-ca) · ca,acme,pki</td><td>c8:63:14:72:87:81</td><td><span class="obs">OBS✓ssh</span></td></tr>
+<tr class="hl"><td>chlorine</td><td>10.7.0.10</td><td>Khadas</td><td>VIM4 · Ubuntu 22.04 · arm64</td><td>internal CA/key server (step-ca) + BIND 9.18.39 authoritative secondary for akoria.net and generated reverse zones; all 18 SOA serials matched xenon on 2026-10-21. Bare zones and RPZ are not served here.</td><td>c8:63:14:72:87:81</td><td><span class="obs">OBS✓SSH / DNS</span></td></tr>
 <tr><td>tachyon</td><td>10.6.6.10</td><td>Particle</td><td>Tachyon</td><td>GPS/PTP time source · ntp</td><td>—</td><td><span class="inf">SoT</span></td></tr>
 </tbody>
 </table>
@@ -936,9 +1000,11 @@ unlabeled or rogue devices — worth identifying. <span class="obs">OBS</span></
 <li><b>lithium</b> sits on <span class="m">10.6.3.0/24</span> and <span class="m">10.6.4.0/24</span>,
 <em>neither of which is a zoned subnet</em> — a real SoT host on unadvertised address space.
 <span class="obs">OBS</span></li>
-<li><b>iron → steel</b> rename: the live zone serves <span class="m">steel</span> as the DNS
-secondary, but the SoT <span class="m">reserved:</span> block still calls the box
-<span class="m">iron</span> with a different (db) role. Same hardware, unreconciled record.
+<li><b>steel / iron handoff</b>: live SoR and DNS still assign <span class="m">.11</span>
+to <span class="m">steel</span>, while <span class="m">iron</span> is reserved for the
+post-redeployment ZimaBlade and tertiary DNS role. The operator confirms the Steel
+inventory label is on the ZimaBlade; its switch location is laboratory port 12.
+Keep the live name/IP assignment until console access and redeployment complete.
 <span class="obs">OBS</span></li>
 <li><b>nitrogen</b> DNS name vs. box hostname <span class="m">dev-family-pi01</span>; SoT lists it
 as a Pi 500, live kernel is a CM5-class 2712 — confirm the exact model.
@@ -980,8 +1046,8 @@ sockets that connect them.</p>
 <tr><td>SolariNet dashboard</td><td>xenon</td><td>dashboard.akoria.net (HTTPS vhost, :9443 intranet)</td><td>Apache + php-fpm (user jason) <span class="obs">OBS</span></td></tr>
 <tr><td class="m">solarinet-server / -monitor / -snmp</td><td>xenon</td><td>systemd units</td><td>C daemons; hardened units <span class="obs">OBS</span></td></tr>
 <tr><td class="m">notify / alertbridge</td><td>xenon</td><td>consume <span class="m">notify.events</span></td><td>alert fan-out to delivery bridges <span class="obs">OBS</span></td></tr>
-<tr><td class="m">sor-emit / -apply-dns / -apply-pihole / -reconcile</td><td>xenon</td><td>RabbitMQ <span class="m">sor.events</span></td><td>CDC pipeline — F-08 gap <span class="inf">flag</span></td></tr>
-<tr><td>BIND (akoria.net)</td><td>xenon (primary); radium, steel (secondary)</td><td>:53</td><td>+ RPZ blocklist + ~100 split-horizon "bare" zones <span class="obs">OBS</span></td></tr>
+<tr><td class="m">sor-emit / -apply-dns / -apply-pihole / -reconcile</td><td>xenon (live units)</td><td>RabbitMQ <span class="m">sor.events</span></td><td>delivery controls implemented in candidate; deployed configuration still differs <span class="inf">flag</span></td></tr>
+<tr><td>BIND (akoria.net)</td><td>xenon primary; radium + chlorine secondary for forward; chlorine secondary for reverse</td><td>:53</td><td>xenon also serves RPZ and 90 split-horizon bare zones; chlorine does not yet replicate those <span class="obs">OBS</span></td></tr>
 <tr><td>Samba AD DC + Keycloak</td><td>radium</td><td>LDAP/Kerberos/OIDC; sso.akoria.net</td><td>authoritative akoria.org <span class="obs">OBS</span></td></tr>
 <tr><td>Forgejo</td><td>cesium</td><td>git.akoria.net</td><td>STATIC_ROOT_PATH on internal storage <span class="inf">SoT</span></td></tr>
 <tr><td>MariaDB — SoR/CMDB</td><td>cesium (primary), benzene (mirror)</td><td>db.akoria.net → benzene</td><td>separate DB from monitoring <span class="inf">SoT</span></td></tr>
@@ -997,7 +1063,7 @@ sockets that connect them.</p>
 <dt>7701 / 7702 / 7703</dt><dd>SCP over <span class="m">tls+tcp</span> (nng + mbedTLS mTLS) — client, monitor, and control channels into solariServer.</dd>
 <dt>/run/solari/solariCtl.sock</dt><dd>AF_UNIX line protocol — the only mutation path from the dashboard to the C core.</dd>
 <dt>9443 / 443</dt><dd>Dashboard HTTPS (intranet additive vhost / public subdomain vhost).</dd>
-<dt>53</dt><dd>DNS — BIND on xenon/radium/steel + Pi-hole on helium/mercury.</dd>
+<dt>53</dt><dd>DNS — BIND on xenon and radium; chlorine serves secondary akoria.net/reverse zones; Pi-hole on helium/mercury. Steel is offline and not advertised.</dd>
 <dt>5672</dt><dd>RabbitMQ AMQP on benzene (vhost <span class="m">solari</span>).</dd>
 </dl>
 </section>
@@ -1011,18 +1077,14 @@ be. Discovery flows from the first into the second; DNS and Pi-hole flow out of 
 
 <h2 id="s7-1">7.1 &nbsp; Two databases</h2>
 <dl class="kv">
-<dt>Monitoring DB</dt><dd>~30 InnoDB tables under <span class="m">db/migrations/001–019</span> — nodes, reports, probe results, alerts and rules, topology edges, discovery, panel/criticality, lifecycle tombstones. All timestamps stored UTC.</dd>
-<dt>SoR / CMDB</dt><dd>Separate DB on <span class="m">cesium</span>, mirrored to <span class="m">benzene</span>. The canonical entity spine is defined in <span class="m">netdb/sor/schema.sql</span> (<span class="m">netdb/sor/migrations/</span> holds only incremental deltas): <span class="m">entities, hardware_models, hardware_units, locations, networks, subnets, vlans, interfaces, ip_addresses</span>. Change-data-capture rides a separate <span class="m">sor_outbox</span> table defined in <span class="m">deploy/sorsync/sql/01-outbox.sql</span>.</dd>
+<dt>Monitoring DB</dt><dd>32 application InnoDB tables maintained by 28 SQL migration files (numbered <span class="m">001–027</span>, with two distinct <span class="m">016_*</span> migrations), plus the migration ledger — nodes, reports and receipts, probe results, alerts and rules, topology edges, discovery, panel/criticality, lifecycle tombstones, enrollment identity, and durable decommission challenges. All timestamps stored UTC.</dd>
+<dt>SoR / CMDB</dt><dd>Separate DB on <span class="m">cesium</span>, mirrored to <span class="m">benzene</span>. The canonical entity spine is defined in <span class="m">netdb/sor/schema.sql</span> (<span class="m">netdb/sor/migrations/</span> holds only incremental deltas): <span class="m">entities, hardware_models, hardware_units, locations, networks, subnets, vlans, interfaces, ip_addresses</span>. Change-data-capture uses <span class="m">sor_outbox</span> and <span class="m">sor_sync_state</span> from ledgered migration <span class="m">022_transactional_outbox.sql</span>, with the 21 SoR CDC triggers in migration <span class="m">023_sor_cdc_triggers.sql</span>; the former deploy SQL is retained only as a legacy reference.</dd>
 </dl>
 
 <div class="callout gap">
-<span class="tag">Known gap — F-12, schema lifecycle</span>
-<p>The monitoring schema is <strong>not reproducible from a clean checkout</strong> as built:
-<span class="m">schema.sql</span> is stale (reflects only migration 001), there is a
-<strong>duplicate ordinal 016</strong> (two files, currently inert), and there is no single
-migrator with immutable IDs, checksums, and an applied-ledger. Phase-2 (I2) adopts one migrator
-and resolves the duplicate. Until then, the live database — not the tree — is the truth of what
-columns exist.</p>
+<span class="tag">F-12 status — clean installs reproducible; legacy adoption open</span>
+<p><span class="m">tools/migrate.py</span> applies the monitoring and SoR streams with immutable full-file IDs, SHA-256 checksums, a durable ledger, ordered gap detection, and explicit refusal of unknown legacy schemas. <span class="m">tools/export_schema.py</span> rebuilds both streams in disposable databases and exports <span class="m">db/schema.sql</span> and <span class="m">netdb/sor/schema.snapshot.sql</span> with their migration manifests. CI checks the generated snapshots byte-for-byte. The two monitoring files numbered 016 have distinct ledger IDs and deterministic order.</p>
+<p>The generated snapshots are reference artifacts; install and upgrade through the ledgered runner. Existing production databases have no migration ledger, so backup, full schema comparison, and reviewed history adoption remain release gates. <span class="m">solariServer --init-db</span> is retired because it cannot provide that safety.</p>
 </div>
 
 <figure class="fig">
@@ -1063,7 +1125,7 @@ columns exist.</p>
   <line x1="330" y1="240" x2="230" y2="283" stroke="#5B41C8" stroke-width="1.2" marker-end="url(#e1)"/>
   <line x1="270" y1="302" x2="298" y2="302" stroke="#5B41C8" stroke-width="1.2" marker-end="url(#e1)"/>
   <line x1="450" y1="302" x2="468" y2="302" stroke="#5B41C8" stroke-width="1.2" marker-end="url(#e1)"/>
-  <text x="365" y="340" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#C4172C">F-08: emit path is not confirm-gated — see §4.2</text>
+  <text x="365" y="340" text-anchor="middle" font-family="'IBM Plex Mono'" font-size="7.5" fill="#C4172C">F-08: confirm-gated delivery and reconciliation are implemented in candidate; deployment pending</text>
 </svg>
 <figcaption><b>Figure 7.1</b> — The SoR entity spine and its CDC outbox. Every page in the planned integration (I2/I4) hangs off <span class="m">entities</span>. <span class="obs">OBSERVED</span> from <span class="m">netdb/sor/schema.sql</span> + <span class="m">deploy/sorsync/sql/</span>.</figcaption>
 </figure>
@@ -1141,6 +1203,7 @@ never be replayed under a different node's identity.</p>
 <thead><tr><th>Boundary</th><th>Control today</th><th>Hardening</th><th>Sev</th></tr></thead>
 <tbody>
 <tr><td>Browser → PHP</td><td>session + default-deny Policy + CSRF/Origin</td><td>claims validation, break-glass disable, rate-limit, role revalidation (F-14)</td><td><span class="sev p1">P1</span></td></tr>
+<tr><td>Node bootstrap → PHP</td><td>host/role-bound bearer digest + expiry; C verifies before CSR storage</td><td>real HTTPS → Ctl → DB → CA integration test; rate-limit public bootstrap</td><td><span class="sev p1">P1</span></td></tr>
 <tr><td>PHP → C (solariCtl)</td><td>local UNIX socket; op= attribution; confirm-token for destructive verbs</td><td>framed I/O + deadlines + caps (F-11); split least-priv accounts + SO_PEERCRED (F-04)</td><td><span class="sev p0">P0</span></td></tr>
 <tr><td>Node → server (SCP)</td><td>mTLS; role-from-cert-CN; illegal-type reject</td><td>frame↔cert identity binding (F-01); mTLS invariant not configurable (F-29)</td><td><span class="sev p0">P0</span></td></tr>
 <tr><td>Server → DNS/AD</td><td>SoR-driven render + apply</td><td>render+validate+atomic-switch+rollback (F-17); AD/LDAP write paths frozen</td><td><span class="sev p1">P1</span></td></tr>
@@ -1216,6 +1279,7 @@ which capabilities are deliberately switched off.</p>
 <dt>deploy/fleet/</dt><dd>Ansible inventory + a netboot <span class="m">catalog.json</span>. The netboot HTTP service on <span class="m">benzene:8080</span> is staged and inert — see freeze below.</dd>
 <dt>deploy/dns-bare/, netdb/</dt><dd>Zone generation from the SoT: <span class="m">gen-zones.py</span> renders <span class="m">akoria.net</span>; <span class="m">sync-net-to-org.py</span> mirrors into the AD realm hourly; <span class="m">gen-bare.py</span> produces the ~100 split-horizon per-host zones.</dd>
 <dt>deploy/sorsync/</dt><dd>The CDC units — <span class="m">sor-emit</span>, <span class="m">sor-apply-dns</span>, <span class="m">sor-apply-pihole</span>, <span class="m">sor-reconcile</span> — running on xenon.</dd>
+<dt>status-panel/</dt><dd>The Galactic Unicorn firmware, shared USB/TLS wire protocol, and lithium daemon. The subproject’s <a href="panel/SolariNet_Panel_Developer_Reference.html">developer reference</a> covers its module boundaries and test workflow; operator behavior is in the <a href="panel/SolariNet_Panel_Users_Guide.html">panel user guide</a>.</dd>
 </dl>
 
 <h2 id="s10-2">10.2 &nbsp; Frozen capabilities</h2>
@@ -1350,7 +1414,7 @@ fleet-of-one), Contained (kept lab-only now, fixed later), or Folded (merged int
 <tr><td class="m">F-10</td><td>Health &amp; convergence records can lie</td><td><span class="sev p1">P1</span></td><td>Adopt (persist once, fsync) · I3 / Ph2</td></tr>
 <tr><td class="m">F-11</td><td>solariCtl wire protocol unsafe both ends</td><td><span class="sev p1">P1</span></td><td>Adopt (framed I/O+caps) · Ph1</td></tr>
 <tr><td class="m">F-12</td><td>Schema lifecycle not reproducible</td><td><span class="sev p1">P1</span></td><td>Adopt (one migrator, ledger) · I2 / Ph2</td></tr>
-<tr><td class="m">F-13</td><td>Browser freshness violates honesty goal</td><td><span class="sev p1">P1</span></td><td>Adopt — the hinge · I3 / Ph1</td></tr>
+<tr><td class="m">F-13</td><td>Browser freshness violates honesty goal</td><td><span class="sev p1">P1</span></td><td>Core and per-source cache/stale/SSE mitigations in candidate; finish authenticated browser checks · I3 / Ph1</td></tr>
 <tr><td class="m">F-14</td><td>Auth/session controls incomplete</td><td><span class="sev p1">P1</span></td><td>Adopt (claims, rate-limit) · Ph1</td></tr>
 <tr><td class="m">F-15</td><td>Opie "read-only" not confidentiality-safe</td><td><span class="sev p1">P1</span></td><td>Contain now, harden Ph3</td></tr>
 <tr><td class="m">F-16</td><td>Fleet provisioning leaves key material staged</td><td><span class="sev p1">P1</span></td><td>Adopt (node keys, one-time CSR) · Ph3</td></tr>
@@ -1360,7 +1424,7 @@ fleet-of-one), Contained (kept lab-only now, fixed later), or Folded (merged int
 <tr><td class="m">F-20</td><td>HRW membership unproven; claim too broad</td><td><span class="sev p2">P2</span></td><td>Adopt + doc-fix now · Ph3–4</td></tr>
 <tr><td class="m">F-21</td><td>Spool has no quota/age; sequence reuse</td><td><span class="sev p2">P2</span></td><td>Adopt as batch · Ph3–4</td></tr>
 <tr><td class="m">F-22</td><td>SoR multi-step writes untransacted</td><td><span class="sev p2">P2</span></td><td>Adopt · folded into Ph2 (F-17)</td></tr>
-<tr><td class="m">F-23</td><td>Decommission sends before durable confirm</td><td><span class="sev p2">P2</span></td><td>Adopt as batch · Ph3–4</td></tr>
+<tr><td class="m">F-23</td><td>Decommission receiver and delivery</td><td><span class="sev p2">P2</span></td><td>Challenge gate, target-node field, generation-bound acknowledgement, and persistent bounded delivery retry implemented; client receiver and control-queue token redaction remain open</td></tr>
 <tr><td class="m">F-24</td><td>Tab5 secret-at-rest unproven</td><td><span class="sev p2">P2</span></td><td>Adopt as batch · Ph3–4</td></tr>
 <tr><td class="m">F-25</td><td>UniFi false-green</td><td><span class="sev p2">P2</span></td><td>Fold into I3 · pulled into Ph1</td></tr>
 <tr><td class="m">F-26</td><td>Authbroker fails open on empty token</td><td><span class="sev p2">P2</span></td><td>Adopt as batch · Ph3–4</td></tr>
@@ -1372,8 +1436,9 @@ fleet-of-one), Contained (kept lab-only now, fixed later), or Folded (merged int
 </tbody>
 </table>
 </div>
-<p class="note-inline">✓ = landed on the current branch (<span class="m">stabilize/phase-0-containment</span>)
-as of this revision. All other items are open per their phase.</p>
+<p class="note-inline">✓ = implemented on the local integration candidate named in the cover, based on
+the current audit. A checkmark does not mean the change has been published, deployed, or passed
+cross-lab review. Open items and release blockers are summarized in Document control.</p>
 </section>
 
 <!-- ==================================================== §12 APPENDICES === -->
@@ -1403,8 +1468,8 @@ as of this revision. All other items are open per their phase.</p>
 <tr><td>carbon</td><td>10.0.0.10</td><td>NAS (DXP4800 Plus)</td><td>benzene</td><td>10.5.2.50</td><td>MariaDB + netboot</td></tr>
 <tr><td>beaker / flask</td><td>10.0.0.7/.8</td><td>WiFi 7 APs</td><td>nitrogen</td><td>10.5.2.20</td><td>dev</td></tr>
 <tr><td>helium / mercury</td><td>10.0.0.254/.253</td><td>Pi-hole pair</td><td>quanta</td><td>10.6.0.10</td><td>Grafana</td></tr>
-<tr><td>steel</td><td>10.0.0.11</td><td>DNS secondary</td><td>valence</td><td>10.6.0.20</td><td>monitor outpost</td></tr>
-<tr><td>silicon</td><td>10.0.0.250</td><td>edge proxy (Caddy)</td><td>chlorine</td><td>10.7.0.10</td><td>internal CA</td></tr>
+<tr><td>steel</td><td>10.0.0.11</td><td>ZimaBlade; tertiary DNS planned after redeployment</td><td>valence</td><td>10.6.0.20</td><td>monitor outpost</td></tr>
+<tr><td>silicon</td><td>10.0.0.250</td><td>edge proxy (Caddy)</td><td>chlorine</td><td>10.7.0.10</td><td>internal CA + BIND secondary</td></tr>
 <tr><td>silver</td><td>10.0.0.85</td><td>printer</td><td>photon</td><td>10.7.0.1</td><td>NVR hub</td></tr>
 <tr><td>hydrogen</td><td>10.0.1.50</td><td>workstation (Mac)</td><td>tachyon</td><td>10.6.6.10</td><td>GPS/PTP time</td></tr>
 </tbody>
@@ -1412,11 +1477,11 @@ as of this revision. All other items are open per their phase.</p>
 </div>
 
 <h2 id="s12-3">C &nbsp; Methodology &amp; provenance</h2>
-<p>This reference was assembled from three cross-checked sources, all captured on 2026-09-17:
-the committed source tree on branch <span class="m">stabilize/phase-0-containment</span>; the
-rendered live configuration on <span class="m">xenon</span> (BIND zones, systemd units, route and
-ARP tables, read via <span class="m">sudo cat</span> and read-only SSH); and an authorized live
-discovery pass. Discovery method was <span class="m">nmap -sn -PR</span> across the 16 zoned /24s
+<p>The host inventory and its discovery observations were captured on 2026-09-17. They were
+cross-checked against the source tree and live state available on that date. The current code
+candidate and later live observations are recorded separately in the cover callout and the
+stabilization baseline. The historic discovery method was <span class="m">nmap -sn -PR</span>
+across the 16 zoned /24s
 plus read-only SSH fact-gathering; the offline IEEE OUI table resolved MAC vendors. A full
 service/OS scan and SNMP polling were <strong>not</strong> completed — those columns are blank by
 honest omission, and no MAC, model, or address in this document was synthesized to fill a gap.
@@ -1432,11 +1497,14 @@ to refresh.</p>
 </div>
 
 <hr class="soft">
-<p class="small center">SolariNet Developer &amp; Architecture Reference · Revision 1.0 · 2026-09-17 ·
+<p class="small center">SolariNet Developer &amp; Architecture Reference · Revision 1.1 · 2026-10-21 ·
 Internal · <span class="m">github.com/soren42/Solarinet</span> · Set in IBM Plex Sans &amp; Mono ·
 Rendered with WeasyPrint from self-contained HTML — no build step.</p>
 </section>
 
 <!-- SECTIONS APPENDED BELOW -->
+<script>
+document.getElementById('print-guide').addEventListener('click', function () { window.print(); });
+</script>
 </body>
 </html>

@@ -1,11 +1,10 @@
 /*
  * test_client_report.c - the client reporting path (sec 7.3) end to end.
  *
- * Two cases, both against a loopback PULL "server":
- *   1. live send: connect, collect, push a CLIENT_REPORT, verify it arrives and
- *      carries this node's id.
- *   2. fault tolerance: with the server DOWN, a report is durably spooled; when
- *      the server comes up, draining replays it and empties the queue.
+ * Two cases against a loopback REQ/REP acknowledgment endpoint:
+ *   1. live send: verify a matching session/sequence ACK completes delivery.
+ *   2. fault tolerance: with the endpoint DOWN, a report is durably spooled;
+ *      when it comes up, draining keeps the report until ACK.
  *
  * Gated behind SOLARI_WITH_IO && SOLARI_WITH_SQLITE (it needs nng + the spool),
  * so it builds and runs where the I/O layer exists (xenon).
@@ -14,67 +13,74 @@
 #include "client.h"
 
 #include "solari/solariNet.h"
+#include "solari/solariCrypto.h"
 #include "solari/solariFrame.h"
 #include "solari/solariTlv.h"
 #include "solari/solariReporter.h"
 #include "solari/solariTime.h"
 #include "solari/solariError.h"
+#include "solari/solariMsg.h"
+#include "report_ack_stub.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define URL_LIVE  "tcp://127.0.0.1:8810"
 #define URL_SPOOL "tcp://127.0.0.1:8811"
+#define URL_LIVE_ACK "tcp://127.0.0.1:8811"
+#define URL_SPOOL_ACK "tcp://127.0.0.1:8812"
+#define URL_BAD_ACK "tcp://127.0.0.1:8814"
 
 void setUp(void) {}
 void tearDown(void) {}
 
 static void test_report_live_send(void)
 {
-    solariConnOpts pullOpts;
-    solariConn    *pull = NULL;
+    solariConnOpts repOpts;
+    solariConn    *ackRep = NULL;
     clientConfig   cfg;
     clientContext  ctx;
     clientState    st;
-    solariClientReport rep;
-    const uint8_t *rx = NULL;
-    size_t rlen = 0;
-    solariFrameHeader h;
+    solariClientReport report;
     solariStatus sendRc = ERR_CONN_RETRY;
+    pthread_t ackThread;
+    reportAckStub ackStub;
     int tries;
 
     clientConfigDefaults(&cfg);
     strncpy(cfg.hostFqdn, "creport-live.akoria.net", sizeof cfg.hostFqdn - 1);
     strncpy(cfg.primaryUrl, URL_LIVE, sizeof cfg.primaryUrl - 1);
-    /* no spoolDb: send returns ERR_CONN_RETRY until the pipe is live */
+    /* no spoolDb: the report requires a server ACK to return SOLARI_OK */
 
-    memset(&pullOpts, 0, sizeof pullOpts);
-    pullOpts.url = URL_LIVE;
-    pullOpts.pattern = SOLARI_PATTERN_PULL;
-    pullOpts.recvTimeoutMs = 4000;
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnListen(&pullOpts, &pull));
+    memset(&repOpts, 0, sizeof repOpts);
+    repOpts.url = URL_LIVE_ACK;
+    repOpts.pattern = SOLARI_PATTERN_REP;
+    repOpts.recvTimeoutMs = 4000;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnListen(&repOpts, &ackRep));
 
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientContextInit(&ctx, &cfg));
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientConnect(&ctx));
+    TEST_ASSERT_EQUAL_UINT64(
+        solariNodeIdFromFqdnRole("creport-live.akoria.net", ROLE_CLIENT),
+        ctx.nodeId);
+    (void)clientConnect(&ctx); /* report delivery uses the confirmed ACK endpoint */
 
     memset(&st, 0, sizeof st);
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientCollectReport(&cfg, &st, true, &rep));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientCollectReport(&cfg, &st, true, &report));
 
+    ackStub.conn = ackRep; ackStub.replies = 1; ackStub.corruptFirst = false;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&ackThread, NULL, reportAckStubRun, &ackStub));
     for (tries = 0; tries < 80 && sendRc != SOLARI_OK; tries++) {
-        sendRc = clientReportSend(&ctx, &rep);
+        sendRc = clientReportSend(&ctx, &report);
         if (sendRc != SOLARI_OK) solariSleepMs(50);
     }
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, sendRc);
-
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnRecv(pull, &rx, &rlen));
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariFrameParse(rx, rlen, &h, NULL, NULL, NULL));
-    TEST_ASSERT_EQUAL_UINT8(SCP_MSG_CLIENT_REPORT, h.msgType);
-    TEST_ASSERT_EQUAL_UINT64(ctx.nodeId, h.sourceNodeId);
+    pthread_join(ackThread, NULL);
 
     clientContextClose(&ctx);
-    solariConnClose(pull);
+    solariConnClose(ackRep);
 }
 
 static void test_spool_then_drain(void)
@@ -83,13 +89,12 @@ static void test_spool_then_drain(void)
     clientConfig  cfg;
     clientContext ctx;
     clientState   st;
-    solariClientReport rep;
-    solariConnOpts pullOpts;
-    solariConn    *pull = NULL;
-    const uint8_t *rx = NULL;
-    size_t rlen = 0;
-    solariFrameHeader h;
+    solariClientReport report;
+    solariConnOpts repOpts;
+    solariConn    *ackRep = NULL;
     int tries;
+    pthread_t ackThread;
+    reportAckStub ackStub;
 
     snprintf(dbpath, sizeof dbpath, "/tmp/solari_creport_%ld.db", (long)getpid());
     remove(dbpath);
@@ -103,32 +108,71 @@ static void test_spool_then_drain(void)
     clientConnect(&ctx);                         /* dialer; no listener yet */
 
     memset(&st, 0, sizeof st);
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientCollectReport(&cfg, &st, true, &rep));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientCollectReport(&cfg, &st, true, &report));
 
     /* server down -> the report must be spooled, not lost */
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientReportSend(&ctx, &rep));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientReportSend(&ctx, &report));
     TEST_ASSERT_TRUE(solariReporterSpoolDepth(ctx.rep) >= 1);
 
     /* bring the server up; draining replays the queue to empty */
-    memset(&pullOpts, 0, sizeof pullOpts);
-    pullOpts.url = URL_SPOOL;
-    pullOpts.pattern = SOLARI_PATTERN_PULL;
-    pullOpts.recvTimeoutMs = 4000;
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnListen(&pullOpts, &pull));
-    clientConnect(&ctx);                         /* ensure a live conn exists */
+    memset(&repOpts, 0, sizeof repOpts);
+    repOpts.url = URL_SPOOL_ACK;
+    repOpts.pattern = SOLARI_PATTERN_REP;
+    repOpts.recvTimeoutMs = 4000;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnListen(&repOpts, &ackRep));
+    ackStub.conn = ackRep; ackStub.replies = 1; ackStub.corruptFirst = false;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&ackThread, NULL, reportAckStubRun, &ackStub));
 
     for (tries = 0; tries < 80 && solariReporterSpoolDepth(ctx.rep) > 0; tries++) {
         clientDrainSpool(&ctx);
         if (solariReporterSpoolDepth(ctx.rep) > 0) solariSleepMs(50);
     }
+    pthread_join(ackThread, NULL);
     TEST_ASSERT_EQUAL_size_t(0, solariReporterSpoolDepth(ctx.rep));
 
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnRecv(pull, &rx, &rlen));
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariFrameParse(rx, rlen, &h, NULL, NULL, NULL));
-    TEST_ASSERT_EQUAL_UINT8(SCP_MSG_CLIENT_REPORT, h.msgType);
+    clientContextClose(&ctx);
+    solariConnClose(ackRep);
+    remove(dbpath);
+}
+
+static void test_mismatched_ack_keeps_report_spooled(void)
+{
+    char dbpath[64];
+    clientConfig cfg;
+    clientContext ctx;
+    clientState st;
+    solariClientReport report;
+    solariConnOpts repOpts;
+    solariConn *ackRep = NULL;
+    reportAckStub ackStub;
+    pthread_t ackThread;
+
+    snprintf(dbpath, sizeof dbpath, "/tmp/solari_creport_bad_ack_%ld.db", (long)getpid());
+    remove(dbpath);
+    clientConfigDefaults(&cfg);
+    strncpy(cfg.hostFqdn, "creport-bad-ack.akoria.net", sizeof cfg.hostFqdn - 1);
+    strncpy(cfg.primaryUrl, URL_BAD_ACK, sizeof cfg.primaryUrl - 1);
+    strncpy(cfg.reportAckUrl, URL_BAD_ACK, sizeof cfg.reportAckUrl - 1);
+    strncpy(cfg.spoolDb, dbpath, sizeof cfg.spoolDb - 1);
+    memset(&repOpts, 0, sizeof repOpts);
+    repOpts.url = URL_BAD_ACK;
+    repOpts.pattern = SOLARI_PATTERN_REP;
+    repOpts.recvTimeoutMs = 4000;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariConnListen(&repOpts, &ackRep));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientContextInit(&ctx, &cfg));
+    memset(&st, 0, sizeof st);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientCollectReport(&cfg, &st, true, &report));
+
+    ackStub.conn = ackRep; ackStub.replies = 2; ackStub.corruptFirst = true;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&ackThread, NULL, reportAckStubRun, &ackStub));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientReportSend(&ctx, &report));
+    TEST_ASSERT_EQUAL_size_t(1, solariReporterSpoolDepth(ctx.rep));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientDrainSpool(&ctx));
+    pthread_join(ackThread, NULL);
+    TEST_ASSERT_EQUAL_size_t(0, solariReporterSpoolDepth(ctx.rep));
 
     clientContextClose(&ctx);
-    solariConnClose(pull);
+    solariConnClose(ackRep);
     remove(dbpath);
 }
 
@@ -249,6 +293,7 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_report_live_send);
     RUN_TEST(test_spool_then_drain);
+    RUN_TEST(test_mismatched_ack_keeps_report_spooled);
     RUN_TEST(test_discovery_frame);
     RUN_TEST(test_topology_frame);
     RUN_TEST(test_reporter_restart_has_distinct_identity);
