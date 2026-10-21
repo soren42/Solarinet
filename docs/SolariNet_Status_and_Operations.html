@@ -46,6 +46,9 @@
     body{background:#fff;color:#111}
     .wrap{max-width:none;padding:0}
     .toc,.gap,.system-map{break-inside:avoid}
+    .note,.gap,.toc{background:#f4f7fa;color:#17202a;border-color:#8796a6}
+    .toc a{color:#155c70}
+    code{background:#eef2f6;color:#1d3857}
     .status-now{break-inside:auto}
     .actions{display:none}
     .status-now{background:#fff;color:#111;border-color:#7b8794}
@@ -438,17 +441,32 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   nightly and <code>CALL solari_roll_partitions(...)</code> monthly.</p>
 
   <h2 id="ci">CI</h2>
-  <p><code>.github/workflows/ci.yml</code> defines four jobs (validated as well-formed YAML):</p>
+  <p><code>.github/workflows/ci.yml</code> defines ten job groups. The local
+  <code>build-server-asan</code> CTest run passed <strong>37/37</strong>; hosted CI has not run
+  for this unreleased candidate.</p>
   <ul>
-    <li><code>core</code> — the default zero-dependency build + ctest.</li>
-    <li><code>server</code> — the full <code>SOLARI_BUILD_SERVER + IO + SQLITE + JSON</code>
-    build with the bootstrap dependency set.</li>
-    <li><code>cross</code> — a matrix (linux-arm64 / arm32, windows-x86_64) via the
-    <code>cmake/toolchains/*</code> files, with a qemu-user smoke run of the cross-built
-    <code>test_*</code> binaries.</li>
-    <li><code>macos</code> — a universal build on the native runner.</li>
+    <li><code>core</code> — the default zero-dependency build and CTest suite.</li>
+    <li><code>server</code> — full server build with ASan/UBSan, database migrations,
+    enrollment and lease failover tests, scan-worker and adoption integration, and browser
+    acceptance.</li>
+    <li><code>dashboard</code> — PHP/API and authorization tests, migration contracts, RackWire
+    APIs, scanner-to-RackWire browser flow, and deployment-package checks.</li>
+    <li><code>rackwire-browser</code> — standalone offline, accessible, responsive planner flow.</li>
+    <li><code>python-integrations</code> — MCP, alertbridge, UniFi, authbroker, notifications, and
+    Opie tests.</li>
+    <li><code>sorsync</code> — SoR outbox delivery across RabbitMQ releases and an upgrade/recovery
+    rehearsal.</li>
+    <li><code>protocol-fuzz</code> — coverage-instrumented SCP parser fuzz smoke tests.</li>
+    <li><code>panel</code> — firmware, daemon, provisioning-tool, and dashboard parity suites.</li>
+    <li><code>cross</code> — Linux ARM, Windows, and other cross-target builds with qemu-user
+    smoke runs where available.</li>
+    <li><code>macos</code> — universal build and native core tests.</li>
   </ul>
-  <p>Loopback / transport staging is best-effort, mirroring <code>bootstrap-xenon.sh</code>.</p>
+  <p>Loopback transport staging is best-effort, mirroring <code>bootstrap-xenon.sh</code>.
+  The RackWire and dashboard jobs check out submodules recursively; the candidate RackWire
+  GitHub mirror is still absent, so those hosted jobs cannot fetch this gitlink until that
+  repository is published. Other CI results remain local or unverified as stated in their
+  gates.</p>
 
   <h2 id="gaps">Known gaps &amp; deferred items</h2>
   <div class="gap">
