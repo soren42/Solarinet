@@ -2179,3 +2179,21 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   or RackWire repository names under the expected owners. None were found. Exact
   GitHub/Forgejo scanner-ingest paths remain absent, and GitHub RackWire remains
   absent; destination choice is still needed before publishing those projects.
+
+## 2026-10-21 — SolariNet candidate recorded locally
+
+- Committed the 327-path SolariNet integration candidate as
+  `2721771 feat(stabilization): close platform integration seams`. This commit
+  includes the RackWire gitlink to `a0f456a`, the migration/tooling and test
+  additions, and the paired manuals/runbooks. It is local only; no branch or tag
+  was pushed.
+- A high-confidence scan across 356 candidate paths found no private-key,
+  GitHub/AWS/OpenAI/Anthropic, or Slack token patterns. The scan suppressed all
+  values; it is a pattern check, not a comprehensive secret audit. The staged
+  whitespace check found trailing spaces in the F09 lease contract; those were
+  removed before the commit and the final check passed.
+- Refreshed the Status & Operations Guide and PDF after the commit. The status
+  snapshot records a clean worktree, the two matching published `main` refs at
+  `5e8d688`, no release tags, and the status refresh commit's **20-commit**
+  lead. The RackWire gitlink is committed locally, while the GitHub mirror and
+  scanner-ingest remote are still absent.

@@ -71,10 +71,10 @@
 
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 21 October 2026</h2>
-    <p>The integration candidate is not released: the local branch is 18 commits ahead of
-    Forgejo and GitHub <code>main</code>, whose refs match at <code>5e8d688</code>. The
-    worktree has 177 tracked paths changed and 150 untracked paths. Neither remote has a
-    release tag, and no candidate release or deployment has been made.</p>
+    <p>The integration candidate is not released: as of this snapshot, the local branch is
+    20 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    at <code>5e8d688</code>. The worktree is clean. Neither remote has a release tag, and no
+    candidate release or deployment has been made.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
       <title id="map-title">SolariNet integration boundaries</title>
       <desc id="map-desc">Operators use the authenticated dashboard and RackWire. The dashboard writes inventory to the SoR. The SoR feeds DNS and notifications. Monitoring clients and scan workers report to the C control server. The Khadas VIM4 runs an authoritative DNS secondary.</desc>
@@ -147,11 +147,10 @@
       the standalone scanner-ingest checkout has no remote or matching repository on either host,
       and the local Claude Code OAuth session is expired. GitHub CI checks out RackWire
       recursively, but `soren42/RackWire` is absent. RackWire's eight documentation and
-      entrypoint changes are now recorded in local candidate commit <code>a0f456a</code>;
-      the SolariNet worktree points to it, but that parent gitlink update is not committed or
-      published yet. Scanner-ingest now has a clean local documentation candidate at
-      <code>ebb9a58</code>, including its paired interface-guide PDF; its checkout still has
-      no configured remote or matching repository on either host.</li>
+      entrypoint changes are committed as <code>a0f456a</code>, and the SolariNet candidate
+      contains that gitlink. Scanner-ingest has a clean local documentation candidate at
+      <code>ebb9a58</code>, including its paired interface-guide PDF. Neither subproject
+      candidate has been published.</li>
     </ul>
     <p>Current evidence and next gates: <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">Stabilization Baseline</a>
     and <a href="SolariNet_Stabilization_Integration_Workflow_2026-08-09.md">Integration Workflow</a>.</p>
