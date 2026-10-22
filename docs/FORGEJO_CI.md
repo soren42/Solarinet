@@ -24,10 +24,21 @@ Tests and their live-SoR guards remain unchanged.
 This contract requires a **dedicated, disposable Linux VM** with Docker, `sudo`, and the
 Forgejo runner installed in host mode using label `solarinet-ci-host:host`. Configure runner
 capacity to `1`; jobs share fixed loopback ports. Host mode does not isolate job code. Never
-register a shared application, database, DNS, workstation, or production host. The VM should
-hold no production credentials or writable production mounts and should be reset/recreated
-when its trust state is uncertain. The workflow cleans up its named service containers with
-`if: always()` steps.
+register a shared application, database, DNS, workstation, or production host. The VM must
+hold no production credentials or writable production mounts and must be reverted or
+recreated after every job, since job code can use `sudo` and persist changes across jobs.
+The workflow cleans up its named service containers with `if: always()` steps, but that
+cleanup does not replace a VM reset.
+
+The host firewall must enforce the runner network boundary independently of the guest:
+allow DHCP/DNS to the libvirt gateway, Forgejo on Cesium (`10.1.0.200:3000`), and required
+public package/action downloads on TCP 80/443. Deny all other guest-to-host and
+guest-to-private/reserved-network traffic, including IPv6 and link-local paths. Permit only
+reply traffic for guest-initiated connections. Do not rely on guest firewall rules because
+host-mode jobs have root privileges. Public HTTPS egress remains an exfiltration path for
+anything exposed inside the VM, so runner jobs must not receive production or reusable
+credentials; use one-job/ephemeral registration where supported and reset the VM after the
+job.
 
 Native macOS coverage remains GitHub-only. The Linux Forgejo workflow does not claim that
 gate has run.
@@ -46,8 +57,11 @@ registered, that host mode executes successfully, or that the full CI matrix pas
 supports repository-scoped runner registration. No runner process/service was found on
 Cesium, Benzene, Xenon, or Chlorine. Benzene has sufficient capacity for a separate VM; its
 existing `argon` VM is a Rocky Linux workload and is left untouched. No runner VM or runner
-has been provisioned. Creating a dedicated disposable VM on Benzene remains the selected
-path, subject to completing its network isolation and reset design.
+has been provisioned. A dedicated disposable VM on Benzene remains the selected path. The
+host currently has no active `firewalld`/`nftables` service and the default libvirt NAT
+network permits guest egress broadly, so it does not meet the runner isolation contract.
+The runner VM must use a separate network with host-enforced allow rules and a tested
+per-job reset mechanism before registration.
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private; this does not establish whether the repository Actions unit is
