@@ -8,7 +8,7 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | Working tree `integrate/phase0-reconcile-20261022`, HEAD `411f1791` | Candidate is published to both Forgejo and GitHub as `integrate/stability-20261020` and `integrate/phase0-reconcile-20261022`; `main` is `5e8d6889` on both. GitHub PR #37 targets `main` and is open/draft. |
+| SolariNet | Working tree `integrate/phase0-reconcile-20261022`, HEAD `c1fd5879` | Candidate is published to both Forgejo and GitHub as `integrate/stability-20261020` and `integrate/phase0-reconcile-20261022`; `main` is `5e8d6889` on both. GitHub PR #37 targets `main` and is open/draft. Product-code parent `411f1791` passed all 15 jobs; later commits only update handoff/review docs, with run `39873540098` pending. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | Local branch `integrate/solarinet-20261021`, HEAD `b0c6d20` | Local repository only, with `VALIDATION.md` modified and no configured remote. Earlier lookup found no matching published GitHub/Forgejo repository; remote ownership remains unresolved. |
 
@@ -20,7 +20,7 @@ GitHub run `39872287455` completed successfully on `411f1791`: all 15 jobs passe
 
 The candidate checkout is clean at `411f1791`. No cross-lab reviewer is available in the current session; internal agent audits are not cross-lab review and do not satisfy that gate. Mainline merge, release tags, release publication, and promotion remain outstanding.
 
-**Target runtime follow-up:** a direct read-only CLI connection using values parsed from Xenon’s PHP-FPM pool returned MariaDB error 1045 with credentials suppressed. PHP-FPM’s journal showed no matching connection failure in the checked period, so this probe alone does not establish a live application outage. Authenticated browser acceptance against the staged Cesium package and CI package passed; Xenon PHP-FPM/Apache behavior and current live SoR migration state remain UNVERIFIED. A clean-source candidate package from `77ee2c6` was installed to Cesium’s separate preflight root, with all 181 payload hashes, PHP syntax/extensions, and binary libraries verified. No service was started. Docs-only CI run `39873267956` is in progress on this commit.
+**Target runtime follow-up:** a direct read-only schema query through Xenon’s active PHP-FPM socket succeeded. Cesium `sor` has 45 base tables, four views, and 24 triggers; all four taxonomy tables, both outbox tables, and 21 core CDC triggers exist. Migration 024/026 CDC triggers, migration 025 allocator fields/index, and migration 027 cable-detail columns are absent. There is no `solari_migration_ledger`; the ledgered migrator correctly refuses automatic adoption. This confirms the current live baseline without reading application rows or changing the database. The earlier CLI 1045 came from the probe’s simplistic parsing of the PHP-FPM configuration; the actual FPM path works. A clean-source candidate package from `77ee2c6` is installed to Cesium’s separate preflight root, with all 181 payload hashes, PHP syntax/extensions, and binary libraries verified; no service was started. Run `39872287455` passed all 15 jobs on code commit `411f1791`; docs-only runs `39873267956` and `39873540098` are in progress on commits `77ee2c6` and `c1fd587`, respectively.
 
 ### Latest local validation checkpoint · 2026-10-22 23:16 UTC
 
