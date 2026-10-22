@@ -75,7 +75,7 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: as of this snapshot, the local branch is
-    35 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    37 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
     at <code>5e8d688</code>. The worktree is clean. The public review branch is open as GitHub
     draft PR <code>#37</code>; no main branch merge or release tag exists. The Xenon backup
     utility is deployed as a local-only recovery path.</p>
@@ -167,12 +167,13 @@
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. Root PR CI run
-      <code>39703464795</code> at <code>1f6adfe</code> passed all 15 hosted jobs, including realtime
+      <code>39705502734</code> at <code>0a322eb</code> passed all 15 hosted jobs, including realtime
       scan/candidate-ingest and scanner/RackWire browser acceptance. During the preceding run, the
       clean-install snapshot check exposed MariaDB client-version drift: hosted 10.11 emits
       <code>SQL_NOTES</code> wrappers while the 11.8 snapshot uses <code>NOTE_VERBOSITY</code>;
-      cross-version normalization now passes in hosted CI. Earlier runs also found a date-sensitive
-      DNS assertion and checkout/artifact wiring defects. Keep the PRs in draft
+      cross-version normalization now passes in hosted CI. The latest run also exercised the new
+      RackWire subproject gitlink and verified the release archive excludes its <code>.github</code>
+      workflow. Earlier runs found a date-sensitive DNS assertion and checkout/artifact wiring defects. Keep the PRs in draft
       until all checks and independent review pass.</li>
     </ul>
     <p>Current evidence and next gates: <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">Stabilization Baseline</a>
@@ -461,7 +462,9 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   <strong>37/37</strong>. The first hosted run passed 12 of 15 checks; subsequent runs caught a
   date-dependent SOA serial test, a missing RackWire mirror, a missing server-binary artifact in
   the dashboard job, server checkout omitting the RackWire submodule, and clean-install schema
-  formatting between MariaDB 10.11 and 11.8 dump clients. Run <code>39703464795</code> passed all
+  formatting between MariaDB 10.11 and 11.8 dump clients and release packaging initially included
+  subproject CI metadata; the packager now excludes that non-runtime tree. Run
+  <code>39705502734</code> passed all
   15 hosted checks, including the clean-install ledger and schema snapshot comparison. RackWire's
   own workflow, run <code>39704732584</code>, independently passed its 45 backend tests and four
   runtime checksum checks.</p>
