@@ -54,7 +54,7 @@
 </header>
 <p class="lede">This guide covers the supported changeover from the standalone <code>scanner-ingest</code> app to the dashboard’s authenticated SoR inventory flow. The scanner remains the portable capture tool; the dashboard is the preferred write path into the shared inventory System of Record. A restricted local CLI maintenance path remains available.</p>
 
-<div class="box state"><strong>Release state:</strong> The dashboard upload and import code and the RackWire model-profile editor are implemented in the integration worktree. JSX, PHP syntax, route authorization, UI behavior, scratch-MariaDB transaction tests, authenticated HTTP routes, and the scanner-to-RackWire browser acceptance pass locally. Apply is bound to the preview plan fingerprint and rejects a stale preview. No scanner export has been applied to the live SoR; staged dashboard deployment and live operator verification remain pending.</div>
+<div class="box state"><strong>Release state:</strong> The dashboard upload/import code and RackWire model-profile editor are implemented in the integration candidate. Tests cover JSX, PHP syntax, route authorization, UI behavior, scratch-MariaDB transactions, authenticated HTTP routes, and scanner-to-RackWire browser acceptance; apply is bound to the preview plan fingerprint and rejects a stale preview. The candidate is installed in an isolated, loopback-only Cesium development environment, where authenticated browser testing verified native network scan, live candidate recovery, and adoption into monitoring plus a SoR network entity. No scanner export has been applied to the live SoR; production dashboard deployment and production operator verification remain pending.</div>
 
 <h2>1. Operator procedure</h2>
 <ol>
