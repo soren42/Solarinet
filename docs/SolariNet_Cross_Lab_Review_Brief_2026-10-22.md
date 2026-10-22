@@ -8,7 +8,7 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | code candidate `789b1d3`; docs follow-ups `04e80be`, `b81e2cc` | Both Forgejo and GitHub `main` are `5e8d688`; both integration refs match. Draft GitHub PR #37 is open. |
+| SolariNet | code candidate `789b1d3`; docs follow-ups `04e80be`, `b81e2cc`, `fa1ba87` | Both Forgejo and GitHub `main` are `5e8d688`; both integration refs match. Draft GitHub PR #37 is open. |
 | RackWire | `integrate/solarinet-20261021` at `99453f3` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | `integrate/solarinet-20261021` at `c2a3f7b` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Updated manuals and validation are committed locally. |
 
@@ -25,7 +25,7 @@ No main branch has been merged and no release tags exist. The scanner-ingest man
 
 ## Evidence available
 
-- Root GitHub PR #37: code-bearing commit `789b1d3` passed hosted run `39715155684` (15/15); documentation commits `04e80be` and `b81e2cc` passed runs `39715807073` and `39716727270` (15/15 each). Coverage includes dashboard/API, scanner/RackWire browser acceptance, server/database tests, cross-platform builds, and the RabbitMQ version matrix.
+- Root GitHub PR #37: code-bearing commit `789b1d3` passed hosted run `39715155684` (15/15); documentation commits `04e80be`, `b81e2cc`, and `fa1ba87` passed runs `39715807073`, `39716727270`, and `39718050283` (15/15 each). Coverage includes dashboard/API, scanner/RackWire browser acceptance, server/database tests, cross-platform builds, and the RabbitMQ version matrix.
 - RackWire GitHub PR #1 at `99453f3`: hosted run `39704732584`, backend/runtime checks successful.
 - Root candidate browser/integration suite previously exercised scanner import, RackWire plan persistence, barcode resolution, authenticated scan admission, native worker progress, and candidate visibility. A direct, bounded `10.0.0.0/24` acceptance processed 254 addresses and produced 14 reviewable candidates in a disposable database.
 - Pushed scan retry and ingest patch: API retains the idempotency key after an uncertain network failure, clears it after successful admission, and uses a fresh key for a later intentional scan. The server binds idempotency replay to the original verb and argument payload; same-key/different-payload requests fail closed. The live DB integration test covers mismatch rejection and no extra row. In the browser test, the first scan reached PHP, the C queue, and MariaDB before its response was dropped; after reload, the retry returned the original admission. The browser then adopted the candidate through the Monitor dialog and verified one monitoring asset plus the mapped IPv4 address on a separate SoR entity. The combined direct-route run passed on disposable MariaDB 11.8.9 monitoring and SoR schemas: 254/254 addresses processed, 12 candidates found, the listener candidate visible while the scan remained running, and `10.0.0.20` adopted into monitoring and SoR. A loopback `/32` combined run also passed. Both used the native worker, C bridge, PHP API, authenticated dashboard, and local Chromium. The CI browser step now receives both scratch database configurations, and the harness rejects missing or non-scratch SoR settings. The PHP route test, Node syntax check, YAML parse, and whitespace check pass. The local reviewer found and cleared the payload-binding fix; hosted CI passed, while cross-lab review remains unavailable.
