@@ -2513,3 +2513,22 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   for the updated browser harness, cross-lab review, and deployed dashboard
   behavior. The standalone scanner-ingest repository still has no release
   remote.
+
+## 2026-10-22 — hosted candidate pass and RackWire CSRF retry coverage
+
+- GitHub PR #37 run `39718723877` for commit `5160202` passed all 15 workflow
+  jobs, including live Discovery worker/API and candidate adoption, authenticated
+  scanner import and RackWire browser acceptance, dashboard UI checks, clean
+  database installs, and release package activation/rollback tests. This is
+  hosted CI evidence, not a deployed-host check.
+- A read-only SSH preflight of Cesium confirmed the `jason` account, MariaDB,
+  and ample disk capacity. PHP CLI and Podman/Docker are absent. No test app,
+  runtime, or database was deployed or created.
+- Independent internal RackWire review found that stale-CSRF retry was only
+  covered by source matching. Added behavioral tests that expire the first token
+  for plan writes and barcode lookup, verify the refreshed token and unchanged
+  request payload, and prove a second rejection stops after exactly one retry.
+  `node tests/dashboard/test_rackwire_ui.js` now passes 60/60 locally.
+- **UNVERIFIED:** hosted CI for the new CSRF behavioral tests, cross-lab review,
+  deployed candidate behavior, exact scanner source-location mapping, and
+  scanner-ingest repository ownership/remotes.

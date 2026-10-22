@@ -271,5 +271,117 @@ console.log("\n[2] token bridge — every --sn-* token used is bridged to a dash
   }
 }
 
-console.log("\n" + pass + " passed, " + fail + " failed\n");
-process.exit(fail ? 1 : 0);
+/* --------------------------------------------------- [3] stale CSRF retry --- */
+async function testExpiredCsrfRetry() {
+  console.log("\n[3] stale dashboard CSRF token retries once with a refreshed token");
+  var html = fs.readFileSync(RW_INDEX, "utf8");
+
+  function makeResponse(status, body) {
+    return {
+      status: status,
+      ok: status >= 200 && status < 300,
+      json: async function () { return body; },
+      clone: function () { return { json: async function () { return body; } }; }
+    };
+  }
+  function makeHarness(responses) {
+    var calls = [], refreshes = 0;
+    var sandbox = {
+      API: "/api",
+      rwOnline: function () { return true; },
+      rwSessionCsrf: async function (refresh) {
+        if (refresh) { refreshes++; return "fresh-token"; }
+        return "stale-token";
+      },
+      fetch: async function (url, options) {
+        calls.push({ url: url, options: {
+          method: options.method,
+          headers: Object.assign({}, options.headers),
+          body: options.body,
+          credentials: options.credentials
+        } });
+        var response = responses.shift();
+        if (!response) throw new Error("unexpected extra request");
+        return response;
+      },
+      window: { RW: { DEVICES: [{ id: "model-1", name: "Lab switch" }] } }
+    };
+    vm.createContext(sandbox);
+    return { sandbox: sandbox, calls: calls, refreshes: function () { return refreshes; } };
+  }
+
+  var invalidCsrf = { ok: false, error: { message: "Missing or invalid CSRF token." } };
+  var planStart = html.indexOf("async function rwFetch(path, body) {");
+  var planEnd = html.indexOf("\n\n/* ── RackWire discovery seam", planStart);
+  ok("rwFetch helper source is available for behavioral test", planStart >= 0 && planEnd > planStart);
+  if (planStart >= 0 && planEnd > planStart) {
+    var planHarness = makeHarness([
+      makeResponse(403, invalidCsrf),
+      makeResponse(200, { ok: true, data: { id: 71 } })
+    ]);
+    try {
+      vm.runInContext(html.slice(planStart, planEnd), planHarness.sandbox, { filename: "rackwire-rwFetch.js" });
+      var plan = await planHarness.sandbox.rwFetch("/rackwire/plans", { name: "retry" });
+      ok("plan POST succeeds after one expired-token retry", !!plan && plan.id === 71);
+      ok("plan POST uses stale then refreshed CSRF tokens exactly once",
+        planHarness.calls.length === 2 && planHarness.refreshes() === 1 &&
+        planHarness.calls[0].options.headers["X-Solari-CSRF"] === "stale-token" &&
+        planHarness.calls[1].options.headers["X-Solari-CSRF"] === "fresh-token");
+      ok("plan retry preserves the original request body",
+        planHarness.calls[0].options.body === planHarness.calls[1].options.body &&
+        JSON.parse(planHarness.calls[1].options.body).name === "retry");
+    } catch (e) {
+      ok("plan POST retry harness completes", false, String(e.message).split("\n")[0]);
+    }
+
+    var deniedHarness = makeHarness([
+      makeResponse(403, invalidCsrf), makeResponse(403, invalidCsrf)
+    ]);
+    try {
+      vm.runInContext(html.slice(planStart, planEnd), deniedHarness.sandbox, { filename: "rackwire-rwFetch-denied.js" });
+      var denied = await deniedHarness.sandbox.rwFetch("/rackwire/plans", { name: "retry" });
+      ok("plan POST stops after one refreshed-token rejection",
+        denied === null && deniedHarness.calls.length === 2 && deniedHarness.refreshes() === 1);
+    } catch (e) {
+      ok("plan POST bounded retry harness completes", false, String(e.message).split("\n")[0]);
+    }
+  }
+
+  var lookupStart = html.indexOf("  async lookupCode(code) {");
+  var lookupEnd = html.indexOf("\n  scanGo()", lookupStart);
+  ok("barcode lookup method is available for behavioral test", lookupStart >= 0 && lookupEnd > lookupStart);
+  if (lookupStart >= 0 && lookupEnd > lookupStart) {
+    var lookupHarness = makeHarness([
+      makeResponse(403, invalidCsrf),
+      makeResponse(200, { ok: true, data: {
+        found: true, subjectTable: "hardware_units",
+        subject: { modelId: "model-1", assetTag: "ASSET-71", serial: "SER-71" }
+      } })
+    ]);
+    try {
+      var lookup = vm.runInContext("({" + html.slice(lookupStart, lookupEnd).trim() + "})",
+        lookupHarness.sandbox, { filename: "rackwire-lookupCode.js" });
+      var receiver = { _codeExtra: null };
+      var device = await lookup.lookupCode.call(receiver, "ASSET-71");
+      ok("barcode lookup succeeds after one expired-token retry", !!device && device.id === "model-1");
+      ok("barcode retry uses fresh CSRF once and preserves request body",
+        lookupHarness.calls.length === 2 && lookupHarness.refreshes() === 1 &&
+        lookupHarness.calls[0].options.headers["X-Solari-CSRF"] === "stale-token" &&
+        lookupHarness.calls[1].options.headers["X-Solari-CSRF"] === "fresh-token" &&
+        lookupHarness.calls[0].options.body === lookupHarness.calls[1].options.body);
+      ok("barcode result retains asset tag and serial on the placed device",
+        !!receiver._codeExtra && receiver._codeExtra.assetId === "ASSET-71" &&
+        receiver._codeExtra.serial === "SER-71");
+    } catch (e) {
+      ok("barcode lookup retry harness completes", false, String(e.message).split("\n")[0]);
+    }
+  }
+}
+
+testExpiredCsrfRetry().then(function () {
+  console.log("\n" + pass + " passed, " + fail + " failed\n");
+  process.exit(fail ? 1 : 0);
+}).catch(function (e) {
+  console.error("Unexpected test error:", e);
+  process.exit(1);
+});

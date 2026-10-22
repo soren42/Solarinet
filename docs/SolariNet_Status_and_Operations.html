@@ -81,9 +81,12 @@
     <code>04e80be</code>, <code>b81e2cc</code>, and <code>fa1ba87</code> are pushed to both
     remotes. The realtime Discovery retry, payload-bound idempotency, SoR ingest acceptance,
     CI, and review documentation are committed on both remotes. GitHub PR #37 run
-    <code>39718050283</code> passed all 15 jobs, including the authenticated
-    scanner/RackWire browser flow. Scanner-ingest documentation is committed locally at
-    <code>c2a3f7b</code>, but that repository has no release remote. The public review branch is
+    <code>39718723877</code> passed all 15 jobs, including live Discovery worker/API,
+    candidate adoption, scanner/RackWire browser flow, and release-package/rollback checks.
+    RackWire PR #1 has green hosted checks. Scanner-ingest documentation is committed locally at
+    <code>c2a3f7b</code>, but that repository has no release remote. A read-only Cesium preflight
+    found ample disk and MariaDB but no PHP CLI or container runtime for an isolated app instance.
+    The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
@@ -207,8 +210,13 @@
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
-      <code>39718050283</code> at location/deployment documentation commit <code>fa1ba87</code>,
-      passed all 15 hosted jobs. The preceding status-documentation commit <code>b81e2cc</code>
+      <code>39718723877</code> at documentation commit <code>5160202</code> passed all 15 hosted
+      jobs, including lifecycle UI, authenticated scanner import, scanner-to-RackWire browser
+      acceptance, live Discovery scan and adoption, and release package activation/rollback
+      contract tests. A read-only Cesium preflight found MariaDB and ample disk but no PHP CLI or
+      container runtime; no app instance was deployed there. The preceding location/deployment
+      documentation run <code>39718050283</code> at commit <code>fa1ba87</code> passed all 15 jobs;
+      the status-documentation commit <code>b81e2cc</code>
       passed all 15 in run <code>39716727270</code>; commit <code>04e80be</code> passed all 15 in
       run <code>39715807073</code>; code-bearing commit <code>789b1d3</code> passed all 15 in
       run <code>39715155684</code>. These follow-ups changed documentation only. The earlier
