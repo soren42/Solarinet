@@ -1297,6 +1297,14 @@ static void test_ctl_request_queue(void)
     TEST_ASSERT_EQUAL_UINT64(idIdem, idIdem2);
     TEST_ASSERT_EQUAL_UINT64(3, liveCount("SELECT COUNT(*) FROM ctlRequest"));
 
+    /* Reusing a key for a different payload is a conflict, not a replay of the
+     * original request id. This prevents callers from pairing one scan/job id
+     * with a different CIDR or other queued operation arguments. */
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverDbCtlRequestSubmit(g_db,
+        "SIGN", "cn=other op=carol", "carol", 33, "idem-key-abc", &idIdem2));
+    TEST_ASSERT_EQUAL_UINT64(0, idIdem2);
+    TEST_ASSERT_EQUAL_UINT64(3, liveCount("SELECT COUNT(*) FROM ctlRequest"));
+
     /* F10: the SAME key from a DIFFERENT requester must NOT collapse. Idempotency
      * is scoped to (requestedBy, idempotencyKey), so one caller cannot pre-seed a
      * predictable key to make another's submit silently return the first's row.

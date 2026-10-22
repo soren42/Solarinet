@@ -95,6 +95,57 @@
   // X-Solari-CSRF header on every state-changing request; we receive it in the
   // login / whoami response envelopes and cache it here for the session.
   var CSRF = "";
+  // Retain a scan's idempotency key when its response is lost. A retry in the
+  // same tab (including after reload) with the same CIDR/ports reuses the key;
+  // a successful admission consumes it so a later intentional scan is fresh.
+  var pendingDiscoveryScanKeys = Object.create(null);
+  var pendingDiscoveryScanOrder = [];
+  var discoveryScanKeyStorage = "solari.pendingDiscoveryScanKeys";
+
+  function persistDiscoveryScanKeys() {
+    try {
+      var entries = pendingDiscoveryScanOrder.filter(function (fingerprint) {
+        return !!pendingDiscoveryScanKeys[fingerprint];
+      }).map(function (fingerprint) {
+        return [fingerprint, pendingDiscoveryScanKeys[fingerprint]];
+      });
+      if (entries.length) window.sessionStorage.setItem(discoveryScanKeyStorage, JSON.stringify(entries));
+      else window.sessionStorage.removeItem(discoveryScanKeyStorage);
+    } catch (_) { /* session storage is optional; in-memory retry still works */ }
+  }
+
+  function restoreDiscoveryScanKeys() {
+    try {
+      var entries = JSON.parse(window.sessionStorage.getItem(discoveryScanKeyStorage) || "[]");
+      if (!Array.isArray(entries)) return;
+      entries.forEach(function (entry) {
+        if (!Array.isArray(entry) || typeof entry[0] !== "string" || entry[0].length > 1024 ||
+            typeof entry[1] !== "string" || !/^scan-[0-9a-f]{32}$/.test(entry[1]) ||
+            pendingDiscoveryScanKeys[entry[0]]) return;
+        pendingDiscoveryScanKeys[entry[0]] = entry[1];
+        pendingDiscoveryScanOrder.push(entry[0]);
+      });
+      while (pendingDiscoveryScanOrder.length > 16) {
+        delete pendingDiscoveryScanKeys[pendingDiscoveryScanOrder.shift()];
+      }
+    } catch (_) { /* malformed or unavailable storage cannot block the app */ }
+  }
+
+  restoreDiscoveryScanKeys();
+
+  function newDiscoveryScanKey() {
+    var bytes = new Uint8Array(16);
+    if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      // This key deduplicates retries; it is not an authentication credential.
+      for (var i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    var hex = Array.prototype.map.call(bytes, function (byte) {
+      return byte.toString(16).padStart(2, "0");
+    }).join("");
+    return "scan-" + hex;
+  }
 
   function unwrap(json) {
     // accept the stable envelope; also tolerate a bare payload defensively.
@@ -126,6 +177,7 @@
       headers: Object.assign(
         { "Accept": "application/json" },
         opts.body ? { "Content-Type": "application/json" } : {},
+        opts.headers || {},
         // Attach the CSRF token on state-changing requests (server-enforced).
         (isWrite && CSRF) ? { "X-Solari-CSRF": CSRF } : {}
       ),
@@ -174,7 +226,35 @@
     });
   }
   // expose raw helpers for screens that want ad-hoc calls
-  function post(path, body) { return getJSON(path, { method: "POST", body: body || {} }); }
+  function post(path, body, headers) {
+    return getJSON(path, { method: "POST", body: body || {}, headers: headers || {} });
+  }
+
+  function discoverScan(cidr, ports) {
+    var body = { cidr: cidr, ports: ports || "" };
+    var fingerprint = JSON.stringify(body);
+    var key = pendingDiscoveryScanKeys[fingerprint];
+    if (!key) {
+      key = newDiscoveryScanKey();
+      pendingDiscoveryScanKeys[fingerprint] = key;
+      pendingDiscoveryScanOrder.push(fingerprint);
+      while (pendingDiscoveryScanOrder.length > 16) {
+        var expired = pendingDiscoveryScanOrder.shift();
+        delete pendingDiscoveryScanKeys[expired];
+      }
+      persistDiscoveryScanKeys();
+    }
+    return post(EP.discScan, body, { "Idempotency-Key": key }).then(function (result) {
+      if (pendingDiscoveryScanKeys[fingerprint] === key) {
+        delete pendingDiscoveryScanKeys[fingerprint];
+        pendingDiscoveryScanOrder = pendingDiscoveryScanOrder.filter(function (item) {
+          return item !== fingerprint;
+        });
+        persistDiscoveryScanKeys();
+      }
+      return result;
+    });
+  }
 
   // =====================================================================
   // ENDPOINT PATHS (the PHP agent must match these exactly)
@@ -1042,7 +1122,7 @@
       return getJSON(EP.discovery + "?status=" + encodeURIComponent(status || "all"))
         .then(function (w) { return (Array.isArray(w) ? w : []).map(mapDiscovered); });
     },
-    discoverScan: function (cidr, ports) { return post(EP.discScan, { cidr: cidr, ports: ports || "" }); },
+    discoverScan: discoverScan,
     discoverScanRequest: function (id) { return getJSON(EP.discScanRequest(id)); },
     discoverScanStatus: function (id) { return getJSON(EP.discScanStatus(id)); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },

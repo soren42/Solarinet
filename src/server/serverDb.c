@@ -2466,20 +2466,23 @@ solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *verb,
     if (mysql_stmt_execute(st) != 0) {
         unsigned int e = mysql_stmt_errno(st);
         mysql_stmt_close(st);
-        /* Duplicate idempotency key: the request is already queued. Look up its
-         * id and return it, so the caller sees the original pending request. */
+        /* Duplicate idempotency key: replay only an identical request. A key
+         * reused with different arguments must fail closed; otherwise the API
+         * could pair the original request id with the caller's new payload. */
         if (e == 1062 && idemKey && idemKey[0]) {
             /* Scope the lookup to (requestedBy, idemKey) to match the composite
              * UNIQUE key (review F10): a global key let one requester pre-seed a
              * predictable key so another's submit silently returned the first
              * one's request id. Keys now only collide within the same requester. */
             static const char *SEL =
-                "SELECT id FROM ctlRequest WHERE requestedBy = ? AND idempotencyKey = ?";
+                "SELECT id, verb, argsWire FROM ctlRequest "
+                "WHERE requestedBy = ? AND idempotencyKey = ?";
             MYSQL_STMT *sel;
-            MYSQL_BIND  in[2], out[1];
+            MYSQL_BIND  in[2], out[3];
             unsigned long long vId = 0;
-            unsigned long lReqSel, lKey;
-            my_bool isNull = 0;
+            char existingVerb[32], existingArgs[16384];
+            unsigned long lReqSel, lKey, lVerb = 0, lArgs = 0;
+            my_bool isNullId = 0, isNullVerb = 0, isNullArgs = 0;
             if (dbStmtPrepare(conn, SEL, &sel) != SOLARI_OK) return ERR_DB;
             dbBindStr(&in[0], requestedBy, &lReqSel);
             dbBindStr(&in[1], idemKey, &lKey);
@@ -2487,12 +2490,26 @@ solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *verb,
                 mysql_stmt_execute(sel) != 0) {
                 mysql_stmt_close(sel); return ERR_DB;
             }
-            dbBindOutU64(&out[0], &vId, &isNull);
+            dbBindOutU64(&out[0], &vId, &isNullId);
+            dbBindOutStr(&out[1], existingVerb, sizeof existingVerb - 1,
+                         &lVerb, &isNullVerb);
+            dbBindOutStr(&out[2], existingArgs, sizeof existingArgs - 1,
+                         &lArgs, &isNullArgs);
             if (mysql_stmt_bind_result(sel, out) != 0) {
                 mysql_stmt_close(sel); return ERR_DB;
             }
-            if (mysql_stmt_fetch(sel) == 0 && !isNull && reqIdOut) *reqIdOut = vId;
+            int fetchRc = mysql_stmt_fetch(sel);
+            if (fetchRc == 0 && !isNullId && !isNullVerb && !isNullArgs) {
+                existingVerb[lVerb < sizeof existingVerb ? lVerb : sizeof existingVerb - 1] = '\0';
+                existingArgs[lArgs < sizeof existingArgs ? lArgs : sizeof existingArgs - 1] = '\0';
+                if (strcmp(existingVerb, verb) != 0 || strcmp(existingArgs, argsWire ? argsWire : "") != 0) {
+                    mysql_stmt_close(sel);
+                    return ERR_INVALID_ARG;
+                }
+                if (reqIdOut) *reqIdOut = vId;
+            }
             mysql_stmt_close(sel);
+            if (fetchRc == MYSQL_DATA_TRUNCATED) return ERR_INVALID_ARG;
             return (reqIdOut && *reqIdOut) ? SOLARI_OK : ERR_DB;
         }
         solariLogf(SOLARI_LOG_ERROR, "serverDb: ctlRequest submit failed (errno %u)", e);

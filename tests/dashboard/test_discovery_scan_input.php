@@ -104,9 +104,12 @@ $router = new Router();
 $register($router);
 $GLOBALS['scan_handler'] = $router->posts['/api/discovery/scan'];
 
+$_SERVER['HTTP_IDEMPOTENCY_KEY'] = 'scan-regression-key-001';
 assert_route_status(['cidr' => '10.0.0.0/24', 'ports' => '22,443'], 202);
 assert_true(SolariCtl::$queued[0] === 'DISCOVER', 'valid scan should enter the privileged C control queue');
 assert_true(SolariCtl::$queued[1]['ports'] === '22,443', 'validated ports should preserve request order');
+assert_true(SolariCtl::$queued[3] === 'scan-regression-key-001',
+    'scan idempotency key should reach the durable control queue');
 assert_true(Response::$result === ['cidr' => '10.0.0.0/24', 'scanId' => 42,
     'hostsTotal' => 254, 'status' => 'queued'], 'scan API should return a durable job id and accepted status');
 assert_true(Response::$status === 202, 'scan admission must return HTTP 202');
@@ -136,5 +139,10 @@ foreach ([
     assert_route_status($body, 400);
     assert_true(SolariCtl::$call === $before, 'invalid input must not reach solariCtl');
 }
+
+$_SERVER['HTTP_IDEMPOTENCY_KEY'] = 'invalid/key';
+$beforeQueued = SolariCtl::$queued;
+assert_route_status(['cidr' => '10.0.0.0/24'], 400);
+assert_true(SolariCtl::$queued === $beforeQueued, 'invalid idempotency key must not reach solariCtl');
 
 echo "Discovery scan input and route bounds passed\n";

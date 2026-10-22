@@ -144,13 +144,41 @@ return false;
 async function main() {
   requireScratchDatabase();
   const suffix = crypto.randomBytes(6).toString('hex');
-  const locationName = `Browser Fixture ${suffix}`;
-  const itemId = crypto.randomUUID();
-  const assetId = crypto.randomUUID();
-  const tag = `BROWSER-SCAN-${suffix.toUpperCase()}`;
-  const serial = `BROWSER-SER-${suffix.toUpperCase()}`;
-  const make = `Browser Scanner ${suffix}`;
-  const model = `Temporary unit ${suffix}`;
+  const exportPath = process.env.SOLARI_SCANNER_EXPORT_FILE
+    ? path.resolve(process.env.SOLARI_SCANNER_EXPORT_FILE) : '';
+  const snapshot = exportPath
+    ? JSON.parse(fs.readFileSync(exportPath, 'utf8'))
+    : {
+      schema_version: 1,
+      exported_at: new Date().toISOString(),
+      items: [{ id: crypto.randomUUID(), name: `Temporary unit ${suffix}`, manufacturer: `Browser Scanner ${suffix}`, model: `Temporary unit ${suffix}`, category: 'scanner', barcode: `PRODUCT-${suffix}`, notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
+      assets: [{ id: crypto.randomUUID(), item_id: '', tag: `BROWSER-SCAN-${suffix.toUpperCase()}`, serial: `BROWSER-SER-${suffix.toUpperCase()}`, location: `Browser Fixture ${suffix}`, status: 'in_stock', notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
+    };
+  if (!exportPath) snapshot.assets[0].item_id = snapshot.items[0].id;
+  assert.equal(snapshot.schema_version, 1, 'scanner export must use supported schema version 1');
+  assert(Array.isArray(snapshot.items) && Array.isArray(snapshot.assets), 'scanner export must contain catalog and asset arrays');
+  const activeItems = snapshot.items.filter((item) => item && item.archived === 0);
+  const activeAssets = snapshot.assets.filter((asset) => asset && asset.archived === 0);
+  assert(activeItems.length > 0 && activeAssets.length > 0, 'scanner export must include active catalog items and assets');
+  const itemIdSet = new Set(activeItems.map((item) => item.id));
+  const importAssets = activeAssets.filter((asset) => itemIdSet.has(asset.item_id));
+  assert.equal(importAssets.length, activeAssets.length, 'every active scanner asset must reference an active catalog item');
+  assert(importAssets.every((asset) => typeof asset.tag === 'string' && asset.tag.trim()), 'every active scanner asset must have a tag');
+  const focusAsset = importAssets[0];
+  const focusItem = activeItems.find((item) => item.id === focusAsset.item_id);
+  const itemIds = activeItems.map((item) => item.id);
+  const assetIds = importAssets.map((asset) => asset.id);
+  const importedTags = importAssets.map((asset) => asset.tag);
+  assert.equal(new Set(importedTags).size, importedTags.length, 'active scanner asset tags must be unique');
+  const serial = focusAsset.serial || '';
+  const tag = focusAsset.tag;
+  const make = focusItem.manufacturer || 'Unknown manufacturer';
+  const model = focusItem.model || focusItem.name;
+  assert(typeof model === 'string' && model.trim(), 'selected scanner item must identify a hardware model');
+  const sourceLocations = Array.from(new Set(importAssets
+    .map((asset) => typeof asset.location === 'string' ? asset.location.trim() : '')
+    .filter(Boolean)));
+  const locationChoices = Object.create(null);
   const sessionUser = `scanner-browser-${suffix}`;
   const actor = `dashboard:${sessionUser}`;
   const sourceExistedBefore = sql(`SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1`);
@@ -175,12 +203,16 @@ async function main() {
   let browserDiagnostics = '';
 
   try {
-    sql(`INSERT INTO locations (name,loc_type,source_id,asserted_kind,asserted_at)
-         VALUES (${quote(locationName)},'site',${manualSource},'human',NOW()),
-                (${quote(locationName)},'site',${manualSource},'human',NOW())`);
-    locationIds = sql(`SELECT id FROM locations WHERE name=${quote(locationName)} AND deleted_at IS NULL ORDER BY id`).split(/\s+/).filter(Boolean);
-    assert.equal(locationIds.length, 2, 'scratch SoR must contain two duplicate-name location choices');
-    const selectedLocation = Number(locationIds[1]);
+    for (const locationName of sourceLocations) {
+      sql(`INSERT INTO locations (name,loc_type,source_id,asserted_kind,asserted_at)
+           VALUES (${quote(locationName)},'site',${manualSource},'human',NOW()),
+                  (${quote(locationName)},'site',${manualSource},'human',NOW())`);
+      const choices = sql(`SELECT id FROM locations WHERE name=${quote(locationName)} AND deleted_at IS NULL ORDER BY id`).split(/\s+/).filter(Boolean);
+      assert.equal(choices.length, 2, `scratch SoR must contain two duplicate choices for source location ${locationName}`);
+      locationChoices[locationName] = choices.map(Number);
+      locationIds.push(...choices);
+    }
+    const selectedLocation = focusAsset.location ? locationChoices[focusAsset.location.trim()]?.[1] : null;
 
     const seedNote = `seed ${suffix}`;
     const initialRackwirePlan = JSON.stringify({ devices: [], cables: [], racks: [], notes: [{ uid: `seed-${suffix}`, text: seedNote, x: 0, y: 0 }], codeMap: {} });
@@ -234,35 +266,33 @@ async function main() {
     await page.getByRole('button', { name: 'Scanner import', exact: true }).click();
     await page.getByRole('heading', { name: 'Import a scanner-ingest export' }).waitFor();
 
-    const snapshot = {
-      schema_version: 1,
-      exported_at: new Date().toISOString(),
-      items: [{ id: itemId, name: model, manufacturer: make, model, category: 'scanner', barcode: `PRODUCT-${suffix}`, notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
-      assets: [{ id: assetId, item_id: itemId, tag, serial, location: 'Nook', status: 'in_stock', notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
-    };
+    const scannerExportName = exportPath ? path.basename(exportPath) : 'scanner-fixture.json';
     await page.getByLabel('Scanner JSON export').setInputFiles({
-      name: 'scanner-fixture.json', mimeType: 'application/json',
-      buffer: Buffer.from(JSON.stringify(snapshot)),
+      name: scannerExportName, mimeType: 'application/json',
+      buffer: exportPath ? fs.readFileSync(exportPath) : Buffer.from(JSON.stringify(snapshot)),
     });
-    await page.getByText('scanner-fixture.json: 1 catalog items, 1 assets.').waitFor();
+    await page.getByText(`${scannerExportName}: ${snapshot.items.length} catalog items, ${snapshot.assets.length} assets.`).waitFor();
     assert(await page.getByRole('note').getByText('Some SoR locations share a name').isVisible(),
       'duplicate SoR names should be called out');
-    const locationSelect = page.getByLabel('Nook');
-    await locationSelect.selectOption(String(selectedLocation));
+    for (const locationName of sourceLocations) {
+      await page.getByLabel(`SoR destination for source location ${locationName}`).selectOption(String(locationChoices[locationName][1]));
+    }
 
     const before = await context.request.get(`${base}/api/inventory`);
     assert.equal(before.status(), 200);
     const beforeData = (await before.json()).data;
-    assert(!beforeData.units.some((unit) => unit.assetTag === tag), 'preview fixture asset must not exist before apply');
+    assert(!beforeData.units.some((unit) => importedTags.includes(unit.assetTag)), 'preview fixture assets must not exist before apply');
 
     await page.getByRole('button', { name: 'Preview import' }).click();
     const preview = page.getByRole('status').filter({ hasText: 'Preview ready' });
     await preview.waitFor();
     await preview.getByText(`insert hardware units`, { exact: false }).waitFor();
-    await preview.getByText(`#${selectedLocation} · ${locationName}`, { exact: false }).waitFor();
+    for (const locationName of sourceLocations) {
+      await preview.getByText(`#${locationChoices[locationName][1]} · ${locationName}`, { exact: false }).waitFor();
+    }
     const afterPreview = await context.request.get(`${base}/api/inventory`);
     const afterPreviewData = (await afterPreview.json()).data;
-    assert(!afterPreviewData.units.some((unit) => unit.assetTag === tag), 'preview must leave SoR inventory unchanged');
+    assert(!afterPreviewData.units.some((unit) => importedTags.includes(unit.assetTag)), 'preview must leave SoR inventory unchanged');
 
     await page.getByRole('button', { name: 'Apply import' }).click();
     await page.getByRole('status').filter({ hasText: 'Import complete' }).waitFor();
@@ -272,9 +302,11 @@ async function main() {
     const imported = appliedData.units.find((unit) => unit.assetTag === tag);
     assert(imported, 'applied scanner asset must be returned by the real SoR inventory route');
     assert.equal(Number(imported.locationId), selectedLocation, 'mapped SoR location ID must be committed');
+    const importedBatch = appliedData.units.filter((unit) => importedTags.includes(unit.assetTag));
+    assert.equal(importedBatch.length, importAssets.length, 'every active scanner export asset must be imported');
     await page.getByRole('button', { name: 'Configure RackWire profiles', exact: true }).click();
     const importedRow = page.locator('tr').filter({ hasText: tag });
-    await importedRow.getByText(locationName, { exact: true }).waitFor();
+    if (focusAsset.location) await importedRow.getByText(focusAsset.location, { exact: true }).waitFor();
     const profileModel = page.getByLabel('SoR hardware model');
     await profileModel.waitFor();
     await page.waitForFunction((id) => Array.from(document.querySelectorAll('select[aria-label="SoR hardware model"] option')).some((option) => option.value === String(id)), imported.modelId);
@@ -457,13 +489,11 @@ async function main() {
     if (child) await new Promise((resolve) => child.once('exit', resolve));
     try {
       const cleanup = `SET @source_id=(SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1);
-        SET @unit_id=(SELECT id FROM hardware_units WHERE asset_tag=${quote(tag)} LIMIT 1);
-        SET @model_id=(SELECT id FROM hardware_models WHERE make=${quote(make)} AND model=${quote(model)} LIMIT 1);
         DELETE FROM audit_log WHERE actor_label=${quote(actor)};
-        DELETE FROM barcodes WHERE subject_table='hardware_units' AND subject_id=@unit_id;
-        DELETE FROM external_refs WHERE source_id=@source_id AND external_id IN (${quote(itemId)},${quote(assetId)});
-        DELETE FROM hardware_units WHERE id=@unit_id;
-        DELETE FROM hardware_models WHERE id=@model_id;
+        DELETE FROM barcodes WHERE subject_table='hardware_units' AND subject_id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
+        DELETE FROM hardware_units WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
+        DELETE FROM hardware_models WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_models' AND external_id IN (${itemIds.map(quote).join(',')}));
+        DELETE FROM external_refs WHERE source_id=@source_id AND external_id IN (${[...itemIds, ...assetIds].map(quote).join(',')});
         DELETE FROM locations WHERE id IN (${locationIds.map(Number).join(',') || '0'});
         ${rackwirePlanId ? `DELETE FROM rw_plan_versions WHERE plan_id=${rackwirePlanId}; DELETE FROM rw_plans WHERE id=${rackwirePlanId};` : ''}
         ${sourceExistedBefore ? '' : "DELETE FROM sources WHERE id=@source_id AND NOT EXISTS (SELECT 1 FROM external_refs WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_models WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_units WHERE source_id=@source_id);"}`;

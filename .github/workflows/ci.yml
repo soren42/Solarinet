@@ -353,6 +353,12 @@ jobs:
           SOLARI_DB_USER: root
           SOLARI_DB_PASS: serverci_scratch
           SOLARI_DB_NAME: solarinet_scan_worker_ci
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_USER: root
+          SOR_DB_PASS: serverci_scratch
+          SOR_DB_NAME: solarinet_scan_worker_sor_ci
           MYSQL_PWD: serverci_scratch
         run: node tests/browser/test_scan_worker_browser_e2e.cjs build-server/src/server/solariScanWorker build-server/tests/test_ctl_adopt_bridge
       - uses: actions/upload-artifact@v4

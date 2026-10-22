@@ -2287,3 +2287,166 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   production recovery objectives remain **UNVERIFIED**.
 - Updated the backup README, paired monolithic runbook HTML/PDF, and status
   guide HTML/PDF with the deployed state and remaining off-host gates.
+
+## 2026-10-22 — Xenon discovery deployment acceptance inventory
+
+- Read-only checks on Xenon found Apache, PHP 8.4 FPM, and `solarinet-server`
+  active. The dashboard's unauthenticated `/api/discovery` request returned
+  HTTP 401, consistent with its authentication boundary.
+- `rackwire-discovery.service` is loaded and active on loopback port 8785. Its
+  local health endpoint and the Apache RackWire proxy health endpoint both
+  returned HTTP 200. This verifies service reachability only; the health response
+  includes a CSRF token, which was not printed or retained.
+- The candidate bundle's `dashboard/public/screens3.jsx` does not match the
+  Xenon-served `/var/www/solarinet/screens3.jsx` hash. Xenon's RackWire service
+  is therefore not evidence that the candidate's authenticated dashboard scan,
+  live candidate polling, or scanner-ingest-to-RackWire flow is deployed there.
+  The Xenon source checkout is on `stabilize/phase-0-containment` at `ed57e72`
+  with pre-existing user changes; it was not modified.
+- No database writes, scan jobs, service changes, or webroot changes were made.
+  **UNVERIFIED:** authenticated PHP-FPM/browser flow on Xenon, live candidate
+  scan behavior, and candidate release deployment/rollback. Rehearse against a
+  disposable database and isolated release path after independent review.
+
+## 2026-10-22 — realtime scan retry idempotency
+
+- Wired optional request headers through the dashboard API helper and added a
+  bounded per-request key cache for Discovery scan admission. A retry with the
+  same CIDR/ports reuses its key after a lost response; a confirmed admission
+  consumes the key so an intentional later scan is a new job.
+- Extended the browser-to-native-worker test to let the first request reach
+  PHP, the C control queue, and MariaDB, then abort the browser response. The
+  retry used the same key, received the same durable admission, and the
+  disposable schema contained exactly one scan job. A browser-level API check
+  also confirms network failure retains the key across reload, successful admission consumes it,
+  and a later intentional scan gets a fresh key. The native worker completed
+  `127.0.0.1/32` and ingested one candidate.
+- The test used a fresh MariaDB 11.8.6 container bound to loopback. Migration
+  033 was applied, the browser test passed, and the container was removed. The
+  PHP route test confirms the key is forwarded and invalid key syntax is rejected;
+  `node --check` and `git diff --check` pass.
+- **UNVERIFIED:** hosted CI for this uncommitted patch, independent review, and
+  the authenticated scan UI against Xenon's deployed dashboard. A secret-free
+  cross-lab review brief is available at
+  `docs/SolariNet_Cross_Lab_Review_Brief_2026-10-22.md`; no reviewer has yet
+  returned findings. No live SoR, scan, or service state was changed.
+
+## 2026-10-22 — realtime network scan and SoR ingest acceptance
+
+- Extended the authenticated browser acceptance through the operator's
+  candidate adoption action. The browser follows RackWire's Network discovery
+  handoff, scans `127.0.0.1/32` with the native worker, sees the candidate,
+  handles a lost admission response by retrying the same idempotency key, and
+  adopts the candidate through the Monitor dialog.
+- The test confirms one durable scan job, one discovered row changed to
+  `adopted`, a monitoring asset, and the mapped IPv4 address on a live SoR
+  entity. The SoR row assertion queries the separate SoR database rather than
+  the monitoring schema. Physical asset intake remains the scanner-ingest
+  preview/apply flow; network discovery adoption creates a monitored host and
+  SoR host/address, not a physical asset.
+- The test passed using separate disposable monitoring and SoR schemas on
+  MariaDB 11.8.9. The browser path used the locally installed Chromium and the
+  real PHP API, C control bridge, native worker, and authenticated dashboard.
+  The scratch database container used loopback only and was removed after the
+  run. `php tests/dashboard/test_discovery_scan_input.php`, `node --check`,
+  and `git diff --check` also passed.
+- Repeated the combined acceptance with the guarded direct-route lab scan.
+  The workstation owned `10.0.0.20` and routed directly to `10.0.0.254` through
+  `enp1s0`; the test was restricted to `10.0.0.0/24`. It processed **254/254**
+  addresses, found **12** candidates, and the browser observed the listener's
+  candidate while the worker still reported `running`. It then retried the lost
+  admission response, confirmed one durable scan job, adopted `10.0.0.20`, and
+  verified the monitoring asset and SoR address in the separate scratch
+  schemas. The MariaDB 11.8.9 container was removed after the run; no live
+  inventory or SoR database was used.
+- Updated the CI browser step to pass the isolated SoR connection and require
+  `SOLARI_TEST_SOR_DB=1`; the end-to-end test now refuses to run without both
+  dedicated scratch database configurations.
+- **UNVERIFIED:** hosted CI for this uncommitted extension, cross-lab review,
+  authenticated browser testing against Xenon's deployed dashboard, and scan
+  throughput beyond the tested `/24`.
+
+## 2026-10-22 — idempotency payload binding review fix
+
+- Review identified that the queue previously replayed a matching operator/key
+  without checking that the new verb and arguments matched the stored request.
+  `serverDbCtlRequestSubmit` now compares both fields and rejects mismatched key
+  reuse with `ERR_INVALID_ARG`; exact retries still return the existing request
+  id. The live database integration test asserts the mismatch creates no row.
+- `cmake --build build-server --parallel 4` passed. The full live database
+  integration test passed against a fresh MariaDB 11.8 container after
+  applying monitoring migrations through 033; the container was stopped and
+  removed. Root PHP scan-route tests, JavaScript syntax checks, and
+  `git diff --check` passed.
+- **UNVERIFIED:** cross-lab review of this fix, hosted CI, and any behavior on
+  the deployed dashboard. No live scan, SoR inventory, DNS, or UniFi state was
+  changed.
+
+## 2026-10-22 — RabbitMQ live health and upgrade gate recheck
+
+- Read-only Benzene inspection found the rootful Podman container `rabbitmq`
+  running RabbitMQ 3.13.7 with zero restarts and `unless-stopped` policy.
+  `podman-restart.service` is active. The image remains the floating
+  `rabbitmq:3-management` tag.
+- Diagnostics reported the node fully booted with no local or cluster alarms.
+  In vhost `solari`, all four application queues are durable classic queues;
+  each has one consumer and zero ready or unacknowledged messages. Seven client
+  connections were present.
+- The data-volume rehearsal and restore remain as previously recorded. The
+  project gate still requires independent review and pinned startup before
+  upgrading the live broker; the cross-lab reviewer is not authenticated. No
+  broker, volume, or service state was changed during this check.
+- **UNVERIFIED:** host-reboot recovery on a pinned image, a real application
+  publish/consume during the upgrade window, and rollback from the upgraded
+  volume. Defer live cutover until the review and recovery plan are closed.
+
+## 2026-10-22 — certificate replacement and UniFi comparison gate audit
+
+- Rechecked the current tree after an audit reported a missing certificate
+  replacement assertion. `tests/integration/test_gossip.sh` already creates
+  old and replacement leaf certificates with the same subject and distinct
+  serials, revokes the old leaf, and passes both to the pinned-stack test.
+  `tests/integration/test_gossip.c` verifies the old leaf is rejected and the
+  replacement is accepted and admitted as the same logical gossip identity.
+  `ctest --test-dir build-server --output-on-failure -R '^test_gossip$'` passed
+  1/1. This is loopback CRL-handshake evidence, not proof of fleet distribution
+  or activation.
+- Rechecked the proposed UniFi/SoR planner gap against the current code. The
+  GET-only collector, `load_sor_state()` read-only transaction, and
+  `compare_sor()` report already implement the needed conservative comparison;
+  a second planner would duplicate that behavior. The comparison labels the
+  source `/8` versus overlapping SoR `/24`s `review_required`, reports subnet
+  and DHCP conflicts, and has no write path. All 18 UniFi poller/topology tests
+  passed. This test run used fixtures and did not re-read the live controller or
+  SoR.
+- These checks close the specific replacement-leaf test gap and show the
+  proposed separate planner is redundant. They do not close the broader F-01
+  fleet-update/revocation release gate or resolve the live UniFi source-of-truth
+  discrepancy. Cross-lab security review remains **UNVERIFIED**.
+
+## 2026-10-22 — launched scanner export through SoR and RackWire
+
+- Read the running scanner-ingest app's schema-v1 JSON export through its
+  loopback endpoint. It contained two catalog items and two assets. The browser
+  E2E uploaded that exact export, previewed without writes, mapped both source
+  locations, applied to a disposable SoR, and read both assets back. RackWire
+  then resolved one imported asset's barcode and persisted its tag and serial on
+  a plan. The CI-default synthetic export fixture passed in a second run.
+- The export's two location selectors initially had accessible names that
+  included their option lists, causing an ambiguous test selection. Added
+  explicit accessible names to the destination selectors and unmatched-location
+  policy in `dashboard/public/screens4.jsx`; both the actual-export and synthetic
+  browser paths passed afterward.
+- The test deliberately created duplicate scratch destinations for each source
+  location and chose one by row ID. This verifies operator mapping and the
+  integration contract; it does not establish that either real source location
+  maps to the duplicate live “Painted Fern” sites. The recorded ambiguity
+  remains unresolved.
+- A post-run check found zero imported models, units, locations, RackWire plans,
+  external references, or scanner-ingest source rows in the disposable schema.
+  The export file was removed; the scanner app remained unchanged and loopback
+  bound. No live SoR write occurred.
+- **UNVERIFIED:** production SoR import and exact location ownership, hosted CI
+  for the updated browser harness, cross-lab review, and deployed dashboard
+  behavior. The standalone scanner-ingest repository still has no release
+  remote.

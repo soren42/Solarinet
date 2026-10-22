@@ -44,9 +44,19 @@ function databaseConfig() {
       !/^solarinet_scan_worker_[a-z0-9_]+$/.test(name)) {
     throw new Error('Set SOLARI_TEST_DB=1 and loopback solarinet_scan_worker_* DB settings.');
   }
+  const sorHost = process.env.SOR_DB_HOST || '';
+  const sorName = process.env.SOR_DB_NAME || '';
+  if (process.env.SOLARI_TEST_SOR_DB !== '1' || !['127.0.0.1', 'localhost'].includes(sorHost) ||
+      !/^solarinet_scan_worker_sor_[a-z0-9_]+$/.test(sorName)) {
+    throw new Error('Set SOLARI_TEST_SOR_DB=1 and loopback solarinet_scan_worker_sor_* SoR settings.');
+  }
   return {
     host, port: process.env.SOLARI_DB_PORT || '3306', name,
     user: process.env.SOLARI_DB_USER || 'root', pass: process.env.SOLARI_DB_PASS || '',
+    sor: {
+      host: sorHost, port: process.env.SOR_DB_PORT || '3306', name: sorName,
+      user: process.env.SOR_DB_USER || 'root', pass: process.env.SOR_DB_PASS || '',
+    },
   };
 }
 
@@ -248,6 +258,35 @@ async function main() {
     }
     assert.equal(await page.evaluate(() => window.SOLARI && window.SOLARI.source), 'live',
       'dashboard must boot in live mode');
+    const idempotencyKeys = await page.evaluate(async () => {
+      const api = window.SOLARI.api;
+      const originalFetch = window.fetch;
+      const keys = [];
+      let calls = 0;
+      window.fetch = (url, options) => {
+        keys.push(options.headers['Idempotency-Key']);
+        calls++;
+        if (calls === 1) return Promise.reject(new TypeError('simulated lost response'));
+        return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { scanId: 7, status: 'queued' } }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        }));
+      };
+      try {
+        await api.discoverScan('192.0.2.1/32').catch(() => {});
+        await api.discoverScan('192.0.2.1/32');
+        await api.discoverScan('192.0.2.1/32');
+        return keys;
+      } finally {
+        window.fetch = originalFetch;
+      }
+    });
+    assert.match(idempotencyKeys[0] || '', /^scan-[0-9a-f]{32}$/,
+      'scan idempotency key must be a 128-bit hex value with the accepted prefix');
+    assert.equal(idempotencyKeys[1], idempotencyKeys[0],
+      'an unresolved request must reuse its key after a network error');
+    assert.notEqual(idempotencyKeys[2], idempotencyKeys[1],
+      'a successful admission must consume the key before a later intentional scan');
     await page.locator('.nav-item').filter({ hasText: /^RackWire$/ }).click();
     await page.getByRole('heading', { name: 'RackWire', exact: true }).waitFor();
     await page.getByText('Network, power & interconnect planning', { exact: false }).waitFor();
@@ -278,6 +317,45 @@ async function main() {
     await page.getByRole('button', { name: 'Network discovery', exact: true }).click();
     await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
     await page.getByPlaceholder('192.168.1.0/24').fill(SCAN_CIDR);
+
+    // Let the first admission reach PHP/C/SoR, then drop its HTTP response to
+    // model a transient client network failure. Retrying the same scan must
+    // reuse its idempotency key and return the already-created admission.
+    const scanAdmissions = [];
+    let resolveFirstAdmission;
+    const firstAdmissionCaptured = new Promise((resolve) => { resolveFirstAdmission = resolve; });
+    await page.route('**/api/discovery/scan', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      const headers = await route.request().allHeaders();
+      const response = await route.fetch();
+      const responseBody = await response.body();
+      scanAdmissions.push({
+        key: headers['idempotency-key'],
+        status: response.status(),
+        body: JSON.parse(responseBody.toString('utf8')),
+      });
+      if (scanAdmissions.length === 1) {
+        await route.abort('failed');
+        resolveFirstAdmission();
+        return;
+      }
+      return route.fulfill({ response, body: responseBody });
+    });
+
+    await page.getByRole('button', { name: 'Scan', exact: true }).click();
+    await firstAdmissionCaptured;
+    assert.equal(scanAdmissions[0].status, 202, 'the first scan attempt must reach durable admission');
+    assert.match(scanAdmissions[0].key || '', /^scan-[0-9a-f]{32}$/,
+      'scan admission must carry a well-formed idempotency key');
+
+    // Reload after the response is lost. The per-tab key must survive in
+    // sessionStorage so the operator can safely retry from a fresh page state.
+    await page.reload({ waitUntil: 'load' });
+    await page.locator('.nav-item').filter({ hasText: /^Discovery$/ }).waitFor();
+    await page.locator('.nav-item').filter({ hasText: /^Discovery$/ }).click();
+    await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
+    await page.getByPlaceholder('192.168.1.0/24').fill(SCAN_CIDR);
+
     const acceptedResponse = page.waitForResponse((response) =>
       response.url().endsWith('/api/discovery/scan') && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Scan', exact: true }).click();
@@ -285,6 +363,11 @@ async function main() {
     assert.equal(accepted.status(), 202, 'Discovery UI must submit through the real scan API');
     const csrf = (await accepted.request().allHeaders())['x-solari-csrf'];
     assert(typeof csrf === 'string' && csrf.length > 20, 'real scan admission must carry CSRF');
+    assert.equal(scanAdmissions.length, 2, 'a retry must submit exactly one second admission request');
+    assert.equal(scanAdmissions[1].key, scanAdmissions[0].key,
+      'a retry after a lost response must reuse the scan idempotency key');
+    assert.deepEqual(scanAdmissions[1].body.data, scanAdmissions[0].body.data,
+      'the retry must return the original durable admission instead of creating another scan');
 
     const firstObservedStatus = await page.waitForFunction(() => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
@@ -328,6 +411,7 @@ async function main() {
         `discovery responses: ${discoveryResponses.join('\n')}\n` +
         `browser errors: ${errors.join(' | ')}\nPHP: ${phpLogs}`);
     }
+
     assert.deepEqual(errors, [], 'browser has no JavaScript errors');
     assert.deepEqual(external, [], 'browser makes no external requests');
 
@@ -338,9 +422,28 @@ async function main() {
     assert.equal(Number(scanDone), SCAN_HOSTS, 'native worker must process the entire selected CIDR');
     assert.equal(Number(scanTotal), SCAN_HOSTS, 'admission must preserve the selected host count');
     assert(Number(scanFound) > 0, 'native worker must find at least one host');
+    assert.equal(sql(db, `SELECT COUNT(*) FROM discoveryScanJob WHERE requestedBy=${quote(operator)}`), '1',
+      'a lost-response retry must not create duplicate scan work');
     const candidates = sql(db, `SELECT COUNT(*) FROM discovered WHERE ip=${quote(SCAN_TARGET)} AND kind='host' AND via='portscan' AND status='new'`);
     assert.equal(candidates, '1', 'native worker must create one reviewable discovery candidate');
-    console.log(`RackWire-to-native-worker browser E2E passed: ${SCAN_CIDR}, ${scanDone}/${scanTotal} hosts, ${scanFound} candidates, embedded discovery handoff, live status polling, navigation recovery, and candidate ingest${NETWORK_SCAN ? ' before terminal completion' : ''}.`);
+
+    // Exercise the operator's candidate-ingest action end to end. Discovery
+    // adoption creates a monitored host and mirrors its address into the SoR;
+    // physical assets still enter through the separate scanner-import flow.
+    const adoptedName = `${REQUESTER}-adopted-${process.pid}`;
+    await page.locator('tr').filter({ hasText: SCAN_TARGET }).getByRole('button', { name: 'Monitor', exact: true }).click();
+    await page.getByPlaceholder(SCAN_TARGET).fill(adoptedName);
+    await page.getByRole('button', { name: 'Monitor system', exact: true }).click();
+    await page.getByText(`Adopted ${adoptedName}`, { exact: false }).waitFor();
+
+    const adoptedRow = sql(db, `SELECT COUNT(*) FROM discovered WHERE ip=${quote(SCAN_TARGET)} AND kind='host' AND via='portscan' AND status='adopted'`);
+    assert.equal(adoptedRow, '1', 'operator candidate ingest must mark the discovered row adopted');
+    const monitoredAsset = sql(db, `SELECT COUNT(*) FROM asset WHERE ip=${quote(SCAN_TARGET)} AND displayName=${quote(adoptedName)}`);
+    assert.equal(monitoredAsset, '1', 'operator candidate ingest must create a monitoring asset');
+    const sorMappedAddress = `::ffff:${SCAN_TARGET}`;
+    const sorAddress = sql(db.sor, `SELECT COUNT(*) FROM entities e JOIN ip_addresses a ON a.entity_id=e.id WHERE a.address=INET6_ATON(${quote(sorMappedAddress)}) AND e.name=${quote(adoptedName)} AND a.deleted_at IS NULL AND e.deleted_at IS NULL`);
+    assert.equal(sorAddress, '1', 'operator candidate ingest must mirror the host and address into the SoR');
+    console.log(`RackWire-to-native-worker browser E2E passed: ${SCAN_CIDR}, ${scanDone}/${scanTotal} hosts, ${scanFound} candidates, idempotent lost-response retry, live status polling, RackWire handoff, candidate adoption into monitoring/SoR, and physical scanner-import separation${NETWORK_SCAN ? ' before terminal completion' : ''}.`);
   } finally {
     if (browser) await browser.close();
     await stop(php);

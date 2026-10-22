@@ -39,7 +39,7 @@
     footer { margin-top:2px; padding-top:4px; }
     .callout, .note { break-inside:avoid; }
     thead { display:table-header-group; }
-    tr { break-inside:avoid; }
+    tr { break-inside:auto; page-break-inside:auto; }
     a { color:inherit; text-decoration:none; }
   }
 </style>
@@ -51,12 +51,12 @@
     <path d="M19 48 36 19l18 29M19 48h35M36 19v34" fill="none" stroke="#087a96" stroke-width="3" stroke-linecap="round"/>
     <circle cx="36" cy="19" r="5" fill="#087a96"/><circle cx="19" cy="48" r="5" fill="#087a96"/><circle cx="54" cy="48" r="5" fill="#087a96"/>
   </svg>
-  <div><h1>Stabilization baseline and release gates</h1><p class="meta">SolariNet and RackWire | Baseline 20 October 2026 · candidate evidence updated 21 October 2026 | operational snapshot, not a release declaration</p></div>
+  <div><h1>Stabilization baseline and release gates</h1><p class="meta">SolariNet and RackWire | Baseline 20 October 2026 · release state rechecked 22 October 2026 | operational snapshot, not a release declaration</p></div>
 </header>
 
-<p class="lede">The existing August 9 stabilization workflow remains the controlling plan. This snapshot records what was checked on October 20, the first integration changes, and the gates that still prevent a trustworthy platform release.</p>
+<p class="lede">The existing August 9 stabilization workflow remains the controlling plan. This page preserves dated observations from the baseline work; its opening release card and the linked Status &amp; Operations guide reflect the current candidate. Table evidence retains its original observation dates.</p>
 
-<div class="callout"><strong>Release state, rechecked 2026-10-21:</strong> No new SolariNet or RackWire version is ready to tag. GitHub and Forgejo main still match at <code>5e8d688</code>; <code>integrate/stability-20261020</code> is 18 commits ahead and has the separate <code>stabilize/phase-0-containment</code> branch as an ancestor. The integration worktree has 176 root tracked paths changed and 123 untracked paths, plus a dirty RackWire submodule. The containment worktree is 31 commits behind and 2 ahead of main; do not use it as the release candidate. Root and RackWire have no tags. The candidate gitlink advances RackWire to its Forgejo main at <code>5f29f59</code>. Scanner-ingest has a local Git root, but no GitHub/Forgejo remote. Independent review, production security and migration gates, and release ownership remain open.</div>
+<div class="callout"><strong>Release state, rechecked 2026-10-22:</strong> No new SolariNet or RackWire version is ready to tag. Forgejo and GitHub root <code>main</code> still match at <code>5e8d688</code>; <code>integrate/stability-20261020</code> is 37 commits ahead at <code>3a0246d</code>, and both remote integration refs match that commit. Root draft PR <code>#37</code> is open; its latest hosted run passed 15 jobs. The local root worktree has fourteen modified tracked files and two untracked items, including realtime Discovery scan retry, payload-bound idempotency, SoR ingest acceptance, the live scanner-export-to-RackWire browser test, accessible location labels, CI and status docs, and the Mosquitto deployment guide. The scan-to-adoption browser flow passes with separate disposable monitoring and SoR schemas. The full monitoring CTest suite passed 36/36 against a scratch MariaDB migrated through 033; the separate loopback transport test passed. The changes have not yet reached hosted CI or cross-lab review. RackWire is at <code>99453f3</code> on <code>integrate/solarinet-20261021</code>, two commits ahead of matching Forgejo/GitHub <code>main</code> at <code>5f29f59</code>; draft PR <code>#1</code> and its CI are open/passing. Root and RackWire have no release tags. Scanner-ingest is at local commit <code>ebb9a58</code>, has five modified manual/validation files, and no remote. Cross-lab review is unavailable because Claude CLI is unauthenticated; authenticated deployed-browser and production migration/rollback gates also remain open. See the <a href="SolariNet_Status_and_Operations.html">current Status &amp; Operations guide</a> and <a href="SolariNet_Cross_Lab_Review_Brief_2026-10-22.md">cross-lab review brief</a>.</div>
 
 <h2>1. Observed state</h2>
 <table>

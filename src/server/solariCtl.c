@@ -757,7 +757,10 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
                                       (uint32_t)peerUid, idem[0] ? idem : NULL,
                                       &reqId);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "enqueue failed");
+            return ctlReplyErr(replyOut, replyCap, st,
+                               st == ERR_INVALID_ARG
+                                   ? "idempotency key conflicts with a different queued request"
+                                   : "enqueue failed");
         solariLogf(SOLARI_LOG_INFO,
                    "ctl: queued %s request=%llu op=%s peer=%u",
                    inner, reqId, operator_, peerUid);

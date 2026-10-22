@@ -50,6 +50,7 @@
     .toc a{color:#155c70}
     code{background:#eef2f6;color:#1d3857}
     .status-now{break-inside:auto}
+    .status-now li{break-inside:avoid}
     .actions{display:none}
     .status-now{background:#fff;color:#111;border-color:#7b8794}
     .status-now h2,.status-now p,.status-now li,.status-now a{color:#111}
@@ -74,11 +75,14 @@
 
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
-    <p>The integration candidate is not released: as of this snapshot, the local branch is
-    37 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
-    at <code>5e8d688</code>. The worktree is clean. The public review branch is open as GitHub
-    draft PR <code>#37</code>; no main branch merge or release tag exists. The Xenon backup
-    utility is deployed as a local-only recovery path.</p>
+    <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
+    at <code>3a0246d</code> is 37 commits ahead of Forgejo and GitHub <code>main</code>, whose
+    refs match at <code>5e8d688</code>. The root worktree has uncommitted Discovery retry and
+    payload-bound idempotency code, regression tests, docs, and CI changes; local tests pass,
+    but these edits have not reached hosted CI. Scanner-ingest has uncommitted manual and
+    validation updates. The public review branch is
+    open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
+    Xenon backup utility is deployed as a local-only recovery path.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
       <title id="map-title">SolariNet integration boundaries</title>
       <desc id="map-desc">Operators use the authenticated dashboard and RackWire. The dashboard writes inventory to the SoR. The SoR feeds DNS and notifications. Monitoring clients and scan workers report to the C control server. The Khadas VIM4 runs an authoritative DNS secondary.</desc>
@@ -102,16 +106,21 @@
       </g>
     </svg>
     <ul>
-      <li><strong>RabbitMQ:</strong> Benzene runs the broker in Podman on RabbitMQ
-      <code>3.13.7</code>. It reports fully booted with no local alarms. The SoR apply
-      queues for AD, Pi-hole, and DNS each had one running consumer and zero ready or
-      unacknowledged messages; notify dispatch also had one consumer and no backlog.
-      Xenon’s emitter, apply workers, reconciliation, and notification services were active
-      during the 22 October check. RabbitMQ was fully booted with no local alarms; its
-      <code>solari</code> vhost had zero ready/unacknowledged messages and one consumer on
-      <code>sor.apply.ad</code>, <code>sor.apply.pihole</code>, <code>sor.apply.dns</code>, and
-      <code>notify.dispatch</code>. The broker is operational, but its installed release is old
-      and upgrade/recovery remain release gates.</li>
+      <li><strong>RabbitMQ:</strong> Benzene runs RabbitMQ <code>3.13.7</code> in rootful
+      Podman using the floating <code>rabbitmq:3-management</code> tag. The 22 October check
+      found it fully booted with no alarms; each of four <code>solari</code> queues had one
+      consumer and zero ready/unacknowledged messages, with seven client connections. Xenon emitter, apply,
+      reconciliation, and notification services were active. Upgrade and recovery remain
+      release gates.</li>
+      <li><strong>Mosquitto:</strong> Benzene’s Mosquitto <code>2.1.2</code> had a rapid
+      config-open restart loop. With no MQTT clients connected, it was recreated using the
+      same ports and persistent mounts, with a read-only config mount. The password file is
+      owned by UID/GID <code>1883:1883</code>, mode <code>0700</code>. The replacement runs
+      with zero restarts; the failed container is retained for incident analysis. The original mount
+      failure cause remains unknown. Authbroker is not deployed on Xenon: its unit, virtual
+      environment, and config are absent, so authenticated MQTT client behavior remains
+      unverified. See the <a href="../deploy/mosquitto/README.md">Mosquitto deployment guide</a>
+      for the pinned image, secret-free config example, and verification steps.</li>
       <li><strong>Backups:</strong> Cesium’s 21 October SoR dump restored successfully into
       a disposable MariaDB instance and all 41 tables passed checks. On 22 October, the
       Xenon runner wrote a 56.4 MB root-only archive and the exact artifact restored into
@@ -131,18 +140,36 @@
       processed all 254 addresses, and recorded 14 candidates in a disposable database; the local
       listener appeared in Discovery before scan completion. The accepted path polls live worker
       status, refreshes candidates during execution, and supports reviewing and ingesting
-      discovered candidates into inventory. No production database was changed.
+      discovered candidates into inventory. A 22 October combined scan-and-ingest acceptance
+      processed 254/254 addresses, found 12 candidates, observed the listener candidate while
+      the worker was running, retried a lost response without duplicating the job, and adopted
+      <code>10.0.0.20</code> into monitoring and the SoR. It used separate disposable stores; no
+      production database was changed.
       A separate UI acceptance verified candidate refresh before its controlled scan fixture
-      reaches a terminal state. Larger-range throughput and deployed worker behavior remain
-      unverified. Adoption mirrors a host and address into
-      monitoring and SoR;
-      it does not create a physical asset.</li>
+      reaches a terminal state. Larger-range throughput and candidate deployment remain
+      unverified. A read-only Xenon check found the standalone RackWire discovery service and
+      Apache health proxy returning HTTP 200, while the dashboard's unauthenticated discovery
+      endpoint returned HTTP 401 as expected. The Xenon-served dashboard bundle differs from
+      this candidate, so those checks do not verify its authenticated real-time scan path.
+      The 22 October scratch-database browser acceptance also exercised the full operator
+      ingest step: it dropped the response after durable scan admission, retried with the same
+      idempotency key, observed one live candidate, adopted it through the Monitor dialog, and
+      verified one monitoring asset plus the mapped address on a SoR entity. The test used
+      separate disposable monitoring and SoR schemas. The combined direct-route <code>/24</code>
+      run verified this whole path. Adoption creates a monitored host and
+      SoR host/address; it does not create a physical asset. Physical assets enter through the
+      scanner-ingest preview/apply flow. The local patch and CI changes remain uncommitted.
+      Full monitoring CTest passed 36/36 against a disposable MariaDB migrated through 033,
+      and the separate loopback transport test passed. Hosted CI, cross-lab review, and the
+      authenticated Xenon browser path remain pending.</li>
       <li><strong>Inventory:</strong> scanner export, dashboard import, and transactional SoR
       paths are implemented and pass scratch-database tests. No scanner rows have been imported
-      into the live SoR. The launched scanner app's actual two-item/two-asset export was previewed,
-      applied, and replayed in a disposable SoR; counts and location readback passed. Source
-      locations “Bin #5” and “Nook” do not identify which of the two duplicate root “Painted Fern”
-      sites (IDs <code>9103</code>, <code>9104</code>) is correct. The standalone scanner-ingest
+      into the live SoR. The authenticated browser E2E loaded the launched app's exact
+      two-item/two-asset export, previewed and applied it to a disposable SoR, read both assets
+      back, and carried one through RackWire profile setup, barcode resolution, and plan save.
+      It explicitly mapped source locations to duplicate scratch rows; this does not resolve which
+      of the two duplicate root “Painted Fern” sites (IDs <code>9103</code>, <code>9104</code>)
+      “Bin #5” and “Nook” should map to. The standalone scanner-ingest
       app has a local Git repository but no configured release remotes; GitHub and Forgejo lookups
       found no published <code>scanner-ingest</code> repository, so its release ownership/path is
       unresolved.</li>
@@ -166,18 +193,19 @@
       <code>39704732584</code>; root CI also recursively checks out its pinned gitlink.
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
-      authenticated session, so cross-lab review is unavailable. Root PR CI run
-      <code>39705502734</code> at <code>0a322eb</code> passed all 15 hosted jobs, including realtime
-      scan/candidate-ingest and scanner/RackWire browser acceptance. During the preceding run, the
-      clean-install snapshot check exposed MariaDB client-version drift: hosted 10.11 emits
+      authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
+      <code>39706191166</code> at <code>3a0246d</code>, passed all 15 hosted jobs. The preceding
+      code-bearing run <code>39705502734</code> at <code>0a322eb</code> passed the real-time
+      scan/candidate-ingest, scanner/RackWire browser, and release-package checks. During an earlier
+      run, the clean-install snapshot check exposed MariaDB client-version drift: hosted 10.11 emits
       <code>SQL_NOTES</code> wrappers while the 11.8 snapshot uses <code>NOTE_VERBOSITY</code>;
-      cross-version normalization now passes in hosted CI. The latest run also exercised the new
-      RackWire subproject gitlink and verified the release archive excludes its <code>.github</code>
-      workflow. Earlier runs found a date-sensitive DNS assertion and checkout/artifact wiring defects. Keep the PRs in draft
-      until all checks and independent review pass.</li>
+      cross-version normalization now passes in hosted CI. The PRs remain drafts pending independent
+      review and release gates. The local Discovery retry/SoR-ingest, accessible location-label,
+      and live scanner-export browser changes are newer than the latest hosted CI run.</li>
     </ul>
-    <p>Current evidence and next gates: <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">Stabilization Baseline</a>
-    and <a href="SolariNet_Stabilization_Integration_Workflow_2026-08-09.md">Integration Workflow</a>.</p>
+    <p>Current evidence and next gates: <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">Stabilization Baseline</a>,
+    <a href="SolariNet_Stabilization_Integration_Workflow_2026-08-09.md">Integration Workflow</a>, and the
+    <a href="SolariNet_Cross_Lab_Review_Brief_2026-10-22.md">cross-lab review brief</a>.</p>
   </section>
 
   <div class="toc">
