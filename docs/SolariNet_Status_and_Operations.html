@@ -77,13 +77,14 @@
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
     is mirrored on Forgejo and GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
-    The code-bearing commit <code>789b1d3</code> and documentation follow-ups
-    <code>04e80be</code>, <code>b81e2cc</code>, and <code>fa1ba87</code> are pushed to both
-    remotes. The realtime Discovery retry, payload-bound idempotency, SoR ingest acceptance,
+    The integration head <code>4790dcd</code> is pushed to both remotes; it includes the
+    realtime scan/SoR code, RackWire CSRF behavioral tests, the scanner/RackWire browser retry
+    acceptance, and refreshed status documentation. The realtime Discovery retry, payload-bound idempotency, SoR ingest acceptance,
     CI, and review documentation are committed on both remotes. GitHub PR #37 run
     <code>39718723877</code> passed all 15 jobs, including live Discovery worker/API,
     candidate adoption, scanner/RackWire browser flow, and release-package/rollback checks.
-    RackWire PR #1 has green hosted checks. Scanner-ingest documentation is committed locally at
+    RackWire PR #1 at <code>a66bd21</code> has green hosted checks (run
+    <code>39719734709</code>). Scanner-ingest documentation is committed locally at
     <code>c2a3f7b</code>, but that repository has no release remote. A read-only Cesium preflight
     found ample disk and MariaDB but no PHP CLI or container runtime for an isolated app instance.
     The new browser follow-up injects an expiry-shaped CSRF rejection, refreshes identity, and succeeds
@@ -208,9 +209,8 @@
       Staged production browser verification, cross-lab review, production migration/rollback,
       and application deployment remain open. The root review branch has a GitHub draft PR
       <code>#37</code>; RackWire's public GitHub mirror now has main and integration branches plus
-      draft PR <code>#1</code>. RackWire's new independent GitHub Actions workflow passed
-      <code>45/45</code> backend tests and four runtime checksum checks in run
-      <code>39704732584</code>; root CI also recursively checks out its pinned gitlink.
+      draft PR <code>#1</code>. RackWire's GitHub workflow passed in run
+      <code>39719734709</code>; root CI also recursively checks out its pinned gitlink.
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
