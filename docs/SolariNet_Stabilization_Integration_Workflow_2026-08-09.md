@@ -2403,6 +2403,24 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   and remote; and deployment/release integration. No main branch was merged,
   no version was tagged, and no live SoR, DNS, or UniFi state was changed.
 
+## 2026-10-22 — mirrored CI and deployment-target recheck
+
+- Root status and review documentation were committed as `04e80be` and pushed
+  to matching GitHub and Forgejo integration refs. Hosted run `39715807073`
+  passed all 15 jobs. The scanner-ingest manual/validation updates were
+  committed locally as `c2a3f7b`; the repository still has no configured remote.
+- Xenon was checked read-only before deployment. The active server runs from a
+  separate checkout at `/home/jason/Code/Solarinet` on branch
+  `stabilize/phase-0-containment`, with uncommitted changes. Apache serves
+  `/var/www/solarinet`; PHP 8.4-FPM is active, `/opt/solarinet/current` is
+  absent, and `solarinet-scan-worker.service` is inactive. This differs from
+  the candidate's atomic release contract. No host files or services were
+  changed; an isolated candidate target or reviewed host-layout migration is
+  required before deployment.
+- **UNVERIFIED:** candidate runtime behavior on Xenon; cross-lab review; and
+  whether the user prefers creating a private hosted repository for the local
+  scanner-ingest app. The production-like DNS and UniFi systems were untouched.
+
 ## 2026-10-22 — RabbitMQ live health and upgrade gate recheck
 
 - Read-only Benzene inspection found the rootful Podman container `rabbitmq`

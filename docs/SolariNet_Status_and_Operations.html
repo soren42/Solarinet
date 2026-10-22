@@ -32,7 +32,7 @@
   .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
   .toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 20px;margin:18px 0;font-size:14px}
   .toc a{color:var(--accent);text-decoration:none} .toc a:hover{text-decoration:underline}
-  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .footer{margin-top:0;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
   .actions{display:flex;justify-content:flex-end;margin:0 0 14px}
   .actions button{border:1px solid var(--line);border-radius:7px;padding:9px 13px;background:var(--panel2);color:var(--ink);font:600 13px var(--sans);cursor:pointer}
   .actions button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
@@ -76,12 +76,13 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
-    at <code>789b1d3</code> is 38 commits ahead of Forgejo and GitHub <code>main</code>, whose
-    refs match at <code>5e8d688</code>. The realtime Discovery retry, payload-bound idempotency,
+    is mirrored on Forgejo and GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
+    The code-bearing commit <code>789b1d3</code> and status-documentation commit
+    <code>04e80be</code> are pushed to both remotes. The realtime Discovery retry, payload-bound idempotency,
     SoR ingest acceptance, CI, and review documentation are committed on both remotes.
-    GitHub PR #37 run <code>39715155684</code> passed all 15 jobs, including the authenticated
-    scanner/RackWire browser flow. Scanner-ingest still has uncommitted manual and validation
-    updates. The public review branch is
+    GitHub PR #37 run <code>39715807073</code> passed all 15 jobs, including the authenticated
+    scanner/RackWire browser flow. Scanner-ingest documentation is committed locally at
+    <code>c2a3f7b</code>, but that repository has no release remote. The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
@@ -184,6 +185,13 @@
       designing the transactional importer. A read-only SoR query returned 16 active /24s across
       eight named segments; all have VLAN and gateway unset. The UniFi /8 overlaps all 16 and
       matches none exactly. The cause and source authority are unresolved.</li>
+      <li><strong>Deployment target:</strong> a read-only Xenon check found the active server
+      runs from a separate, dirty checkout at <code>/home/jason/Code/Solarinet</code>, while
+      Apache serves <code>/var/www/solarinet</code>. The release contract's
+      <code>/opt/solarinet/current</code> path is absent and
+      <code>solarinet-scan-worker.service</code> is inactive. No host files or services were
+      changed; establish an isolated candidate target or reconcile the host with the atomic
+      release contract before deployment.</li>
       <li><strong>Release gates:</strong> authenticated browser acceptance now passes against
       disposable SoR and broker fixtures, including scanner import and RackWire iframe save.
       Staged production browser verification, cross-lab review, production migration/rollback,
@@ -195,8 +203,10 @@
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
-      <code>39715155684</code> at code-bearing commit <code>789b1d3</code>, passed all 15 hosted
-      jobs. The preceding
+      <code>39715807073</code> at documentation commit <code>04e80be</code>, passed all 15 hosted
+      jobs. The preceding code-bearing commit <code>789b1d3</code> also passed all 15 jobs in
+      run <code>39715155684</code>; <code>04e80be</code> adds only verification/status documentation.
+      The earlier
       code-bearing run <code>39705502734</code> at <code>0a322eb</code> passed the real-time
       scan/candidate-ingest, scanner/RackWire browser, and release-package checks. During an earlier
       run, the clean-install snapshot check exposed MariaDB client-version drift: hosted 10.11 emits
@@ -548,11 +558,6 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   </ul>
   </div>
 
-  <p class="footer">Status card updated 22 October 2026. Sections below preserve the Phase 7
-  implementation snapshot and its test counts. For current test results and release gates, use
-  the linked <code>SolariNet_Stabilization_Baseline_2026-10-20</code> and
-  <code>SolariNet_Stabilization_Integration_Workflow_2026-08-09</code>. This guide does not
-  declare the integration candidate ready for release.</p>
 </div>
 <script>
   document.getElementById('print-guide').addEventListener('click', function () {
