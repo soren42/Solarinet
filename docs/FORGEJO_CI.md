@@ -6,8 +6,9 @@
 
 ## Decision
 
-Forgejo is the authoritative remote for this project. GitHub is a mirror and can lag or
-be unavailable during service incidents. The Forgejo workflow is maintained as a generated
+Forgejo is the authoritative remote for this project. GitHub is a secondary mirror and can
+lag or be unavailable during service incidents; work and verification proceed on Forgejo
+first. The Forgejo workflow is maintained as a generated
 adaptation of `.github/workflows/ci.yml`; the renderer and parity check are
 `tools/ci/render_forgejo_workflow.py`. The GitHub workflow runs that check so changes to the
 source CI cannot silently leave Forgejo CI stale.
@@ -41,10 +42,22 @@ as available from Runner v9 onward in its [Actions troubleshooting guide](https:
 These checks validate schema and source shape; they do not prove that a compatible runner is
 registered, that host mode executes successfully, or that the full CI matrix passes there.
 
-No dedicated disposable runner VM has been identified or provisioned. Therefore Forgejo CI
-execution is **UNVERIFIED**. Do not describe this workflow as a green hosted gate until a
-dedicated runner has run the complete matrix. The existing GitHub workflow remains available
-as a mirror validation path when GitHub Actions is operating normally.
+**Host audit, 2026-10-22:** Forgejo 15.0.3 is active on Cesium. The installed Forgejo CLI
+supports repository-scoped runner registration. No runner process/service was found on
+Cesium, Benzene, Xenon, or Chlorine. Benzene has sufficient capacity for a separate VM; its
+existing `argon` VM is a Rocky Linux workload and is left untouched. No runner VM or runner
+has been provisioned. Creating a dedicated disposable VM on Benzene remains the selected
+path, subject to completing its network isolation and reset design.
+
+Unauthenticated requests to the repository Actions API and UI returned 404 because the
+repository is private; this does not establish whether the repository Actions unit is
+enabled. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15 defaults
+Actions to enabled), but repository unit state still needs authenticated verification.
+
+Therefore Forgejo CI execution is **UNVERIFIED**. Do not describe this workflow as a green
+hosted gate until a dedicated runner has run the complete matrix. GitHub remains a secondary
+mirror and verification path when its service is healthy; its current Actions incident does
+not change Forgejo's primary status.
 
 ## Forgejo references
 

@@ -78,14 +78,14 @@
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
     is maintained on Forgejo first and mirrored to GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
     The last fully CI-validated code ref is <code>c867bcb</code>; its GitHub run passed all 15 jobs.
-    Documentation-only status updates are published to Forgejo first and mirror to GitHub; both
-    <code>main</code> refs remain at <code>5e8d688</code>. The code candidate
+    Documentation-only status updates are published to Forgejo first; GitHub may lag while its
+    Actions service is degraded. Both <code>main</code> refs remain at <code>5e8d688</code>. The code candidate
     <code>c1ce64d</code> includes the
     realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
     acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
     GitHub reports an active Actions incident affecting workflow and step results
     (<a href="https://www.githubstatus.com/api/v2/incidents/unresolved.json">incident q29p76qtnkyk</a>, checked 22 October).
-    Forgejo remains the authoritative remote, with GitHub as a mirror during service disruptions. Commit <code>3b16f7e</code> publishes <code>.forgejo/workflows/ci.yml</code>, generated from the GitHub workflow by <code>tools/ci/render_forgejo_workflow.py</code>. It preserves loopback-only scratch DB/broker checks and Docker upgrade behavior on a dedicated disposable host runner. Local schema validation with Forgejo Runner v13.2.0 passed; no such runner has been provisioned, so hosted execution remains unverified. See <a href="FORGEJO_CI.md">the Forgejo CI guide</a>. GitHub reports continuing Actions workflow and step result delays under an active incident.
+    Forgejo remains the authoritative remote; GitHub is secondary during service disruptions. Commit <code>3b16f7e</code> publishes <code>.forgejo/workflows/ci.yml</code>, generated from the GitHub workflow by <code>tools/ci/render_forgejo_workflow.py</code>. It preserves loopback-only scratch DB/broker checks and Docker upgrade behavior on a dedicated disposable host runner. Local schema validation with Forgejo Runner v13.2.0 passed. The Forgejo 15.0.3 service is active, but no runner is installed on the checked hosts and no runner VM has been provisioned. Anonymous Actions API/UI requests return 404 for the private repository and do not establish its unit state. Hosted execution remains unverified. See <a href="FORGEJO_CI.md">the Forgejo CI guide</a>. GitHub reports continuing Actions workflow and step result delays under an active incident.
     The previous docs-only run
     <code>39738275605</code> passed all 15 jobs on <code>46045e9</code>; code run
     <code>39737421770</code> passed all 15 jobs, including the database-backed
