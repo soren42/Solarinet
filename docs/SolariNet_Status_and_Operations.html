@@ -217,6 +217,10 @@
       into the live SoR. The authenticated browser E2E loaded the launched app's exact
       two-item/two-asset export, previewed and applied it to a disposable SoR, read both assets
       back, and carried one through RackWire profile setup, barcode resolution, and plan save.
+      On 22 October, the standalone checkout passed 63 tests (16 optional database/ZXing tests
+      skipped in the base run); a second isolated MariaDB run passed all 20 source/exporter tests.
+      The temporary server used a private Unix socket with networking disabled; no live SoR rows
+      were written.
       It explicitly mapped source locations to duplicate scratch rows; this does not resolve which
       of the two duplicate root “Painted Fern” sites (IDs <code>9103</code>, <code>9104</code>)
       “Bin #5” and “Nook” should map to. A read-only transaction against the live SoR, using
