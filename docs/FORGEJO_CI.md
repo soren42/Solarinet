@@ -40,6 +40,14 @@ anything exposed inside the VM, so runner jobs must not receive production or re
 credentials; use one-job/ephemeral registration where supported and reset the VM after the
 job.
 
+The host network configuration is in `deploy/forgejo-runner/`. Its guard filters both the
+dedicated bridge and pinned VM tap (`vnet-ci0`); the runner VM definition must use that tap
+name. `install-host-network.sh` disables libvirt network autostart and enables systemd units
+that start the network only after the guard. Stopping the guard leaves its nftables rules
+installed and stops the dedicated network. The systemd units also tie host `nftables.service`
+reloads to a guard reload and stop/restart events to CI network teardown; that interaction
+is configured but remains unexercised because `nftables.service` is disabled on Benzene.
+
 Native macOS coverage remains GitHub-only. The Linux Forgejo workflow does not claim that
 gate has run.
 
@@ -58,10 +66,15 @@ supports repository-scoped runner registration. No runner process/service was fo
 Cesium, Benzene, Xenon, or Chlorine. Benzene has sufficient capacity for a separate VM; its
 existing `argon` VM is a Rocky Linux workload and is left untouched. No runner VM or runner
 has been provisioned. A dedicated disposable VM on Benzene remains the selected path. The
-host currently has no active `firewalld`/`nftables` service and the default libvirt NAT
-network permits guest egress broadly, so it does not meet the runner isolation contract.
-The runner VM must use a separate network with host-enforced allow rules and a tested
-per-job reset mechanism before registration.
+default libvirt NAT network remains untouched. A separate `solarinet-ci` NAT network is
+active with libvirt autostart disabled; its nftables guard is loaded and enabled at boot.
+Before applying the guard, the host had no active `firewalld`/`nftables` service and the
+default libvirt NAT network allowed broad guest egress. A temporary network-namespace probe
+verified the new policy: Forgejo TCP 3000, gateway DNS, and public TCP 443 connected; Cesium
+MariaDB TCP 3306 and Benzene SSH TCP 22 did not. Stopping the guard service took down the
+CI network while leaving the nftables rules installed; restarting the guard and network
+restored both. The CI network currently has no attached guest. The runner VM must use this
+network and a tested per-job reset mechanism before registration.
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private; this does not establish whether the repository Actions unit is

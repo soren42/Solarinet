@@ -1,0 +1,50 @@
+# Host-enforced egress policy for the isolated Forgejo CI libvirt network.
+# Workflow jobs run host-mode with sudo inside the guest, so guest firewall
+# rules are not a security boundary. The runner domain must pin its tap name
+# to vnet-ci0; filtering the bridge name does not match routed VM traffic.
+destroy table inet solarinet_ci_guard
+
+table inet solarinet_ci_guard {
+    chain input {
+        type filter hook input priority -50; policy accept;
+
+        iifname { "virbr-ci0", "vnet-ci0" } udp dport 67 counter accept
+        iifname { "virbr-ci0", "vnet-ci0" } ip saddr 192.168.123.0/24 udp dport 53 counter accept
+        iifname { "virbr-ci0", "vnet-ci0" } ip saddr 192.168.123.0/24 tcp dport 53 counter accept
+        iifname { "virbr-ci0", "vnet-ci0" } counter drop
+    }
+
+    chain forward {
+        type filter hook forward priority -50; policy accept;
+
+        iifname { "virbr-ci0", "vnet-ci0" } oifname "virbr-ci0" counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip saddr != 192.168.123.0/24 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } meta nfproto ipv6 counter drop
+
+        # Forgejo's internal service endpoint is the sole private-network
+        # exception needed by the runner.
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 10.1.0.200 tcp dport 3000 counter accept
+
+        # Do not allow HTTP(S) to non-public destinations, including RFC1918,
+        # loopback, link-local, shared-address, documentation, and benchmark
+        # ranges. These checks are deliberately before the public web allowance.
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 0.0.0.0/8 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 10.0.0.0/8 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 100.64.0.0/10 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 127.0.0.0/8 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 169.254.0.0/16 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 172.16.0.0/12 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 192.0.0.0/24 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 192.0.2.0/24 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 192.88.99.0/24 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 192.168.0.0/16 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 198.18.0.0/15 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 198.51.100.0/24 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 203.0.113.0/24 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 224.0.0.0/4 counter drop
+        iifname { "virbr-ci0", "vnet-ci0" } ip daddr 240.0.0.0/4 counter drop
+
+        iifname { "virbr-ci0", "vnet-ci0" } tcp dport { 80, 443 } counter accept
+        iifname { "virbr-ci0", "vnet-ci0" } counter drop
+    }
+}

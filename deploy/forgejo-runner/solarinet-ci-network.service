@@ -1,0 +1,14 @@
+[Unit]
+Description=Isolated SolariNet Forgejo CI libvirt network
+Requires=solarinet-ci-guard.service virtnetworkd.service
+BindsTo=solarinet-ci-guard.service
+After=solarinet-ci-guard.service virtnetworkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/virsh net-start solarinet-ci
+ExecStop=/usr/bin/virsh net-destroy solarinet-ci
+
+[Install]
+WantedBy=multi-user.target
