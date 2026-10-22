@@ -2597,3 +2597,21 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
 - **UNVERIFIED:** authenticated browser operation against the installed PHP
   service, persistent worker startup/restart, broader subnet scan policy, live
   SoR migration/adoption, cross-lab review, and promotion to a main branch/tag.
+
+### Staged dashboard authentication acceptance
+
+- On 2026-10-22, exercised the installed candidate through Chromium via an SSH
+  loopback tunnel. A random temporary operator credential was stored only in a
+  mode-0600 scratch file and used to sign in through the actual dashboard UI.
+  The browser then fetched authenticated scan history (HTTP 200, empty result),
+  obtained the session CSRF token, logged out through the protected route
+  (HTTP 200), and verified `whoami` returned 401 afterward. No browser page
+  errors occurred.
+- The temporary auth file, password, rate-limit directory, and browser session
+  were removed. The PHP listener was restarted without local-login settings;
+  `auth/config` reports local login disabled, the UI still returns 200, and an
+  unauthenticated scan-history request returns 401. The listener remains bound
+  to `127.0.0.1:17701` and uses only the disposable Cesium databases.
+- This verifies the installed PHP CLI runtime and actual login/session/CSRF
+  flow. It does not verify PHP-FPM, Apache, OIDC, a persistent scan worker,
+  production data, or a cross-lab review.
