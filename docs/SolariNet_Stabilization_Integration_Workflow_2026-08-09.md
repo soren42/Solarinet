@@ -2570,3 +2570,30 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
 - `git diff --check`, PHP syntax, route tests, and Node syntax checks passed.
   Hosted CI, cross-lab review, a staged app deployment, mirrored push, merge,
   and release have not yet been performed for this working diff.
+
+## 2026-10-22 — isolated Cesium development deployment
+
+- Built a clean `Release` configuration with the IO, SQLite, JSON, server, and
+  scan-worker components enabled. The compiler emitted existing truncation and
+  maybe-uninitialized warnings in client/SNMP paths; both server and scan-worker
+  binaries built successfully without ASAN/UBSAN runtime dependencies.
+- Packaged commit `4b50cca7d8d78bbd644b86e1d86a70990a0f7051` as
+  `dev-20261022-4b50cca`. The archive contains 180 allowlisted files, records
+  the pinned RackWire gitlink, reports `sourceTreeDirty=false`, and has SHA-256
+  `b271c39fad19fa9ece8dbef96a07e94285f4a7ffd22dca9ad6b83754e49d0ab4`.
+  Dashboard release tests passed 7/7; two dirty-tree-only cases were skipped.
+- Installed and activated the release under Cesium's separate
+  `~/.local/share/solarinet-dev/release-root`. The release integrity installer
+  validated the payload. A PHP CLI development server is listening on
+  `127.0.0.1:17701` only, using the separate disposable SoR/monitoring databases
+  on `127.0.0.1:13316`. The UI shell and public auth configuration return 200;
+  unauthenticated scan-job history returns 401. No test identity bypass was
+  installed. This is a loopback development deployment, not PHP-FPM, Apache, a
+  persistent scan worker, or the production dashboard.
+- The currently running dev package is the code candidate at `4b50cca`; this
+  workflow note records the subsequent deployment verification. Its app code
+  has not changed since the release was packaged. The user-owned PHP CLI package
+  install on Cesium also resolved glibc updates as recorded above.
+- **UNVERIFIED:** authenticated browser operation against the installed PHP
+  service, persistent worker startup/restart, broader subnet scan policy, live
+  SoR migration/adoption, cross-lab review, and promotion to a main branch/tag.
