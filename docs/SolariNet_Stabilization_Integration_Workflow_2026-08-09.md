@@ -2535,7 +2535,8 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   handler. The browser flow passed against a freshly migrated loopback scratch
   SoR. The test driver dropped the scratch schema and temporary account after
   the run.
-- **UNVERIFIED:** hosted CI for the new CSRF behavioral tests, cross-lab review,
-  actual elapsed-token expiry handling by the PHP guard, deployed candidate
-  behavior, exact scanner source-location mapping, and scanner-ingest repository
-  ownership/remotes.
+- Hosted CI run `39720370015` for commit `23aee5b` passed the full workflow matrix,
+  including the scanner/RackWire browser path and dashboard API tests.
+- **UNVERIFIED:** cross-lab review, actual elapsed-token expiry handling by the PHP
+  guard, deployed candidate behavior, exact scanner source-location mapping, and
+  scanner-ingest repository ownership/remotes.
