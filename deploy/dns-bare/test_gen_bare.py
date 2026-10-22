@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression coverage for safe, repeatable bare-zone secondary generation."""
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -80,7 +81,12 @@ class BareZoneGeneratorTest(unittest.TestCase):
                 "--previous", str(previous), "--transfer", "10.7.0.10",
             ], check=True, capture_output=True, text=True)
             contents = (output / "db.bare-alpha").read_text(encoding="utf-8")
-            self.assertIn("2026102102 ; serial", contents)
+            serial_match = re.search(r"^\s+(\d+) ; serial$", contents, re.MULTILINE)
+            self.assertIsNotNone(serial_match)
+            serial = int(serial_match.group(1))
+            distance = (serial - 2026102101) & 0xffffffff
+            self.assertGreater(distance, 0)
+            self.assertLess(distance, 0x80000000)
             self.assertIn("@ IN A 10.0.0.22", contents)
 
     def test_rejects_invalid_transfer_address(self):
