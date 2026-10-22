@@ -361,11 +361,57 @@ async function main() {
       throw new Error('RackWire scan dialog did not open after SCAN. Frame text: ' + (await rackwireFrame.locator('body').innerText()).slice(0, 1600) + '\nConsole: ' + browserConsole.join(' | '));
     }
     await barcodeInput.fill(tag);
+    // Simulate one expiry-shaped 403, then keep the identity refresh and retry
+    // on the real same-origin PHP/SoR routes to exercise the full iframe path.
+    const csrfRetry = {
+      active: false,
+      lookupAttempts: 0,
+      whoamiRefreshes: 0,
+      firstToken: '',
+      retryToken: '',
+      firstExpired: false,
+    };
+    await page.route('**/api/auth/whoami', async (route) => {
+      let frameUrl = '';
+      try { frameUrl = route.request().frame().url(); } catch (_) {}
+      if (csrfRetry.active && frameUrl.includes('/rackwire/')) csrfRetry.whoamiRefreshes += 1;
+      await route.continue();
+    });
+    await page.route('**/api/inventory/codes/lookup', async (route) => {
+      if (!csrfRetry.active) return route.continue();
+      csrfRetry.lookupAttempts += 1;
+      const token = route.request().headers()['x-solari-csrf'] || '';
+      if (csrfRetry.lookupAttempts === 1) {
+        csrfRetry.firstToken = token;
+        csrfRetry.firstExpired = true;
+        return route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: false,
+            error: { code: 'forbidden', message: 'Missing or invalid CSRF token.' },
+            ts: Date.now(),
+          }),
+        });
+      }
+      if (csrfRetry.lookupAttempts === 2) csrfRetry.retryToken = token;
+      return route.continue();
+    });
+    await page.locator(frameSelector).evaluate((element) => {
+      element.contentWindow.eval('rwPlanCsrf = ""; rwPlanCsrfPromise = null;');
+    });
+    csrfRetry.active = true;
     const barcodeLookupWait = page.waitForResponse((response) =>
-      response.url().includes('/api/inventory/codes/lookup') && response.request().method() === 'POST');
+      response.url().includes('/api/inventory/codes/lookup') && response.request().method() === 'POST'
+        && response.status() === 200);
     await rackwireFrame.getByRole('button', { name: 'Look up', exact: true }).click();
     const barcodeLookup = await barcodeLookupWait;
     assert.equal(barcodeLookup.status(), 200, 'RackWire barcode scan must resolve a scanner-imported inventory unit');
+    assert.equal(csrfRetry.firstExpired, true, 'the first barcode request must receive a simulated expired-token rejection');
+    assert.equal(csrfRetry.lookupAttempts, 2, 'RackWire must issue exactly one lookup retry');
+    assert.equal(csrfRetry.whoamiRefreshes, 2, 'RackWire must fetch identity once for the stale token and once to refresh it');
+    assert(csrfRetry.firstToken.length > 20 && csrfRetry.retryToken.length > 20,
+      'both the initial and refreshed barcode requests must carry a session CSRF token');
     const lookupHeaders = await barcodeLookup.request().allHeaders();
     assert(typeof lookupHeaders['x-solari-csrf'] === 'string' && lookupHeaders['x-solari-csrf'].length > 20,
       'RackWire barcode lookup must carry the dashboard CSRF token');

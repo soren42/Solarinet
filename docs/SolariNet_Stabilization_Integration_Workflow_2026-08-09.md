@@ -2529,6 +2529,13 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   for plan writes and barcode lookup, verify the refreshed token and unchanged
   request payload, and prove a second rejection stops after exactly one retry.
   `node tests/dashboard/test_rackwire_ui.js` now passes 60/60 locally.
+- Extended the combined scanner/RackWire browser E2E to inject an
+  expiry-shaped 403 for the first barcode request, refresh identity through the
+  real PHP endpoint, and let the retry reach the real guarded inventory/SoR
+  handler. The browser flow passed against a freshly migrated loopback scratch
+  SoR. The test driver dropped the scratch schema and temporary account after
+  the run.
 - **UNVERIFIED:** hosted CI for the new CSRF behavioral tests, cross-lab review,
-  deployed candidate behavior, exact scanner source-location mapping, and
-  scanner-ingest repository ownership/remotes.
+  actual elapsed-token expiry handling by the PHP guard, deployed candidate
+  behavior, exact scanner source-location mapping, and scanner-ingest repository
+  ownership/remotes.
