@@ -430,6 +430,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site-id", default=os.environ.get("UNIFI_SITE_ID"))
     parser.add_argument("--ca-file", default=os.environ.get("UNIFI_CA_FILE"))
+    parser.add_argument("--connect-ip", default=os.environ.get("UNIFI_CONNECT_IP"),
+                        help="connect to this IP while retaining the gateway hostname for TLS")
     parser.add_argument("--allow-insecure-tls", action="store_true",
                         help="explicitly allow the controller's unverified self-signed certificate")
     parser.add_argument("--compare-sor", action="store_true",
@@ -445,7 +447,7 @@ def main(argv=None):
               file=sys.stderr)
     try:
         gateway = validate_gateway_url(gateway)
-        client = unifipolld.UniFiClient(gateway, api_key, args.ca_file)
+        client = unifipolld.UniFiClient(gateway, api_key, args.ca_file, connect_ip=args.connect_ip)
         snapshot = collect_topology(client, args.site_id)
         if args.compare_sor:
             snapshot["sor_comparison"] = compare_sor(snapshot, load_sor_state())

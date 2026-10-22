@@ -37,7 +37,7 @@ keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth,clientAuth
 subjectAltName = IP:127.0.0.1,DNS:localhost
 EOF
-for name in a b revoked; do
+for name in a b c revoked; do
   openssl req -new -newkey rsa:2048 -nodes \
     -subj "/CN=monitor.${name}.gossip.test" \
     -keyout "$tmp/${name}.key" -out "$tmp/${name}.csr" >/dev/null 2>&1
@@ -61,7 +61,8 @@ openssl ca -batch -config "$tmp/ca.cnf" -revoke "$tmp/revoked.pem" >/dev/null 2>
 openssl ca -batch -config "$tmp/ca.cnf" -gencrl -out "$tmp/crl.pem" >/dev/null 2>&1
 cat "$tmp/ca.pem" "$tmp/crl.pem" > "$tmp/trust.pem"
 "$test_bin" "$tmp/trust.pem" "$tmp/a.pem" "$tmp/a.key" \
-  "$tmp/b.pem" "$tmp/b.key" "$tmp/revoked.pem" "$tmp/revoked.key" \
+  "$tmp/b.pem" "$tmp/b.key" "$tmp/c.pem" "$tmp/c.key" \
+  "$tmp/revoked.pem" "$tmp/revoked.key" \
   "$tmp/replacement.pem" "$tmp/replacement.key"
 
 # The pinned NNG/mbedTLS stack must fail closed when a present CRL is stale or
@@ -72,7 +73,8 @@ openssl ca -batch -config "$tmp/ca.cnf" -gencrl \
   -out "$tmp/expired-crl.pem" >/dev/null 2>&1
 cat "$tmp/ca.pem" "$tmp/expired-crl.pem" > "$tmp/expired-trust.pem"
 "$test_bin" "$tmp/expired-trust.pem" "$tmp/a.pem" "$tmp/a.key" \
-  "$tmp/b.pem" "$tmp/b.key" "$tmp/revoked.pem" "$tmp/revoked.key" \
+  "$tmp/b.pem" "$tmp/b.key" "$tmp/c.pem" "$tmp/c.key" \
+  "$tmp/revoked.pem" "$tmp/revoked.key" \
   "$tmp/replacement.pem" "$tmp/replacement.key" \
   expect-invalid-crl
 
@@ -80,7 +82,8 @@ printf '%s\n' '-----BEGIN X509 CRL-----' 'this-is-not-base64' \
   '-----END X509 CRL-----' > "$tmp/malformed-crl.pem"
 cat "$tmp/ca.pem" "$tmp/malformed-crl.pem" > "$tmp/malformed-trust.pem"
 "$test_bin" "$tmp/malformed-trust.pem" "$tmp/a.pem" "$tmp/a.key" \
-  "$tmp/b.pem" "$tmp/b.key" "$tmp/revoked.pem" "$tmp/revoked.key" \
+  "$tmp/b.pem" "$tmp/b.key" "$tmp/c.pem" "$tmp/c.key" \
+  "$tmp/revoked.pem" "$tmp/revoked.key" \
   "$tmp/replacement.pem" "$tmp/replacement.key" \
   expect-invalid-crl
 
@@ -115,6 +118,7 @@ openssl ca -batch -config "$tmp/other/ca.cnf" -gencrl \
   -out "$tmp/other/crl.pem" >/dev/null 2>&1
 cat "$tmp/ca.pem" "$tmp/other/crl.pem" > "$tmp/wrong-issuer-trust.pem"
 "$test_bin" "$tmp/wrong-issuer-trust.pem" "$tmp/a.pem" "$tmp/a.key" \
-  "$tmp/b.pem" "$tmp/b.key" "$tmp/revoked.pem" "$tmp/revoked.key" \
+  "$tmp/b.pem" "$tmp/b.key" "$tmp/c.pem" "$tmp/c.key" \
+  "$tmp/revoked.pem" "$tmp/revoked.key" \
   "$tmp/replacement.pem" "$tmp/replacement.key" \
   wrong-issuer

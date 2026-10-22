@@ -129,6 +129,17 @@ table.tbl tr{break-inside:avoid;}
 table.tbl tbody tr.hl,table.tbl tbody tr.hl:nth-child(even){background:#E6F2F8;}
 table.tbl tbody tr.hl td:first-child{box-shadow:inset 2px 0 0 var(--accent);}
 .tbl-wrap{overflow-x:auto;}
+.tbl.inventory{table-layout:fixed;font-size:7.4pt;}
+.tbl.inventory th,.tbl.inventory td{padding:3pt 4pt;overflow-wrap:anywhere;}
+.tbl.inventory th:nth-child(1),.tbl.inventory td:nth-child(1){width:10%;}
+.tbl.inventory th:nth-child(2),.tbl.inventory td:nth-child(2){width:12%;}
+.tbl.inventory th:nth-child(3),.tbl.inventory td:nth-child(3){width:11%;}
+.tbl.inventory th:nth-child(4),.tbl.inventory td:nth-child(4){width:17%;}
+.tbl.inventory th:nth-child(5),.tbl.inventory td:nth-child(5){width:25%;}
+.tbl.inventory th:nth-child(6),.tbl.inventory td:nth-child(6){width:11%;}
+.tbl.inventory th:nth-child(7),.tbl.inventory td:nth-child(7){width:14%;}
+.tbl.inventory td:first-child{white-space:nowrap;}
+.tbl.inventory td:last-child .inf{white-space:normal;}
 td.c,th.c{text-align:center;} td.r,th.r{text-align:right;}
 .note-inline{font-size:8.4pt; color:var(--faint); margin-top:-6pt;
   line-height:1.4; text-align:left;}
@@ -479,7 +490,10 @@ tracks the work (F-19/F-20) that is meant to make the claim true.</p>
 authoritative on <span class="m">xenon</span> (BIND primary); the forward zone
 has secondaries on <span class="m">radium</span> and <span class="m">chlorine</span>,
 while generated reverse zones use <span class="m">xenon</span> and <span class="m">chlorine</span>
-because radium does not serve those zones. The ZimaBlade
+because radium does not serve those zones. Chlorine also receives the 90 single-label
+zones and the <span class="m">rpz.akoria</span> policy zone. The Khadas serves all 109
+transferred zones, with canonical contents and SOAs matching Xenon at the 2026-10-22 check.
+The ZimaBlade
 still labeled <span class="m">steel</span> is offline and is not currently advertised
 as a nameserver; it is planned for a tertiary DNS role after redeployment.
 <span class="m">akoria.org</span>
@@ -927,7 +941,7 @@ hosts in the current SoT — stale zones or an incomplete host list. <span class
 
 <h2 id="s5-2">5.2 &nbsp; Host inventory — infrastructure &amp; services</h2>
 <div class="tbl-wrap">
-<table class="tbl mono">
+<table class="tbl mono inventory">
 <caption>Core infrastructure hosts. MAC = live ARP capture; hardware confirmed by SSH where noted.</caption>
 <thead><tr><th>Host</th><th>IP</th><th>Manufacturer</th><th>Type / model</th><th>Role · key CNAMEs</th><th>MAC (obs)</th><th>Flag</th></tr></thead>
 <tbody>
@@ -952,7 +966,7 @@ hosts in the current SoT — stale zones or an incomplete host list. <span class
 <tr><td>astatine</td><td>10.5.2.10</td><td>Argon41</td><td>OneUp SBC</td><td>SBC workstation · laptop</td><td>—</td><td><span class="inf">SoT</span></td></tr>
 <tr><td>quanta</td><td>10.6.0.10</td><td>Raspberry Pi</td><td>Pi 5</td><td>Grafana · grafana</td><td>—</td><td><span class="inf">SoT</span></td></tr>
 <tr><td>valence</td><td>10.6.0.20</td><td>FriendlyElec</td><td>NanoPi-R1 (armhf)</td><td>monitoring outpost</td><td>02:81:12:d7:eb:db <span class="inf">(locally-admin MAC)</span></td><td><span class="obs">OBS↑</span></td></tr>
-<tr class="hl"><td>chlorine</td><td>10.7.0.10</td><td>Khadas</td><td>VIM4 · Ubuntu 22.04 · arm64</td><td>internal CA/key server (step-ca) + BIND 9.18.39 authoritative secondary for akoria.net and generated reverse zones; all 18 SOA serials matched xenon on 2026-10-21. Bare zones and RPZ are not served here.</td><td>c8:63:14:72:87:81</td><td><span class="obs">OBS✓SSH / DNS</span></td></tr>
+<tr class="hl"><td>chlorine</td><td>10.7.0.10</td><td>Khadas</td><td>VIM4 · Ubuntu 22.04 · arm64</td><td>internal CA/key server (step-ca) + BIND 9.18.39 authoritative secondary for all 109 transferred zones: forward, reverse, 90 single-label, and RPZ. SOA and canonical contents matched Xenon on 2026-10-22.</td><td>c8:63:14:72:87:81</td><td><span class="obs">OBS✓SSH / DNS</span></td></tr>
 <tr><td>tachyon</td><td>10.6.6.10</td><td>Particle</td><td>Tachyon</td><td>GPS/PTP time source · ntp</td><td>—</td><td><span class="inf">SoT</span></td></tr>
 </tbody>
 </table>
@@ -1043,15 +1057,15 @@ sockets that connect them.</p>
 <caption>Deployed units — deploy/host-configs/xenon/*.service and the wider fabric.</caption>
 <thead><tr><th>Service</th><th>Host</th><th>Endpoint</th><th>Notes / flag</th></tr></thead>
 <tbody>
-<tr><td>SolariNet dashboard</td><td>xenon</td><td>dashboard.akoria.net (HTTPS vhost, :9443 intranet)</td><td>Apache + php-fpm (user jason) <span class="obs">OBS</span></td></tr>
+<tr><td>SolariNet dashboard</td><td>xenon</td><td>dashboard.akoria.net (SNI HTTPS vhost, :443)</td><td>Apache + php-fpm (user jason); static files from <code>/var/www/solarinet</code>, API script from the development checkout <span class="obs">OBS</span></td></tr>
 <tr><td class="m">solarinet-server / -monitor / -snmp</td><td>xenon</td><td>systemd units</td><td>C daemons; hardened units <span class="obs">OBS</span></td></tr>
 <tr><td class="m">notify / alertbridge</td><td>xenon</td><td>consume <span class="m">notify.events</span></td><td>alert fan-out to delivery bridges <span class="obs">OBS</span></td></tr>
 <tr><td class="m">sor-emit / -apply-dns / -apply-pihole / -reconcile</td><td>xenon (live units)</td><td>RabbitMQ <span class="m">sor.events</span></td><td>delivery controls implemented in candidate; deployed configuration still differs <span class="inf">flag</span></td></tr>
-<tr><td>BIND (akoria.net)</td><td>xenon primary; radium + chlorine secondary for forward; chlorine secondary for reverse</td><td>:53</td><td>xenon also serves RPZ and 90 split-horizon bare zones; chlorine does not yet replicate those <span class="obs">OBS</span></td></tr>
+<tr><td>BIND (akoria.net)</td><td>xenon primary; radium + chlorine secondary for forward; chlorine secondary for reverse</td><td>:53</td><td>Xenon is primary; Radium and Chlorine are secondary for forward, Chlorine also serves 90 bare-name zones and RPZ. Canonical contents including SOAs match for all 109 transferred zones (checked 2026-10-22) <span class="obs">OBS</span></td></tr>
 <tr><td>Samba AD DC + Keycloak</td><td>radium</td><td>LDAP/Kerberos/OIDC; sso.akoria.net</td><td>authoritative akoria.org <span class="obs">OBS</span></td></tr>
 <tr><td>Forgejo</td><td>cesium</td><td>git.akoria.net</td><td>STATIC_ROOT_PATH on internal storage <span class="inf">SoT</span></td></tr>
 <tr><td>MariaDB — SoR/CMDB</td><td>cesium (primary), benzene (mirror)</td><td>db.akoria.net → benzene</td><td>separate DB from monitoring <span class="inf">SoT</span></td></tr>
-<tr><td>RabbitMQ</td><td>benzene</td><td><span class="m">amqp://…@10.5.2.50:5672/solari</span></td><td>notify.events + sor.events; no canonical broker config in repo <span class="inf">flag</span></td></tr>
+<tr><td>RabbitMQ</td><td>benzene</td><td><span class="m">amqp://…@10.5.2.50:5672/solari</span></td><td>Live container still references floating <code>rabbitmq:3-management</code>; a digest-pinned, health-checked rootful Quadlet candidate exists in <span class="m">deploy/rabbitmq/</span> but is not installed <span class="inf">flag</span></td></tr>
 <tr><td>step-ca internal CA</td><td>chlorine</td><td>ca/acme/pki.akoria.net</td><td>X.509 + S/MIME + ACME + SSH CA <span class="inf">SoT</span></td></tr>
 <tr><td>Fleet netboot HTTP</td><td>benzene</td><td>:8080</td><td>staged, inert — contained (F-07) <span class="inf">flag</span></td></tr>
 </tbody>
@@ -1062,8 +1076,8 @@ sockets that connect them.</p>
 <dl class="kv">
 <dt>7701 / 7702 / 7703</dt><dd>SCP over <span class="m">tls+tcp</span> (nng + mbedTLS mTLS) — client, monitor, and control channels into solariServer.</dd>
 <dt>/run/solari/solariCtl.sock</dt><dd>AF_UNIX line protocol — the only mutation path from the dashboard to the C core.</dd>
-<dt>9443 / 443</dt><dd>Dashboard HTTPS (intranet additive vhost / public subdomain vhost).</dd>
-<dt>53</dt><dd>DNS — BIND on xenon and radium; chlorine serves secondary akoria.net/reverse zones; Pi-hole on helium/mercury. Steel is offline and not advertised.</dd>
+<dt>443</dt><dd>Dashboard HTTPS selected by SNI for <code>dashboard.akoria.net</code> and aliases; shares the standard HTTPS listener with other vhosts.</dd>
+<dt>53</dt><dd>DNS — BIND on Xenon and Radium; Chlorine serves secondaries for akoria.net, reverse, 90 single-label, and RPZ zones. Pi-hole is on Helium/Mercury. Steel is offline and not advertised.</dd>
 <dt>5672</dt><dd>RabbitMQ AMQP on benzene (vhost <span class="m">solari</span>).</dd>
 </dl>
 </section>
@@ -1452,7 +1466,7 @@ cross-lab review. Open items and release blockers are summarized in Document con
 <dt>SoR / CMDB</dt><dd>System of Record / Configuration Management Database — the declared-intent datastore on cesium.</dd>
 <dt>CDC</dt><dd>Change Data Capture — the outbox-and-consume path that propagates SoR changes to DNS/Pi-hole.</dd>
 <dt>solariCtl</dt><dd>The in-process operator bridge inside solariServer; AF_UNIX line protocol; holds CA signing material.</dd>
-<dt>RPZ</dt><dd>Response Policy Zone — the DNS blocklist zone served by BIND on xenon.</dd>
+<dt>RPZ</dt><dd>Response Policy Zone — the DNS blocklist zone served by BIND on Xenon and transferred to Chlorine.</dd>
 <dt>F-nn</dt><dd>A numbered finding from the 2026-08-09 architecture review (see §11.4).</dd>
 </dl>
 

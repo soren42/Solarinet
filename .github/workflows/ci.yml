@@ -131,7 +131,7 @@ jobs:
       - name: Install exercised sync dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y mariadb-client bind9 bind9-utils
+          sudo apt-get install -y mariadb-client bind9 bind9-utils python3-venv
           python3 -m venv /tmp/sorsync-ci
           /tmp/sorsync-ci/bin/pip install -r deploy/sorsync/requirements.txt
       - name: Apply SoR migrations to the disposable integration database
@@ -141,6 +141,18 @@ jobs:
           mariadb -h127.0.0.1 -P3306 -uroot -e 'ALTER DATABASE solarinet_sorsync_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
           /tmp/sorsync-ci/bin/python tools/migrate.py --database sor \
             --db-name solarinet_sorsync_ci --host 127.0.0.1 --port 3306 --user root
+          mariadb -h127.0.0.1 -P3306 -uroot solarinet_sorsync_ci -e \
+            "CREATE TABLE _solarinet_test_scratch (marker VARCHAR(64) PRIMARY KEY); INSERT INTO _solarinet_test_scratch VALUES ('solarinet-ci-scratch-v1')"
+      - name: Rehearse SoR candidate rollback and forward recovery
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_DATABASE: solarinet_sorsync_ci
+          SOR_DB_NAME: solarinet_sorsync_ci
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+        run: bash tests/netdb/test_sor_migration_rollback.sh
       - name: Test SoR delivery, failure recovery, and rendered DNS chain
         env:
           SOLARI_TEST_AMQP_URL: amqp://solarinet_fixture:delivery_fixture@127.0.0.1:5672/solari
@@ -156,6 +168,16 @@ jobs:
           test -n "$broker_container"
           export SOLARI_TEST_BROKER_CONTAINER="$broker_container"
           /tmp/sorsync-ci/bin/python -m unittest discover -s deploy/sorsync -p 'test_*.py' -v
+      - name: Verify scoped UniFi importer database privileges
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_DATABASE: solarinet_sorsync_ci
+          SOR_DB_NAME: solarinet_sorsync_ci
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+        run: PATH="/tmp/sorsync-ci/bin:$PATH" bash tests/netdb/test_unifi_import_least_privilege.sh
       - name: Build the pinned RabbitMQ 4.3.7 upgrade intermediate
         run: |
           build_context="/tmp/solari-rabbitmq-437-build"
@@ -268,6 +290,8 @@ jobs:
           cmake --build build-server -j
       - name: Validate isolated DNS generations
         run: python3 -m unittest discover -s netdb -p test_zone_generation.py -v
+      - name: Verify zone serial continuity and emitted BIND data
+        run: python3 -m unittest discover -s netdb -p test_gen_zones.py -v
       - name: DNS activation and rollback against isolated BIND
         run: python3 -m unittest discover -s deploy/dns-release -p test_release.py -v
       - name: Khadas secondary zone inventory and refresh tests
@@ -445,7 +469,7 @@ jobs:
       - name: Install PHP CLI
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y php-cli php-mysql mariadb-client
+          sudo apt-get install -y php-cli php-mysql mariadb-client python3-venv
       - name: PHP runtime extension contract
         run: php tests/dashboard/test_php_runtime_extensions.php
       - uses: actions/setup-node@v4
@@ -505,6 +529,10 @@ jobs:
         env:
           NODE_PATH: /tmp/dashboard-playwright/node_modules
         run: node tests/browser/test_freshness_sessions_e2e.cjs
+      - name: Provisioning allocation browser acceptance
+        env:
+          NODE_PATH: /tmp/dashboard-playwright/node_modules
+        run: node tests/browser/test_provisioning_allocator_e2e.cjs
       - name: Lifecycle UI suite
         run: node tests/dashboard/test_lifecycle_ui.js
       - name: Panel AW UI suite
@@ -513,7 +541,7 @@ jobs:
         run: php tests/dashboard/test_panel_gear.php
       - name: Panel episode-namespace tests (CONTRACT-SW §13 D17)
         run: php tests/dashboard/test_panel_episode.php
-      - name: Migration 020 against a scratch solarinet_stage DB (CONTRACT-RW §6)
+      - name: SoR integration migrations against scratch solarinet_stage
         env:
           MYSQL_PWD: rwci_scratch
         run: |
@@ -524,8 +552,91 @@ jobs:
           $MYSQL < netdb/sor/migrations/014_inventory.sql
           $MYSQL < netdb/sor/migrations/015_barcodes.sql
           $MYSQL < netdb/sor/migrations/020_rackwire.sql
-          echo "-- re-applying 020 to prove idempotency --"
-          $MYSQL < netdb/sor/migrations/020_rackwire.sql
+          $MYSQL < netdb/sor/migrations/021_provisioning_taxonomy.sql
+          $MYSQL < netdb/sor/migrations/022_transactional_outbox.sql
+          $MYSQL < netdb/sor/migrations/023_sor_cdc_triggers.sql
+          $MYSQL < netdb/sor/migrations/024_provisioning_cdc.sql
+          $MYSQL < netdb/sor/migrations/025_network_allocator_gate.sql
+          $MYSQL < netdb/sor/migrations/026_unifi_network_cdc.sql
+          $MYSQL < netdb/sor/migrations/027_interconnect_cable_details.sql
+          $MYSQL -e "CREATE TABLE _solarinet_test_scratch (marker VARCHAR(64) PRIMARY KEY); INSERT INTO _solarinet_test_scratch VALUES ('solarinet-ci-scratch-v1')"
+          echo "-- re-applying idempotent network/RackWire migrations --"
+          $MYSQL < netdb/sor/migrations/025_network_allocator_gate.sql
+          $MYSQL < netdb/sor/migrations/026_unifi_network_cdc.sql
+          $MYSQL < netdb/sor/migrations/027_interconnect_cable_details.sql
+      - name: Deployment boundary and hardened PHP-FPM contracts
+        run: |
+          python3 -m unittest discover -s tests/deploy -p 'test_boundary_verifier.py' -v
+          python3 -m unittest discover -s tests/deploy -p 'test_hardened_fpm_contract.py' -v
+          python3 -m unittest discover -s tests/deploy -p 'test_systemd_units.py' -v
+          python3 -m unittest discover -s tests/deploy -p 'test_rabbitmq_quadlet.py' -v
+      - name: Network allocator review API contract
+        run: php tests/dashboard/test_network_allocator_api.php
+      - name: SoR CDC and allocator approval integration
+        env:
+          MYSQL_PWD: rwci_scratch
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_stage
+          SOR_DB_USER: root
+          SOR_DB_PASS: rwci_scratch
+          MYSQL_DATABASE: solarinet_stage
+          SOR_TEST_DB: solarinet_stage
+          SOR_TEST_HOST: 127.0.0.1
+          SOR_TEST_PORT: '3306'
+          SOR_TEST_USER: root
+          SOR_TEST_PASSWORD: rwci_scratch
+        run: |
+          bash tests/netdb/test_provisioning_cdc.sh
+          bash tests/netdb/test_unifi_network_cdc.sh
+          NA_REAL_DB_TEST=1 php tests/dashboard/test_network_allocator_api.php
+          python3 -m venv /tmp/solarinet-unifi-ci
+          /tmp/solarinet-unifi-ci/bin/pip install -r deploy/unifi/requirements.txt
+          /tmp/solarinet-unifi-ci/bin/python -m unittest discover -s deploy/unifi -p 'test_unifi_network_sor.py' -v
+      - name: Dashboard SoR grant matrix and RackWire cable commit integration
+        env:
+          MYSQL_PWD: rwci_scratch
+          SOR_DASHBOARD_ADMIN_HOST: 127.0.0.1
+          SOR_DASHBOARD_ADMIN_PORT: '3306'
+          SOR_DASHBOARD_ADMIN_USER: root
+          SOR_DASHBOARD_ADMIN_PASSWORD: rwci_scratch
+          SOR_DASHBOARD_TEST_ALLOW_CREATE_USER: '1'
+          SOR_DASHBOARD_TEST_DB: solarinet_stage
+          SOR_DASHBOARD_TEST_USER_HOST: '%'
+          SOR_DASHBOARD_TEST_KEEP_USER: '1'
+          RW_REAL_DB_TEST: '1'
+          RW_TEST_DB: solarinet_stage
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_stage
+          SOR_DB_USER: sor_dash_test
+          SOR_DB_PASS: sor_dash_test_ephemeral
+          RW_FIXTURE_DB_USER: root
+          RW_FIXTURE_DB_PASS: rwci_scratch
+          SOR_TEST_DB: solarinet_stage
+          SOR_TEST_DB_HOST: 127.0.0.1
+          SOR_TEST_DB_PORT: '3306'
+          SOR_TEST_DB_USER: sor_test
+          SOR_TEST_DB_PASSWORD: sor_test_ephemeral
+        run: |
+          cleanup_dashboard_users() {
+            mariadb --protocol=TCP -h127.0.0.1 -P3306 -uroot --password="$MYSQL_PWD" <<'SQL'
+          DROP USER IF EXISTS 'sor_dash_test'@'%';
+          DROP USER IF EXISTS 'sor_test'@'%';
+          SQL
+          }
+          trap cleanup_dashboard_users EXIT
+          python3 -m venv /tmp/sor-dashboard-ci
+          /tmp/sor-dashboard-ci/bin/pip install 'PyMySQL==1.2.0'
+          /tmp/sor-dashboard-ci/bin/python tests/deploy/test_sor_dashboard_grants.py
+          php tests/dashboard/test_rackwire_commit_db.php
+          mariadb -h127.0.0.1 -P3306 -uroot <<'SQL'
+          CREATE USER IF NOT EXISTS 'sor_test'@'%' IDENTIFIED BY 'sor_test_ephemeral';
+          ALTER USER 'sor_test'@'%' IDENTIFIED BY 'sor_test_ephemeral';
+          GRANT ALL PRIVILEGES ON `solarinet_stage`.* TO 'sor_test'@'%';
+          SQL
+          /tmp/sor-dashboard-ci/bin/python netdb/sor/test_allocator_db.py
       - name: SoR host mirror transaction and retry boundary
         env:
           SOLARI_TEST_SOR_DB: '1'
@@ -563,6 +674,17 @@ jobs:
           SOR_DB_USER: root
           SOR_DB_PASS: rwci_scratch
         run: node tests/browser/test_scanner_import_e2e.cjs
+      - name: Authenticated browser acceptance against the packaged release tree
+        env:
+          NODE_PATH: /tmp/dashboard-playwright/node_modules
+          SOLARI_RELEASE_BIN_DIR: build-release/src/server
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_stage
+          SOR_DB_USER: root
+          SOR_DB_PASS: rwci_scratch
+        run: python3 tests/deploy/test_packaged_browser_e2e.py
       - name: Dashboard release package, activation, and rollback contract
         env:
           SOLARI_RELEASE_BIN_DIR: build-release/src/server
@@ -577,7 +699,7 @@ jobs:
           python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root --check
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --check
           test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" = 34
-          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 8
+          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 12
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output /tmp/monitoring-schema.sql
           python3 tools/export_schema.py --database sor --user root --host 127.0.0.1 --port 3306 --output /tmp/sor-schema.sql
           diff -u db/schema.sql /tmp/monitoring-schema.sql

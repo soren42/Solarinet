@@ -151,11 +151,13 @@
     </svg>
     <ul>
       <li><strong>RabbitMQ:</strong> Benzene runs RabbitMQ <code>3.13.7</code> in rootful
-      Podman using the floating <code>rabbitmq:3-management</code> tag. The 22 October check
-      found it fully booted with no alarms; each of four <code>solari</code> queues had one
-      consumer and zero ready/unacknowledged messages, with seven client connections. Xenon emitter, apply,
-      reconciliation, and notification services were active. Upgrade and recovery remain
-      release gates.</li>
+      Podman. The live container still references the floating <code>rabbitmq:3-management</code>
+      tag, although its local image digest matches the CI-pinned 3.13.7 image. The 22 October
+      check found it fully booted with no alarms; each of four <code>solari</code> queues had one
+      consumer and zero ready/unacknowledged messages, with seven client connections. Xenon emitter,
+      apply, reconciliation, and notification services were active. A rootful Quadlet definition
+      now pins the digest and health-checks the container, but remains a reviewed candidate; the
+      live container has not been replaced. Upgrade and recovery remain release gates.</li>
       <li><strong>Mosquitto:</strong> Benzene’s Mosquitto <code>2.1.2</code> had a rapid
       config-open restart loop. With no MQTT clients connected, it was recreated using the
       same ports and persistent mounts, with a read-only config mount. The password file is
@@ -172,8 +174,12 @@
       for a local root-NVMe target. This shares Xenon’s host failure domain. NAS-X
       provisioning, permissions, and an off-host restore remain unverified.</li>
       <li><strong>DNS:</strong> Khadas VIM4 chlorine is active as an authoritative-only secondary
-      for 109 zones. Steel at <code>10.0.0.11</code> is unreachable; its ZimaBlade tertiary DNS
-      role awaits console redeployment.</li>
+      for 109 zones. Rechecked 22 October at 22:37 UTC: <code>solari-bind9</code> and
+      <code>step-ca</code> are active, BIND configuration validates, and TCP/UDP port 53
+      listens only on <code>10.7.0.10</code>. The authoritative NS/SOA answers are present,
+      recursion returns <code>REFUSED</code>, and canonical zone contents plus SOAs match
+      Xenon for all 109 zones. Steel at <code>10.0.0.11</code> remains the last-known
+      unreachable ZimaBlade; its tertiary DNS role awaits console redeployment.</li>
       <li><strong>Network discovery:</strong> operators can start a bounded asynchronous scan
       of RFC1918, loopback, or IPv4 link-local ranges (public and boundary-crossing ranges are
       rejected by both the API and worker);

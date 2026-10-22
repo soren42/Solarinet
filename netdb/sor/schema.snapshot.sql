@@ -8,9 +8,13 @@
 --   014_inventory sha256=036759e95e5550b6c7ec369a6e780bf81739c964debf19262dfd7bdecad2456f
 --   015_barcodes sha256=f65fb022e7806c835cac2deb003bb65ad30a30de634ca9a6314bc973c2d5b0a4
 --   020_rackwire sha256=e425533919188e4cedddabc88a3e9c8c08d5cb9cbb6d7f46c53f6d58b925df9d
---   021_provisioning_taxonomy sha256=73d40dfec8e27338867a86260f7aba12d7a21194a498841b9c17b8ffaaf7ffa3
+--   021_provisioning_taxonomy sha256=9ee25baa436bd80406d3cbf261c611cdfe4c044b5df14640e5e1899a00f8b106
 --   022_transactional_outbox sha256=86239cb34615f50e48bc7b7629df496ea399d78196d647b4d4ea72dbc67cdc7a
 --   023_sor_cdc_triggers sha256=50577d58e2735bc332df7565e4fd3ccffd9aba71791fa7f73499043e16c6cf5e
+--   024_provisioning_cdc sha256=89880eeb87e758fcee54ebd11d1b380e9d1e883306bce552374e7a3abcbbbf49
+--   025_network_allocator_gate sha256=34d2c5fb57984dbadc9cdaddc4979fb31f69b647c2c45f44ce04f4c3f3c9d2a0
+--   026_unifi_network_cdc sha256=1c6c092d08783729c506edb8ae41dd22f0bb21b19d299b124ce4822b174901dc
+--   027_interconnect_cable_details sha256=0ed1ed961fe13366195191a2038df5468f8ca75f5865a6b8963e0b72d07bb0e3
 
 /*M!999999\- enable the sandbox mode */
 
@@ -228,6 +232,57 @@ CREATE TABLE `dhcp_ranges` (
   CONSTRAINT `fk_dhcp_ranges_subnet` FOREIGN KEY (`subnet_id`) REFERENCES `subnets` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='DHCP dynamic pools / static blocks / exclusions inside a subnet (from UniFi)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_dhcp_ranges_ai
+AFTER INSERT ON `dhcp_ranges` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('dhcp_ranges',NEW.id,'insert') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_dhcp_ranges_au
+AFTER UPDATE ON `dhcp_ranges` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('dhcp_ranges',NEW.id,'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_dhcp_ranges_ad
+AFTER DELETE ON `dhcp_ranges` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('dhcp_ranges',OLD.id,'delete') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `dns_records`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -488,6 +543,60 @@ CREATE TABLE `entity_functions` (
   CONSTRAINT `ck_entity_functions_primary` CHECK (`is_primary` in (0,1))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Ordered multi-tag membership of entities in the function taxonomy; one live primary tag per entity (plan §5/§10)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_entity_functions_ai
+AFTER INSERT ON `entity_functions` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('entity_functions', NEW.id, 'insert') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_entity_functions_au
+AFTER UPDATE ON `entity_functions` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('entity_functions', NEW.id, 'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_entity_functions_ad
+AFTER DELETE ON `entity_functions` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('entity_functions', OLD.id, 'delete') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `external_refs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -509,6 +618,57 @@ CREATE TABLE `external_refs` (
   CONSTRAINT `fk_external_refs_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Join table between SoR rows and their native IDs in each source system; the sync engine''s correlation key';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_external_refs_ai
+AFTER INSERT ON `external_refs` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('external_refs',NEW.id,'insert') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_external_refs_au
+AFTER UPDATE ON `external_refs` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('external_refs',NEW.id,'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_external_refs_ad
+AFTER DELETE ON `external_refs` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('external_refs',OLD.id,'delete') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `function_incompatibility`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -534,6 +694,60 @@ CREATE TABLE `function_incompatibility` (
   CONSTRAINT `ck_function_incompat_order` CHECK (`function_lo_id` < `function_hi_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Symmetric incompatible function-tag pairs, stored canonically lo<hi (plan §5)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_function_incompatibility_ai
+AFTER INSERT ON `function_incompatibility` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('function_incompatibility', NEW.id, 'insert') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_function_incompatibility_au
+AFTER UPDATE ON `function_incompatibility` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('function_incompatibility', NEW.id, 'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_function_incompatibility_ad
+AFTER DELETE ON `function_incompatibility` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('function_incompatibility', OLD.id, 'delete') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `functions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -562,6 +776,60 @@ CREATE TABLE `functions` (
   CONSTRAINT `ck_functions_criticality` CHECK (`criticality` between 1 and 5)
 ) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Closed function-tag taxonomy: drives IP allocation, package bundle, DNS, config, criticality (plan §5)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_functions_ai
+AFTER INSERT ON `functions` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('functions', NEW.id, 'insert') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_functions_au
+AFTER UPDATE ON `functions` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('functions', NEW.id, 'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_functions_ad
+AFTER DELETE ON `functions` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('functions', OLD.id, 'delete') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `group_members`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -679,6 +947,8 @@ CREATE TABLE `interconnects` (
   `link_kind` enum('copper','fiber','moca','wireless','virtual','lldp_adjacency','logical','power') NOT NULL DEFAULT 'copper' COMMENT 'physical medium, or discovered/logical adjacency; power = AC/DC cord (RackWire)',
   `label` varchar(128) DEFAULT NULL COMMENT 'cable label / patch id / SSID for wireless',
   `length_m` decimal(6,2) DEFAULT NULL COMMENT 'cable length in metres, if physical and known',
+  `media_standard` varchar(32) DEFAULT NULL COMMENT 'cable or power-cord standard identifier, e.g. cat6, om3, c13c14',
+  `jacket_color` varchar(64) DEFAULT NULL COMMENT 'physical cable jacket color, when known',
   `notes` varchar(255) DEFAULT NULL COMMENT 'free-form note',
   `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row (lldp_adjacency rows come from solarinet_monitor)',
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'machine' COMMENT 'provenance: human- or machine-asserted',
@@ -953,10 +1223,17 @@ CREATE TABLE `networks` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
   `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `enabled` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'source-reported network state; disabled networks are not allocator candidates',
+  `management` varchar(32) DEFAULT NULL COMMENT 'upstream management mode, e.g. GATEWAY, SWITCH, UNMANAGED',
+  `is_default` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'source marks this as its default network',
+  `allocator_eligible` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'explicit operator approval; imports never enable address allocation automatically',
+  `allocator_approved_by` varchar(128) DEFAULT NULL COMMENT 'authenticated dashboard operator who last approved allocation',
+  `allocator_approved_at` datetime DEFAULT NULL COMMENT 'time of the last operator allocation approval',
   PRIMARY KEY (`id`),
   KEY `ix_networks_vlan` (`vlan_id`),
   KEY `fk_networks_source` (`source_id`),
   KEY `idx_networks_name` (`name`,`deleted_at`),
+  KEY `ix_networks_allocator` (`enabled`,`allocator_eligible`,`deleted_at`),
   CONSTRAINT `fk_networks_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
   CONSTRAINT `fk_networks_vlan` FOREIGN KEY (`vlan_id`) REFERENCES `vlans` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Logical network segments (core/production/IoT/...); groups subnets by function';
@@ -1467,6 +1744,60 @@ CREATE TABLE `sources` (
   UNIQUE KEY `uq_sources_slug` (`slug`)
 ) ENGINE=InnoDB AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Registry of every system allowed to assert facts (provenance targets)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_sources_ai
+AFTER INSERT ON `sources` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('sources', NEW.id, 'insert') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_sources_au
+AFTER UPDATE ON `sources` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('sources', NEW.id, 'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_sources_ad
+AFTER DELETE ON `sources` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name, row_id, action)
+  VALUES ('sources', OLD.id, 'delete') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `subnets`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -1628,6 +1959,57 @@ CREATE TABLE `vlans` (
   CONSTRAINT `ck_vlans_tag_range` CHECK (`vlan_tag` between 1 and 4094)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='802.1Q VLANs (seeded from UniFi network config)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_vlans_ai
+AFTER INSERT ON `vlans` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('vlans',NEW.id,'insert') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_vlans_au
+AFTER UPDATE ON `vlans` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('vlans',NEW.id,'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_vlans_ad
+AFTER DELETE ON `vlans` FOR EACH ROW
+  INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('vlans',OLD.id,'delete') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 /*!50001 DROP VIEW IF EXISTS `v_dns_cnames`*/;
 /*!50001 SET @saved_cs_client          = @@character_set_client */;
 /*!50001 SET @saved_cs_results         = @@character_set_results */;

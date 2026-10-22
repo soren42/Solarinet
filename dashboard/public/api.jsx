@@ -298,6 +298,7 @@
     pools:        "/api/pools",
     pool:         function (id) { return "/api/pools/" + encodeURIComponent(id); },
     assets:       "/api/assets",
+    allocatorNetworks: "/api/networks/allocator-eligibility",
     asset:        function (id) { return "/api/assets/" + encodeURIComponent(id); },
     provision:    "/api/control/provision",
     decommission: "/api/control/decommission",
@@ -1135,6 +1136,11 @@
     createPool: function (body) { return post(EP.pools, body || {}); },
     updatePool: function (id, body) { return post(EP.pool(id), body || {}); },
     assets: function () { return getJSON(EP.assets); },
+    allocatorNetworks: function () { return getJSON(EP.allocatorNetworks); },
+    setAllocatorEligibility: function (id, eligible) {
+      return post("/api/networks/" + encodeURIComponent(id) + "/allocator-eligibility",
+        { eligible: !!eligible, confirm: true });
+    },
     asset: function (id) { return getJSON(EP.asset(id)); },
     updateAsset: function (id, body) { return post(EP.asset(id), body || {}); },
     // removal / lifecycle (PR-C endpoints) — all destructive, all double-confirmed:

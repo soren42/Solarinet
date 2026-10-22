@@ -129,8 +129,12 @@ def source_hash(paths):
 def target_status(c, name, values):
     """Durably merge one target's pending/applied state without logging secrets."""
     path = pathlib.Path(c.get("dns", "target_state_file"))
+    if path.is_symlink():
+        raise ValueError("DNS target state file must not be a symlink")
+    if path.parent.is_symlink():
+        raise ValueError("DNS target state directory must not be a symlink")
     parent = path.parent.stat()
-    if path.is_symlink() or path.parent.is_symlink() or parent.st_uid != os.geteuid() or parent.st_mode & 0o077:
+    if parent.st_uid != os.geteuid() or parent.st_mode & 0o077:
         raise ValueError("DNS target state directory must be private and owned by the applier")
     lock_path = path.with_suffix(path.suffix + ".lock")
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)

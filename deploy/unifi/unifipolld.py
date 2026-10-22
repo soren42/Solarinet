@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Fail-soft UniFi Integration API poller for the panel A1 gear feed."""
 import argparse
+import http.client
+import ipaddress
 import json
 import math
 import os
+import socket
 import ssl
 import sys
 import time
 from pathlib import Path
 from urllib.error import URLError, HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener, urlopen
 
 try:
     import pymysql
@@ -74,15 +77,29 @@ def save_state(path, state):
 
 
 class UniFiClient:
-    def __init__(self, gateway, api_key, cafile=None):
+    def __init__(self, gateway, api_key, cafile=None, connect_ip=None):
         self.gateway = gateway.rstrip("/")
         self.api_key = api_key
         # nosec: self-signed home gateway, see CONTRACT-AW.md §2
         self.context = ssl.create_default_context(cafile=cafile) if cafile else ssl._create_unverified_context()
+        self.opener = None
+        if connect_ip:
+            try:
+                self.connect_ip = str(ipaddress.ip_address(connect_ip))
+            except ValueError as error:
+                raise ValueError("UNIFI_CONNECT_IP must be a valid IP address") from error
+            self.opener = build_opener(
+                ProxyHandler({}),
+                _ConnectIPHTTPSHandler(self.connect_ip, context=self.context),
+            )
 
     def get(self, path):
         request = Request(self.gateway + path, headers={"X-API-KEY": self.api_key})
-        with urlopen(request, context=self.context, timeout=12) as response:  # nosec: gateway is locally administered
+        if self.opener is not None:
+            response = self.opener.open(request, timeout=12)
+        else:
+            response = urlopen(request, context=self.context, timeout=12)  # nosec: gateway is locally administered
+        with response:
             return json.load(response)
 
     def device_statistics(self, site_id, device_id):
@@ -96,6 +113,36 @@ class UniFiClient:
             return self.get(f"/proxy/network/integration/v1/sites/{site_id}/devices/{device_id}/statistics/latest")
         except (HTTPError, URLError, OSError, ValueError):
             return None
+
+
+class _ConnectIPHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to an IP while keeping the URL hostname for SNI and TLS checks."""
+
+    def __init__(self, host, connect_ip, **kwargs):
+        self.connect_ip = connect_ip
+        super().__init__(host, **kwargs)
+
+    def connect(self):
+        if self._tunnel_host:
+            raise OSError("UNIFI_CONNECT_IP cannot be combined with an HTTPS proxy tunnel")
+        sock = socket.create_connection((self.connect_ip, self.port), self.timeout, self.source_address)
+        try:
+            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        except Exception:
+            sock.close()
+            raise
+
+
+class _ConnectIPHTTPSHandler(HTTPSHandler):
+    def __init__(self, connect_ip, context):
+        super().__init__(context=context)
+        self.connect_ip = connect_ip
+
+    def https_open(self, request):
+        def connection(host, **kwargs):
+            return _ConnectIPHTTPSConnection(host, connect_ip=self.connect_ip, **kwargs)
+
+        return self.do_open(connection, request, context=self._context)
 
 
 def data_items(value):
@@ -277,7 +324,7 @@ def main():
     # a cert pulled from the gateway itself) enables verification; otherwise
     # this intentionally falls back to skip-verify (nosec, see UniFiClient).
     cafile = os.environ.get("UNIFI_CA_FILE")
-    client = UniFiClient(gateway, key, cafile)
+    client = UniFiClient(gateway, key, cafile, connect_ip=os.environ.get("UNIFI_CONNECT_IP"))
     while True:
         poll_cycle(client, args.database, args.state, args.dry_run)
         if args.once:

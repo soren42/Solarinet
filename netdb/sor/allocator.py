@@ -160,16 +160,25 @@ def _homeSubnetForFunction(cur, functionSlug):
     segment has no IPv4 subnet.
     """
     cur.execute(
-        "SELECT network_id FROM functions "
-        "WHERE slug=%s AND deleted_at IS NULL", (functionSlug,))
+        "SELECT f.network_id, n.enabled, n.allocator_eligible "
+        "FROM functions f LEFT JOIN networks n "
+        "ON n.id=f.network_id AND n.deleted_at IS NULL "
+        "WHERE f.slug=%s AND f.deleted_at IS NULL", (functionSlug,))
     frow = cur.fetchone()
     if not frow:
         raise LookupError(f"unknown function tag: {functionSlug}")
-    networkId = frow[0]
+    networkId, networkEnabled, allocatorEligible = frow
     if networkId is None:
         raise LookupError(
             f"function '{functionSlug}' has no home network wired "
             "(functions.network_id is NULL — wire it after UniFi import)")
+    if networkEnabled is None:
+        raise LookupError(f"home network {networkId} for '{functionSlug}' is not live")
+    if not networkEnabled:
+        raise LookupError(f"home network {networkId} for '{functionSlug}' is disabled")
+    if not allocatorEligible:
+        raise LookupError(
+            f"home network {networkId} for '{functionSlug}' is not approved for static allocation")
 
     # Read every live subnet in the segment and pick the IPv4 one by PARSING the
     # cidr text — NOT prefix_len <= 32, which an IPv6 /32 also satisfies. Read the
@@ -217,19 +226,45 @@ def _usedAndRanges(cur, subnetId):
     # Lock the subnet row — this is the per-subnet allocation mutex — and read its
     # authoritative cidr/gateway in the same statement, under the lock.
     cur.execute(
-        "SELECT cidr, CAST(gateway_ip AS CHAR) FROM subnets "
-        "WHERE id=%s AND deleted_at IS NULL FOR UPDATE", (subnetId,))
+        "SELECT s.network_id,s.cidr,CAST(s.gateway_ip AS CHAR),n.enabled,n.allocator_eligible "
+        "FROM subnets s JOIN networks n ON n.id=s.network_id "
+        "WHERE s.id=%s AND s.deleted_at IS NULL AND n.deleted_at IS NULL FOR UPDATE", (subnetId,))
     srow = cur.fetchone()
     if not srow:
         raise LookupError(f"subnet {subnetId} vanished before allocation (soft-deleted?)")
-    cidr, gateway = srow[0], srow[1]
+    if not srow[3]:
+        raise LookupError(f"network for subnet {subnetId} is disabled")
+    if not srow[4]:
+        raise LookupError(f"network for subnet {subnetId} is not approved for static allocation")
+    networkId, cidr, gateway = srow[0], srow[1], srow[2]
+
+    # Approval is normally revoked by the importer when overlapping controller
+    # state appears. Recheck here as the final safety boundary too: direct SoR
+    # edits, a stale approval, or a future import path must not let the allocator
+    # write into a prefix that another live segment also claims. The target subnet
+    # lock above serializes this check against the UniFi importer, which locks all
+    # other live subnet rows before changing/adding a prefix.
+    net = ipaddress.ip_network(cidr, strict=False)
+    if net.version == 4:
+        cur.execute(
+            "SELECT n.name,s.cidr FROM subnets s JOIN networks n ON n.id=s.network_id "
+            "WHERE s.network_id<>%s AND s.deleted_at IS NULL AND n.deleted_at IS NULL "
+            "ORDER BY s.id", (networkId,))
+        for otherName, otherCidr in cur.fetchall():
+            try:
+                otherNet = ipaddress.ip_network(otherCidr, strict=False)
+            except ValueError:
+                continue
+            if otherNet.version == 4 and net.overlaps(otherNet):
+                raise LookupError(
+                    f"network for subnet {subnetId} ({cidr}) overlaps live IPv4 subnet "
+                    f"{otherCidr} in network '{otherName}'")
 
     # Every live address whose subnet_id matches, OR (belt-and-braces) that falls
     # inside the prefix even if subnet_id was never backfilled by a direct writer.
     # Native INET6: read via CAST(... AS CHAR), compare via CAST(%s AS INET6)
     # (INET6_NTOA/INET6_ATON do not work on the native type). _v4() folds the
     # v4-mapped render back to dotted-quad downstream.
-    net = ipaddress.ip_network(cidr, strict=False)
     # A plain (consistent) read is correct here ONLY because allocate() enforces
     # READ COMMITTED isolation: under READ COMMITTED each statement takes a fresh
     # read view, so this scan — run after we acquired the subnet lock above — sees

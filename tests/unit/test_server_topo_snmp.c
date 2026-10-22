@@ -9,6 +9,7 @@
 #define _GNU_SOURCE
 #endif
 #define SOLARI_TEST_TOPO_LLDP 1
+#include "../test_temp_path.h"
 
 #include "serverTopology.c"
 
@@ -200,8 +201,8 @@ static void test_finalize_wireless_ap(void)
  * device: the fake CLI returns one consistent LLDP neighbor across columns. */
 static void test_fetch_via_fake_snmpbulkwalk(void)
 {
-    char dir[] = "/tmp/solari-topo-snmp-XXXXXX";
-    char executable[256];
+    char dir[512];
+    char executable[1024];
     const char *oldPath = getenv("PATH");
     char *savedPath = oldPath ? strdup(oldPath) : NULL;
     FILE *fake;
@@ -214,7 +215,7 @@ static void test_fetch_via_fake_snmpbulkwalk(void)
     solariStatus failedRc;
     int pathRc;
 
-    if (!mkdtemp(dir)) {
+    if (!solariTestTempDir(dir, sizeof dir, "solari-topo-snmp")) {
         TEST_FAIL_MESSAGE("could not create fake SNMP tool directory");
         return;
     }

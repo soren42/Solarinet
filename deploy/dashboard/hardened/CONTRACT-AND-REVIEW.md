@@ -84,6 +84,13 @@ Build as reviewable files; NOTHING deployed to xenon. Mirror Phase-0 pattern
   hardened php-fpm pool (www-solari + open_basedir), hardened server.service
   (solari + sandbox), server.conf [ctl] fragment, tmpfiles, PERMISSIONS.md
   matrix, verify-boundary.sh (asserts www-solari cannot read CA key + socket ACL).
+  The hardened pool explicitly maps PHP environment dependencies for SoR,
+  Forgejo, Keycloak, CA, DNS, uploads, and fleet catalog; contract tests check
+  those mappings, placeholder-only secret values, writable state setup, and
+  open_basedir coverage. The separate `solari_dashboard` SoR account has a
+  table-scoped grant file; a scratch-schema test confirms its exact 53
+  privileges, no global grants, query access, no-op write access, and denials
+  on sensitive tables.
 - **End-to-end (verify-boundary.sh against a live enforcing server): ✅ PASS.**
   Exercised on a fully-disposable local instance — throwaway MariaDB (full
   migration chain) + throwaway `solari`/`www-solari`/`solari-ctl` uids + a real
@@ -131,7 +138,7 @@ Rev-3 design doc — findings are carried as tracked code/schema/doc work per st
 | F8 | `serverDbCtlRequestComplete` returned OK when it affected **zero rows** (already-settled), hiding a lost update | **FIXED** — `affected_rows==0 → ERR_TLV_END` | serverDb.c; live DB test |
 | F9 | Consumer replayed the **PHP-supplied `op=`**; and control.php routes still call privileged verbs directly | **FIXED** — op= bound server-side from stored `requestedBy` (injected first); **route-rewiring now DONE**: all six privileged routes (PROVISION/DECOMMISSION/RETIRE/DEPLOY/FLEET_PROVISION/FLEET_IMAGE) go through `SolariCtl::callQueued()` (enqueue→poll), passing no `op=` in args; ordinary CRIT_SET/SURVEY stay direct | solariCtl.c consumer; control.php; SolariCtl.php `callQueued` |
 | F10 | **Global** idempotency key let one caller pre-seed a key so another's submit returned the first's row | **FIXED** — composite `UNIQUE(requestedBy, idempotencyKey)`; scoped SELECT | migration 020 + schema.sql; serverDb.c; live DB test |
-| F11 | `verify-boundary.sh`: decisive checks **SKIP** (still PASS) when a client/secret is absent; CA key path hardcoded | **FIXED** — CA key read from `[ca] keyFile` in server.conf; unrunnable decisive checks now FAIL | verify-boundary.sh |
+| F11 | `verify-boundary.sh`: decisive checks **SKIP** (still PASS) when a client/secret is absent; CA key path hardcoded | **FIXED** — CA key read from `[ca] keyFile` in server.conf; missing CA or server environment paths now FAIL; regression-tested for missing server env | verify-boundary.sh; `tests/deploy/test_boundary_verifier.py` |
 | F12 | `RuntimeDirectoryMode=0750` on `solari:solari` dir denies `www-solari` (in solari-ctl, not solari) the traverse → socket unreachable | **FIXED** — `0751` (other gets `--x`, traverse-only); matrix + footnote reconciled | solarinet-server.service; PERMISSIONS.md |
 
 ## Round-2 review disposition (rewire + verify layer-2; opus-4.8 authored → GPT-5.5/codex)

@@ -40,6 +40,8 @@ declare(strict_types=1);
  *                       created_at/updated_at/deleted_at.
  *   sources             a 'rackwire' row, resolved by `slug` (rw_source_id()),
  *                       mirroring Sor::sourceId()'s 'dashboard' lookup.
+ *   interconnects       port- or entity-level endpoints + label/length/notes;
+ *                       media_standard/jacket_color are added by migration 025.
  *
  * power_circuits, interfaces.circuit_id/watts_rated/poe_class, and
  * interfaces.if_kind += power_inlet/power_outlet also landed in 020 but are
@@ -268,9 +270,11 @@ return static function (Router $router): void {
         $router->get('/api/rackwire/sor/interconnects', static function (): void {
             $rows = rw_rows(
                 'SELECT ic.id, ic.link_kind, ic.label, ic.length_m, ic.notes,
+                        ic.media_standard, ic.jacket_color,
                         ic.asserted_kind, ic.asserted_at, s.slug AS sourceSlug,
                         COALESCE(ea.name, eaif.name) AS aName,
                         COALESCE(eb.name, ebif.name) AS bName,
+                        hua.asset_tag AS aAssetTag, hub.asset_tag AS bAssetTag,
                         ifa.name AS aIfName, ifb.name AS bIfName
                    FROM interconnects ic
                    JOIN sources s ON s.id = ic.source_id AND s.deleted_at IS NULL
@@ -280,6 +284,10 @@ return static function (Router $router): void {
                    LEFT JOIN interfaces ifb ON ifb.id  = ic.b_interface_id AND ifb.deleted_at  IS NULL
                    LEFT JOIN entities  eaif ON eaif.id = ifa.entity_id     AND eaif.deleted_at IS NULL
                    LEFT JOIN entities  ebif ON ebif.id = ifb.entity_id     AND ebif.deleted_at IS NULL
+                   LEFT JOIN hardware_units hua ON hua.id = COALESCE(ea.hardware_unit_id, eaif.hardware_unit_id)
+                                                AND hua.deleted_at IS NULL
+                   LEFT JOIN hardware_units hub ON hub.id = COALESCE(eb.hardware_unit_id, ebif.hardware_unit_id)
+                                                AND hub.deleted_at IS NULL
                   WHERE ic.deleted_at IS NULL
                   ORDER BY ic.id DESC
                   LIMIT 5000'
@@ -674,16 +682,50 @@ return static function (Router $router): void {
                         $skipped[] = "cable $cid: $kindDetail";
                         continue;
                     }
-                    $label = isset($c['label']) && is_string($c['label']) && $c['label'] !== '' ? $c['label'] : null;
+                    $aIf = rw_resolve_interface($aEnt, $aEnd, $deviceByUid[(string) $aDev] ?? []);
+                    $bIf = rw_resolve_interface($bEnt, $bEnd, $deviceByUid[(string) $bDev] ?? []);
+                    $label = isset($c['label']) && is_string($c['label']) && trim($c['label']) !== '' ? trim($c['label']) : null;
+                    $notes = isset($c['notes']) && is_string($c['notes']) && trim($c['notes']) !== '' ? trim($c['notes']) : null;
+                    $standard = isset($c['standard']) && is_string($c['standard']) && trim($c['standard']) !== '' ? trim($c['standard']) : null;
+                    $jacket = isset($c['jacket']) && is_string($c['jacket']) && trim($c['jacket']) !== '' ? trim($c['jacket']) : null;
+                    $length = null;
+                    if (isset($c['lengthM']) && $c['lengthM'] !== '' && $c['lengthM'] !== null) {
+                        if (!is_numeric($c['lengthM']) || !is_finite((float) $c['lengthM'])
+                            || (float) $c['lengthM'] < 0 || (float) $c['lengthM'] > 9999.99) {
+                            $skipped[] = "cable $cid: invalid lengthM (expected 0..9999.99 metres)";
+                            continue;
+                        }
+                        $length = round((float) $c['lengthM'], 2);
+                    }
+                    if (($label !== null && rw_text_length($label) > 128) || ($notes !== null && rw_text_length($notes) > 255)
+                        || ($standard !== null && rw_text_length($standard) > 32) || ($jacket !== null && rw_text_length($jacket) > 64)) {
+                        $skipped[] = "cable $cid: cable details exceed a SoR field limit";
+                        continue;
+                    }
 
-                    $existing = rw_row(
-                        'SELECT id, source_id FROM interconnects
+                    // Prefer port identity when it is known so separate
+                    // connections between the same two devices remain distinct.
+                    // Devices without a matching interface still commit at the
+                    // entity level, matching the schema's documented fallback.
+                    $aColumn = $aIf !== null ? 'a_interface_id' : 'a_entity_id';
+                    $bColumn = $bIf !== null ? 'b_interface_id' : 'b_entity_id';
+                    $reverseAColumn = $bIf !== null ? 'a_interface_id' : 'a_entity_id';
+                    $reverseBColumn = $aIf !== null ? 'b_interface_id' : 'b_entity_id';
+                    $aValue = $aIf ?? $aEnt;
+                    $bValue = $bIf ?? $bEnt;
+                    $existingRows = rw_rows(
+                        "SELECT id, source_id FROM interconnects
                           WHERE deleted_at IS NULL AND link_kind = :lk
-                            AND ((a_entity_id = :a1 AND b_entity_id = :b1)
-                              OR (a_entity_id = :b2 AND b_entity_id = :a2))
-                          LIMIT 1',
-                        [':lk' => $linkKind, ':a1' => $aEnt, ':b1' => $bEnt, ':b2' => $aEnt, ':a2' => $bEnt]
+                            AND (($aColumn = :a1 AND $bColumn = :b1)
+                              OR ($reverseAColumn = :b2 AND $reverseBColumn = :a2))
+                          LIMIT 2",
+                        [':lk' => $linkKind, ':a1' => $aValue, ':b1' => $bValue, ':b2' => $aValue, ':a2' => $bValue]
                     );
+                    if (count($existingRows) > 1) {
+                        $skipped[] = "cable $cid: multiple matching SoR links; resolve duplicate links before committing";
+                        continue;
+                    }
+                    $existing = $existingRows[0] ?? null;
                     if ($existing !== null) {
                         if ((int) $existing['source_id'] !== $srcId) {
                             $skipped[] = "cable $cid: existing link owned by another source, not touched";
@@ -692,23 +734,39 @@ return static function (Router $router): void {
                         if (!$dryRun) {
                             rw_exec(
                                 'UPDATE interconnects
-                                    SET label = :lbl, source_id = :src, asserted_kind = \'human\', asserted_at = NOW()
+                                    SET a_interface_id = :aif, b_interface_id = :bif,
+                                        a_entity_id = :ae, b_entity_id = :be,
+                                        label = :lbl, length_m = :len, notes = :notes,
+                                        media_standard = :standard, jacket_color = :jacket,
+                                        source_id = :src, asserted_kind = \'human\', asserted_at = NOW()
                                   WHERE id = :id',
-                                [':lbl' => $label, ':src' => $srcId, ':id' => $existing['id']]
+                                [':aif' => $aIf, ':bif' => $bIf,
+                                 ':ae' => $aIf === null ? $aEnt : null, ':be' => $bIf === null ? $bEnt : null,
+                                 ':lbl' => $label, ':len' => $length, ':notes' => $notes,
+                                 ':standard' => $standard, ':jacket' => $jacket,
+                                 ':src' => $srcId, ':id' => $existing['id']]
                             );
                         }
                         $updated++;
                     } else {
                         if (!$dryRun) {
                             rw_exec(
-                                'INSERT INTO interconnects (a_entity_id, b_entity_id, link_kind, label, source_id, asserted_kind, asserted_at)
-                                 VALUES (:a, :b, :lk, :lbl, :src, \'human\', NOW())',
-                                [':a' => $aEnt, ':b' => $bEnt, ':lk' => $linkKind, ':lbl' => $label, ':src' => $srcId]
+                                'INSERT INTO interconnects
+                                    (a_interface_id, b_interface_id, a_entity_id, b_entity_id,
+                                     link_kind, label, length_m, notes, media_standard, jacket_color,
+                                     source_id, asserted_kind, asserted_at)
+                                 VALUES (:aif, :bif, :ae, :be, :lk, :lbl, :len, :notes, :standard, :jacket, :src, \'human\', NOW())',
+                                [':aif' => $aIf, ':bif' => $bIf,
+                                 ':ae' => $aIf === null ? $aEnt : null, ':be' => $bIf === null ? $bEnt : null,
+                                 ':lk' => $linkKind, ':lbl' => $label, ':len' => $length,
+                                 ':notes' => $notes, ':standard' => $standard, ':jacket' => $jacket,
+                                 ':src' => $srcId]
                             );
                         }
                         $created++;
                     }
-                    $committed[] = "cable $cid: $linkKind — $kindDetail";
+                    $endpointDetail = ($aIf !== null || $bIf !== null) ? 'port-level identity' : 'entity-level fallback';
+                    $committed[] = "cable $cid: $linkKind — $kindDetail; $endpointDetail";
                 }
 
                 // dryRun: roll back every write above, keep the tallies.
@@ -1001,12 +1059,14 @@ function rw_interconnect_row(array $r): array
         'linkKind'     => $r['link_kind'],
         'label'        => $r['label'],
         'lengthM'      => Coerce::float($r['length_m'] ?? null),
+        'standard'     => $r['media_standard'] ?? null,
+        'jacket'       => $r['jacket_color'] ?? null,
         'notes'        => $r['notes'],
         'assertedKind' => $r['asserted_kind'],
         'assertedAt'   => Coerce::iso($r['asserted_at'] ?? null),
         'source'       => $r['sourceSlug'],
-        'a'            => ['entity' => $r['aName'] ?? null, 'ifName' => $r['aIfName'] ?? null],
-        'b'            => ['entity' => $r['bName'] ?? null, 'ifName' => $r['bIfName'] ?? null],
+        'a'            => ['entity' => $r['aName'] ?? null, 'assetTag' => $r['aAssetTag'] ?? null, 'ifName' => $r['aIfName'] ?? null],
+        'b'            => ['entity' => $r['bName'] ?? null, 'assetTag' => $r['bAssetTag'] ?? null, 'ifName' => $r['bIfName'] ?? null],
     ];
 }
 
@@ -1096,15 +1156,18 @@ function rw_resolve_entity(array $d): ?int
     $assetId = isset($d['assetId']) && is_string($d['assetId']) && trim($d['assetId']) !== ''
         ? trim($d['assetId']) : null;
     if ($assetId !== null) {
-        $row = rw_row(
+        $rows = rw_rows(
             'SELECT e.id FROM entities e
                JOIN hardware_units hu ON hu.id = e.hardware_unit_id
               WHERE hu.asset_tag = :tag AND hu.deleted_at IS NULL AND e.deleted_at IS NULL
-              LIMIT 1',
+              LIMIT 2',
             [':tag' => $assetId]
         );
-        if ($row !== null) {
-            return (int) $row['id'];
+        if (count($rows) > 1) {
+            return null;
+        }
+        if (count($rows) === 1) {
+            return (int) $rows[0]['id'];
         }
     }
 
@@ -1113,12 +1176,65 @@ function rw_resolve_entity(array $d): ?int
         if ($v === '') {
             continue;
         }
-        $row = rw_row('SELECT id FROM entities WHERE LOWER(name) = LOWER(:n) AND deleted_at IS NULL LIMIT 1', [':n' => $v]);
-        if ($row !== null) {
-            return (int) $row['id'];
+        $rows = rw_rows(
+            'SELECT id FROM entities WHERE LOWER(name) = LOWER(:n) AND deleted_at IS NULL LIMIT 2',
+            [':n' => $v]
+        );
+        if (count($rows) > 1) {
+            return null;
+        }
+        if (count($rows) === 1) {
+            return (int) $rows[0]['id'];
         }
     }
     return null;
+}
+
+/**
+ * Resolve a RackWire internal port id to a live SoR interface. `ifMap` maps
+ * monitoring interface names to RackWire port ids, so invert it for commits.
+ * A missing or ambiguous mapping returns null and lets the caller preserve the
+ * cable at entity granularity rather than guessing a physical port.
+ *
+ * @param array<string,mixed> $end
+ * @param array<string,mixed> $device
+ */
+function rw_resolve_interface(int $entityId, array $end, array $device): ?int
+{
+    $portId = isset($end['port']) && is_string($end['port']) ? trim($end['port']) : '';
+    if ($portId === '') {
+        return null;
+    }
+
+    $ifMap = is_array($device['ifMap'] ?? null) ? $device['ifMap'] : [];
+    $mappedNames = [];
+    foreach ($ifMap as $ifName => $mappedPort) {
+        if (is_string($ifName) && is_string($mappedPort) && trim($mappedPort) === $portId) {
+            $mappedNames[] = trim($ifName);
+        }
+    }
+    if (count($mappedNames) > 1) {
+        return null;
+    }
+    $ifName = $mappedNames[0] ?? $portId;
+    if ($ifName === '') {
+        return null;
+    }
+
+    $rows = rw_rows(
+        'SELECT id FROM interfaces
+          WHERE entity_id = :eid AND name = :name AND deleted_at IS NULL
+          LIMIT 2',
+        [':eid' => $entityId, ':name' => $ifName]
+    );
+    return count($rows) === 1 ? (int) $rows[0]['id'] : null;
+}
+
+/** Count Unicode code points so limits match MariaDB VARCHAR character widths. */
+function rw_text_length(string $value): int
+{
+    $count = preg_match_all('/./us', $value);
+    return $count === false ? PHP_INT_MAX : $count;
 }
 
 /**

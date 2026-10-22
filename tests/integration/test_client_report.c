@@ -9,7 +9,9 @@
  * Gated behind SOLARI_WITH_IO && SOLARI_WITH_SQLITE (it needs nng + the spool),
  * so it builds and runs where the I/O layer exists (xenon).
  */
+#define _GNU_SOURCE
 #include "unity.h"
+#include "../test_temp_path.h"
 #include "client.h"
 
 #include "solari/solariNet.h"
@@ -85,7 +87,7 @@ static void test_report_live_send(void)
 
 static void test_spool_then_drain(void)
 {
-    char dbpath[64];
+    char dbpath[512], leaf[128];
     clientConfig  cfg;
     clientContext ctx;
     clientState   st;
@@ -96,7 +98,8 @@ static void test_spool_then_drain(void)
     pthread_t ackThread;
     reportAckStub ackStub;
 
-    snprintf(dbpath, sizeof dbpath, "/tmp/solari_creport_%ld.db", (long)getpid());
+    snprintf(leaf, sizeof leaf, "solari_creport_%ld.db", (long)getpid());
+    TEST_ASSERT_TRUE(solariTestTempPath(dbpath, sizeof dbpath, leaf));
     remove(dbpath);
 
     clientConfigDefaults(&cfg);
@@ -137,7 +140,7 @@ static void test_spool_then_drain(void)
 
 static void test_mismatched_ack_keeps_report_spooled(void)
 {
-    char dbpath[64];
+    char dbpath[512], leaf[128];
     clientConfig cfg;
     clientContext ctx;
     clientState st;
@@ -147,7 +150,8 @@ static void test_mismatched_ack_keeps_report_spooled(void)
     reportAckStub ackStub;
     pthread_t ackThread;
 
-    snprintf(dbpath, sizeof dbpath, "/tmp/solari_creport_bad_ack_%ld.db", (long)getpid());
+    snprintf(leaf, sizeof leaf, "solari_creport_bad_ack_%ld.db", (long)getpid());
+    TEST_ASSERT_TRUE(solariTestTempPath(dbpath, sizeof dbpath, leaf));
     remove(dbpath);
     clientConfigDefaults(&cfg);
     strncpy(cfg.hostFqdn, "creport-bad-ack.akoria.net", sizeof cfg.hostFqdn - 1);

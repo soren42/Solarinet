@@ -194,7 +194,9 @@ try {
     $log = fopen($serverLogPath, 'ab');
     if ($log === false) throw new RuntimeException('Could not create HTTP fixture log.');
     $descriptors = [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log];
-    $server = proc_open([PHP_BINARY, '-d', 'memory_limit=128M', '-d', 'session.save_path=' . $sessions,
+    // Exercise the API's full 4 MiB application cap independently of a host
+    // php.ini that may set post_max_size below the supported request limit.
+    $server = proc_open([PHP_BINARY, '-d', 'memory_limit=128M', '-d', 'post_max_size=5M', '-d', 'session.save_path=' . $sessions,
         '-S', '127.0.0.1:' . $httpPort, $work . '/router.php'], $descriptors, $pipes, dirname(__DIR__, 2));
     if (!is_resource($server)) throw new RuntimeException('Could not start the local PHP HTTP fixture.');
     $ready = false;
@@ -247,7 +249,8 @@ try {
     $capacityPreview = httpRequest($baseUrl . '/api/inventory/scanner-import/preview', 'POST', $capacityPayload, $cookie, $csrf);
     check($capacityPreview['status'] === 200
         && ($capacityPreview['body']['data']['counts']['insert.hardware_units'] ?? 0) === 5000,
-        'scanner import did not preview all 5,000 assets within the request limit (HTTP ' . $capacityPreview['status'] . ')');
+        'scanner import did not preview all 5,000 assets within the request limit (HTTP ' . $capacityPreview['status']
+        . ', response ' . json_encode($capacityPreview['body'], JSON_UNESCAPED_SLASHES) . ')');
     $bulkRows = $db->prepare('SELECT COUNT(*) FROM hardware_units WHERE asset_tag LIKE :tag');
     $bulkRows->execute([':tag' => 'CAP-' . $suffix . '-%']);
     check((int) $bulkRows->fetchColumn() === 0, '5,000-asset preview wrote inventory');

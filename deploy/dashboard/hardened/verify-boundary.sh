@@ -83,14 +83,14 @@ else
   pass "$DASH_USER cannot read the CA key ($CA_KEY)"
 fi
 
-if [ -e "$SRV_ENV" ]; then
+if [ -f "$SRV_ENV" ]; then
   if runAsDash test -r "$SRV_ENV" 2>/dev/null; then
     bad "$DASH_USER CAN read the server env/DB pass ($SRV_ENV)"
   else
     pass "$DASH_USER cannot read the server env ($SRV_ENV)"
   fi
 else
-  echo "  SKIP  server env not at $SRV_ENV (set SOLARI_SERVER_ENV)"
+  bad "server env not found at $SRV_ENV — cannot verify the dashboard is denied it (set SOLARI_SERVER_ENV)"
 fi
 
 # --- layer 2: socket ownership/mode ---

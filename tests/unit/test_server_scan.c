@@ -1,5 +1,9 @@
 /* Scan parsing, subprocess cancellation, and worker progress tests. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "unity.h"
+#include "../test_temp_path.h"
 
 #include "serverScan.c"
 
@@ -135,10 +139,13 @@ static void test_worker_throttles_unchanged_enrichment_progress(void)
 
 static void test_cancel_requires_complete_positive_pid_marker(void)
 {
-    char markerPath[] = "/tmp/solari-scan-marker.XXXXXX";
+    char markerPath[512];
     const char *values[] = { "", "not-a-pid", "0\n", "-1\n", "123oops\n", "123\n" };
     solariStatus observed[6];
-    int fd = mkstemp(markerPath);
+    int fd;
+    TEST_ASSERT_TRUE(solariTestTempPath(markerPath, sizeof markerPath,
+                                        "solari-scan-marker.XXXXXX"));
+    fd = mkstemp(markerPath);
     size_t i;
     int ioOk = 1;
     TEST_ASSERT_TRUE(fd >= 0);
@@ -311,10 +318,11 @@ static void test_cancel_terminates_enrichment_process_group(void)
     serverContext ctx;
     struct sockaddr_in addr;
     socklen_t addrLen = sizeof addr;
-    char dirTemplate[] = "/tmp/solari-scan-tool.XXXXXX";
-    char *dir = mkdtemp(dirTemplate);
-    char toolPath[256], markerPath[256], argsPath[256], script[768], portText[16];
-    char pathValue[512];
+    char dirTemplate[512];
+    char *dir = solariTestTempDir(dirTemplate, sizeof dirTemplate,
+                                  "solari-scan-tool");
+    char toolPath[1024], markerPath[1024], argsPath[1024], script[768], portText[16];
+    char pathValue[1200];
     char argsText[1024] = {0}, expectedPorts[32];
     const char *pathEnv = getenv("PATH");
     char *oldPath = pathEnv ? strdup(pathEnv) : NULL;

@@ -8,11 +8,23 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | Last fully CI-validated code candidate `c867bcb` | Later commits contain status/CI documentation only and are published to Forgejo first; both root `main` refs were `5e8d688` at the last check. Draft GitHub PR #37 remains open. |
+| SolariNet | Working tree `integrate/phase0-reconcile-20261022`, HEAD `3097ea62` | At 2026-10-22 23:16 UTC, Forgejo `integrate/stability-20261020` and GitHub mirror both pointed to `3097ea62`; both `main` refs pointed to `5e8d688`. The 83-path candidate overlay is uncommitted and has not been pushed. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
-| scanner-ingest | `integrate/solarinet-20261021`, base `c2a3f7b` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Latest test-fixture and manual/validation updates are committed locally at `9ac42d6`; independent review is pending. |
+| scanner-ingest | Local branch `integrate/solarinet-20261021`, HEAD `b0c6d20` | Local repository only, with `VALIDATION.md` modified and no configured remote. Earlier lookup found no matching published GitHub/Forgejo repository; remote ownership remains unresolved. |
 
-No main branch has been merged and no release tags exist. The scanner-ingest manual/validation edits remain local and have no configured remote.
+No main branch has been merged and no release tags exist. Older checkpoints below describe previously published candidates; the latest ref and worktree state above supersedes their claims about the current release candidate.
+
+### Latest local validation checkpoint · 2026-10-22 23:16 UTC
+
+The full native server build passed. CTest passed 36/36 non-loopback tests and the loopback test 1/1 after test fixtures were changed to honor `TMPDIR`; the `/tmp` filesystem had reached its user quota. The disposable SoR harness passed migrations 014–027, dashboard grant and denial checks, CDC, UniFi import, allocator API, RackWire commit/replay, and concurrency tests, then removed its schema and accounts. The authenticated scanner/RackWire Chromium flow passed against a separate freshly migrated loopback scratch schema; a post-run query found no schema or temporary account. RackWire UI passed 60/60, dashboard JSX parsed 16/16, lifecycle UI passed 92/92, panel UI passed 164/164, scanner import UI passed, and the RackWire API passed 65/65. scanner-ingest ran 47 tests, 16 skipped for absent MariaDB configuration/optional decoder, and 31 subtests. The local deploy-contract suite passed 13/13. Workflow parity and `git diff --check` passed.
+
+**Still UNVERIFIED:** hosted CI for the uncommitted candidate; independent cross-lab review (Claude CLI is unauthenticated and no Anthropic review tool is available); live SoR migrations/rollback and approved UniFi import; authenticated PHP-FPM/Apache behavior; deployment and release promotion; scanner-ingest remote ownership. No service, live SoR data, or remote ref changed during this checkpoint.
+
+At 2026-10-22 23:18 UTC, the candidate `solariServer` and `solariScanWorker` also passed the pinned static-dependency release check. The release lifecycle suite passed 9/9. A 181-file dirty preflight archive was built locally and has `sourceTreeDirty=true`; it is useful for preflight only and is not a promotable release. No remote ref, Cesium release symlink, or service changed.
+
+At 2026-10-22 23:23 UTC, the installed package tree passed the authenticated scanner/RackWire browser E2E against a loopback scratch SoR migrated through 027. The browser test now requires the scratch sentinel before fixture writes, accepts an installed release root, and runs in both CI workflows through a temporary package/install wrapper. Local scratch schema and account cleanup was verified. Hosted CI has not run for this new job.
+
+The dirty preflight package is also installed under a separate Cesium development root, without changing the existing `current` root or starting services. Remote PHP 8.5.12 syntax/extensions and both binary runtime library resolutions pass. The existing loopback dev package remains active; PHP-FPM/Apache and candidate runtime behavior on Cesium remain unverified.
 
 ## Current release-candidate recheck · 2026-10-22
 

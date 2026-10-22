@@ -4,13 +4,14 @@
 #include "clientControl.h"
 #include "solari/solariMsg.h"
 #include "solari/solariTlv.h"
+#include "../test_temp_path.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-static char testDir[128];
+static char testDir[512];
 static clientConfig cfg;
 static clientControlState state;
 static unsigned failSyncNth;
@@ -31,10 +32,15 @@ int __wrap_rename(const char *from, const char *to)
 
 void setUp(void)
 {
-    snprintf(testDir, sizeof testDir, "/tmp/solari-control-test-XXXXXX");
-    TEST_ASSERT_NOT_NULL(mkdtemp(testDir));
+    char statePath[512];
+    int written;
+    TEST_ASSERT_NOT_NULL(solariTestTempDir(testDir, sizeof testDir,
+                                           "solari-control-test"));
     clientConfigDefaults(&cfg);
-    snprintf(cfg.ctrlStateFile, sizeof cfg.ctrlStateFile, "%s/state", testDir);
+    written = snprintf(statePath, sizeof statePath, "%s/state", testDir);
+    TEST_ASSERT_TRUE(written >= 0 && (size_t)written < sizeof statePath);
+    TEST_ASSERT_TRUE((size_t)written < sizeof cfg.ctrlStateFile);
+    memcpy(cfg.ctrlStateFile, statePath, (size_t)written + 1);
     state.appliedEpoch = 3;
     failSyncNth = 0;
     failRename = 0;

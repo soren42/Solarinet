@@ -113,7 +113,7 @@ int serverSnmpMergeIface(serverSnmpIface *ifaces, size_t *count, size_t cap,
                          serverSnmpOidKind kind, int ifIndex, const char *val)
 {
     serverSnmpIface *f;
-    unsigned long long counter;
+    unsigned long long counter = 0;
     long status = 0;
     char *end;
     if (!ifaces || !count || !val || ifIndex <= 0) return 0;

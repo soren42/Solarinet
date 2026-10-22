@@ -34,6 +34,10 @@ import allocator  # noqa: E402
 
 
 DB = os.environ.get("SOR_TEST_DB", "sor_test")
+DB_HOST = os.environ.get("SOR_TEST_DB_HOST", "127.0.0.1")
+DB_PORT = int(os.environ.get("SOR_TEST_DB_PORT", "3306"))
+DB_USER = os.environ.get("SOR_TEST_DB_USER", "sor_test")
+DB_PASSWORD = os.environ.get("SOR_TEST_DB_PASSWORD", "sor_test_ephemeral")
 FAILS = []
 
 
@@ -42,8 +46,8 @@ def conn():
     # default REPEATABLE READ the free-address scan reads a snapshot frozen at
     # transaction start and concurrent allocation spins to exhaustion. Set it on
     # the connection before its first statement via init_command.
-    return pymysql.connect(host="127.0.0.1", user="sor_test",
-                           password="sor_test_ephemeral", database=DB,
+    return pymysql.connect(host=DB_HOST, port=DB_PORT, user=DB_USER,
+                           password=DB_PASSWORD, database=DB,
                            charset="utf8mb4", autocommit=False,
                            init_command="SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
 
@@ -71,8 +75,9 @@ def setupFixtures(c):
     src = cur.fetchone()[0]
 
     cur.execute(
-        "INSERT INTO networks (name, purpose, source_id, asserted_kind) "
-        "VALUES ('alloc_test', 'allocator concurrency test', %s, 'human')", (src,))
+        "INSERT INTO networks "
+        "(name, purpose, source_id, asserted_kind, allocator_eligible) "
+        "VALUES ('alloc_test', 'allocator concurrency test', %s, 'human', 1)", (src,))
     networkId = cur.lastrowid
 
     cur.execute(
@@ -95,6 +100,46 @@ def teardownFixtures(c, networkId, subnetId):
     cur.execute("DELETE FROM subnets WHERE id=%s", (subnetId,))
     cur.execute("DELETE FROM networks WHERE id=%s", (networkId,))
     c.commit()
+
+
+def scenarioAllocatorApprovalGate(networkId, functionSlug):
+    """Imported networks must be explicitly enabled for allocation."""
+    c = conn(); cur = c.cursor()
+    cur.execute("UPDATE networks SET allocator_eligible=0 WHERE id=%s", (networkId,))
+    c.commit()
+    error = None
+    try:
+        allocator._homeSubnetForFunction(cur, functionSlug)
+    except LookupError as e:
+        error = str(e)
+    note(error is not None and "not approved" in error,
+         f"default-off allocation gate rejects unapproved network (got {error!r})")
+
+    cur.execute("UPDATE networks SET allocator_eligible=1 WHERE id=%s", (networkId,))
+    cur.execute("UPDATE networks SET enabled=0 WHERE id=%s", (networkId,))
+    c.commit()
+    error = None
+    try:
+        allocator._homeSubnetForFunction(cur, functionSlug)
+    except LookupError as e:
+        error = str(e)
+    note(error is not None and "disabled" in error,
+         f"disabled network rejected even after allocation approval (got {error!r})")
+    cur.execute("UPDATE networks SET enabled=1, allocator_eligible=1 WHERE id=%s", (networkId,))
+    subnetId = allocator._homeSubnetForFunction(cur, functionSlug)[0]
+    # Model a source/config change after the initial route selection but before
+    # the allocator acquires its subnet mutex. The locked recheck must observe
+    # the revocation and stop instead of allocating from stale eligibility.
+    cur.execute("UPDATE networks SET allocator_eligible=0 WHERE id=%s", (networkId,))
+    error = None
+    try:
+        allocator._usedAndRanges(cur, subnetId)
+    except LookupError as e:
+        error = str(e)
+    note(error is not None and "not approved" in error,
+         f"subnet-lock recheck observes a revoked approval (got {error!r})")
+    cur.execute("UPDATE networks SET allocator_eligible=1 WHERE id=%s", (networkId,))
+    c.commit(); c.close()
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +744,8 @@ def main():
     c = conn()
     networkId, subnetId, functionSlug = setupFixtures(c)
     try:
+        print("scenario 0: allocator approval gate")
+        scenarioAllocatorApprovalGate(networkId, functionSlug)
         print("scenario 1: locked allocate() race")
         scenarioLockedRace(functionSlug)
         # reset addresses for the isolated constraint scenarios

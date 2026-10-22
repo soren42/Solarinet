@@ -48,11 +48,9 @@
 --     information_schema-guarded index/constraint adds via PREPARE/EXECUTE
 --     (pattern copied from 020_rackwire.sql:240-253 / 014_inventory.sql).
 --
--- No CDC triggers are added here. Per the 020 precedent, trigger creation is
--- owned by the generated deploy/sorsync/sql/02-triggers.sql; when the run-queue
--- (§11) needs inventory regeneration to react to taxonomy edits, these tables
--- get added to that generator's tracked-table list — not hand-written here, so
--- ownership stays single.
+-- CDC trigger ownership is in migration 024_provisioning_cdc.sql. It tracks
+-- `sources` and the three mutable taxonomy tables; inventory_snapshots is
+-- immutable and omitted.
 --
 -- Target: MariaDB >= 10.7 (INET6, generated columns), InnoDB, utf8mb4.
 -- Database: `sor` on cesium (10.1.0.200). Apply on cesium ONLY; replication

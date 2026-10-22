@@ -102,6 +102,26 @@ gzip integrity check passed; restore completed; all 41 base tables passed
 SoR artifact only. At the start of the 2026-10-22 Xenon work, its backup runner,
 config, timer, mounted target, and matching archive were absent.
 
+On 2026-10-22 the daily Cesium artifact (`sor-2026-10-22.sql.gz`, 31,297
+compressed bytes; 03:32 -0400) passed `gzip -t` and restored into a private
+temporary datadir using Cesium's MariaDB 12.3.2 binary with
+`--skip-networking`. `mariadb-check` passed all 41 base tables; the restored
+schema contained four views, 24 triggers, and no routines. The temporary
+instance and datadir were removed. This artifact predates migration 021: the
+separate `sor-pre-021-20261022.sql.gz` was created later that day, and the live
+schema audit subsequently confirmed migration 021 is present. The restore drill
+therefore validates the pre-021 schema only. At 21:44 UTC on 2026-10-22, the
+installed runner produced a 33,372-byte post-021 dump into a private temporary
+target. It restored into an isolated MariaDB 12.3.2 datadir with networking
+disabled; `mariadb-check` passed all 45 base tables, and the restore contained
+four views, 24 triggers, zero routines, and all four taxonomy tables. The
+temporary archive and datadir were removed. This closes the current post-021
+restore rehearsal. Take and restore-check a fresh archive before any future
+live schema action. A read-only comparison on 2026-10-22 verified current
+Cesium and Benzene table/column/index/constraint/trigger/view metadata and
+canonicalized table-data digests; the replica reported both threads running,
+zero lag, and no replication errors.
+
 Xenon's mounted `/nas/Shared` is CIFS (`//nas-x.local/Shared`) with the mount
 root observed as `root:root` mode `0755`; it contains personal directories and
 is rejected by the runner. Read-only access to NAS-X confirmed the

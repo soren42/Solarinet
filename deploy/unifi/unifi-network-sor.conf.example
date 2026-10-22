@@ -1,0 +1,8 @@
+# Copy to /etc/solarinet/unifi-network-sor.conf and set the SoR service
+# password. The importer reads only this [sor] section.
+[sor]
+host = 10.1.0.200
+port = 3306
+user = solarinet_unifi_import
+password = REPLACE_WITH_SCOPED_SOR_PASSWORD
+name = sor

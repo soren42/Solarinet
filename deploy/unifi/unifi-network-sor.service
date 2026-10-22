@@ -1,0 +1,33 @@
+[Unit]
+Description=SolariNet UniFi network facts to SoR import
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/solarinet/unifi-network-sor.env
+ConditionPathExists=/etc/solarinet/unifi-network-sor.conf
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=jason
+Group=jason
+WorkingDirectory=/home/jason/Code/Solarinet
+EnvironmentFile=/etc/solarinet/unifi-network-sor.env
+Environment=SORSYNC_CONF=/etc/solarinet/unifi-network-sor.conf
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/jason/Code/Solarinet/deploy/unifi/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/unifi/unifi_network_sor.py --apply
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes

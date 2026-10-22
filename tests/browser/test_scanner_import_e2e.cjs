@@ -13,7 +13,9 @@ const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { chromium } = require('playwright');
 
-const ROOT = path.resolve(__dirname, '../..');
+const ROOT = process.env.SOLARI_TEST_ROOT
+  ? path.resolve(process.env.SOLARI_TEST_ROOT)
+  : path.resolve(__dirname, '../..');
 const PUBLIC = path.join(ROOT, 'dashboard/public');
 const API_INDEX = path.join(ROOT, 'dashboard/api/index.php');
 const AUTH_LIB = path.join(ROOT, 'dashboard/api/lib/Auth.php');
@@ -28,6 +30,15 @@ function requireScratchDatabase() {
       !['127.0.0.1', 'localhost'].includes(DB_HOST) ||
       !/^solarinet_[a-z0-9_]+$/.test(DB_NAME) || !/^\d+$/.test(DB_PORT)) {
     throw new Error('Set SOLARI_TEST_SOR_DB=1 and a loopback solarinet_* SOR_DB_* test database.');
+  }
+  if (!fs.existsSync(PUBLIC) || !fs.existsSync(API_INDEX) || !fs.existsSync(AUTH_LIB)) {
+    throw new Error('Dashboard browser-test root must contain the public app and PHP API.');
+  }
+  if (process.env.SOLARI_TEST_ROOT && !fs.existsSync(path.join(ROOT, 'RELEASE.json'))) {
+    throw new Error('SOLARI_TEST_ROOT must point at an installed release containing RELEASE.json.');
+  }
+  if (sql("SELECT marker FROM _solarinet_test_scratch WHERE marker='solarinet-ci-scratch-v1'") !== 'solarinet-ci-scratch-v1') {
+    throw new Error('Refusing browser fixtures: scratch SoR sentinel is missing.');
   }
 }
 
@@ -525,18 +536,27 @@ async function main() {
     const pendingAdmission = await pendingAdmissionResponse;
     assert.equal((await pendingAdmission.json()).data.state, 'pending',
       'the UI must poll and retain a pending durable admission request');
-    await page.waitForFunction(() => {
-      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
-      const status = document.querySelector('[role="status"]');
-      return job && job.requestId === 940 && job.status === 'admission_pending'
-        && status && status.textContent.includes('Waiting for scan admission');
-    });
+    try {
+      await page.waitForFunction(() => {
+        const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+        const status = document.querySelector('.page-sub[role="status"]');
+        return job && job.requestId === 940 && job.status === 'admission_pending'
+          && status && status.textContent.includes('Waiting for scan admission');
+      }, null, { timeout: 5000 });
+    } catch (error) {
+      const state = await page.evaluate(() => ({
+        scan: sessionStorage.getItem('solari.activeScan'),
+        status: document.querySelector('.page-sub[role="status"]')?.textContent || null,
+        toast: document.querySelector('[role="alert"]')?.textContent || null,
+      }));
+      throw new Error(`${error.message}; scan admission UI state: ${JSON.stringify(state)}`);
+    }
     assert(await page.getByRole('button', { name: 'Scan active…', exact: true }).isDisabled(),
       'the scan action must stay disabled while admission is pending');
     await context.request.get(`${base}/__finish_admission`);
     await page.waitForFunction(() => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
-      const status = document.querySelector('[role="status"]');
+      const status = document.querySelector('.page-sub[role="status"]');
       return job && job.scanId === 941 && job.status === 'running' && status
         && status.textContent.includes('4/16 hosts checked') && status.textContent.includes('0 candidates saved');
     });
@@ -603,14 +623,14 @@ async function main() {
     await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
     await page.waitForFunction(() => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
-      const status = document.querySelector('[role="status"]');
+      const status = document.querySelector('.page-sub[role="status"]');
       return job && job.scanId === 941 && job.status === 'running' && status
         && status.textContent.includes('4/16 hosts checked');
     });
     await context.request.get(`${base}/__finish_sweep`);
     await page.waitForFunction(() => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
-      const status = document.querySelector('[role="status"]');
+      const status = document.querySelector('.page-sub[role="status"]');
       return job && job.status === 'running' && job.hostsDone === 16 && job.hostsFound === 0
         && status && status.textContent.includes('Host sweep complete')
         && status.textContent.includes('0 candidates saved');
@@ -618,7 +638,7 @@ async function main() {
     await context.request.get(`${base}/__finish_candidate`);
     await page.waitForFunction(() => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
-      const status = document.querySelector('[role="status"]');
+      const status = document.querySelector('.page-sub[role="status"]');
       return job && job.status === 'running' && job.hostsFound === 1
         && status && status.textContent.includes('1 candidate saved');
     });
@@ -628,7 +648,7 @@ async function main() {
     await context.request.get(`${base}/__finish_scan`);
     await page.waitForFunction(() => {
       const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
-      const status = document.querySelector('[role="status"]');
+      const status = document.querySelector('.page-sub[role="status"]');
       return job && job.status === 'completed' && status
         && status.textContent.includes('Last scan completed');
     });

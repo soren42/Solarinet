@@ -122,6 +122,8 @@ final class RwFakePdo extends PDO
     private array $resolvers;
     private string $insertId = '1';
     private bool $inTx = false;
+    /** @var list<array{sql:string,params:array<string,mixed>}> */
+    public array $executed = [];
 
     public function __construct(array $resolvers)
     {
@@ -136,6 +138,7 @@ final class RwFakePdo extends PDO
     /** @return array{0:array<int,array<string,mixed>>,1:int} [rows, affectedRowCount] */
     public function resolve(string $sql, array $params): array
     {
+        $this->executed[] = ['sql' => $sql, 'params' => $params];
         $norm = preg_replace('/\s+/', ' ', trim($sql)) ?? $sql;
         foreach ($this->resolvers as $r) {
             if (str_contains($norm, $r['match'])) {
@@ -217,6 +220,16 @@ function rw_worker_scenario(string $name): array
                     ['id' => 3, 'make' => 'Ubiquiti', 'model' => 'USW-Pro-24', 'hw_type' => 'switch', 'notes' => null,
                      'groups_json' => null, 'device_json' => null, 'unitCount' => 2],
                 ]],
+            ];
+        case 'sor-links':
+            return [
+                ['match' => 'FROM interconnects ic', 'rows' => [[
+                    'id' => 30, 'link_kind' => 'fiber', 'label' => 'uplink', 'length_m' => '2.50',
+                    'media_standard' => 'om3', 'jacket_color' => 'aqua', 'notes' => 'to core',
+                    'asserted_kind' => 'human', 'asserted_at' => '2026-10-22 10:00:00', 'sourceSlug' => 'rackwire',
+                    'aName' => 'switch-a', 'bName' => 'switch-b', 'aIfName' => 'Ethernet1/0/1', 'bIfName' => 'Ethernet1/0/2',
+                    'aAssetTag' => 'SI-0001', 'bAssetTag' => 'SI-0002',
+                ]]],
             ];
         case 'create-plan':
             return [
@@ -318,7 +331,21 @@ function rw_worker_scenario(string $name): array
             return [
                 $sourceRow,
                 ['match' => 'SELECT id FROM entities WHERE LOWER(name) = LOWER(:n)', 'rows' => [['id' => 100]]],
+                ['match' => 'FROM interfaces WHERE entity_id = :eid AND name = :name', 'rows' => []],
                 ['match' => 'FROM interconnects WHERE deleted_at IS NULL AND link_kind = :lk', 'rows' => []],
+            ];
+        case 'commit-port':
+            return [
+                $sourceRow,
+                ['match' => 'hu.asset_tag = :tag', 'rows' => [['id' => 100]]],
+                ['match' => 'FROM interfaces WHERE entity_id = :eid AND name = :name', 'rows' => [['id' => 500]]],
+                ['match' => 'FROM interconnects WHERE deleted_at IS NULL AND link_kind = :lk', 'rows' => []],
+                ['match' => 'INSERT INTO interconnects', 'rows' => [], 'affected' => 1, 'insertId' => 88],
+            ];
+        case 'commit-ambiguous-name':
+            return [
+                $sourceRow,
+                ['match' => 'SELECT id FROM entities WHERE LOWER(name) = LOWER(:n)', 'rows' => [['id' => 100], ['id' => 101]]],
             ];
         default:
             return [];
@@ -329,6 +356,9 @@ function rw_worker_scenario(string $name): array
 
 register_shutdown_function(static function (): void {
     fwrite(STDERR, "STATUS:" . http_response_code() . "\n");
+    if (getenv('RW_CAPTURE') && isset($GLOBALS['rwTestPdo'])) {
+        fwrite(STDERR, 'CAPTURE:' . json_encode($GLOBALS['rwTestPdo']->executed) . "\n");
+    }
 });
 
 $scenario = (string) (getenv('RW_SCENARIO') ?: '');
@@ -336,12 +366,23 @@ if ($scenario === 'sor-disabled') {
     // Leave SOR_DB_USER unset: Sor::enabled() is false, Sor::db() 503s on the
     // first real query — exercises the documented failure envelope with no
     // FakePdo at all.
+} elseif ($scenario === 'real-db') {
+    // This mode exists only for the disposable integration script. Refuse
+    // anything except its loopback scratch database before the route runs.
+    if (getenv('RW_REAL_DB_TEST') !== '1' || getenv('SOR_DB_HOST') !== '127.0.0.1'
+        || getenv('SOR_DB_NAME') !== getenv('RW_TEST_DB')
+        || !in_array(getenv('SOR_DB_NAME'), ['sor_test', 'solarinet_stage'], true)) {
+        fwrite(STDERR, "real-db worker refused: expected an allowlisted loopback scratch DB\n");
+        exit(2);
+    }
 } else {
     putenv('SOR_DB_USER=rwtest');
     $ref  = new ReflectionClass(Sor::class);
     $prop = $ref->getProperty('pdo');
     $prop->setAccessible(true);
-    $prop->setValue(null, new RwFakePdo(rw_worker_scenario($scenario)));
+    $rwTestPdo = new RwFakePdo(rw_worker_scenario($scenario));
+    $GLOBALS['rwTestPdo'] = $rwTestPdo;
+    $prop->setValue(null, $rwTestPdo);
 }
 
 if (getenv('RW_AUTH')) {

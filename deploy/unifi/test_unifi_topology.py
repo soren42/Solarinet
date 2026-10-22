@@ -65,7 +65,7 @@ class TopologyTests(unittest.TestCase):
         self.assertIn("certificate verification is disabled", stderr.getvalue())
         self.assertIn("API key is sent over an unverified connection", stderr.getvalue())
         self.assertNotIn("fixture-key", stderr.getvalue())
-        client.assert_called_once_with("https://controller.invalid", "fixture-key", None)
+        client.assert_called_once_with("https://controller.invalid", "fixture-key", None, connect_ip=None)
 
     def test_cli_verified_ca_does_not_emit_insecure_warning(self):
         stderr = io.StringIO()
@@ -77,6 +77,18 @@ class TopologyTests(unittest.TestCase):
              redirect_stderr(stderr), redirect_stdout(io.StringIO()):
             self.assertEqual(0, topology.main([]))
         self.assertNotIn("certificate verification is disabled", stderr.getvalue())
+
+    def test_cli_passes_connection_ip_without_replacing_gateway_name(self):
+        with patch.dict(os.environ, {"UNIFI_GW": "https://controller.invalid",
+                                     "UNIFI_API_KEY": "fixture-key",
+                                     "UNIFI_CA_FILE": "/run/secrets/unifi-ca.pem",
+                                     "UNIFI_CONNECT_IP": "10.0.0.1"}, clear=True), \
+             patch.object(topology.unifipolld, "UniFiClient") as client, \
+             patch.object(topology, "collect_topology", return_value={"sites": []}), \
+             redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            self.assertEqual(0, topology.main([]))
+        client.assert_called_once_with("https://controller.invalid", "fixture-key",
+                                       "/run/secrets/unifi-ca.pem", connect_ip="10.0.0.1")
 
     def test_reads_site_network_pages_and_network_details(self):
         client = FakeClient({

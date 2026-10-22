@@ -66,8 +66,13 @@ function rw_worker_run(string $php, string $worker, array $env): array
     if (preg_match('/STATUS:(\d+)/', $stderr, $m) === 1) {
         $status = (int) $m[1];
     }
+    $capture = null;
+    if (preg_match('/CAPTURE:(\[.*\])/s', $stderr, $m) === 1) {
+        $capture = json_decode($m[1], true);
+    }
     $decoded = json_decode((string) $stdout, true);
-    return ['status' => $status, 'body' => is_array($decoded) ? $decoded : null, 'raw' => (string) $stdout];
+    return ['status' => $status, 'body' => is_array($decoded) ? $decoded : null,
+            'capture' => $capture, 'raw' => (string) $stdout];
 }
 
 $php = PHP_BINARY !== '' ? PHP_BINARY : 'php';
@@ -216,6 +221,14 @@ echo "\n[3] envelope shape\n";
     rw_test_ok($r['status'] === 200 && ($lib0['vendor'] ?? null) === 'Ubiquiti'
         && ($lib0['unitCount'] ?? null) === 2 && array_key_exists('groups', $lib0),
         'library row carries vendor/unitCount/groups', json_encode($lib0));
+
+    $r = $run(['RW_METHOD' => 'GET', 'RW_PATH' => '/api/rackwire/sor/interconnects',
+               'RW_AUTH' => '1', 'RW_SCENARIO' => 'sor-links']);
+    $link = ($r['body']['data'] ?? [])[0] ?? [];
+    rw_test_ok(($link['standard'] ?? null) === 'om3' && ($link['jacket'] ?? null) === 'aqua'
+        && ($link['lengthM'] ?? null) === 2.5
+        && ($link['a']['assetTag'] ?? null) === 'SI-0001' && ($link['b']['assetTag'] ?? null) === 'SI-0002',
+        'SoR overlay returns cable metadata and endpoint asset tags', json_encode($link));
 
     // GET /sor/interconnects with Sor unconfigured -> 503 service_unavailable
     // (migration 020 documented as "not applied" in this failure path).
@@ -397,6 +410,79 @@ echo "\n[7] commit link_kind from port domain\n";
     rw_test_ok(str_contains($committed, 'c-unknown: copper')
         && str_contains($committed, 'no endpoint port resolved'),
         'unresolvable port -> text heuristic, labelled as the fallback', $committed);
+    rw_test_ok(str_contains($committed, 'entity-level fallback'),
+        'missing SoR ports remain visible as an entity-level commit', $committed);
+}
+
+// A duplicate entity name must never select an arbitrary SoR entity.
+echo "[8] commit identity ambiguity\n";
+{
+    $ports = [['k' => 'lan', 'n' => 'LAN', 'domain' => 'net', 'conn' => 'rj45', 'count' => 1]];
+    $plan = [
+        'devices' => [
+            ['uid' => 'd1', 'name' => 'duplicate switch', 'groups' => $ports],
+            ['uid' => 'd2', 'name' => 'duplicate switch', 'groups' => $ports],
+        ],
+        'cables' => [[
+            'uid' => 'ambiguous-cable',
+            'a' => ['dev' => 'd1', 'port' => 'lan-1'],
+            'b' => ['dev' => 'd2', 'port' => 'lan-1'],
+            'standard' => 'cat6',
+        ]],
+    ];
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/commit',
+               'RW_BODY' => json_encode(['dryRun' => true, 'plan' => $plan]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'commit-ambiguous-name']);
+    $d = $r['body']['data'] ?? [];
+    $skipped = implode(' | ', $d['skipped'] ?? []);
+    rw_test_ok($r['status'] === 200 && ($d['created'] ?? null) === 0
+        && str_contains($skipped, 'endpoint device did not resolve'),
+        'duplicate entity names are refused instead of choosing the first row', $r['raw']);
+}
+
+echo "[9] commit preserves asset, port and cable fields\n";
+{
+    $ports = [['k' => 'lan', 'n' => 'LAN', 'domain' => 'net', 'conn' => 'rj45', 'count' => 1]];
+    $plan = [
+        'devices' => [
+            ['uid' => 'd1', 'name' => 'switch-a', 'assetId' => 'SI-0001',
+             'ifMap' => ['Ethernet1/0/1' => 'lan-1'], 'groups' => $ports],
+            ['uid' => 'd2', 'name' => 'switch-b', 'assetId' => 'SI-0002',
+             'ifMap' => ['Ethernet1/0/1' => 'lan-1'], 'groups' => $ports],
+        ],
+        'cables' => [[
+            'uid' => 'mapped-cable',
+            'a' => ['dev' => 'd1', 'port' => 'lan-1'],
+            'b' => ['dev' => 'd2', 'port' => 'lan-1'],
+            'standard' => 'cat6', 'label' => 'rack patch 1', 'lengthM' => 2.5,
+            'jacket' => 'blue', 'notes' => 'uplink',
+        ]],
+    ];
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/commit',
+               'RW_BODY' => json_encode(['dryRun' => false, 'plan' => $plan]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'commit-port', 'RW_CAPTURE' => '1']);
+    $d = $r['body']['data'] ?? [];
+    $calls = $r['capture'] ?? [];
+    $writes = array_values(array_filter($calls, static fn ($q) => str_starts_with($q['sql'] ?? '', 'INSERT INTO interconnects')));
+    $params = $writes[0]['params'] ?? [];
+    $tagLookups = array_values(array_filter($calls, static fn ($q) => str_contains($q['sql'] ?? '', 'hu.asset_tag = :tag')));
+    $ifLookups = array_values(array_filter($calls, static fn ($q) => str_contains($q['sql'] ?? '', 'FROM interfaces')
+        && str_contains($q['sql'] ?? '', 'entity_id = :eid')));
+    rw_test_ok($r['status'] === 200 && ($d['created'] ?? null) === 1
+        && str_contains(implode(' | ', $d['committed'] ?? []), 'port-level identity'),
+        'scanner asset tags and ifMap port identifiers resolve to a port-level link', $r['raw']);
+    rw_test_ok(count($tagLookups) === 2 && ($tagLookups[0]['params'][':tag'] ?? null) === 'SI-0001'
+        && ($tagLookups[1]['params'][':tag'] ?? null) === 'SI-0002'
+        && count($ifLookups) === 2 && ($ifLookups[0]['params'][':name'] ?? null) === 'Ethernet1/0/1',
+        'commit queries exact scanner tags and reverses ifMap to SoR interface names', json_encode($calls));
+    rw_test_ok(($params[':aif'] ?? null) === 500 && ($params[':bif'] ?? null) === 500
+        && array_key_exists(':ae', $params) && $params[':ae'] === null
+        && array_key_exists(':be', $params) && $params[':be'] === null,
+        'persisted endpoints use interface foreign keys', json_encode($params));
+    rw_test_ok(($params[':lbl'] ?? null) === 'rack patch 1' && ($params[':len'] ?? null) === 2.5
+        && ($params[':notes'] ?? null) === 'uplink' && ($params[':standard'] ?? null) === 'cat6'
+        && ($params[':jacket'] ?? null) === 'blue',
+        'label, length, standard, jacket and notes survive the commit', json_encode($params));
 }
 
 echo "\n" . $pass . " passed, " . $fail . " failed\n";

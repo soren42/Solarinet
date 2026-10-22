@@ -735,6 +735,96 @@
   /* ===================== PROVISIONING ===================== */
   function Provisioning({ onOpenNode }) {
     const [enr, setEnr] = useState(S.enrollments);
+    const [allocatorNetworks, setAllocatorNetworks] = useState([]);
+    const [allocatorBusy, setAllocatorBusy] = useState(false);
+    const [allocatorLoading, setAllocatorLoading] = useState(true);
+    const [allocatorError, setAllocatorError] = useState("");
+    const [allocatorSearch, setAllocatorSearch] = useState("");
+    function loadAllocatorNetworks() {
+      const a = api();
+      if (!a || !a.allocatorNetworks) {
+        setAllocatorLoading(false);
+        setAllocatorError("Network allocation review requires the live API.");
+        return;
+      }
+      setAllocatorLoading(true);
+      a.allocatorNetworks().then(function (rows) {
+        setAllocatorNetworks(Array.isArray(rows) ? rows : []);
+        setAllocatorError("");
+      }).catch(function (e) {
+        setAllocatorError(e && e.message || "Could not load SoR networks.");
+      }).finally(function () { setAllocatorLoading(false); });
+    }
+    useEffect(function () { loadAllocatorNetworks(); }, []);
+    function changeAllocatorEligibility(network) {
+      const eligible = !network.allocator_eligible;
+      if (!window.confirm((eligible ? "Approve " : "Revoke approval for ") + network.name +
+          (eligible ? " for static IP allocation? Source changes will revoke this approval." : "?"))) return;
+      const a = api();
+      if (!a || !a.setAllocatorEligibility) return;
+      setAllocatorBusy(true);
+      a.setAllocatorEligibility(network.id, eligible).then(function () {
+        toast(eligible ? "Static allocation approved for " + network.name : "Static allocation approval revoked", "check");
+        loadAllocatorNetworks();
+      }).catch(function (e) {
+        toast("Approval update failed: " + (e && e.message || "error"), "close");
+      }).finally(function () { setAllocatorBusy(false); });
+    }
+    function allocationReadiness(network) {
+      const overlaps = Array.isArray(network.overlapping_networks) ? network.overlapping_networks : [];
+      const count = Number(network.ipv4_subnet_count) || 0;
+      if (!network.enabled) {
+        return {
+          label: network.allocator_eligible ? "Approval needs review" : "Disabled at source",
+          tone: "blocked",
+          reason: network.allocator_eligible
+            ? "An approval is recorded, but this network is disabled at source. Review and revoke the approval."
+            : "Enable this network at its source before approving static allocation."
+        };
+      }
+      if (count !== 1) {
+        return {
+          label: network.allocator_eligible ? "Approval needs review" : "Blocked · subnet data",
+          tone: "blocked",
+          reason: "Approval requires exactly one live IPv4 subnet; this network has " + count + "."
+        };
+      }
+      if (overlaps.length) {
+        return {
+          label: network.allocator_eligible ? "Approval needs review" : "Blocked · prefix overlap",
+          tone: "blocked",
+          reason: (network.allocator_eligible ? "An approval is recorded, but " : "") +
+            "these live prefixes overlap: " + overlaps.join(", ") + ". Reconcile the SoR prefixes first."
+        };
+      }
+      if (network.allocator_eligible) {
+        return { label: "Approved", tone: "approved", reason: "Approved for static address allocation." };
+      }
+      return {
+        label: canOp() ? "Ready to approve" : "Operator approval required",
+        tone: "ready",
+        reason: canOp()
+          ? "One live IPv4 subnet and no overlapping SoR prefixes. Approval changes the SoR only; source changes revoke it."
+          : "This network meets the SoR checks. An operator must approve static allocation."
+      };
+    }
+    const allocatorEligibleCount = allocatorNetworks.filter(function (network) {
+      return allocationReadiness(network).label === "Approved";
+    }).length;
+    const allocatorReadyCount = allocatorNetworks.filter(function (network) {
+      return allocationReadiness(network).label === "Ready to approve" ||
+        allocationReadiness(network).label === "Operator approval required";
+    }).length;
+    const allocatorBlockedCount = allocatorNetworks.length - allocatorEligibleCount - allocatorReadyCount;
+    const allocatorQuery = allocatorSearch.trim().toLowerCase();
+    const visibleAllocatorNetworks = allocatorNetworks.filter(function (network) {
+      if (!allocatorQuery) return true;
+      const searchable = [network.name, network.purpose, network.management, network.vlan_name,
+        network.vlan_tag, ...(network.subnets || []).flatMap(function (subnet) {
+          return [subnet.cidr, subnet.gateway_ip, subnet.dhcp_pools];
+        })].filter(function (value) { return value != null; }).join(" ").toLowerCase();
+      return searchable.includes(allocatorQuery);
+    });
     const [token, setToken] = useState(null);
     const drifted = S.nodes.filter((n) => !n.converged);
     const converged = S.nodes.length - drifted.length;
@@ -890,6 +980,79 @@
       <div className="page">
         <div className="page-head">
           <div><h1 className="page-title">Provisioning</h1><div className="page-sub">enrollment · binary deploy · config convergence</div></div>
+        </div>
+
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <div className="panel__head"><Icon name="network" size={16} /><h3>Static address allocation</h3>
+            <div className="right">SoR · operator approval required</div>
+          </div>
+          <div className="panel__body">
+            <p className="muted" style={{ margin: "0 0 14px", maxWidth: 900 }}>
+              Review the VLAN, IPv4 subnet, gateway, and DHCP pool before enabling this segment for automated static address allocation.
+              Approval requires one live IPv4 subnet. Changes from the source revoke approval; this does not change UniFi configuration.
+            </p>
+            {allocatorLoading && <div className="td-mono muted" role="status">Loading SoR networks…</div>}
+            {allocatorError && <div className="td-mono" role="alert" style={{ color: "var(--warn)" }}>{allocatorError}
+              <button className="btn-ghost" style={{ marginLeft: 10 }} onClick={loadAllocatorNetworks}>Retry</button>
+            </div>}
+            {!allocatorLoading && !allocatorError && allocatorNetworks.length === 0 &&
+              <div className="td-mono muted">No live SoR networks are available.</div>}
+            {!allocatorLoading && !allocatorError && allocatorNetworks.length > 0 && <>
+              <div className="allocator-toolbar">
+                <label className="allocator-search">
+                  <span className="sr-only">Search networks by name, VLAN, subnet, gateway, or DHCP pool</span>
+                  <input type="search" value={allocatorSearch} onChange={function (event) { setAllocatorSearch(event.target.value); }}
+                    aria-label="Search networks by name, VLAN, subnet, gateway, or DHCP pool"
+                    placeholder="Search networks, VLANs, prefixes…" />
+                </label>
+                <div className="allocator-counts" role="status" aria-live="polite">
+                  <span><b>{allocatorEligibleCount}</b> approved</span>
+                  <span><b>{allocatorReadyCount}</b> ready</span>
+                  <span><b>{allocatorBlockedCount}</b> blocked</span>
+                  <span className="muted">{visibleAllocatorNetworks.length} of {allocatorNetworks.length}</span>
+                </div>
+              </div>
+              {visibleAllocatorNetworks.length === 0 &&
+                <div className="td-mono muted allocator-empty">No networks match “{allocatorSearch.trim()}”.</div>}
+            </>}
+            {!allocatorLoading && !allocatorError && visibleAllocatorNetworks.map(function (network) {
+              const subnetSummary = (network.subnets || []).map(function (subnet) {
+                return <div key={subnet.id} className="td-mono" style={{ marginTop: 4 }}>
+                  <span>{subnet.cidr}</span>{subnet.gateway_ip ? <span className="muted"> · gateway {subnet.gateway_ip}</span> : null}
+                  {subnet.dhcp_pools ? <div className="muted">DHCP {subnet.dhcp_pools}</div> : <div className="muted">No dynamic DHCP pool recorded</div>}
+                </div>;
+              });
+              const canApprove = canOp() && network.enabled && Number(network.ipv4_subnet_count) === 1
+                && !(network.overlapping_networks || []).length;
+              const readiness = allocationReadiness(network);
+              return <div key={network.id} className="enr-row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 260px", minWidth: 220 }}>
+                  <div className="td-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>{network.name}
+                    {network.vlan_tag != null ? <span className="muted"> · VLAN {network.vlan_tag}</span> : null}
+                    {network.is_default ? <span className="tag" style={{ marginLeft: 7 }}>controller default</span> : null}
+                  </div>
+                  <div className="muted" style={{ fontSize: 11 }}>{network.purpose || network.vlan_name || network.management || "Network segment"}</div>
+                  {subnetSummary.length ? subnetSummary : <div className="td-mono muted" style={{ marginTop: 4 }}>No live subnet</div>}
+                  {network.allocator_eligible && <div className="td-mono muted" style={{ marginTop: 5 }}>
+                    Approved by {network.allocator_approved_by || "unknown"}{network.allocator_approved_at ? " · " + network.allocator_approved_at + " UTC" : ""}
+                  </div>}
+                  {!!(network.overlapping_networks || []).length && <div className="td-mono" style={{ marginTop: 5, color: "var(--warn)" }}>
+                    Prefix overlap: {network.overlapping_networks.join(", ")} · reconcile before approval
+                  </div>}
+                  <div className={"allocator-reason " + (readiness.tone === "blocked" ? "is-blocked" : "")}>{readiness.reason}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+                  <span className={"tag allocator-state allocator-state--" + readiness.tone}>{readiness.label}</span>
+                  <button className={network.allocator_eligible ? "btn-ghost" : "btn-primary"}
+                    disabled={allocatorBusy || (!network.allocator_eligible && !canApprove) || (!canOp())}
+                    title={!canOp() ? "Operator role required" : (!canApprove && !network.allocator_eligible ? readiness.reason : undefined)}
+                    onClick={() => changeAllocatorEligibility(network)}>
+                    {network.allocator_eligible ? "Revoke" : "Approve"}
+                  </button>
+                </div>
+              </div>;
+            })}
+          </div>
         </div>
 
         <div className="panel" style={{ marginBottom: 18 }}>

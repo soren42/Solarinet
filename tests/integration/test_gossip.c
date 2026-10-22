@@ -9,8 +9,9 @@
 
 #define URL_A "tls+tcp://127.0.0.1:18813"
 #define URL_B "tls+tcp://127.0.0.1:18814"
+#define URL_C "tls+tcp://127.0.0.1:18817"
 #define URL_PLAIN "tcp://127.0.0.1:18815"
-static const char *caFile, *certA, *keyA, *certB, *keyB;
+static const char *caFile, *certA, *keyA, *certB, *keyB, *certC, *keyC;
 static const char *certRevoked, *keyRevoked, *certReplacement, *keyReplacement;
 static bool checkRevokedLeaf = true;
 void setUp(void) {}
@@ -30,13 +31,34 @@ static void cfgWith(monitorConfig *c, const char *ownUrl, const char *peerUrl,
     strncpy(c->keyFile, key, sizeof c->keyFile - 1);
 }
 
-static void test_two_monitors_converge_and_reject_forgery(void)
+static void cfgAddPeer(monitorConfig *c, const char *peerUrl)
 {
-    monitorConfig cfgA, cfgB;
-    monitorGossip *gA = NULL, *gB = NULL;
-    monitorPeers regA, regB;
-    uint64_t nodeA, nodeB, now = 1000, fleet[8];
-    size_t n;
+    size_t index = c->peerCount;
+    if (index >= MONITOR_MAX_FLEET) return;
+    strncpy(c->peerUrls[index], peerUrl, sizeof c->peerUrls[index] - 1);
+    c->peerCount++;
+}
+
+static bool sameFleet(const uint64_t *a, size_t aLen,
+                      const uint64_t *b, size_t bLen)
+{
+    size_t i, j;
+    if (aLen != bLen) return false;
+    for (i = 0; i < aLen; i++) {
+        for (j = 0; j < bLen && b[j] != a[i]; j++) {}
+        if (j == bLen) return false;
+    }
+    return true;
+}
+
+static void test_three_monitors_converge_churn_and_reject_forgery(void)
+{
+    monitorConfig cfgA, cfgB, cfgC;
+    monitorGossip *gA = NULL, *gB = NULL, *gC = NULL;
+    monitorPeers regA, regB, regC;
+    uint64_t nodeA, nodeB, nodeC, now = 1000;
+    uint64_t fleetA[8], fleetB[8], fleetC[8];
+    size_t nA, nB, nC;
     int tries;
     bool converged = false;
     solariConn *forger = NULL;
@@ -50,27 +72,73 @@ static void test_two_monitors_converge_and_reject_forgery(void)
 
     cfgWith(&cfgA, URL_A, URL_B, "a.gossip.test", certA, keyA);
     cfgWith(&cfgB, URL_B, URL_A, "b.gossip.test", certB, keyB);
+    cfgWith(&cfgC, URL_C, URL_A, "c.gossip.test", certC, keyC);
+    cfgA.peerTtlSec = cfgB.peerTtlSec = cfgC.peerTtlSec = 3;
+    cfgAddPeer(&cfgA, URL_C);
+    cfgAddPeer(&cfgB, URL_C);
+    cfgAddPeer(&cfgC, URL_B);
     nodeA = monitorNodeId(&cfgA);
     nodeB = monitorNodeId(&cfgB);
+    nodeC = monitorNodeId(&cfgC);
     monitorPeersInit(&regA, nodeA);
     monitorPeersInit(&regB, nodeB);
+    monitorPeersInit(&regC, nodeC);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorGossipOpen(&cfgA, nodeA, &gA));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorGossipOpen(&cfgB, nodeB, &gB));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorGossipOpen(&cfgC, nodeC, &gC));
     TEST_ASSERT_NOT_NULL(gA);
     TEST_ASSERT_NOT_NULL(gB);
-    for (tries = 0; tries < 60 && !converged; tries++) {
+    TEST_ASSERT_NOT_NULL(gC);
+    for (tries = 0; tries < 100 && !converged; tries++) {
         monitorGossipTick(gA, &regA, now);
         monitorGossipTick(gB, &regB, now);
+        monitorGossipTick(gC, &regC, now);
         now += 1000;
-        converged = regA.count >= 1 && regB.count >= 1;
+        converged = regA.count == 2 && regB.count == 2 && regC.count == 2;
         if (!converged) solariSleepMs(20);
     }
-    TEST_ASSERT_TRUE(regA.count >= 1);
-    TEST_ASSERT_TRUE(regB.count >= 1);
-    n = monitorPeersFleet(&regA, now, 90, fleet, 8);
-    TEST_ASSERT_EQUAL_size_t(2, n);
-    TEST_ASSERT_EQUAL_UINT64(nodeA, fleet[0]);
-    TEST_ASSERT_EQUAL_UINT64(nodeB, fleet[1]);
+    TEST_ASSERT_TRUE(converged);
+    nA = monitorPeersFleet(&regA, now, cfgA.peerTtlSec, fleetA, 8);
+    nB = monitorPeersFleet(&regB, now, cfgB.peerTtlSec, fleetB, 8);
+    nC = monitorPeersFleet(&regC, now, cfgC.peerTtlSec, fleetC, 8);
+    TEST_ASSERT_EQUAL_size_t(3, nA);
+    TEST_ASSERT_EQUAL_size_t(3, nB);
+    TEST_ASSERT_EQUAL_size_t(3, nC);
+    TEST_ASSERT_TRUE(sameFleet(fleetA, nA, fleetB, nB));
+    TEST_ASSERT_TRUE(sameFleet(fleetA, nA, fleetC, nC));
+    {
+        int ti;
+        for (ti = 0; ti < 120; ti++) {
+            char targetId[40];
+            int owners = 0;
+            snprintf(targetId, sizeof targetId, "tcp:mesh-target-%d:443", ti);
+            owners += monitorOwnsTarget(nodeA, fleetA, nA, targetId, 2);
+            owners += monitorOwnsTarget(nodeB, fleetB, nB, targetId, 2);
+            owners += monitorOwnsTarget(nodeC, fleetC, nC, targetId, 2);
+            TEST_ASSERT_EQUAL_INT(2, owners);
+        }
+    }
+
+    /* A departed monitor disappears from both survivor views after the peer
+     * TTL, and the two-node membership produces exactly two owners again. */
+    monitorGossipClose(gC);
+    gC = NULL;
+    converged = false;
+    for (tries = 0; tries <= (int)cfgA.peerTtlSec + 2 && !converged; tries++) {
+        monitorGossipTick(gA, &regA, now);
+        monitorGossipTick(gB, &regB, now);
+        monitorPeersPrune(&regA, now, cfgA.peerTtlSec);
+        monitorPeersPrune(&regB, now, cfgB.peerTtlSec);
+        now += 1000;
+        nA = monitorPeersFleet(&regA, now, cfgA.peerTtlSec, fleetA, 8);
+        nB = monitorPeersFleet(&regB, now, cfgB.peerTtlSec, fleetB, 8);
+        converged = nA == 2 && nB == 2 && sameFleet(fleetA, nA, fleetB, nB);
+        if (!converged) solariSleepMs(2);
+    }
+    TEST_ASSERT_TRUE(converged);
+    TEST_ASSERT_TRUE(!monitorOwnsTarget(nodeC, fleetA, nA, "tcp:mesh-target-0:443", 2));
+    TEST_ASSERT_TRUE(monitorOwnsTarget(nodeA, fleetA, nA, "tcp:mesh-target-0:443", 2));
+    TEST_ASSERT_TRUE(monitorOwnsTarget(nodeB, fleetB, nB, "tcp:mesh-target-0:443", 2));
 
     /* A valid A certificate cannot claim an unrelated node ID. */
     memset(&opts, 0, sizeof opts);
@@ -149,6 +217,7 @@ static void test_two_monitors_converge_and_reject_forgery(void)
     }
     monitorGossipClose(gA);
     monitorGossipClose(gB);
+    monitorGossipClose(gC);
 }
 
 /* A present but expired or malformed CRL must not be treated as a clean trust
@@ -225,21 +294,22 @@ static void test_plain_pipe_has_no_verified_peer_identity(void)
 
 int main(int argc, char **argv)
 {
-    if (argc != 10 && argc != 11) return 2;
+    if (argc != 12 && argc != 13) return 2;
     caFile = argv[1]; certA = argv[2]; keyA = argv[3]; certB = argv[4]; keyB = argv[5];
-    certRevoked = argv[6]; keyRevoked = argv[7];
-    certReplacement = argv[8]; keyReplacement = argv[9];
-    if (argc == 11 && strcmp(argv[10], "expect-invalid-crl") == 0) {
+    certC = argv[6]; keyC = argv[7];
+    certRevoked = argv[8]; keyRevoked = argv[9];
+    certReplacement = argv[10]; keyReplacement = argv[11];
+    if (argc == 13 && strcmp(argv[12], "expect-invalid-crl") == 0) {
         UNITY_BEGIN();
         RUN_TEST(test_invalid_crl_fails_closed);
         return UNITY_END();
     }
-    if (argc == 11 && strcmp(argv[10], "wrong-issuer") == 0)
+    if (argc == 13 && strcmp(argv[12], "wrong-issuer") == 0)
         checkRevokedLeaf = false;
-    else if (argc == 11)
+    else if (argc == 13)
         return 2;
     UNITY_BEGIN();
-    RUN_TEST(test_two_monitors_converge_and_reject_forgery);
+    RUN_TEST(test_three_monitors_converge_churn_and_reject_forgery);
     RUN_TEST(test_plain_pipe_has_no_verified_peer_identity);
     return UNITY_END();
 }
