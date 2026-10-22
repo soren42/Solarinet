@@ -107,6 +107,18 @@ if ($path === '/api/discovery/scan-requests/940') {
         'scanId' => $state === 'done' ? 941 : null, 'hostsTotal' => $state === 'done' ? 16 : null],
         'ts' => time()]); exit;
 }
+if ($path === '/api/discovery/scan-jobs') {
+    $phase = is_file(${JSON.stringify(scanStatePath)})
+        ? file_get_contents(${JSON.stringify(scanStatePath)}) : '';
+    header('Content-Type: application/json');
+    $jobs = in_array($phase, ['admission-done', 'sweep-done', 'candidate-done', 'scan-done'], true) ? [[
+        'scanId' => 941, 'cidr' => '127.0.0.1/32', 'ports' => '', 'status' => 'running',
+        'hostsTotal' => 16, 'hostsDone' => in_array($phase, ['sweep-done', 'candidate-done', 'scan-done'], true) ? 16 : 4,
+        'hostsFound' => in_array($phase, ['candidate-done', 'scan-done'], true) ? 1 : 0,
+        'error' => '', 'createdAt' => date('Y-m-d H:i:s.000'),
+    ]] : [];
+    echo json_encode(['ok' => true, 'data' => $jobs, 'ts' => time()]); exit;
+}
 if ($path === '/api/discovery/scans/941') {
     $scanPhase = is_file(${JSON.stringify(scanStatePath)})
         ? file_get_contents(${JSON.stringify(scanStatePath)}) : '';
@@ -244,12 +256,20 @@ async function main() {
     const pageErrors = [];
     const browserConsole = [];
     const externalRequests = [];
+    const scanJobsResponses = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('console', (message) => {
       if (message.type() === 'error') browserConsole.push(message.text());
     });
     page.on('request', (request) => {
       if (!request.url().startsWith(base + '/') && !request.url().startsWith('file://')) externalRequests.push(request.url());
+    });
+    page.on('response', async (response) => {
+      if (response.url().includes('/api/discovery/scan-jobs')) {
+        let body = '';
+        try { body = await response.text(); } catch (_) { /* response body may be unavailable */ }
+        scanJobsResponses.push(`${response.status()} ${body.slice(0, 500)}`);
+      }
     });
 
     await page.goto(`${base}/__fixture_session`, { waitUntil: 'domcontentloaded' });
@@ -485,6 +505,27 @@ async function main() {
     });
     assert(await page.getByRole('button', { name: 'Scan active…', exact: true }).isDisabled(),
       'the scan action must stay disabled while the worker is running');
+
+    // Durable scan state must recover from the server if browser session state
+    // disappears, rather than requiring the original tab storage to survive.
+    await page.evaluate(() => sessionStorage.removeItem('solari.activeScan'));
+    await page.reload();
+    await page.locator('.nav-item').filter({ hasText: /^Discovery$/ }).click();
+    await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
+    try {
+      await page.getByRole('status').filter({ hasText: 'Resumed saved scan' }).waitFor({ timeout: 5000 });
+    } catch (error) {
+      throw new Error(`Server scan recovery did not render: ${error.message}\n` +
+        `stored job: ${await page.evaluate(() => sessionStorage.getItem('solari.activeScan'))}\n` +
+        `scan-jobs responses: ${scanJobsResponses.join(' | ')}\n` +
+        `page errors: ${pageErrors.join(' | ')}\nconsole: ${browserConsole.join(' | ')}`);
+    }
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      return job && job.scanId === 941 && job.recoveredFromServer === true && job.status === 'running';
+    });
+    assert(await page.getByRole('button', { name: 'Scan active…', exact: true }).isDisabled(),
+      'server-recovered scan must keep duplicate admission disabled');
 
     // The progress card is component state backed by sessionStorage. Leaving
     // Discovery and returning should restore the same job and resume polling.

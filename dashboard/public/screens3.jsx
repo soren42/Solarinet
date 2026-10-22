@@ -173,6 +173,24 @@
       } catch (_) { /* scan continues even when browser storage is unavailable */ }
     }
     useEffect(function () {
+      if (scanJob) return;
+      const a = api();
+      if (!a || !a.listDiscoveryScanJobs) return;
+      let live = true;
+      a.listDiscoveryScanJobs().then(function (jobs) {
+        if (!live || !Array.isArray(jobs) || !jobs.length) return;
+        try {
+          if (window.sessionStorage.getItem("solari.activeScan")) return;
+        } catch (_) { /* recovery still works if browser storage is unavailable */ }
+        const active = jobs.find(function (job) { return ["queued", "running"].indexOf(job.status) >= 0; });
+        const latest = active || jobs[0];
+        if (latest && Number.isSafeInteger(Number(latest.scanId)) && Number(latest.scanId) > 0) {
+          setScanJob(Object.assign({}, latest, { recoveredFromServer: true }));
+        }
+      }).catch(function () { /* keep Discovery usable when scan history is unavailable */ });
+      return function () { live = false; };
+    }, []);
+    useEffect(function () {
       if (!scanJob || ["completed", "failed", "cancelled"].indexOf(scanJob.status) >= 0) return;
       const a = api();
       if (!a) return;
@@ -313,7 +331,8 @@
       && scanHostsTotal > 0 && scanHostsDone >= scanHostsTotal);
     const scanCandidateCount = scanCandidatesSaved + " candidate" + (scanCandidatesSaved === 1 ? "" : "s") + " saved";
     const scanProgress = scanJob && scanJob.status !== "completed" && scanJob.status !== "failed" && scanJob.status !== "cancelled"
-      ? (scanJob.status === "admission_pending" ? "Waiting for scan admission…"
+      ? (scanJob.recoveredFromServer ? "Resumed saved scan · " : "")
+        + (scanJob.status === "admission_pending" ? "Waiting for scan admission…"
         : scanSweepComplete
           ? "Scan running · Host sweep complete · finalizing candidate records · " + scanCandidateCount
           : "Scan " + scanJob.status + " · " + scanHostsDone + "/" + (scanHostsTotal || "?") + " hosts checked · " + scanCandidateCount)

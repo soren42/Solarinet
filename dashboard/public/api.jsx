@@ -284,6 +284,7 @@
     },
     discovery:    "/api/discovery",         // ?status=new|all
     discScan:     "/api/discovery/scan",     // POST {cidr, ports?}
+    discScanJobs: "/api/discovery/scan-jobs", // recent durable jobs for the authenticated operator
     discScanRequest: function (id) { return "/api/discovery/scan-requests/" + encodeURIComponent(id); },
     discScanStatus: function (id) { return "/api/discovery/scans/" + encodeURIComponent(id); },
     discAdopt:    function (id) { return "/api/discovery/" + encodeURIComponent(id) + "/adopt"; },
@@ -1123,6 +1124,7 @@
         .then(function (w) { return (Array.isArray(w) ? w : []).map(mapDiscovered); });
     },
     discoverScan: discoverScan,
+    listDiscoveryScanJobs: function () { return getJSON(EP.discScanJobs); },
     discoverScanRequest: function (id) { return getJSON(EP.discScanRequest(id)); },
     discoverScanStatus: function (id) { return getJSON(EP.discScanStatus(id)); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },

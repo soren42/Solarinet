@@ -36,6 +36,15 @@ final class Operator
     public static function requireOperator(): string { return 'test-operator'; }
 }
 
+final class Db
+{
+    public static array $rows = [];
+    public static string $sql = '';
+    public static array $params = [];
+    public static function rows(string $sql, array $params = []): array
+    { self::$sql = $sql; self::$params = $params; return self::$rows; }
+}
+
 final class SolariCtl
 {
     public static array $call = [];
@@ -127,6 +136,22 @@ assert_true(SolariCtl::$call[0] === 'REQUEST_GET' && SolariCtl::$call[1]['op'] =
     'queue admission status must be scoped to the authenticated operator');
 assert_true(Response::$result['scanId'] === 42 && Response::$result['state'] === 'done',
     'completed queue admission should recover its durable scan id');
+
+Db::$rows = [[
+    'scanId' => '73', 'cidr' => '10.0.0.0/24', 'ports' => '', 'status' => 'running',
+    'hostsTotal' => '254', 'hostsDone' => '96', 'hostsFound' => '4',
+    'errorText' => null, 'createdAt' => '2026-10-22 12:34:56.000',
+]];
+($router->gets['/api/discovery/scan-jobs'])();
+assert_true(str_contains(Db::$sql, 'WHERE requestedBy = :requestedBy'),
+    'recent scan jobs must be scoped in SQL to the authenticated requester');
+assert_true(Db::$params === [':requestedBy' => 'test-operator'],
+    'recent scan jobs must bind the authenticated requester');
+assert_true(Response::$result === [[
+    'scanId' => 73, 'cidr' => '10.0.0.0/24', 'ports' => '', 'status' => 'running',
+    'hostsTotal' => 254, 'hostsDone' => 96, 'hostsFound' => 4, 'error' => '',
+    'createdAt' => '2026-10-22 12:34:56.000',
+]], 'recent scan jobs should expose bounded progress without leaking another operator identity');
 
 foreach ([
     ['cidr' => '999.1.1.1/24'],

@@ -58,3 +58,12 @@ No main branch has been merged and no release tags exist. The scanner-ingest man
 - State whether the code is suitable for a development deployment, and list the exact conditions still required before merging or tagging.
 
 **Secret handling:** This brief contains no credentials, tokens, private keys, or secret values. Refer to secret files by path only; do not copy their contents into review notes.
+
+
+## 2026-10-22 candidate delta: durable scan recovery
+
+The working candidate adds `GET /api/discovery/scan-jobs`, operator-authenticated and requester-scoped, returning only the ten newest jobs. Discovery fetches this list when sessionStorage has no active scan and restores a queued/running job (or the latest terminal result). Tests assert SQL requester scoping, API normalization, active-state restoration in the scanner/RackWire browser fixture, and terminal-state recovery against the real scratch monitoring DB after a native loopback scan.
+
+Local verification passed: `php -l dashboard/api/routes/discovery_mut.php`, `php tests/dashboard/test_discovery_scan_input.php`, `node --check` for both changed browser tests, the scanner-import/RackWire Chromium E2E against Cesium loopback scratch SoR, and the RackWire-to-native-worker Chromium E2E against Cesium loopback scratch monitoring/SoR schemas. The worker test verified 1/1 loopback host, one candidate, retry idempotency, adoption, and terminal recovery after browser session state removal.
+
+Review remains pending. This is an internal same-lab change and has not had a cross-lab reviewer. Wider subnet authorization, deployment behind PHP-FPM, durable worker restart/requeue policy, and scanner-device streaming/automatic ingest remain unverified or outside this patch. The scanner app integration remains a preview/apply import of a schema-v1 JSON snapshot; it does not claim live device streaming.

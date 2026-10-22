@@ -78,6 +78,32 @@ return static function (Router $router): void {
         Response::ok($out);
     }, ['auth' => 'operator']);
 
+    // Recover recent durable scans when browser session storage is lost or the
+    // operator returns from another tab/device. Keep the result scoped to the
+    // authenticated requester and bound it to the ten newest jobs.
+    $router->get('/api/discovery/scan-jobs', static function (): void {
+        $op = Operator::requireOperator();
+        $rows = Db::rows(
+            'SELECT scanId, cidr, ports, status, hostsTotal, hostsDone, hostsFound, errorText, createdAt '
+            . 'FROM discoveryScanJob WHERE requestedBy = :requestedBy ORDER BY scanId DESC LIMIT 10',
+            [':requestedBy' => $op]
+        );
+        $jobs = array_map(static function (array $row): array {
+            return [
+                'scanId' => (int) $row['scanId'],
+                'cidr' => (string) $row['cidr'],
+                'ports' => (string) $row['ports'],
+                'status' => (string) $row['status'],
+                'hostsTotal' => (int) $row['hostsTotal'],
+                'hostsDone' => (int) $row['hostsDone'],
+                'hostsFound' => (int) $row['hostsFound'],
+                'error' => (string) ($row['errorText'] ?? ''),
+                'createdAt' => (string) $row['createdAt'],
+            ];
+        }, $rows);
+        Response::ok($jobs);
+    }, ['auth' => 'operator']);
+
     $router->get('/api/discovery/scans/{scanId}', static function (array $p): void {
         $scanId = self_scan_id($p['scanId'], 'scanId');
         $op = Operator::requireOperator();

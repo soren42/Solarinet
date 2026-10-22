@@ -2540,3 +2540,33 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
 - **UNVERIFIED:** cross-lab review, actual elapsed-token expiry handling by the PHP
   guard, deployed candidate behavior, exact scanner source-location mapping, and
   scanner-ingest repository ownership/remotes.
+
+## 2026-10-22 — durable realtime Discovery recovery
+
+- Added the operator-authenticated `GET /api/discovery/scan-jobs` endpoint. It
+  returns at most the ten newest jobs for the authenticated requester, with
+  bounded progress fields and no requester identity in the response.
+- Discovery now queries that endpoint when browser session state is missing. It
+  resumes an active queued/running job first, or shows the newest terminal job;
+  recovered active jobs continue the existing status polling and keep duplicate
+  scan submission disabled. The scan still runs in the durable worker/database
+  path when a tab closes.
+- Added route coverage for requester scoping and API row normalization, plus
+  browser coverage for active recovery and lost-session recovery after a native
+  scan completes.
+- Verification on 2026-10-22: PHP syntax and scan route tests passed; the
+  scanner-import/RackWire Chromium E2E passed against the isolated Cesium SoR
+  schema on loopback port 13316; the RackWire-to-native-worker E2E passed with a
+  real loopback scan, native worker and C bridge, disposable MariaDB schemas,
+  SoR candidate adoption, idempotent admission retry, and terminal job recovery
+  after clearing sessionStorage. These tests establish scan plumbing and local
+  host discovery, not authorization to scan a broader subnet or deployed service
+  behavior.
+- Cesium has only a per-user loopback MariaDB scratch instance and temporary
+  PHP CLI packages for these checks. No dashboard service, public listener,
+  persistent worker, or live SoR change was deployed. Package installation also
+  caused repository-resolved glibc package updates; `zypper ps -s` reported no
+  process using deleted files or updated core libraries/services since boot.
+- `git diff --check`, PHP syntax, route tests, and Node syntax checks passed.
+  Hosted CI, cross-lab review, a staged app deployment, mirrored push, merge,
+  and release have not yet been performed for this working diff.
