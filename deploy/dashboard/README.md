@@ -141,6 +141,23 @@ it below `/opt/solarinet/releases/`; the installer verifies every file hash and
 atomically points `/opt/solarinet/current` at the new release. Server, PHP, and
 Apache all use that same active tree:
 
+CI keeps sanitizer binaries for the instrumented tests, then builds a separate
+Linux Release pair with `deploy/build-release-binaries.sh` using the pinned
+NNG and mbedTLS static archives. Before upload, the binary check rejects
+sanitizer or dynamic NNG/mbedTLS dependencies, embedded RPATH/RUNPATH entries,
+and unresolved `ldd` dependencies. The Release server and scan worker also run
+against disposable MariaDB schemas before the dashboard job uses those same
+binaries for archive, activation, and rollback tests. For a local build, pass
+the prefix created by `deploy/build-pinned-io-deps.sh`; the optional second
+argument selects the build directory:
+
+```sh
+bash deploy/build-pinned-io-deps.sh /tmp/solarinet-io-deps
+bash deploy/build-release-binaries.sh /tmp/solarinet-io-deps build-release
+SOLARI_RELEASE_BIN_DIR=build-release/src/server \
+  python3 -m unittest discover -s deploy/dashboard -p 'test_release.py' -v
+```
+
 Initialize the pinned RackWire submodule before packaging. The relative submodule
 URL resolves to the sibling RackWire repository on either hosting service. The
 packager requires its checkout to match the parent repository's gitlink and records the exact

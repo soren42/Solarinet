@@ -2738,3 +2738,23 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   PHP-FPM/Apache behavior, larger-range throughput, service reboot recovery,
   and independent cross-lab review. The current CI release package test still
   uses sanitizer-built binaries and needs a runtime dependency gate.
+
+## 2026-10-22 — Release binary portability gate added
+
+- Added `deploy/build-release-binaries.sh` to build the Linux Release server and
+  scan worker against the existing pinned static NNG/mbedTLS archives.
+- Added a runtime checker that rejects ASan/UBSan and dynamic NNG/mbedTLS
+  dependencies, any embedded RPATH/RUNPATH, and unresolved `ldd` libraries.
+  The local Cesium-compatible Release binaries pass; the existing sanitizer
+  binary pair is rejected as expected.
+- CI now keeps the instrumented build for sanitizer coverage, builds the
+  portable Release pair separately, exercises the Release server and worker
+  against disposable MariaDB schemas, uploads those binaries, and uses them
+  for release archive activation/rollback tests. The packaging test accepts
+  an explicit binary directory so it exercises the actual Release artifact.
+- Local static Release build and the 9 release archive/rollback tests pass.
+  Shell syntax, Python compilation, CI YAML parsing, and `git diff --check`
+  pass. ShellCheck is not installed in this workspace.
+- **UNVERIFIED:** hosted CI for the new Release profile and independent
+  cross-lab review. No installed binary or production service was changed by
+  this CI-profile patch.

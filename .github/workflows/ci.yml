@@ -361,13 +361,35 @@ jobs:
           SOR_DB_NAME: solarinet_scan_worker_sor_ci
           MYSQL_PWD: serverci_scratch
         run: node tests/browser/test_scan_worker_browser_e2e.cjs build-server/src/server/solariScanWorker build-server/tests/test_ctl_adopt_bridge
+      - name: Build portable Linux Release server binaries
+        run: bash deploy/build-release-binaries.sh /tmp/solarinet-io-deps build-release
+      - name: Exercise Release server and worker against scratch MariaDB
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_lease_process_ci
+          MYSQL_PWD: serverci_scratch
+        run: python3 tests/integration/test_server_lease_processes.py build-release/src/server/solariServer build-release/src/server/solariScanWorker
+      - name: Exercise Release scan worker against scratch MariaDB
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_scan_worker_ci
+          MYSQL_PWD: serverci_scratch
+        run: python3 tests/integration/test_scan_worker_process.py build-release/src/server/solariScanWorker build-server/tests/test_ctl_adopt_bridge
       - uses: actions/upload-artifact@v4
-        name: Upload release-test server binaries
+        name: Upload portable Release server binaries
         with:
           name: solarinet-server-binaries
           path: |
-            build-server/src/server/solariServer
-            build-server/src/server/solariScanWorker
+            build-release/src/server/solariServer
+            build-release/src/server/solariScanWorker
           if-no-files-found: error
 
   rackwire-browser:
@@ -412,12 +434,12 @@ jobs:
         with:
           submodules: recursive
       - uses: actions/download-artifact@v4
-        name: Download release-test server binaries
+        name: Download portable Release server binaries
         with:
           name: solarinet-server-binaries
-          path: build-server/src/server
-      - name: Mark downloaded server binaries executable
-        run: chmod 0755 build-server/src/server/solariServer build-server/src/server/solariScanWorker
+          path: build-release/src/server
+      - name: Mark downloaded Release binaries executable
+        run: chmod 0755 build-release/src/server/solariServer build-release/src/server/solariScanWorker
       - name: Install PHP CLI
         run: |
           sudo apt-get update -y
@@ -540,6 +562,8 @@ jobs:
           SOR_DB_PASS: rwci_scratch
         run: node tests/browser/test_scanner_import_e2e.cjs
       - name: Dashboard release package, activation, and rollback contract
+        env:
+          SOLARI_RELEASE_BIN_DIR: build-release/src/server
         run: python3 -m unittest discover -s deploy/dashboard -p 'test_release.py' -v
       - name: Ledgered clean installs for monitoring and SoR
         env:

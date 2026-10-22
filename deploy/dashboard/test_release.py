@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -18,8 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = ROOT / "deploy/dashboard/package-release.py"
 INSTALLER = ROOT / "deploy/dashboard/install-release.py"
-BINARY = ROOT / "build-server/src/server/solariServer"
-SCAN_WORKER = ROOT / "build-server/src/server/solariScanWorker"
+BIN_DIR = Path(os.environ.get("SOLARI_RELEASE_BIN_DIR", ROOT / "build-server/src/server"))
+BINARY = BIN_DIR / "solariServer"
+SCAN_WORKER = BIN_DIR / "solariScanWorker"
 PACKAGER_SPEC = importlib.util.spec_from_file_location("dashboard_package_release", PACKAGER)
 assert PACKAGER_SPEC and PACKAGER_SPEC.loader
 PACKAGER_MODULE = importlib.util.module_from_spec(PACKAGER_SPEC)

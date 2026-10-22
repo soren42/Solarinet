@@ -101,7 +101,11 @@
     displayed it. The page was in live mode, API reads returned HTTP 200, and the browser reported
     no page errors or cross-origin requests. The first run exposed missing dev DB environment in
     PHP; after configuring the isolated development DB, acceptance passed. This remains a
-    loopback-only development deployment, not a production release.
+    loopback-only development deployment, not a production release. A repeatable CI Release
+    build was added to the current integration candidate: it statically links pinned NNG/mbedTLS,
+    checks for sanitizer and build-path dependencies, runs the release server and worker against
+    scratch databases, and packages those same binaries. Hosted verification of that addition is
+    pending.
     The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
