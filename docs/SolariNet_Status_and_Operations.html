@@ -77,16 +77,15 @@
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
     is maintained on Forgejo first and mirrored to GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
-    The Forgejo integration ref now leads GitHub by this documentation-only follow-up; GitHub remains
-    at <code>d499ac7</code> while its Actions results recover. The code candidate
+    The last verified common integration ref is <code>c867bcb</code>; both <code>main</code> refs
+    remain at <code>5e8d688</code>. This status and Forgejo CI readiness update is being published
+    to Forgejo first. The code candidate
     <code>c1ce64d</code> includes the
     realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
     acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
-    GitHub PR #37 run <code>39794749486</code> is validating the preceding GitHub mirror tip <code>d499ac7</code>. Its results are delayed:
     GitHub reports an active Actions incident affecting workflow and step results
     (<a href="https://www.githubstatus.com/api/v2/incidents/unresolved.json">incident q29p76qtnkyk</a>, checked 22 October).
-    Forgejo remains the primary Git remote, but this candidate has no <code>.forgejo/workflows</code>
-    definition. No Actions runner was found on Cesium, Benzene, Xenon, Chlorine, or this workspace. Steel is unreachable; other possible runner hosts remain unchecked. The GitHub workflow therefore remains the only verified hosted CI.
+    GitHub run <code>39798443486</code> on <code>c867bcb</code> has now completed with all 15 jobs successful. Earlier integration runs on intermediate docs commits were cancelled when superseded. Forgejo is the primary remote, but this repository still has no <code>.forgejo/workflows</code> definition and no verified runner. A safe Forgejo CI path must preserve the existing tests' loopback-only scratch DB/broker guards and support their Docker-based upgrade test. No Actions runner was found on Cesium, Benzene, Xenon, Chlorine, or this workspace. Steel is unreachable; other possible runner hosts remain unchecked. Forgejo CI is unverified; see <a href="FORGEJO_CI.md">the Forgejo CI readiness assessment</a>. GitHub remains the only hosted validation path. GitHub still reports Actions result delays under an active incident.
     The previous docs-only run
     <code>39738275605</code> passed all 15 jobs on <code>46045e9</code>; code run
     <code>39737421770</code> passed all 15 jobs, including the database-backed
@@ -125,9 +124,8 @@
     Adopting <code>10.0.0.20</code> updated monitoring and SoR rows only in disposable test
     databases. This validates the development workflow and does not establish production scan or
     adoption behavior.
-    This status refresh is published to Forgejo first. The GitHub draft review branch remains at
-    <code>d499ac7</code> until its hosted checks recover; no main branch merge or release tag exists. The public review branch is
-    open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
+    This status refresh is published to Forgejo first. The GitHub draft review branch is
+    open as draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
       <title id="map-title">SolariNet integration boundaries</title>
