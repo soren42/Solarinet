@@ -2755,6 +2755,9 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
 - Local static Release build and the 9 release archive/rollback tests pass.
   Shell syntax, Python compilation, CI YAML parsing, and `git diff --check`
   pass. ShellCheck is not installed in this workspace.
-- **UNVERIFIED:** hosted CI for the new Release profile and independent
-  cross-lab review. No installed binary or production service was changed by
-  this CI-profile patch.
+- GitHub run `39737421770` passed all 15 jobs on commit `8f5af081`. It built
+  the portable Release binaries, exercised the Release server failover and
+  scan worker lifecycle against disposable MariaDB schemas, uploaded those
+  artifacts, and passed dashboard archive activation/rollback using them.
+- **UNVERIFIED:** independent cross-lab review. This CI-profile patch changed
+  no installed binary or production service.

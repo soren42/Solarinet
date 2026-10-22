@@ -77,11 +77,14 @@
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
     is mirrored on Forgejo and GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
-    The integration code candidate <code>c1ce64d</code> is pushed to both remotes; it includes the
+    Latest integration tip <code>8f5af08</code> is pushed to both remotes; its code candidate
+    <code>c1ce64d</code> includes the
     realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
     acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
-    GitHub PR #37 run <code>39733247468</code> passed all 15 jobs, including the database-backed
-    Discovery API and browser-to-native-worker candidate-ingest acceptance. The prior code head
+    GitHub PR #37 run <code>39737421770</code> passed all 15 jobs, including the database-backed
+    Discovery API and browser-to-native-worker candidate-ingest acceptance, plus the separate
+    portable Release server/worker build, lifecycle checks, and package activation/rollback suite.
+    The prior code head
     <code>c4b8975</code> passed all 17 checks in run <code>39730919455</code>, including live Discovery worker/API,
     candidate adoption, scanner/RackWire browser flow, and release-package/rollback checks.
     RackWire PR #1 at <code>a66bd21</code> has green hosted checks (run
@@ -105,7 +108,9 @@
     build was added to the current integration candidate: it statically links pinned NNG/mbedTLS,
     checks for sanitizer and build-path dependencies, runs the release server and worker against
     scratch databases, and packages those same binaries. Hosted verification of that addition is
-    pending.
+    complete: GitHub run <code>39737421770</code> passed all 15 jobs, including release server
+    failover, scan worker lifecycle, and dashboard package activation/rollback tests using the
+    portable Release artifacts.
     The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
