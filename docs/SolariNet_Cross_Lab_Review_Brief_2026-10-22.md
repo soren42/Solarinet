@@ -8,11 +8,11 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | `integrate/stability-20261020` at `3a0246d` | Both Forgejo and GitHub `main` are `5e8d688`; draft GitHub PR #37 is open. The local worktree also has uncommitted scan retry/idempotency code, scan-to-SoR browser acceptance, CI environment changes, and documentation. |
+| SolariNet | `integrate/stability-20261020` at `789b1d3` | Both Forgejo and GitHub `main` are `5e8d688`; both integration refs point to the candidate. Draft GitHub PR #37 is open. |
 | RackWire | `integrate/solarinet-20261021` at `99453f3` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | `integrate/solarinet-20261021` at `ebb9a58` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Manual and validation documentation is locally modified. |
 
-No main branch has been merged and no release tags exist. Do not treat the newest local diff as part of PR #37: it is not yet committed or hosted.
+No main branch has been merged and no release tags exist. The scanner-ingest manual/validation edits remain local and have no configured remote.
 
 ## High-priority review surfaces
 
@@ -25,7 +25,7 @@ No main branch has been merged and no release tags exist. Do not treat the newes
 
 ## Evidence available
 
-- Root GitHub PR #37 at `3a0246d`: hosted CI run `39706191166`, 15/15 jobs successful.
+- Root GitHub PR #37 at code-bearing commit `789b1d3`: hosted CI run `39715155684`, 15/15 jobs successful, including dashboard/API, scanner/RackWire browser acceptance, server build/tests, and RabbitMQ version matrix.
 - RackWire GitHub PR #1 at `99453f3`: hosted run `39704732584`, backend/runtime checks successful.
 - Root candidate browser/integration suite previously exercised scanner import, RackWire plan persistence, barcode resolution, authenticated scan admission, native worker progress, and candidate visibility. A direct, bounded `10.0.0.0/24` acceptance processed 254 addresses and produced 14 reviewable candidates in a disposable database.
 - New local scan retry and ingest patch: API retains the idempotency key after an uncertain network failure, clears it after successful admission, and uses a fresh key for a later intentional scan. The server binds idempotency replay to the original verb and argument payload; same-key/different-payload requests fail closed. The live DB integration test covers mismatch rejection and no extra row. In the browser test, the first scan reached PHP, the C queue, and MariaDB before its response was dropped; after reload, the retry returned the original admission. The browser then adopted the candidate through the Monitor dialog and verified one monitoring asset plus the mapped IPv4 address on a separate SoR entity. The combined direct-route run passed on disposable MariaDB 11.8.9 monitoring and SoR schemas: 254/254 addresses processed, 12 candidates found, the listener candidate visible while the scan remained running, and `10.0.0.20` adopted into monitoring and SoR. A loopback `/32` combined run also passed. Both used the native worker, C bridge, PHP API, authenticated dashboard, and local Chromium. The CI browser step now receives both scratch database configurations, and the harness rejects missing or non-scratch SoR settings. The PHP route test, Node syntax check, YAML parse, and whitespace check pass. A local reviewer found and cleared the payload-binding fix; the requested cross-lab review and hosted CI remain pending.
@@ -34,7 +34,7 @@ No main branch has been merged and no release tags exist. Do not treat the newes
 - Current committed F-01 coverage includes same-CN renewal: `test_gossip.sh` creates two distinct leaf serials for the same identity, revokes the old leaf, and `test_gossip.c` verifies rejection of the revoked leaf plus acceptance and gossip admission of the replacement. `ctest --test-dir build-server --output-on-failure -R '^test_gossip$'` passed 1/1 locally. This proves the pinned loopback TLS fixture behavior after CRL activation, not fleet distribution, freshness acknowledgement, or production rollout.
 - UniFi already has a read-only SoR comparison in `deploy/unifi/unifi_topology.py`: its source collector rejects incomplete pages, `load_sor_state()` uses `SET TRANSACTION READ ONLY` and `SELECT` statements, and `compare_sor()` emits `review_required` conflicts without a writer. `python3 -m unittest discover -s deploy/unifi -p 'test_*.py' -v` passed 18/18. The test suite verifies a source `/8` overlapping 16 SoR `/24`s and a DHCP overlap. This turn used fixtures only; the live UniFi/SoR snapshot was not re-read.
 - Benzene RabbitMQ is currently healthy on the floating `rabbitmq:3-management` tag with four empty application queues and seven connections. Its live upgrade remains deferred pending independent review and pinned startup. DNS state, source ambiguity, off-host backup limits, and remaining release gates are recorded in the linked Status & Operations guide and stabilization workflow.
-- Candidate validation after the latest local changes: `cmake --build build-server --parallel 4` passed; full monitoring CTest passed 36/36 against a disposable MariaDB migrated through 033, and `test_net_loopback` passed separately. scanner-ingest pytest passed 47 tests with 16 skips and 31 subtests. UniFi tests passed 18/18 and DNS release tests passed 17/17. Hosted CI has not yet run on these changes.
+- Candidate validation after the latest code changes: `cmake --build build-server --parallel 4` passed; full monitoring CTest passed 36/36 against a disposable MariaDB migrated through 033, and `test_net_loopback` passed separately. scanner-ingest pytest passed 47 tests with 16 skips and 31 subtests. UniFi tests passed 18/18 and DNS release tests passed 17/17. The hosted run listed above covers the pushed code candidate.
 
 ## Open release questions
 

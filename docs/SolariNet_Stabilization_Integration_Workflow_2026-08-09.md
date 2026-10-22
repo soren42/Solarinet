@@ -2382,6 +2382,27 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   the deployed dashboard. No live scan, SoR inventory, DNS, or UniFi state was
   changed.
 
+## 2026-10-22 — realtime discovery and inventory candidate CI
+
+- Committed the authenticated realtime scan retry, server-side payload-bound
+  idempotency, scan-to-monitoring/SoR browser acceptance, scanner-ingest export
+  to RackWire browser acceptance, scratch SoR CI wiring, accessibility labels,
+  broker configuration guide, and updated status/review artifacts as
+  `789b1d3`. The commit was pushed to matching GitHub and Forgejo
+  `integrate/stability-20261020` refs. GitHub draft PR #37 run `39715155684`
+  passed all 15 jobs, including dashboard/API, scanner/RackWire browser,
+  server/database, cross-platform, and RabbitMQ-version coverage.
+- Local verification also passed the full monitoring CTest suite (36/36) against
+  disposable MariaDB migrated through 033, the separate loopback transport
+  test, scanner-ingest pytest (47 passed, 16 skipped, 31 subtests), UniFi tests
+  (18/18), and DNS release tests (17/17). RackWire PR #1 remains green at
+  `99453f3`.
+- **UNVERIFIED:** independent cross-lab review; authenticated browser behavior
+  on Xenon's deployed dashboard; exact physical destination mapping for
+  scanner locations “Bin #5” and “Nook”; scanner-ingest publication ownership
+  and remote; and deployment/release integration. No main branch was merged,
+  no version was tagged, and no live SoR, DNS, or UniFi state was changed.
+
 ## 2026-10-22 — RabbitMQ live health and upgrade gate recheck
 
 - Read-only Benzene inspection found the rootful Podman container `rabbitmq`
