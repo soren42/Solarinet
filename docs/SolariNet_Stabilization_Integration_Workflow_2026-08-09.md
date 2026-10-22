@@ -2250,24 +2250,40 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   checked that the guide describes the `/24` result while preserving the
   larger-range and deployment limits.
 
-## 2026-10-22 — Xenon logical restore drill
+## 2026-10-22 — Xenon local backup deployment and restore
 
-- Confirmed Xenon's backup timer is inactive, the installed runner/config and
-  mounted target are absent, and the NAS-X `SolariNetBackups` directory has not
-  been provisioned. SSH to NAS-X timed out; no NAS state was changed.
+- Initial inspection confirmed Xenon's backup timer, installed runner/config,
+  and mounted target were absent. MariaDB 11.8.6 was active, the root NVMe had
+  362 GiB free, and `/var/backups/solarinet` was mode 0750 with existing
+  rollback content; it was left untouched. NAS-X `SolariNetBackups` is still
+  unprovisioned; SSH to NAS-X timed out and no NAS state was changed.
 - Attempted the configured MariaDB socket identity (`mysql`) and TCP root
   access. Both were denied. A root Unix-socket `mysqldump` succeeded instead;
   its gzip stream was piped directly over SSH into a disposable local MariaDB
   11.8.6 container without writing an archive to disk.
-- The live source and restored database both reported 29 base tables and zero
-  views, triggers, routines, and events. `mariadb-check` passed every restored
-  table. No write was made to Xenon; the scratch container was removed.
+- The live source and initial scratch restore both reported 29 base tables and
+  zero views, triggers, routines, and events. `mariadb-check` passed every
+  restored table. No write was made to the source database; that scratch
+  container was removed.
 - Corrected the Xenon example to use root Unix-socket authentication and omit
   host/port overrides. The former `mysql` identity and TCP root path were
   rejected on the live host; the root socket path used for the successful drill
   matches the systemd service's root identity.
-- This validates logical dump and restore mechanics only. Unattended
-  authentication, the installed backup runner, scheduled artifacts, off-host
-  retention, NAS permissions, and Forgejo recovery remain unverified. Updated
-  the backup README and monolithic runbook HTML/PDF with this evidence and the
-  corrected authentication status.
+- Added `backup.conf.xenon-local.example` for the host-local NVMe target and
+  installed the runner, service/timer units, and fail-soft notifier on Xenon.
+  The root-owned config uses the tested root Unix socket, targets a new
+  `/var/backups/solarinet-db` directory at mode 0700, and requires no password
+  file. The pre-existing backup directory was not modified.
+- Started the one-shot systemd service. It completed successfully in 22.4 s and
+  wrote `solarinet-2026-10-22.sql.gz` (56,383,267 bytes), root:root mode 0600;
+  `gzip -t` passed. Streamed this exact artifact into a disposable MariaDB
+  11.8.6 container after creating the scratch DB. All 29 tables passed
+  `mariadb-check`; object counts matched at 29 base tables and zero views,
+  triggers, routines, or events. The scratch container was removed.
+- Enabled `solari-backup@xenon.timer`; systemd reported it active with the next
+  run at 2026-10-22 03:34 UTC. This provides a recurring local recovery copy,
+  but Xenon/NVMe failure still loses both the DB and copy. NAS provisioning,
+  effective CIFS modes, off-host artifact/restore, Forgejo recovery, and
+  production recovery objectives remain **UNVERIFIED**.
+- Updated the backup README, paired monolithic runbook HTML/PDF, and status
+  guide HTML/PDF with the deployed state and remaining off-host gates.

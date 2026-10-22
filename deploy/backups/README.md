@@ -99,11 +99,8 @@ On 2026-10-21 the latest Cesium SoR backup (`sor-2026-10-21.sql.gz`, 31,297
 compressed bytes) was streamed into a disposable local MariaDB instance. The
 gzip integrity check passed; restore completed; all 41 base tables passed
 `mariadb-check`, with four views and 24 triggers present. This verified that
-SoR artifact only. Xenon's `solari-backup@xenon.timer`, its
-per-host config, and its configured script are absent at the documented paths;
-no matching `solarinet` dump was found in the checked backup roots. Xenon still
-needs a verified recurring backup target and installed backup runner before
-monitoring-schema adoption.
+SoR artifact only. At the start of the 2026-10-22 Xenon work, its backup runner,
+config, timer, mounted target, and matching archive were absent.
 
 Xenon's mounted `/nas/Shared` is CIFS (`//nas-x.local/Shared`) with the mount
 root observed as `root:root` mode `0755`; it contains personal directories and
@@ -124,23 +121,30 @@ The root filesystem is the local NVMe with 372 GiB free, and `solarinet` is
 about 658 MiB. A separate directory on that NVMe is a practical local recovery
 target, but it cannot protect against NVMe or host failure. MariaDB socket login
 as OS user `mysql` resolved to DB user `mysql@localhost`, but that account was
-denied for the dump operation. TCP root login was also denied. A root
-Unix-socket `mysqldump` succeeded in the isolated restore drill below. No Xenon
-config, target directory, mount, runner, or timer was installed during this
-audit.
+denied for the dump operation. TCP root login was also denied. The systemd
+backup service runs as root, and a root Unix-socket `mysqldump` succeeded.
 
 Xenon's 2026-10-21 recheck found the backup timer inactive, the per-host config
 and installed runner absent, and no mounted target or matching archive. NAS-X
 SSH timed out, so the share could not be rechecked at that time; its provisioning
 and effective permissions remain unverified.
 
-On 2026-10-22, a root Unix-socket `mysqldump` of the live Xenon `solarinet`
-database streamed through gzip into a disposable local MariaDB 11.8.6
-container. Source and restored instance each reported 29 base tables and zero
+On 2026-10-22, installed the runner and systemd units on Xenon. The active
+configuration uses `backup.conf.xenon-local.example`, root Unix-socket
+authentication, and `/var/backups/solarinet-db` on the root NVMe. The one-shot
+service wrote `solarinet-2026-10-22.sql.gz` (56,383,267 compressed bytes),
+root-owned mode `0600`; `gzip -t` passed. The exact runner-produced archive was
+streamed into a disposable MariaDB 11.8.6 container after creating the scratch
+database. Source and restored instances each reported 29 base tables and zero
 views, triggers, routines, or events. `mariadb-check` passed every restored
-table. The source was read-only; no dump file was retained, and the container
-was removed. This proves a logical dump/restore path, not the installed backup
-runner, scheduled backups, off-host retention, or unattended authentication.
+table. The container was removed. Xenon's nightly timer is now enabled and
+active; the next scheduled run was 2026-10-22 03:34 UTC.
+
+This gives Xenon a recurring local recovery copy, not off-host protection. The
+archive shares the host's NVMe failure domain. NAS-X has not provisioned the
+`SolariNetBackups` directory; its effective CIFS ownership/mode, mounted
+backup, and NAS restore remain unverified. Do not point the timer at the NAS
+target until those checks pass. Forgejo recovery also remains unverified.
 
 For Forgejo, stop Forgejo, restore the dump with Forgejo's documented restore
 procedure for the deployed version, verify `app.ini` and repository paths, then

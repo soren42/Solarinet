@@ -75,9 +75,10 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: as of this snapshot, the local branch is
-    24 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
-    at <code>5e8d688</code>. The worktree is clean. Neither remote has a release tag, and no
-    candidate release or deployment has been made.</p>
+    25 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    at <code>5e8d688</code>. The worktree is clean. The integrated application candidate has
+    not been published or released; the Xenon backup utility is deployed as a local-only
+    recovery path.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
       <title id="map-title">SolariNet integration boundaries</title>
       <desc id="map-desc">Operators use the authenticated dashboard and RackWire. The dashboard writes inventory to the SoR. The SoR feeds DNS and notifications. Monitoring clients and scan workers report to the C control server. The Khadas VIM4 runs an authoritative DNS secondary.</desc>
@@ -109,12 +110,11 @@
       during the check. The broker is operational, but the installed release is old and
       upgrade/recovery remain release gates.</li>
       <li><strong>Backups:</strong> Cesium’s 21 October SoR dump restored successfully into
-      a disposable MariaDB instance and all 41 tables passed checks. On 22 October, a
-      read-only root-socket dump of Xenon’s live <code>solarinet</code> database restored into
-      scratch MariaDB; all 29 base tables passed checks and object counts matched. The Xenon
-      example now uses root socket authentication, matching the tested host access. Xenon still
-      has no installed runner, timer, or mounted off-host target, and NAS-X provisioning and
-      permissions remain unverified.</li>
+      a disposable MariaDB instance and all 41 tables passed checks. On 22 October, the
+      Xenon runner wrote a 56.4 MB root-only archive and the exact artifact restored into
+      scratch MariaDB; all 29 base tables passed checks. Xenon’s nightly timer is enabled
+      for a local root-NVMe target. This shares Xenon’s host failure domain. NAS-X
+      provisioning, permissions, and an off-host restore remain unverified.</li>
       <li><strong>DNS:</strong> Khadas VIM4 chlorine is active as an authoritative-only secondary
       for 109 zones. Steel at <code>10.0.0.11</code> is unreachable; its ZimaBlade tertiary DNS
       role awaits console redeployment.</li>
