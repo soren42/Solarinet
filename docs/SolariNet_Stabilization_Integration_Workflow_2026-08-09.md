@@ -2433,6 +2433,18 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   no active scan worker; the documented atomic release contract is not wired
   to that host. No main branch merge, release tag, or deployment was performed.
 
+## 2026-10-22 — authoritative scanner-location hierarchy check
+
+- Corrected the earlier location-state check: `sor_probe` was on the local test
+  environment, not Cesium. A read-only transaction using Xenon's existing
+  SoR-sync service configuration queried the live SoR. Active location IDs
+  9103 and 9104 are duplicate root sites named “Painted Fern”; both have blank
+  notes, no child locations, and no attached hardware units or entities. No
+  exact SoR locations named “Bin #5” or “Nook” were present.
+- The duplicate-site mapping is therefore still ambiguous. No location, unit,
+  entity, or scanner data was written. Keep those source locations explicitly
+  mapped by an operator before applying the live scanner import.
+
 ## 2026-10-22 — RabbitMQ live health and upgrade gate recheck
 
 - Read-only Benzene inspection found the rootful Podman container `rabbitmq`

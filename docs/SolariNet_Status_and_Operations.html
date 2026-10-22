@@ -171,7 +171,10 @@
       back, and carried one through RackWire profile setup, barcode resolution, and plan save.
       It explicitly mapped source locations to duplicate scratch rows; this does not resolve which
       of the two duplicate root “Painted Fern” sites (IDs <code>9103</code>, <code>9104</code>)
-      “Bin #5” and “Nook” should map to. The standalone scanner-ingest
+      “Bin #5” and “Nook” should map to. A read-only transaction against the live SoR, using
+      the existing SoR-sync service configuration, confirmed both active sites have blank notes,
+      no child locations, and no associated hardware units or entities; no exact “Bin #5” or
+      “Nook” SoR locations exist. This still does not establish the physical mapping. The standalone scanner-ingest
       app has a local Git repository but no configured release remotes; GitHub and Forgejo lookups
       found no published <code>scanner-ingest</code> repository, so its release ownership/path is
       unresolved.</li>
