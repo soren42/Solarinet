@@ -76,12 +76,20 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
-    is mirrored on Forgejo and GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
-    Latest integration tip <code>46045e9</code> is pushed to both remotes; its code candidate
+    is maintained on Forgejo first and mirrored to GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
+    The Forgejo integration ref is being advanced with this documentation follow-up; GitHub remains
+    at <code>d499ac7</code> while its Actions results recover. The code candidate
     <code>c1ce64d</code> includes the
     realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
     acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
-    GitHub PR #37 run <code>39738275605</code> passed all 15 jobs for the latest tip; the preceding code run <code>39737421770</code> passed all 15 jobs, including the database-backed
+    GitHub PR #37 run <code>39794749486</code> is validating this tip. Its results are delayed:
+    GitHub reports an active Actions incident affecting workflow and step results
+    (<a href="https://www.githubstatus.com/api/v2/incidents/unresolved.json">incident q29p76qtnkyk</a>, checked 22 October).
+    Forgejo remains the primary Git remote, but this candidate has no <code>.forgejo/workflows</code>
+    definition. No Actions runner was found on Cesium, Benzene, Xenon, Chlorine, or this workspace. Steel is unreachable; other possible runner hosts remain unchecked. The GitHub workflow therefore remains the only verified hosted CI.
+    The previous docs-only run
+    <code>39738275605</code> passed all 15 jobs on <code>46045e9</code>; code run
+    <code>39737421770</code> passed all 15 jobs, including the database-backed
     Discovery API and browser-to-native-worker candidate-ingest acceptance, plus the separate
     portable Release server/worker build, lifecycle checks, and package activation/rollback suite.
     The prior code head
@@ -117,8 +125,8 @@
     Adopting <code>10.0.0.20</code> updated monitoring and SoR rows only in disposable test
     databases. This validates the development workflow and does not establish production scan or
     adoption behavior.
-    Current documentation follow-up <code>46045e9</code> is also green in run
-    <code>39738275605</code>. The public review branch is
+    This status refresh is published to Forgejo first. The GitHub draft review branch remains at
+    <code>d499ac7</code> until its hosted checks recover; no main branch merge or release tag exists. The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
