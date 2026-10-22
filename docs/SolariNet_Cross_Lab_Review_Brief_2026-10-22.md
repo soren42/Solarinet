@@ -8,24 +8,24 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | integration head `2cb099c` (range-enforcement code `c1ce64d`, with synchronized HTML/PDF docs) | Forgejo and GitHub `main` are `5e8d688`; both integration refs match at `2cb099c`. Draft GitHub PR #37 is open. |
+| SolariNet | integration head `46045e9` (latest documentation follow-up; scan policy code `c1ce64d`) | Forgejo and GitHub `main` are `5e8d688`; both integration refs match at `46045e9`. Draft GitHub PR #37 is open. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
-| scanner-ingest | `integrate/solarinet-20261021` at `c2a3f7b` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Updated manuals and validation are committed locally. |
+| scanner-ingest | `integrate/solarinet-20261021`, base `c2a3f7b` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Latest test-fixture and manual/validation updates are committed locally at `9ac42d6`; independent review is pending. |
 
 No main branch has been merged and no release tags exist. The scanner-ingest manual/validation edits remain local and have no configured remote.
 
 ## Current release-candidate recheck · 2026-10-22
 
-- Latest integration head is `8f5af081cdbb31d118d1c05f16fd7bfb0ca24d3a`; Forgejo and GitHub refs match. GitHub run `39737421770` passed all 15 jobs on this commit.
+- Latest integration head is `46045e9605c7fc9e602249dfe9344aeae1ef23cb`; Forgejo and GitHub refs match. GitHub run `39738275605` passed all 15 jobs on this documentation follow-up; code and portable Release checks passed in `39737421770`.
 - Cesium development deployment now uses `dev-20261022-2cb099c-static`, source revision `2cb099c442d14eb8e57b140188941512440c8d3f`, with the RackWire gitlink pinned to `a66bd21`. The loopback PHP UI, native server, worker, and isolated MariaDB are running. Authenticated browser acceptance rejected `192.0.2.0/24`; a permitted `127.0.0.1/32` scan completed 1/1 and displayed its one candidate. The UI reported live data, all checked API reads returned 200, with no page errors or external requests.
 - The first candidate package used sanitizer-linked binaries, and the first Release build used a dynamic NNG dependency unavailable on Cesium. Those package attempts failed to start and were replaced by the statically linked pinned NNG/mbedTLS Release build. The package manifest and Cesium runtime were checked. The repeatable CI Release profile and runtime dependency gate passed hosted verification: CI built and exercised Release server/worker binaries, then used those same artifacts in package activation/rollback tests.
 - Authenticated startup initially lacked the development DB environment and the UI fell back offline. Configuring the PHP process with the isolated dev database restored live mode. This failure and recovery are recorded to prevent treating offline UI acceptance as runtime verification.
 
-- GitHub PR #37 remains open and draft. Forgejo and GitHub integration refs both point to `8f5af081cdbb31d118d1c05f16fd7bfb0ca24d3a`; both root `main` refs remain `5e8d6889bdb3108cd65c594243395e60a7a68db7`.
+- GitHub PR #37 remains open and draft. Forgejo and GitHub integration refs both point to `46045e9605c7fc9e602249dfe9344aeae1ef23cb`; both root `main` refs remain `5e8d6889bdb3108cd65c594243395e60a7a68db7`.
 - Hosted run `39737421770` passed all 15 jobs, including authenticated scan API, browser-to-native-worker candidate ingest, portable Release binary lifecycle tests, and release package activation/rollback. Earlier code run `39733247468` passed the intranet range-policy tests.
 - RackWire PR #1 remains open and draft at `a66bd218acc89b668a8f1a89291f2c32bb38ac59`; its Forgejo and GitHub integration refs match and both `main` refs remain `5f29f590f601bc277390ef28c6569dde52ea432d`. Its hosted checks are green.
-- `scanner-ingest` remains clean at `c2a3f7b81c7569e408fc26746aa1358791d05b1b`, with no configured Git remote and no release tag. Its tests pass locally, but remote publication cannot proceed until the repository destination and ownership are established.
-- **UNVERIFIED / pending:** independent cross-lab review is unavailable in this session; no main branch was merged, release tag created, or production deployment performed. The installed Cesium candidate remains a loopback-only development deployment. Scanner-ingest physical inventory import is snapshot-based; live device streaming/automatic physical asset ingestion is not claimed.
+- `scanner-ingest` base is `c2a3f7b81c7569e408fc26746aa1358791d05b1b`; the current suite follow-up is committed locally at `9ac42d6`, with no configured Git remote or release tag. The full 63-test run passed against Cesium development MariaDB 12.3.2-log (one optional ZXing-C++ test skipped).
+- **UNVERIFIED / pending:** independent cross-lab review is unavailable in this session; no main branch was merged, release tag created, or production deployment performed. The installed Cesium candidate remains a loopback-only development deployment. Scanner-ingest physical inventory import is snapshot-based; live device streaming/automatic physical asset ingestion is not claimed. SolariNet realtime network discovery is separately exercised: a direct-route 10.0.0.0/24 scan processed 254 addresses, surfaced candidates before completion, retried admission without duplicate work, and adopted a candidate into monitoring and SoR in disposable test schemas. Production scanning/adoption remains unverified.
 
 ## High-priority review surfaces
 
