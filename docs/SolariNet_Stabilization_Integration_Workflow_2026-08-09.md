@@ -2615,3 +2615,42 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
 - This verifies the installed PHP CLI runtime and actual login/session/CSRF
   flow. It does not verify PHP-FPM, Apache, OIDC, a persistent scan worker,
   production data, or a cross-lab review.
+
+## 2026-10-22 — installed scan worker and operator adoption acceptance
+
+- The first installed scan attempt exposed a host dependency absent from Cesium's
+  PHP CLI: `ctype_digit()` was undefined. Installed `php8-ctype` 8.5.12-4.1,
+  restarted the loopback PHP server, and repeated the flow successfully. The
+  server's scan input validation, not the scan worker, had failed before this
+  dependency was present.
+- Started the packaged `solariServer` and `solariScanWorker` against the separate
+  `solarinet_scan_worker_dev_20261022` schema. The server bridge socket is in the
+  user-owned dev runtime directory. All TCP listeners (17711–17714) bind only
+  to 127.0.0.1; TLS is disabled only for this loopback instance; auto-discovery
+  is disabled. The PHP API points at that bridge and the isolated monitoring
+  and SoR schemas on loopback port 13316.
+- Through Chromium, signed into the installed dashboard, submitted an explicit
+  `127.0.0.1/32` scan, and observed completion. Native worker log and monitoring
+  DB both show scan 9 completed: one host processed and one candidate saved.
+  The scan found the temporary loopback HTTP listener and other local services;
+  it did not scan a lab subnet.
+- In a new browser session with empty sessionStorage, the dashboard recovered
+  the completed job and candidate from the server. The operator adopted that
+  candidate as `cesium-dev-scan-1792645974579`. The C bridge logged the adoption
+  and dispatched local TCP/HTTP/ICMP probes. Read-only DB checks found the
+  monitoring asset at `127.0.0.1`, the SoR network entity, and its IPv4-mapped
+  address (`00000000000000000000FFFF7F000001`). This adoption created a network
+  host entity, not a physical hardware unit.
+- The development operator account is retained for Jason's loopback testing;
+  the password is in the mode-0600 file
+  `~/.local/share/solarinet-dev/test-password`. The account is rate-limited,
+  local login is enabled only on the loopback PHP CLI instance, and there is no
+  listener exposed on the LAN. Use an SSH tunnel to reach port 17701. The app,
+  server, and worker are running as user processes, not reboot-persistent
+  systemd services.
+- Test target `127.0.0.1:8080` remains an explicit local HTTP endpoint returning
+  200 so the adopted development host's HTTP check does not report a false
+  failure. No production SoR, DNS, UniFi, or external network state was changed.
+- **UNVERIFIED:** PHP-FPM/Apache behavior, OIDC, service restart/reboot recovery,
+  broad-range throughput/policy, physical scanner hardware, promotion to main,
+  release tagging, and cross-lab review.

@@ -77,3 +77,10 @@ The committed `4b50cca` candidate was built as a clean Release configuration (IO
 ### Authenticated deployed-browser follow-up
 
 On 2026-10-22, Chromium accessed the installed loopback PHP CLI service through an SSH tunnel. A temporary random operator credential authenticated through the actual dashboard login form. The requester-scoped scan-history endpoint returned HTTP 200 with an empty list; CSRF-protected logout returned 200; subsequent `whoami` returned 401; no browser page errors occurred. The temporary auth file, password, rate directory, and browser session were removed, and the listener was restarted with local login disabled. PHP-FPM/Apache, OIDC, persistent worker startup, and production data remain unverified.
+
+
+## Installed native scan and adoption follow-up
+
+Cesium PHP CLI initially lacked `ctype`, causing Discovery input validation to fail before admission. Installing `php8-ctype` fixed the host runtime. The packaged `solariServer`, `solariScanWorker`, and PHP dashboard now run against separate loopback scratch schemas; the active TCP listeners on 17711, 17713, and 17714 bind only to 127.0.0.1, TLS is disabled for this loopback instance, and auto-discovery is off.
+
+Chromium submitted `127.0.0.1/32` through the installed dashboard. Native worker and DB evidence show scan 9 completed with one host and one candidate. In a fresh browser session, the dashboard restored the job and candidate from durable history; operator adoption created a monitoring asset and SoR network entity with the IPv4-mapped loopback address, and the C bridge dispatched local probes. This is not a physical inventory unit or a lab-subnet scan. The operator credential remains in a mode-0600 file on Cesium; the PHP, server, and worker listeners are loopback-only and run as user processes, not systemd services. PHP-FPM/Apache, OIDC, restart/reboot recovery, larger ranges, physical scanner hardware, main-branch promotion, and cross-lab review remain open.
