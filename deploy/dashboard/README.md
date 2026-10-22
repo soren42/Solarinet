@@ -51,6 +51,15 @@ remains readable only by `solari`. Keep the URL on the certificate's DNS name; u
 IP address requires that IP to appear in the certificate's subjectAltName.
 
 ## 3. Admin credential
+
+The API runtime requires PHP extensions `ctype`, `openssl`, `pdo_mysql`,
+`session`, and `json`. `ctype` is used by input and route validation; `openssl`
+is required to verify OIDC token signatures. Confirm both CLI and PHP-FPM expose
+the required modules before starting the dashboard. The CI contract check is
+`php tests/dashboard/test_php_runtime_extensions.php`. On openSUSE, the split
+packages include `php8-ctype` and `php8-openssl`; package names differ by
+distribution.
+
 ```sh
 sudo -u www-solari env SOLARI_AUTH_FILE=/var/lib/solarinet-dashboard/solari-auth.json \
   php /opt/solarinet/dashboard/api/tools/solari-passwd.php --user admin --random

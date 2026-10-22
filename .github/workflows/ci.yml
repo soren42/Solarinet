@@ -422,6 +422,8 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y php-cli php-mysql mariadb-client
+      - name: PHP runtime extension contract
+        run: php tests/dashboard/test_php_runtime_extensions.php
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

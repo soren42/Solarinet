@@ -2654,3 +2654,8 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
 - **UNVERIFIED:** PHP-FPM/Apache behavior, OIDC, service restart/reboot recovery,
   broad-range throughput/policy, physical scanner hardware, promotion to main,
   release tagging, and cross-lab review.
+
+
+### PHP runtime dependency contract
+
+The Cesium acceptance found that the separated PHP CLI image lacked both `ctype` and `openssl`: the first prevented scan CIDR validation; the second would prevent OIDC signature verification. Installed `php8-ctype` and `php8-openssl` 8.5.12-4.1. The active PHP process was restarted and verified with `ctype_digit()`, `openssl_verify()`, and `pdo_mysql`. Added `tests/dashboard/test_php_runtime_extensions.php` and a CI step covering ctype, OpenSSL, PDO/MySQL, sessions, and JSON; documented the required extensions and openSUSE package names in `deploy/dashboard/README.md`. Local runtime contract test and PHP syntax check pass.
