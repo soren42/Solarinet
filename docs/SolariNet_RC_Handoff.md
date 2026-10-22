@@ -2,6 +2,8 @@
 
 *2026-07-06. Standard-C control plane + PHP dashboard, per `CLAUDE.md`. Repo: github.com/soren42/Solarinet. This is a snapshot for handing the workstream off (agents moving to QuakeKit); it records what's live, what's committed, and what's next.*
 
+> **Current continuation checkpoint · 2026-10-23:** Treat the older historical candidate statements below as dated records. The active candidate is commit `c1b8e87793b537b3dc2c5bb539f83cc64ff5559b` on `integrate/phase0-reconcile-20261022`, mirrored to Forgejo/GitHub `integrate/stability-20261020`; GitHub PR #37 is open and draft against `main`. GitHub run `39871759430` remains in progress and has a failed server job at the stable schema export definer test. That failure was reproduced locally: one assertion in `tools/test_migrate.py` still expected migrations 022/023 to be the final migrations. A local fix now checks presence and ordering; all 23 `tools/` tests pass. The fix and this checkpoint are not yet committed or pushed. Core and Linux ARM64 jobs were still running at the last check. Cross-lab review, main merge, release tags/publication, and deployment remain open. No production service or live SoR migration was performed as part of this continuation.
+
 ## One-line status
 A coherent first RC: a normalized **System of Record** (mirrored, DNS renders from it), a **message bus**, **notifications**, and a **dashboard/monitor** that genuinely probes the whole homelab — including app-layer health of the new infra.
 

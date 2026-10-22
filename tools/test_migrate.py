@@ -16,7 +16,10 @@ class MigrationPreflightTests(unittest.TestCase):
     def test_sor_stream_owns_transactional_outbox_and_cdc_triggers(self) -> None:
         entries = migrate.migrationFiles("sor")
         ids = [migration_id for migration_id, _path, _checksum in entries]
-        self.assertEqual(ids[-2:], ["022_transactional_outbox", "023_sor_cdc_triggers"])
+        self.assertIn("022_transactional_outbox", ids)
+        self.assertIn("023_sor_cdc_triggers", ids)
+        self.assertLess(ids.index("022_transactional_outbox"),
+                        ids.index("023_sor_cdc_triggers"))
         outbox = next(path.read_text(encoding="utf-8") for migration_id, path, _ in entries
                       if migration_id == "022_transactional_outbox")
         triggers = next(path.read_text(encoding="utf-8") for migration_id, path, _ in entries

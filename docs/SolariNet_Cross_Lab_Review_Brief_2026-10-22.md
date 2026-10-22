@@ -8,11 +8,17 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | Working tree `integrate/phase0-reconcile-20261022`, HEAD `3097ea62` | At 2026-10-22 23:16 UTC, Forgejo `integrate/stability-20261020` and GitHub mirror both pointed to `3097ea62`; both `main` refs pointed to `5e8d688`. The 83-path candidate overlay is uncommitted and has not been pushed. |
+| SolariNet | Working tree `integrate/phase0-reconcile-20261022`, HEAD `c1b8e877` | Candidate commit is published on Forgejo and mirrored to GitHub as `integrate/stability-20261020` and `integrate/phase0-reconcile-20261022`. GitHub PR #37 targets `main` and is open/draft. Current `main` was not rechecked in this update. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | Local branch `integrate/solarinet-20261021`, HEAD `b0c6d20` | Local repository only, with `VALIDATION.md` modified and no configured remote. Earlier lookup found no matching published GitHub/Forgejo repository; remote ownership remains unresolved. |
 
 No main branch has been merged and no release tags exist. Older checkpoints below describe previously published candidates; the latest ref and worktree state above supersedes their claims about the current release candidate.
+
+### Current hosted gate recheck · 2026-10-23
+
+GitHub run `39871759430` is still in progress. The `server (full, IO + SQLite + server)` job failed at **Stable schema export definer normalization**; every preceding step in that job passed, and the `ctest` and later steps were skipped. GitHub withholds failed step logs until the overall run completes. Running the exact `python3 -m unittest discover -s tools -p 'test_*.py' -v` command locally reproduced the cause: `tools/test_migrate.py` incorrectly required migrations 022 and 023 to be the final migrations, despite valid later migrations 024–027. The regression assertion is corrected locally to require both migrations and their ordering; all 23 tool tests now pass. This fix is not yet committed or pushed. Other hosted jobs observed in this run passed; core and Linux ARM64 were still running at this checkpoint.
+
+The candidate checkout is clean at `c1b8e877` before this follow-up. No cross-lab reviewer is available in the current session; internal agent audits are not cross-lab review and do not satisfy that gate. Mainline merge, release tags, release publication, and promotion remain outstanding.
 
 ### Latest local validation checkpoint · 2026-10-22 23:16 UTC
 
