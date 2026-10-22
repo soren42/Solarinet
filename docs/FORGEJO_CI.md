@@ -33,10 +33,13 @@ gate has run.
 
 ## Verification and rollout state
 
-The workflow renderer's `--check` verifies generated-file parity. Local validation also
-parses the YAML and runs `git diff --check`. Those checks validate source shape only; they do
-not prove that a Forgejo runner is registered, that host mode executes successfully, or that
-the full CI matrix passes there.
+The workflow renderer's `--check` verifies generated-file parity. Local checks also parse the
+YAML, verify checkout options and loopback fixture structure, and run `git diff --check`.
+Forgejo Runner v13.2.0's own `validate --directory` command also accepted the workflow; the
+downloaded binary matched Forgejo's published SHA-256 file. Forgejo documents this validator
+as available from Runner v9 onward in its [Actions troubleshooting guide](https://forgejo.org/docs/v15.0/user/actions/troubleshooting/).
+These checks validate schema and source shape; they do not prove that a compatible runner is
+registered, that host mode executes successfully, or that the full CI matrix passes there.
 
 No dedicated disposable runner VM has been identified or provisioned. Therefore Forgejo CI
 execution is **UNVERIFIED**. Do not describe this workflow as a green hosted gate until a
