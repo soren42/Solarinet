@@ -3,6 +3,10 @@
    ============================================================ */
 (function () {
   const { useState, useEffect } = React;
+  // Discovery can unmount/remount as the operator navigates. Keep the read
+  // lock at module scope so a late request from the prior screen cannot race a
+  // new screen's poll loop.
+  let scanStatusPollInFlight = false;
   const Icon = window.Icon;
   const { StatusDot, DangerModal } = window;
   const S = window.SOLARI;
@@ -195,11 +199,17 @@
       const a = api();
       if (!a) return;
       let live = true;
+      let activeController = null;
       function pollScan() {
+        if (!live || scanStatusPollInFlight) return;
+        const controller = new AbortController();
         const poll = scanJob.requestId
-          ? a.discoverScanRequest && a.discoverScanRequest(scanJob.requestId)
-          : a.discoverScanStatus && a.discoverScanStatus(scanJob.scanId);
+          ? a.discoverScanRequest && a.discoverScanRequest(scanJob.requestId, { signal: controller.signal })
+          : a.discoverScanStatus && a.discoverScanStatus(scanJob.scanId, { signal: controller.signal });
         if (!poll) return;
+        scanStatusPollInFlight = true;
+        activeController = controller;
+        const timeout = window.setTimeout(function () { controller.abort(); }, 8000);
         poll.then(function (s) {
           if (!live) return;
           if (scanJob.requestId) {
@@ -220,11 +230,20 @@
             else if (s.status === "failed" || s.status === "cancelled")
               toast("Scan " + s.status + (s.error ? ": " + s.error : ""), "close");
           }
-        }).catch(function () { /* transient poll failure; retain job and retry */ });
+        }).catch(function () { /* transient poll failure; retain job and retry */ })
+          .finally(function () {
+            window.clearTimeout(timeout);
+            if (activeController === controller) activeController = null;
+            scanStatusPollInFlight = false;
+          });
       }
       pollScan();
       const timer = window.setInterval(pollScan, 1000);
-      return function () { live = false; window.clearInterval(timer); };
+      return function () {
+        live = false;
+        if (activeController) activeController.abort();
+        window.clearInterval(timer);
+      };
     }, [scanJob && scanJob.requestId, scanJob && scanJob.scanId,
         scanJob && scanJob.status]);
     useEffect(function () {

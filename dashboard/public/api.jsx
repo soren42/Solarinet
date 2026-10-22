@@ -183,6 +183,7 @@
       ),
       credentials: "same-origin",
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
     }).then(function (r) {
       return r.json().catch(function () {
         throw ApiError("BAD_JSON", "HTTP " + r.status + " — non-JSON response");
@@ -1125,8 +1126,8 @@
     },
     discoverScan: discoverScan,
     listDiscoveryScanJobs: function () { return getJSON(EP.discScanJobs); },
-    discoverScanRequest: function (id) { return getJSON(EP.discScanRequest(id)); },
-    discoverScanStatus: function (id) { return getJSON(EP.discScanStatus(id)); },
+    discoverScanRequest: function (id, opts) { return getJSON(EP.discScanRequest(id), opts); },
+    discoverScanStatus: function (id, opts) { return getJSON(EP.discScanStatus(id), opts); },
     adoptDiscovered: function (discId, body) { return post(EP.discAdopt(discId), body || {}); },
     ignoreDiscovered: function (discId) { return post(EP.discIgnore(discId), {}); },
     // pools + assets (operator config; writes go to the C bridge server-side)

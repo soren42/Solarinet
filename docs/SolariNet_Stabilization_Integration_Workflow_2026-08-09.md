@@ -2659,3 +2659,24 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
 ### PHP runtime dependency contract
 
 The Cesium acceptance found that the separated PHP CLI image lacked both `ctype` and `openssl`: the first prevented scan CIDR validation; the second would prevent OIDC signature verification. Installed `php8-ctype` and `php8-openssl` 8.5.12-4.1. The active PHP process was restarted and verified with `ctype_digit()`, `openssl_verify()`, and `pdo_mysql`. Added `tests/dashboard/test_php_runtime_extensions.php` and a CI step covering ctype, OpenSSL, PDO/MySQL, sessions, and JSON; documented the required extensions and openSUSE package names in `deploy/dashboard/README.md`. Local runtime contract test and PHP syntax check pass.
+
+
+### 2026-10-22 Discovery polling overlap and cancellation hardening
+
+- A slow-response browser regression reproduced overlapping scan-status requests
+  when Discovery was navigated away from and mounted again. The previous
+  interval could outlive its screen component, and each component instance
+  tracked requests independently.
+- The dashboard API now forwards an optional `AbortSignal` to `fetch` for scan
+  admission/status reads. Discovery uses one module-scoped poll lock across
+  component remounts, aborts its active read on unmount, and bounds each read to
+  eight seconds so a stalled request cannot suspend scan progress indefinitely.
+- `tests/browser/test_scanner_import_e2e.cjs` now holds status responses for
+  1.5 seconds (longer than the one-second polling interval), verifies repeated
+  requests do not overlap, navigates away to assert cancellation, and returns to
+  confirm the durable scan resumes. It passed against a fresh, fully migrated
+  local SoR scratch database; the database, user, and temporary credential file
+  were removed. Dashboard JSX parsing (16/16), layout, scanner-import UI, API
+  freshness, Node syntax, and whitespace checks pass.
+- **UNVERIFIED:** hosted CI for this polling patch and independent cross-lab
+  review. No production SoR, DNS, UniFi, or deployment state changed.

@@ -475,6 +475,43 @@ async function main() {
     await page.getByRole('button', { name: 'Network discovery', exact: true }).click();
     await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
     await page.getByPlaceholder('192.168.1.0/24').fill('192.0.2.0/24');
+    const activeStatusRequests = new Set();
+    const statusPollEvents = [];
+    let maxActiveStatusPolls = 0;
+    let statusPollCount = 0;
+    let failedStatusPollCount = 0;
+    let delayStatusResponses = true;
+    page.on('request', (request) => {
+      if (!request.url().includes('/api/discovery/scans/941')) return;
+      statusPollCount += 1;
+      activeStatusRequests.add(request);
+      maxActiveStatusPolls = Math.max(maxActiveStatusPolls, activeStatusRequests.size);
+      statusPollEvents.push(`start ${Date.now()} active=${activeStatusRequests.size}`);
+    });
+    function finishStatusRequest(request) {
+      if (activeStatusRequests.delete(request)) statusPollEvents.push(`finish ${Date.now()} active=${activeStatusRequests.size}`);
+    }
+    page.on('requestfinished', finishStatusRequest);
+    page.on('requestfailed', (request) => {
+      if (activeStatusRequests.has(request)) failedStatusPollCount += 1;
+      finishStatusRequest(request);
+    });
+    await page.route('**/api/discovery/scans/941', async (route) => {
+      // Hold the response longer than Discovery's one-second interval to
+      // prove slow status reads never overlap or race their own results.
+      if (delayStatusResponses) {
+        const aborted = new Promise((resolve) => route.request().once('requestfailed', () => resolve(true)));
+        const delayed = new Promise((resolve) => setTimeout(() => resolve(false), 1500));
+        if (await Promise.race([aborted, delayed])) return;
+      }
+      if (route.request().failure()) return;
+      try {
+        const response = await route.fetch();
+        await route.fulfill({ response });
+      } catch (error) {
+        if (!route.request().failure() && !page.isClosed()) throw error;
+      }
+    });
     const pendingAdmissionResponse = page.waitForResponse((response) =>
       response.url().includes('/api/discovery/scan-requests/940') && response.request().method() === 'GET');
     const scanResponse = page.waitForResponse((response) =>
@@ -505,6 +542,37 @@ async function main() {
     });
     assert(await page.getByRole('button', { name: 'Scan active…', exact: true }).isDisabled(),
       'the scan action must stay disabled while the worker is running');
+    const pollCountBeforeNavigation = statusPollCount;
+    for (let attempt = 0; attempt < 50 && activeStatusRequests.size === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert(activeStatusRequests.size > 0, 'the slow status poll must be active before navigating away');
+    await page.locator('.nav-item').filter({ hasText: /^Inventory$/ }).click();
+    await page.getByRole('heading', { name: 'Inventory', exact: true }).waitFor();
+    for (let attempt = 0; attempt < 30 && activeStatusRequests.size > 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(activeStatusRequests.size, 0, 'leaving Discovery must abort its in-flight status request');
+    assert(failedStatusPollCount > 0, 'navigation must cancel the browser status request');
+    await page.locator('.nav-item').filter({ hasText: /^Discovery$/ }).click();
+    await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
+    await page.waitForFunction(() => {
+      const job = JSON.parse(sessionStorage.getItem('solari.activeScan') || 'null');
+      return job && job.scanId === 941 && job.status === 'running';
+    });
+    for (let attempt = 0; attempt < 110 && (statusPollCount < 2 || activeStatusRequests.size > 0); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert(statusPollCount > pollCountBeforeNavigation,
+      'returning to Discovery must resume status polling for the active scan');
+    for (let attempt = 0; attempt < 50 && activeStatusRequests.size > 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(maxActiveStatusPolls, 1,
+      `slow Discovery status requests must never overlap; events: ${statusPollEvents.join(' | ')}`);
+    assert.equal(activeStatusRequests.size, 0, 'slow scan status request must settle before navigation');
+    delayStatusResponses = false;
+    await page.unroute('**/api/discovery/scans/941');
 
     // Durable scan state must recover from the server if browser session state
     // disappears, rather than requiring the original tab storage to survive.
@@ -564,6 +632,7 @@ async function main() {
       return job && job.status === 'completed' && status
         && status.textContent.includes('Last scan completed');
     });
+    assert.equal(activeStatusRequests.size, 0, 'all scan status requests must settle when the scan completes');
 
     assert.deepEqual(pageErrors, [], 'browser reported no JavaScript errors');
     assert.deepEqual(externalRequests, [], 'browser made no external requests');
