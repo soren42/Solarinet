@@ -64,7 +64,7 @@
 <div class="wrap">
   <div class="actions"><button id="print-guide" type="button">Print or save as PDF</button></div>
   <h1>Status &amp; Operations Guide</h1>
-  <p class="sub">SolariNet platform · operator / developer handbook · current status 21 October 2026</p>
+  <p class="sub">SolariNet platform · operator / developer handbook · current status 22 October 2026</p>
 
   <p>This guide summarizes system operation and retains the Phase 7 implementation notes
   below. It is self-contained with inline CSS, JavaScript, and SVG. The dated status card is
@@ -73,9 +73,9 @@
   release gates.</p>
 
   <section class="status-now" aria-labelledby="status-now-title">
-    <h2 id="status-now-title">Current platform state · 21 October 2026</h2>
+    <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: as of this snapshot, the local branch is
-    23 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    24 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
     at <code>5e8d688</code>. The worktree is clean. Neither remote has a release tag, and no
     candidate release or deployment has been made.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
@@ -109,10 +109,12 @@
       during the check. The broker is operational, but the installed release is old and
       upgrade/recovery remain release gates.</li>
       <li><strong>Backups:</strong> Cesium’s 21 October SoR dump restored successfully into
-      a disposable MariaDB instance and all 41 tables passed checks. Xenon currently has no
-      SolariNet backup timer, config, runner, mounted off-host target, or matching database
-      dump. NAS-X timed out over SSH during this recheck; its backup share state is
-      unverified.</li>
+      a disposable MariaDB instance and all 41 tables passed checks. On 22 October, a
+      read-only root-socket dump of Xenon’s live <code>solarinet</code> database restored into
+      scratch MariaDB; all 29 base tables passed checks and object counts matched. The Xenon
+      example now uses root socket authentication, matching the tested host access. Xenon still
+      has no installed runner, timer, or mounted off-host target, and NAS-X provisioning and
+      permissions remain unverified.</li>
       <li><strong>DNS:</strong> Khadas VIM4 chlorine is active as an authoritative-only secondary
       for 109 zones. Steel at <code>10.0.0.11</code> is unreachable; its ZimaBlade tertiary DNS
       role awaits console redeployment.</li>
@@ -495,7 +497,7 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   </ul>
   </div>
 
-  <p class="footer">Status card updated 21 October 2026. Sections below preserve the Phase 7
+  <p class="footer">Status card updated 22 October 2026. Sections below preserve the Phase 7
   implementation snapshot and its test counts. For current test results and release gates, use
   the linked <code>SolariNet_Stabilization_Baseline_2026-10-20</code> and
   <code>SolariNet_Stabilization_Integration_Workflow_2026-08-09</code>. This guide does not

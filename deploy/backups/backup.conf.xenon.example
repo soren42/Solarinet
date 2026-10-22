@@ -6,12 +6,10 @@ TARGET_DIR="/mnt/solari-backups"
 TARGET_MOUNTPOINT_REQUIRED=1
 RETENTION_DAYS=14
 
-# MariaDB socket authentication: the mysqldump process runs as OS user mysql.
-MYSQL_HOST="localhost"
-MYSQL_PORT=3306
-MYSQL_USER="mysql"
+# The systemd backup service runs as root. Use MariaDB's root Unix-socket
+# authentication; do not set MYSQL_HOST or MYSQL_PORT (which selects TCP here).
+MYSQL_USER="root"
 MYSQLDUMP_BIN="/usr/bin/mysqldump"
-MYSQLDUMP_RUN_AS="mysql"
 
 # Forgejo is hosted on Cesium, so Xenon does not create a Forgejo dump.
 FORGEJO_BIN=""

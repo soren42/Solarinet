@@ -2249,3 +2249,25 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
 - Updated the operator guide and status page, regenerated both paired PDFs, and
   checked that the guide describes the `/24` result while preserving the
   larger-range and deployment limits.
+
+## 2026-10-22 — Xenon logical restore drill
+
+- Confirmed Xenon's backup timer is inactive, the installed runner/config and
+  mounted target are absent, and the NAS-X `SolariNetBackups` directory has not
+  been provisioned. SSH to NAS-X timed out; no NAS state was changed.
+- Attempted the configured MariaDB socket identity (`mysql`) and TCP root
+  access. Both were denied. A root Unix-socket `mysqldump` succeeded instead;
+  its gzip stream was piped directly over SSH into a disposable local MariaDB
+  11.8.6 container without writing an archive to disk.
+- The live source and restored database both reported 29 base tables and zero
+  views, triggers, routines, and events. `mariadb-check` passed every restored
+  table. No write was made to Xenon; the scratch container was removed.
+- Corrected the Xenon example to use root Unix-socket authentication and omit
+  host/port overrides. The former `mysql` identity and TCP root path were
+  rejected on the live host; the root socket path used for the successful drill
+  matches the systemd service's root identity.
+- This validates logical dump and restore mechanics only. Unattended
+  authentication, the installed backup runner, scheduled artifacts, off-host
+  retention, NAS permissions, and Forgejo recovery remain unverified. Updated
+  the backup README and monolithic runbook HTML/PDF with this evidence and the
+  corrected authentication status.
