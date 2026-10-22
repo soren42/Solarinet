@@ -97,7 +97,12 @@ class ReleaseFlowTests(unittest.TestCase):
             self.assertIn("dashboard/public/rackwire/index.html", names)
             self.assertIn("bin/solariServer", names)
             self.assertIn("bin/solariScanWorker", names)
-            self.assertFalse(any(".git" in name or name.endswith((".key", ".pem")) for name in names))
+            self.assertFalse(any(
+                name == ".git" or "/.git/" in name or name.startswith(".git/")
+                or "/.github/" in name or name.startswith(".github/")
+                or name.endswith((".key", ".pem"))
+                for name in names
+            ))
             self.assertEqual(metadata["version"], "test-1")
             self.assertEqual(metadata["sourceTreeDirty"], SOURCE_DIRTY)
             rackwire = subprocess.check_output(

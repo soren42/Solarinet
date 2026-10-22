@@ -63,7 +63,7 @@ def copy_tree(source: Path, destination: Path, files: dict[str, str]) -> None:
         if not path.is_file():
             continue
         relative = path.relative_to(ROOT).as_posix()
-        if any(part in {".git", ".gitignore", ".pytest_cache", "__pycache__"} for part in path.parts):
+        if any(part in {".git", ".gitignore", ".github", ".pytest_cache", "__pycache__"} for part in path.parts):
             continue
         lower_name = path.name.lower()
         if lower_name.startswith(".env") or lower_name in {"solari-auth.json"} or path.suffix.lower() in {".key", ".pem"}:
