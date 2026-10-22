@@ -20,7 +20,7 @@ GitHub run `39872287455` completed successfully on `411f1791`: all 15 jobs passe
 
 The candidate checkout is clean at `411f1791`. No cross-lab reviewer is available in the current session; internal agent audits are not cross-lab review and do not satisfy that gate. Mainline merge, release tags, release publication, and promotion remain outstanding.
 
-**Target runtime follow-up:** a direct read-only CLI connection using values parsed from Xenon’s PHP-FPM pool returned MariaDB error 1045 with credentials suppressed. PHP-FPM’s journal showed no matching connection failure in the checked period, so this probe alone does not establish a live application outage. Authenticated browser acceptance against the staged Cesium package and CI package passed; Xenon PHP-FPM/Apache behavior and current live SoR migration state remain UNVERIFIED.
+**Target runtime follow-up:** a direct read-only CLI connection using values parsed from Xenon’s PHP-FPM pool returned MariaDB error 1045 with credentials suppressed. PHP-FPM’s journal showed no matching connection failure in the checked period, so this probe alone does not establish a live application outage. Authenticated browser acceptance against the staged Cesium package and CI package passed; Xenon PHP-FPM/Apache behavior and current live SoR migration state remain UNVERIFIED. A clean-source candidate package from `77ee2c6` was installed to Cesium’s separate preflight root, with all 181 payload hashes, PHP syntax/extensions, and binary libraries verified. No service was started. Docs-only CI run `39873267956` is in progress on this commit.
 
 ### Latest local validation checkpoint · 2026-10-22 23:16 UTC
 
