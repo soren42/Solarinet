@@ -75,10 +75,10 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: as of this snapshot, the local branch is
-    25 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
-    at <code>5e8d688</code>. The worktree is clean. The integrated application candidate has
-    not been published or released; the Xenon backup utility is deployed as a local-only
-    recovery path.</p>
+    29 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    at <code>5e8d688</code>. The worktree is clean. The public review branch is open as GitHub
+    draft PR <code>#37</code>; no main branch merge or release tag exists. The Xenon backup
+    utility is deployed as a local-only recovery path.</p>
     <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
       <title id="map-title">SolariNet integration boundaries</title>
       <desc id="map-desc">Operators use the authenticated dashboard and RackWire. The dashboard writes inventory to the SoR. The SoR feeds DNS and notifications. Monitoring clients and scan workers report to the C control server. The Khadas VIM4 runs an authoritative DNS secondary.</desc>
@@ -107,8 +107,11 @@
       queues for AD, Pi-hole, and DNS each had one running consumer and zero ready or
       unacknowledged messages; notify dispatch also had one consumer and no backlog.
       Xenon’s emitter, apply workers, reconciliation, and notification services were active
-      during the check. The broker is operational, but the installed release is old and
-      upgrade/recovery remain release gates.</li>
+      during the 22 October check. RabbitMQ was fully booted with no local alarms; its
+      <code>solari</code> vhost had zero ready/unacknowledged messages and one consumer on
+      <code>sor.apply.ad</code>, <code>sor.apply.pihole</code>, <code>sor.apply.dns</code>, and
+      <code>notify.dispatch</code>. The broker is operational, but its installed release is old
+      and upgrade/recovery remain release gates.</li>
       <li><strong>Backups:</strong> Cesium’s 21 October SoR dump restored successfully into
       a disposable MariaDB instance and all 41 tables passed checks. On 22 October, the
       Xenon runner wrote a 56.4 MB root-only archive and the exact artifact restored into
@@ -122,10 +125,13 @@
       the native worker records live results as reviewable Discovery candidates, which remain
       separate from physical inventory until explicitly handled. The dashboard polls worker
       progress every second and refreshes candidate rows every 2.5 seconds while a scan runs, so
-      new hosts appear before completion. RackWire links to the same Discovery workflow. The
-      native-worker browser acceptance scanned the directly connected <code>10.0.0.0/24</code>,
+      new hosts appear before completion. RackWire launches the same live Discovery workflow
+      and receives candidate handoff. The native-worker browser acceptance scanned the directly
+      connected <code>10.0.0.0/24</code>,
       processed all 254 addresses, and recorded 14 candidates in a disposable database; the local
-      listener appeared in Discovery before scan completion. No production database was changed.
+      listener appeared in Discovery before scan completion. The accepted path polls live worker
+      status, refreshes candidates during execution, and supports reviewing and ingesting
+      discovered candidates into inventory. No production database was changed.
       A separate UI acceptance verified candidate refresh before its controlled scan fixture
       reaches a terminal state. Larger-range throughput and deployed worker behavior remain
       unverified. Adoption mirrors a host and address into
@@ -153,14 +159,18 @@
       <li><strong>Release gates:</strong> authenticated browser acceptance now passes against
       disposable SoR and broker fixtures, including scanner import and RackWire iframe save.
       Staged production browser verification, cross-lab review, production migration/rollback,
-      remote GitHub CI, and deployment remain open. The public RackWire GitHub mirror is absent,
-      the standalone scanner-ingest checkout has no remote or matching repository on either host,
-      and the local Claude Code OAuth session is expired. GitHub CI checks out RackWire
-      recursively, but `soren42/RackWire` is absent. RackWire's eight documentation and
-      entrypoint changes are committed as <code>a0f456a</code>, and the SolariNet candidate
-      contains that gitlink. Scanner-ingest has a clean local documentation candidate at
-      <code>ebb9a58</code>, including its paired interface-guide PDF. Neither subproject
-      candidate has been published.</li>
+      and application deployment remain open. The root review branch has a GitHub draft PR
+      <code>#37</code>; RackWire's public GitHub mirror now has main and integration branches plus
+      draft PR <code>#1</code>. Its GitHub mirror was created because root CI recursively checks
+      out the RackWire gitlink. Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
+      repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
+      authenticated session, so cross-lab review is unavailable. Root PR CI is being used to
+      expose further issues; the latest run at <code>c18e1fb</code> passed 14 of 15 checks. The
+      remaining clean-install schema comparison differs because MariaDB 11.8.9 omits a
+      terminator on one executable-comment line. The exporter now normalizes that version-specific
+      dump detail. Earlier runs also found a date-sensitive DNS assertion and
+      checkout/artifact wiring defects. Keep the PRs in draft
+      until all checks and independent review pass.</li>
     </ul>
     <p>Current evidence and next gates: <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">Stabilization Baseline</a>
     and <a href="SolariNet_Stabilization_Integration_Workflow_2026-08-09.md">Integration Workflow</a>.</p>
@@ -443,9 +453,13 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   nightly and <code>CALL solari_roll_partitions(...)</code> monthly.</p>
 
   <h2 id="ci">CI</h2>
-  <p><code>.github/workflows/ci.yml</code> defines ten job groups. The local
-  <code>build-server-asan</code> CTest run passed <strong>37/37</strong>; hosted CI has not run
-  for this unreleased candidate.</p>
+  <p><code>.github/workflows/ci.yml</code> defines ten job groups and the current draft PR runs
+  15 hosted checks. The local <code>build-server-asan</code> CTest run passed
+  <strong>37/37</strong>. The first hosted run passed 12 of 15 checks; subsequent runs caught a
+  date-dependent SOA serial test, a missing RackWire mirror, a missing server-binary artifact in
+  the dashboard job, server checkout omitting the RackWire submodule, and clean-install schema
+  formatting across MariaDB 11.8 patch versions. The first four fixes passed in hosted CI;
+  executable-comment normalization now has a focused regression test and awaits a hosted rerun.</p>
   <ul>
     <li><code>core</code> — the default zero-dependency build and CTest suite.</li>
     <li><code>server</code> — full server build with ASan/UBSan, database migrations,
@@ -465,9 +479,8 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
     <li><code>macos</code> — universal build and native core tests.</li>
   </ul>
   <p>Loopback transport staging is best-effort, mirroring <code>bootstrap-xenon.sh</code>.
-  The RackWire and dashboard jobs check out submodules recursively; the candidate RackWire
-  GitHub mirror is still absent, so those hosted jobs cannot fetch this gitlink until that
-  repository is published. Other CI results remain local or unverified as stated in their
+  The RackWire and dashboard jobs check out submodules recursively; the RackWire GitHub mirror
+  is available. Hosted validation remains in progress for the schema-export correction. Other CI results remain local or unverified as stated in their
   gates.</p>
 
   <h2 id="gaps">Known gaps &amp; deferred items</h2>

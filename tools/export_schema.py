@@ -26,9 +26,16 @@ DEFINER_ID = r"`(?:``|[^`])*`@`(?:``|[^`])*`"
 def normalizeDefiners(sql: str) -> str:
     """Leave DEFINER implicit so snapshots do not depend on the dump account."""
     sql = re.sub(r"/\*!50017 DEFINER=" + DEFINER_ID + r"\*/\s*", "", sql)
-    return re.sub(
+    sql = re.sub(
         r"/\*!50013 DEFINER=" + DEFINER_ID + r" (SQL SECURITY (?:DEFINER|INVOKER)) \*/",
         r"/*!50013 \1 */",
+        sql,
+    )
+    # MariaDB 11.8.9 omits the terminator after this executable comment, while
+    # earlier dump versions include it. Keep checked-in snapshots stable.
+    return re.sub(
+        r"(?m)^(\/\*M!100616 SET @OLD_NOTE_VERBOSITY=.*\*\/);?$",
+        r"\1;",
         sql,
     )
 

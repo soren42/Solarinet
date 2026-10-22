@@ -35,6 +35,12 @@ class DefinerNormalizationTests(unittest.TestCase):
         self.assertIn("/*!50013 SQL SECURITY INVOKER */", result)
         self.assertIn("SELECT 'DEFINER=literal' AS note;", result)
 
+    def test_normalizes_mariadb_note_verbosity_terminator(self) -> None:
+        line = "/*M!100616 SET @OLD_NOTE_VERBOSITY=@@NOTE_VERBOSITY, NOTE_VERBOSITY=0 */"
+
+        self.assertEqual(normalizeDefiners(line + "\n"), line + ";\n")
+        self.assertEqual(normalizeDefiners(line + ";\n"), line + ";\n")
+
 
 if __name__ == "__main__":
     unittest.main()
