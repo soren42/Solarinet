@@ -97,3 +97,14 @@ Chromium submitted `127.0.0.1/32` through the installed dashboard. Native worker
 ## PHP deployment prerequisite discovered
 
 The live dev host's PHP CLI had neither `ctype` nor `openssl` loaded. Discovery failed at `ctype_digit()`; OIDC verification would also be unavailable without `openssl_verify()`. Installed the matching openSUSE packages `php8-ctype` and `php8-openssl`, restarted the development PHP server, and verified ctype, OpenSSL, and PDO MySQL functions in the active runtime. Added a reusable runtime extension check to dashboard CI and documented package requirements. `php tests/dashboard/test_php_runtime_extensions.php` passes locally; hosted CI for the new check is pending.
+
+
+## 2026-10-22 candidate delta: realtime polling lifecycle and Cesium dev activation
+
+The current root candidate is `c4b8975eef46f860aef90b11e50aaabbf4c3ed03`, pushed to both Forgejo and GitHub on `integrate/stability-20261020`. GitHub PR #37 remains draft. Hosted run `39730919455` passed all 17 checks. RackWire remains pinned at `a66bd218acc89b668a8f1a89291f2c32bb38ac59`, with draft PR #1 green. The scanner-ingest repository remains local-only at `c2a3f7b` without a configured remote.
+
+The Discovery UI now forwards abort signals through API helpers, prevents overlapping status polls across mounts, cancels a pending request when leaving the screen, and ignores stale completion updates. Browser acceptance delays worker status responses, navigates away mid-poll, verifies cancellation, returns to Discovery, and asserts no more than one status request is active; the existing live scan, candidate refresh, durable recovery, and adoption assertions still pass. The scanner/RackWire acceptance continues to cover starting the same realtime workflow from RackWire and handing candidates back for review and ingest.
+
+The clean `dev-20261022-c4b8975` package (180 allowlisted files, source tree clean, RackWire gitlink pinned) is installed under Cesium `~/.local/share/solarinet-dev/release-root`; archive SHA-256 is `aa2b9fe778cf5592323e592b6db54e12efaf62db9365a3eade6008e536165847`. The Release build completed, and `deploy/dashboard/test_release.py` passed 9 tests with 2 dirty-tree-only skips. Remote checks confirmed the active release points at `dev-20261022-c4b8975`, the loopback UI returns HTTP 200, unauthenticated scan history returns HTTP 401, and served assets contain both the API abort-signal forwarding and poll guard. Prior authenticated scan/adoption acceptance used isolated scratch schemas. The instance is development-only and loopback-bound.
+
+**UNVERIFIED / pending:** PHP-FPM/Apache behavior, production database migration/rollback, wider subnet throughput, worker restart/reboot recovery, physical scanner streaming, and cross-lab review. Claude CLI has no authenticated session and no cross-lab reviewer is available in this environment. No production deployment, main merge, release tag, or scanner-ingest publication occurred.

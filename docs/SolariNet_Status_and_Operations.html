@@ -77,11 +77,10 @@
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
     is mirrored on Forgejo and GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
-    The integration head <code>4790dcd</code> is pushed to both remotes; it includes the
-    realtime scan/SoR code, RackWire CSRF behavioral tests, the scanner/RackWire browser retry
-    acceptance, and refreshed status documentation. The realtime Discovery retry, payload-bound idempotency, SoR ingest acceptance,
-    CI, and review documentation are committed on both remotes. GitHub PR #37 run
-    <code>39718723877</code> passed all 15 jobs, including live Discovery worker/API,
+    The integration head <code>c4b8975</code> is pushed to both remotes; it includes the
+    realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
+    acceptance, and Discovery polling cancellation/overlap protection. GitHub PR #37 run
+    <code>39730919455</code> passed all 17 checks, including live Discovery worker/API,
     candidate adoption, scanner/RackWire browser flow, and release-package/rollback checks.
     RackWire PR #1 at <code>a66bd21</code> has green hosted checks (run
     <code>39719734709</code>). Scanner-ingest documentation is committed locally at
@@ -90,7 +89,10 @@
     The new browser follow-up injects an expiry-shaped CSRF rejection, refreshes identity, and succeeds
     against the real barcode/SoR API. Hosted run <code>39720370015</code> for commit
     <code>23aee5b</code> passed the full CI matrix. Actual elapsed-token expiry and deployed PHP-FPM
-    behavior remain unverified.
+    behavior remain unverified. The clean <code>dev-20261022-c4b8975</code> release package is
+    installed as a loopback-only Cesium development instance; the UI returns HTTP 200, unauthenticated
+    scan history returns HTTP 401, and the served assets contain the polling fix. This is not a
+    production deployment.
     The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
@@ -150,18 +152,22 @@
       connected <code>10.0.0.0/24</code>,
       processed all 254 addresses, and recorded 14 candidates in a disposable database; the local
       listener appeared in Discovery before scan completion. The accepted path polls live worker
-      status, refreshes candidates during execution, and supports reviewing and ingesting
+      status without overlapping requests, cancels in-flight polling when leaving Discovery,
+      resumes polling on return, refreshes candidates during execution, and supports reviewing and ingesting
       discovered candidates into inventory. A 22 October combined scan-and-ingest acceptance
       processed 254/254 addresses, found 12 candidates, observed the listener candidate while
       the worker was running, retried a lost response without duplicating the job, and adopted
       <code>10.0.0.20</code> into monitoring and the SoR. It used separate disposable stores; no
       production database was changed.
       A separate UI acceptance verified candidate refresh before its controlled scan fixture
-      reaches a terminal state. Larger-range throughput and candidate deployment remain
+      reaches a terminal state. The latest browser acceptance delayed status responses, navigated
+      away during a poll, verified cancellation, returned to Discovery, and confirmed at most one
+      status request was active. Larger-range throughput and candidate deployment remain
       unverified. A read-only Xenon check found the standalone RackWire discovery service and
       Apache health proxy returning HTTP 200, while the dashboard's unauthenticated discovery
-      endpoint returned HTTP 401 as expected. The Xenon-served dashboard bundle differs from
-      this candidate, so those checks do not verify its authenticated real-time scan path.
+      endpoint returned HTTP 401 as expected. Cesium now serves this candidate in a loopback-only
+      development instance; its authenticated scan/adoption flow used isolated scratch stores.
+      PHP-FPM/Apache and production data remain unverified.
       The 22 October scratch-database browser acceptance also exercised the full operator
       ingest step: it dropped the response after durable scan admission, retried with the same
       idempotency key, observed one live candidate, adopted it through the Monitor dialog, and
@@ -214,8 +220,11 @@
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
-      <code>39720370015</code> at integration commit <code>23aee5b</code> passed the full hosted
-      workflow matrix. It includes the scanner/RackWire retry browser acceptance, lifecycle UI, live
+      <code>39730919455</code> at integration commit <code>c4b8975</code> passed all 17 checks. It includes
+      realtime Discovery poll cancellation/overlap coverage, scan/candidate ingest, scanner/RackWire
+      browser acceptance, release package activation/rollback, broker recovery, and clean install checks.
+      The prior run <code>39720370015</code> at integration commit <code>23aee5b</code> passed the full
+      hosted workflow matrix. It includes the scanner/RackWire retry browser acceptance, lifecycle UI, live
       Discovery scan and adoption, release package activation/rollback, broker recovery, and clean
       install checks. The browser flow first injects an expiry-shaped 403, refreshes identity through
       the real endpoint, then succeeds through the real barcode/SoR handler. Actual elapsed-token
