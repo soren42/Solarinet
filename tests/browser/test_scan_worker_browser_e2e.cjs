@@ -213,9 +213,18 @@ async function main() {
     const context = await browser.newContext();
     const page = await context.newPage();
     const errors = [];
+    const consoleErrors = [];
+    const failedRequests = [];
     const external = [];
     const discoveryResponses = [];
     page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text().slice(0, 600));
+    });
+    page.on('requestfailed', (request) => {
+      try { failedRequests.push(`${new URL(request.url()).pathname}: ${request.failure()?.errorText || 'failed'}`); }
+      catch (_) { failedRequests.push('request failed'); }
+    });
     page.on('response', async (response) => {
       if (response.url().includes('/api/discovery')) {
         let body = '';
@@ -242,10 +251,30 @@ async function main() {
     await page.locator('.nav-item').filter({ hasText: /^RackWire$/ }).click();
     await page.getByRole('heading', { name: 'RackWire', exact: true }).waitFor();
     await page.getByText('Network, power & interconnect planning', { exact: false }).waitFor();
-    await page.waitForFunction(() => {
+    try {
+      await page.waitForFunction(() => {
       const frame = document.querySelector('iframe[title="RackWire network, power, and interconnect planner"]');
       return !!(frame && frame.contentWindow && frame.contentWindow.RackWire);
-    }, { timeout: 15000 });
+      }, undefined, { timeout: 45000 });
+    } catch (error) {
+      const frameState = await page.evaluate(() => {
+        const frame = document.querySelector('iframe[title="RackWire network, power, and interconnect planner"]');
+        if (!frame) return { exists: false };
+        let body = '';
+        let readyState = 'unavailable';
+        let rackWire = false;
+        try {
+          body = frame.contentDocument?.body?.innerText?.slice(0, 800) || '';
+          readyState = frame.contentDocument?.readyState || 'unavailable';
+          rackWire = !!frame.contentWindow?.RackWire;
+        } catch (_) { body = 'frame document is inaccessible'; }
+        return { exists: true, path: new URL(frame.src).pathname, readyState, rackWire, body };
+      });
+      throw new Error(`RackWire iframe did not initialize: ${error.message}\n` +
+        `frame: ${JSON.stringify(frameState)}\n` +
+        `page errors: ${errors.join(' | ')}\nconsole errors: ${consoleErrors.join(' | ')}\n` +
+        `failed requests: ${failedRequests.join(' | ')}\nPHP: ${phpLogs}`);
+    }
     await page.getByRole('button', { name: 'Network discovery', exact: true }).click();
     await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
     await page.getByPlaceholder('192.168.1.0/24').fill(SCAN_CIDR);
