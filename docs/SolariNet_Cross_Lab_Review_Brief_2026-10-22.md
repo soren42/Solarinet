@@ -8,11 +8,19 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | integration head `4790dcd` (includes code candidate `789b1d3`, CSRF behavior tests `98d314c`, browser retry E2E `23aee5b`, and current status docs) | Both Forgejo and GitHub `main` are `5e8d688`; both integration refs match. Draft GitHub PR #37 is open. |
+| SolariNet | integration head `d8ca7e4` (includes the scan/idempotency, SoR adoption, durable scan recovery, and PHP runtime-extension contract changes) | Forgejo and GitHub `main` are `5e8d688`; both integration refs match at `d8ca7e4`. Draft GitHub PR #37 is open. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | `integrate/solarinet-20261021` at `c2a3f7b` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Updated manuals and validation are committed locally. |
 
 No main branch has been merged and no release tags exist. The scanner-ingest manual/validation edits remain local and have no configured remote.
+
+## Current release-candidate recheck · 2026-10-22
+
+- GitHub PR #37 head `d8ca7e46359c4ea6521fd83708671412a2d0b85c` is open and draft. Forgejo and GitHub integration refs point to that same commit; both root `main` refs remain `5e8d6889bdb3108cd65c594243395e60a7a68db7`.
+- Hosted run `39727250413` completed successfully for the current head. All 17 reported checks passed, including the full server job's authenticated scan-worker/API/SoR adoption integration and live Discovery browser-to-native-worker candidate-ingest flow, plus the dashboard API and ops scripts, RackWire browser flow, platform builds, and RabbitMQ compatibility jobs.
+- RackWire PR #1 remains open and draft at `a66bd218acc89b668a8f1a89291f2c32bb38ac59`; its Forgejo and GitHub integration refs match and both `main` refs remain `5f29f590f601bc277390ef28c6569dde52ea432d`. Its hosted checks are green.
+- `scanner-ingest` remains clean at `c2a3f7b81c7569e408fc26746aa1358791d05b1b`, with no configured Git remote and no release tag. Its tests pass locally, but remote publication cannot proceed until the repository destination and ownership are established.
+- **UNVERIFIED / pending:** independent cross-lab review is unavailable in this session; no main branch was merged, release tag created, or production deployment performed. The installed Cesium candidate remains a loopback-only development deployment. Scanner-ingest physical inventory import is snapshot-based; live device streaming/automatic physical asset ingestion is not claimed.
 
 ## High-priority review surfaces
 
