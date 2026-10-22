@@ -75,7 +75,7 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: as of this snapshot, the local branch is
-    34 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    35 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
     at <code>5e8d688</code>. The worktree is clean. The public review branch is open as GitHub
     draft PR <code>#37</code>; no main branch merge or release tag exists. The Xenon backup
     utility is deployed as a local-only recovery path.</p>
@@ -161,11 +161,13 @@
       Staged production browser verification, cross-lab review, production migration/rollback,
       and application deployment remain open. The root review branch has a GitHub draft PR
       <code>#37</code>; RackWire's public GitHub mirror now has main and integration branches plus
-      draft PR <code>#1</code>. Its GitHub mirror was created because root CI recursively checks
-      out the RackWire gitlink. Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
+      draft PR <code>#1</code>. RackWire's new independent GitHub Actions workflow passed
+      <code>45/45</code> backend tests and four runtime checksum checks in run
+      <code>39704732584</code>; root CI also recursively checks out its pinned gitlink.
+      Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. Root PR CI run
-      <code>39702671284</code> at <code>80c1c2e</code> passed all 15 hosted jobs, including realtime
+      <code>39703464795</code> at <code>1f6adfe</code> passed all 15 hosted jobs, including realtime
       scan/candidate-ingest and scanner/RackWire browser acceptance. During the preceding run, the
       clean-install snapshot check exposed MariaDB client-version drift: hosted 10.11 emits
       <code>SQL_NOTES</code> wrappers while the 11.8 snapshot uses <code>NOTE_VERBOSITY</code>;
@@ -459,8 +461,10 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   <strong>37/37</strong>. The first hosted run passed 12 of 15 checks; subsequent runs caught a
   date-dependent SOA serial test, a missing RackWire mirror, a missing server-binary artifact in
   the dashboard job, server checkout omitting the RackWire submodule, and clean-install schema
-  formatting between MariaDB 10.11 and 11.8 dump clients. Run <code>39702671284</code> passed all
-  15 hosted checks, including the clean-install ledger and schema snapshot comparison.</p>
+  formatting between MariaDB 10.11 and 11.8 dump clients. Run <code>39703464795</code> passed all
+  15 hosted checks, including the clean-install ledger and schema snapshot comparison. RackWire's
+  own workflow, run <code>39704732584</code>, independently passed its 45 backend tests and four
+  runtime checksum checks.</p>
   <ul>
     <li><code>core</code> — the default zero-dependency build and CTest suite.</li>
     <li><code>server</code> — full server build with ASan/UBSan, database migrations,
@@ -481,7 +485,8 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   </ul>
   <p>Loopback transport staging is best-effort, mirroring <code>bootstrap-xenon.sh</code>.
   The RackWire and dashboard jobs check out submodules recursively; the RackWire GitHub mirror
-  is available. Hosted validation remains in progress for the schema-export correction. Other CI results remain local or unverified as stated in their
+  is available. The RackWire repository now runs its own backend and runtime-integrity checks on
+  pull requests. Other CI results remain local or unverified as stated in their
   gates.</p>
 
   <h2 id="gaps">Known gaps &amp; deferred items</h2>
