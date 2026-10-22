@@ -39,10 +39,10 @@ If the host-runner model cannot be made isolated and repeatable, implement a loo
 
 ## Current evidence
 
-- Forgejo is the primary Git remote; Forgejo and GitHub integration refs were synchronized at `c867bcb` when checked. This readiness documentation is published Forgejo-first.
+- Forgejo is the primary Git remote; Forgejo and GitHub integration refs were synchronized at docs tip `05aa2be` when checked. This readiness documentation was published Forgejo-first.
 - Forgejo instance version 15.0.3 was observed earlier; Actions are enabled by default unless disabled in configuration.
 - No runner process or unit was found on Cesium, Benzene, Xenon, Chlorine, or the current workspace. Steel was unreachable; other possible hosts were not checked.
-- The current GitHub workflow remains the only hosted validation path. Run `39798443486` on `c867bcb` completed with all 15 jobs successful. GitHub's status API still lists an active Actions result-delay incident; the candidate run is green despite that ongoing service issue.
+- The current GitHub workflow remains the only hosted validation path. Run `39798443486` on code head `c867bcb` completed with all 15 jobs successful. Docs-tip run `39800482855` on `05aa2be` is pending. GitHub's status API still lists an active Actions result-delay incident.
 
 ## UNVERIFIED
 
