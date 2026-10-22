@@ -8,7 +8,7 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | Last fully validated code candidate `c867bcb`; docs tip `05aa2be` | Forgejo and GitHub integration refs match at the docs tip; both `main` refs remain `5e8d688`. The status/CI readiness update was published to Forgejo first. Draft GitHub PR #37 remains open. |
+| SolariNet | Last fully CI-validated code candidate `c867bcb` | Later commits contain status/CI documentation only and are published to Forgejo first; both root `main` refs were `5e8d688` at the last check. Draft GitHub PR #37 remains open. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | `integrate/solarinet-20261021`, base `c2a3f7b` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Latest test-fixture and manual/validation updates are committed locally at `9ac42d6`; independent review is pending. |
 

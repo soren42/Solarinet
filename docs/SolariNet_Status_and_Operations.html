@@ -77,15 +77,15 @@
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
     is maintained on Forgejo first and mirrored to GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
-    The last fully CI-validated code ref is <code>c867bcb</code>; the documentation tip <code>05aa2be</code>
-    is mirrored on Forgejo and GitHub, while both <code>main</code> refs remain at <code>5e8d688</code>.
-    This status and Forgejo CI readiness update was published to Forgejo first. The code candidate
+    The last fully CI-validated code ref is <code>c867bcb</code>; its GitHub run passed all 15 jobs.
+    Documentation-only status updates are published to Forgejo first and mirror to GitHub; both
+    <code>main</code> refs remain at <code>5e8d688</code>. The code candidate
     <code>c1ce64d</code> includes the
     realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
     acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
     GitHub reports an active Actions incident affecting workflow and step results
     (<a href="https://www.githubstatus.com/api/v2/incidents/unresolved.json">incident q29p76qtnkyk</a>, checked 22 October).
-    GitHub run <code>39798443486</code> on <code>c867bcb</code> completed all 15 jobs successfully. New docs-tip run <code>39800482855</code> on <code>05aa2be</code> is pending under the active Actions result-delay incident. Forgejo is the primary remote, but this repository still has no <code>.forgejo/workflows</code> definition and no verified runner. A safe Forgejo CI path must preserve the existing tests' loopback-only scratch DB/broker guards and support their Docker-based upgrade test. No Actions runner was found on Cesium, Benzene, Xenon, Chlorine, or this workspace. Steel is unreachable; other possible runner hosts remain unchecked. Forgejo CI is unverified; see <a href="FORGEJO_CI.md">the Forgejo CI readiness assessment</a>. GitHub remains the only hosted validation path.
+    Forgejo is the primary remote, but this repository still has no <code>.forgejo/workflows</code> definition and no verified runner. A safe Forgejo CI path must preserve the existing tests' loopback-only scratch DB/broker guards and support their Docker-based upgrade test. No Actions runner was found on Cesium, Benzene, Xenon, Chlorine, or this workspace. Steel is unreachable; other possible runner hosts remain unchecked. Forgejo CI is unverified; see <a href="FORGEJO_CI.md">the Forgejo CI readiness assessment</a>. GitHub remains the only hosted validation path. GitHub reports continuing Actions workflow and step result delays under an active incident.
     The previous docs-only run
     <code>39738275605</code> passed all 15 jobs on <code>46045e9</code>; code run
     <code>39737421770</code> passed all 15 jobs, including the database-backed
