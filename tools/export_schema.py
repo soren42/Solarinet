@@ -31,6 +31,15 @@ def normalizeDefiners(sql: str) -> str:
         r"/*!50013 \1 */",
         sql,
     )
+    # MariaDB 10.11's dump client uses SQL_NOTES; newer clients use
+    # NOTE_VERBOSITY. These statements only quiet dump/import notes.
+    sql = sql.replace(
+        "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;",
+        "/*M!100616 SET @OLD_NOTE_VERBOSITY=@@NOTE_VERBOSITY, NOTE_VERBOSITY=0 */;",
+    ).replace(
+        "/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;",
+        "/*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;",
+    )
     # MariaDB 11.8.9 omits the terminator after this executable comment, while
     # earlier dump versions include it. Keep checked-in snapshots stable.
     normalizedLines: list[str] = []

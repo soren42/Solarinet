@@ -42,6 +42,22 @@ class DefinerNormalizationTests(unittest.TestCase):
         self.assertEqual(normalizeDefiners(line + ";\n"), line + ";\n")
         self.assertEqual(normalizeDefiners(line + "  \r\n"), line + ";\r\n")
 
+    def test_normalizes_legacy_sql_notes_dump_wrappers(self) -> None:
+        dump = (
+            "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;\n"
+            "CREATE TABLE example (id INT);\n"
+            "/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;\n"
+        )
+
+        result = normalizeDefiners(dump)
+
+        self.assertIn(
+            "/*M!100616 SET @OLD_NOTE_VERBOSITY=@@NOTE_VERBOSITY, NOTE_VERBOSITY=0 */;\n",
+            result,
+        )
+        self.assertIn("/*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;\n", result)
+        self.assertNotIn("SQL_NOTES", result)
+
 
 if __name__ == "__main__":
     unittest.main()
