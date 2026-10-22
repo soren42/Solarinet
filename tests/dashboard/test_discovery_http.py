@@ -213,7 +213,7 @@ def main() -> int:
         viewer_token = whoami["data"]["csrfToken"] if whoami and whoami.get("ok") else ""
         before_submit = queued_discovery_count(db)
         status, _data, _ = http_request(port, "POST", "/api/discovery/scan",
-            cookie=viewer_cookie, csrf=viewer_token, body={"cidr": "192.0.2.0/24", "ports": "443"})
+            cookie=viewer_cookie, csrf=viewer_token, body={"cidr": "10.0.0.0/24", "ports": "443"})
         checks.append(("viewer cannot start a scan", status == 403 and queued_discovery_count(db) == before_submit))
 
         _status, _data, session_cookie = http_request(port, "GET", "/__fixture_session?role=operator")
@@ -222,12 +222,12 @@ def main() -> int:
         token = whoami["data"]["csrfToken"] if whoami and whoami.get("ok") else ""
         before_submit = queued_discovery_count(db)
         status, _data, _ = http_request(port, "POST", "/api/discovery/scan",
-            cookie=operator_cookie, body={"cidr": "192.0.2.0/24", "ports": "443"})
+            cookie=operator_cookie, body={"cidr": "10.0.0.0/24", "ports": "443"})
         checks.append(("operator scan requires CSRF", status == 403 and queued_discovery_count(db) == before_submit))
 
         status, scan, _ = http_request(port, "POST", "/api/discovery/scan",
             cookie=operator_cookie, csrf=token,
-            body={"cidr": "192.0.2.0/24", "ports": "443"})
+            body={"cidr": "10.0.0.0/24", "ports": "443"})
         checks.append(("operator scan queues and returns durable scan identity",
             status == 202 and scan and scan.get("data", {}).get("requestId", 0) > 0
             and scan["data"].get("status") == "admission_pending"

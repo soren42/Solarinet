@@ -273,9 +273,9 @@ async function main() {
         }));
       };
       try {
-        await api.discoverScan('192.0.2.1/32').catch(() => {});
-        await api.discoverScan('192.0.2.1/32');
-        await api.discoverScan('192.0.2.1/32');
+        await api.discoverScan('10.0.0.20/32').catch(() => {});
+        await api.discoverScan('10.0.0.20/32');
+        await api.discoverScan('10.0.0.20/32');
         return keys;
       } finally {
         window.fetch = originalFetch;

@@ -474,7 +474,7 @@ async function main() {
     // durable scan queue rather than calling the standalone RackWire backend.
     await page.getByRole('button', { name: 'Network discovery', exact: true }).click();
     await page.getByRole('heading', { name: 'Discovery', exact: true }).waitFor();
-    await page.getByPlaceholder('192.168.1.0/24').fill('192.0.2.0/24');
+    await page.getByPlaceholder('192.168.1.0/24').fill('10.0.0.0/24');
     const activeStatusRequests = new Set();
     const statusPollEvents = [];
     let maxActiveStatusPolls = 0;

@@ -20,7 +20,34 @@ final class DiscoveryScanInput
             return false;
         }
         $hosts = $prefix === 32 ? 1 : ($prefix === 31 ? 2 : (2 ** (32 - $prefix)) - 2);
-        return $hosts <= 4096;
+        if ($hosts > 4096) {
+            return false;
+        }
+
+        // Discovery is an intranet operation. Keep the HTTP boundary aligned
+        // with the native worker: the entire requested range must fit inside
+        // RFC1918, loopback, or IPv4 link-local space.
+        $address = unpack('Nvalue', inet_pton($parts[0]));
+        if (!is_array($address)) {
+            return false;
+        }
+        $mask = $prefix === 0 ? 0 : ((0xFFFFFFFF << (32 - $prefix)) & 0xFFFFFFFF);
+        $network = $address['value'] & $mask;
+        $last = $network | (~$mask & 0xFFFFFFFF);
+        foreach ([
+            [0x0A000000, 8],       // 10.0.0.0/8
+            [0xAC100000, 12],      // 172.16.0.0/12
+            [0xC0A80000, 16],      // 192.168.0.0/16
+            [0x7F000000, 8],       // 127.0.0.0/8
+            [0xA9FE0000, 16],      // 169.254.0.0/16
+        ] as [$allowedNetwork, $allowedPrefix]) {
+            $allowedMask = (0xFFFFFFFF << (32 - $allowedPrefix)) & 0xFFFFFFFF;
+            if (($network & $allowedMask) === $allowedNetwork
+                && ($last & $allowedMask) === $allowedNetwork) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Empty input means use the server's default port set; null means invalid. */

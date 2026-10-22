@@ -82,7 +82,7 @@ solariStatus serverProvisionConfirmDecommission(serverContext *ctx,
 
 solariStatus serverScanPlan(const char *cidr, const char *ports, uint32_t *total)
 {
-    if (!cidr || strcmp(cidr, "192.0.2.0/24") != 0 ||
+    if (!cidr || strcmp(cidr, "10.0.0.0/24") != 0 ||
         (ports && ports[0] && strcmp(ports, "22") != 0)) return ERR_INVALID_ARG;
     if (total) *total = 254;
     return SOLARI_OK;
@@ -208,7 +208,7 @@ static void test_rbac(void)
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("POOL_DEL", "pool=2", op, sizeof op));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("RULE_DEL", "rule=1", op, sizeof op));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("ALERT_ACK", "event=1", op, sizeof op));
-    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("DISCOVER", "cidr=192.0.2.0/24", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("DISCOVER", "cidr=10.0.0.0/24", op, sizeof op));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("REQUEST_GET", "request=1", op, sizeof op));
     /* destructive WITH op= passes and reports the operator */
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlCheckRbac("RETIRE", "node=1 op=carol", op, sizeof op));
@@ -299,7 +299,7 @@ static void test_discovery_scan_rejected_on_standby(void)
     serverCtl ctl;
     serverContext ctx;
     char reply[256];
-    char line[] = "DISCOVER cidr=192.0.2.0/24 op=alice";
+    char line[] = "DISCOVER cidr=10.0.0.0/24 op=alice";
 
     memset(&ctl, 0, sizeof ctl);
     memset(&ctx, 0, sizeof ctx);
@@ -343,7 +343,7 @@ static void test_discovery_submits_durable_job_and_scopes_status(void)
     serverCtl ctl;
     serverContext ctx;
     char reply[512];
-    char submit[] = "DISCOVER cidr=192.0.2.0/24 ports=22 op=alice";
+    char submit[] = "DISCOVER cidr=10.0.0.0/24 ports=22 op=alice";
     char status[] = "DISCOVER_STATUS scan=42 op=alice";
 
     memset(&ctl, 0, sizeof ctl);
@@ -395,7 +395,7 @@ static void test_enrollment_token_acl(void)
     char reply[256];
     char direct[] = "ENROLL_TOKEN op=web role=client host=node.akoria.net";
     char queued[] = "REQUEST_SUBMIT verb=ENROLL_TOKEN op=web";
-    char scan[] = "DISCOVER cidr=192.0.2.0/24";
+    char scan[] = "DISCOVER cidr=10.0.0.0/24";
     memset(&ctl, 0, sizeof ctl);
     (void)ctlHandleLine(&ctl, scan, CTL_PEER_DASHBOARD, 33,
                         reply, sizeof reply);

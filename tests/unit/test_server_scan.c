@@ -179,8 +179,8 @@ static void test_cidr_excludes_network_and_broadcast(void)
     uint32_t first = 0, count = 0;
     uint8_t prefix = 0;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        scanParseCidr("192.0.2.12/24", &first, &count, &prefix));
-    TEST_ASSERT_EQUAL_UINT32(0xC0000201u, first);
+        scanParseCidr("10.12.0.12/24", &first, &count, &prefix));
+    TEST_ASSERT_EQUAL_UINT32(0x0A0C0001u, first);
     TEST_ASSERT_EQUAL_UINT32(254u, count);
     TEST_ASSERT_EQUAL_UINT8(24u, prefix);
 }
@@ -190,12 +190,15 @@ static void test_small_cidr_ranges(void)
     uint32_t first = 0, count = 0;
     uint8_t prefix = 0;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        scanParseCidr("192.0.2.6/31", &first, &count, &prefix));
-    TEST_ASSERT_EQUAL_UINT32(0xC0000206u, first);
+        scanParseCidr("172.16.0.6/31", &first, &count, &prefix));
+    TEST_ASSERT_EQUAL_UINT32(0xAC100006u, first);
     TEST_ASSERT_EQUAL_UINT32(2u, count);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        scanParseCidr("192.0.2.9/32", &first, &count, &prefix));
-    TEST_ASSERT_EQUAL_UINT32(0xC0000209u, first);
+        scanParseCidr("172.31.255.254/31", &first, &count, &prefix));
+    TEST_ASSERT_EQUAL_UINT32(0xAC1FFFFEu, first);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        scanParseCidr("192.168.2.9/32", &first, &count, &prefix));
+    TEST_ASSERT_EQUAL_UINT32(0xC0A80209u, first);
     TEST_ASSERT_EQUAL_UINT32(1u, count);
 }
 
@@ -210,6 +213,14 @@ static void test_cidr_rejects_malformed_or_unbounded_ranges(void)
         scanParseCidr("192.0.2.0/24/1", &first, &count, NULL));
     TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
         scanParseCidr("0.0.0.0/0", &first, &count, NULL));
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
+        scanParseCidr("192.0.2.0/24", &first, &count, NULL));
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
+        scanParseCidr("10.0.0.0/7", &first, &count, NULL));
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
+        scanParseCidr("172.32.0.0/24", &first, &count, NULL));
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
+        scanParseCidr("192.168.0.0/15", &first, &count, NULL));
 }
 
 static void test_ports_are_strict_and_bounded(void)
@@ -231,12 +242,12 @@ static void test_scan_plan_validates_before_admission(void)
 {
     uint32_t total = 0;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        serverScanPlan("192.0.2.0/24", "22,443", &total));
+        serverScanPlan("10.0.0.0/24", "22,443", &total));
     TEST_ASSERT_EQUAL_UINT32(254, total);
     TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
-        serverScanPlan("192.0.2.0/24", "22,,443", &total));
+        serverScanPlan("10.0.0.0/24", "22,,443", &total));
     TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG,
-        serverScanPlan("192.0.2.0/19", "22", &total));
+        serverScanPlan("10.0.0.0/19", "22", &total));
 }
 
 static void test_lease_loss_between_batches_stops_before_result_writes(void)

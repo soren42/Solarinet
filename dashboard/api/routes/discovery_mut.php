@@ -26,7 +26,7 @@ return static function (Router $router): void {
         $body = solari_json_body();
         $cidr = isset($body['cidr']) ? (string) $body['cidr'] : '';
         if (!DiscoveryScanInput::validCidr($cidr)) {
-            Response::error('bad_request', 'cidr must be a valid IPv4 range of at most 4096 hosts.', 400);
+            Response::error('bad_request', 'cidr must be an intranet IPv4 range within RFC1918, loopback, or link-local space, with at most 4096 hosts.', 400);
         }
         $args = ['cidr' => $cidr];
         if (array_key_exists('ports', $body)) {

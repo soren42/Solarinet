@@ -82,8 +82,27 @@ static const char *scanServiceName(int port)
 
 /* ---- CIDR / port parsing ------------------------------------------------- */
 
+/* Return true only when the complete IPv4 CIDR is inside an intranet prefix. */
+static int scanRangeAllowed(uint32_t network, uint32_t last)
+{
+    static const struct { uint32_t network; uint8_t prefix; } allowed[] = {
+        {0x0A000000u, 8},   /* RFC1918 10.0.0.0/8 */
+        {0xAC100000u, 12},  /* RFC1918 172.16.0.0/12 */
+        {0xC0A80000u, 16},  /* RFC1918 192.168.0.0/16 */
+        {0x7F000000u, 8},   /* loopback */
+        {0xA9FE0000u, 16}   /* IPv4 link-local */
+    };
+    size_t i;
+    for (i = 0; i < sizeof allowed / sizeof allowed[0]; i++) {
+        uint32_t mask = 0xFFFFFFFFu << (32 - allowed[i].prefix);
+        if ((network & mask) == allowed[i].network
+            && (last & mask) == allowed[i].network) return 1;
+    }
+    return 0;
+}
+
 /* Parse "a.b.c.d/nn" into a host base (network+1) and host count, IPv4 only.
- * Returns ERR_INVALID_ARG on a malformed spec or a range wider than the cap. */
+ * Returns ERR_INVALID_ARG on a malformed, out-of-scope, or oversized range. */
 static solariStatus scanParseCidr(const char *cidr, uint32_t *baseHostOut,
                                   uint32_t *countOut, uint8_t *prefixOut)
 {
@@ -92,7 +111,7 @@ static solariStatus scanParseCidr(const char *cidr, uint32_t *baseHostOut,
     const char *digit;
     struct in_addr in;
     unsigned long prefix;
-    uint32_t net, mask, hosts, first;
+    uint32_t net, mask, last, hosts, first;
 
     if (!cidr || !baseHostOut || !countOut) return ERR_INVALID_ARG;
     if (strlen(cidr) >= sizeof buf) return ERR_INVALID_ARG;
@@ -112,6 +131,8 @@ static solariStatus scanParseCidr(const char *cidr, uint32_t *baseHostOut,
     net  = ntohl(in.s_addr);
     mask = (prefix == 0) ? 0u : (0xFFFFFFFFu << (32 - prefix));
     net &= mask;
+    last = net | ~mask;
+    if (!scanRangeAllowed(net, last)) return ERR_INVALID_ARG;
 
     if (prefix >= 31) {
         /* /31 and /32: treat every address in-range as a host (no net/bcast). */

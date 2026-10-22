@@ -2680,3 +2680,28 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   freshness, Node syntax, and whitespace checks pass.
 - **UNVERIFIED:** hosted CI for this polling patch and independent cross-lab
   review. No production SoR, DNS, UniFi, or deployment state changed.
+
+
+### 2026-10-22 Intranet-only scan range enforcement
+
+- The Discovery admission endpoint and native worker previously accepted any
+  IPv4 CIDR up to the 4,096-host cap. That allowed a valid operator request to
+  target public address space, despite the scanner being intended for the lab
+  intranet.
+- Both the PHP API and native C parser now require the complete CIDR to fit
+  within one RFC1918 private block, loopback (`127.0.0.0/8`), or IPv4
+  link-local (`169.254.0.0/16`) block. A CIDR that crosses a prefix boundary is
+  rejected even if its starting address is private. The host-count limit and
+  operator/CSRF checks remain in force.
+- PHP tests cover accepted private, loopback, and link-local ranges plus
+  public documentation ranges and private/public boundary-crossing prefixes.
+  Native parser and scan-plan tests cover the same public-range rejection and
+  private-range boundary behavior. Local validation passed: PHP input/route
+  tests, full CTest (37/37), the updated scan/control C tests (2/2), and
+  Node/Python syntax checks. The latest hosted
+  CI run passed before this range-policy patch; a new hosted run is pending.
+- The scanner/import HTML manual now describes the allowed ranges and realtime
+  polling cancellation behavior, and its matching Letter PDF was regenerated.
+- **UNVERIFIED:** hosted integration/browser CI and deployment of the updated
+  worker/API to the Cesium loopback development instance. No production scan,
+  database, DNS, or UniFi state was changed.
