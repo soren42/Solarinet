@@ -2703,6 +2703,38 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   worker candidate-ingest acceptance.
 - The scanner/import HTML manual now describes the allowed ranges and realtime
   polling cancellation behavior, and its matching Letter PDF was regenerated.
-- **UNVERIFIED:** deployment of the updated worker/API to the Cesium loopback
-  development instance. No production scan,
-  database, DNS, or UniFi state was changed.
+- **UNVERIFIED at this checkpoint:** deployment of the updated worker/API to
+  the Cesium loopback development instance. The follow-up below records that
+  deployment and the runtime packaging correction.
+
+## 2026-10-22 — loopback deployment of intranet scan policy
+
+- Deployed clean package `dev-20261022-2cb099c-static` from source revision
+  `2cb099c442d14eb8e57b140188941512440c8d3f`; the embedded RackWire pin is
+  `a66bd218acc89b668a8f1a89291f2c32bb38ac59`. The archive SHA-256 is
+  `17233165ace3b100e211bc06546612ecfffc1da4e903361c787a2d50db19ec49`. The
+  package contains 180 allowlisted files and its RELEASE manifest was verified.
+- Two package experiments exposed a portability gap. Sanitizer binaries
+  required Cesium libraries that were absent. A normal Release build linked
+  NNG dynamically from a temporary build path and then resolved an incompatible
+  system NNG. The active package uses a Release build with the pinned NNG and
+  mbedTLS archives statically linked; `ldd` and `readelf` showed no NNG,
+  mbedTLS, ASan/UBSan, or temporary RUNPATH dependencies. Server, worker, and
+  PHP processes listen only on loopback; the worker logged ready and the
+  server acquired its development DB lease.
+- The first PHP launch omitted the development DB variables and correctly
+  rendered offline mode. After restarting the PHP process with the isolated
+  `solarinet_scan_worker_dev_20261022` database configuration, the authenticated
+  dashboard returned live mode. The API rejected `192.0.2.0/24`; the browser
+  then submitted only `127.0.0.1/32`. Scan job 9 completed with 1/1 hosts and
+  one candidate; authenticated Discovery displayed it. Summary, jobs, and
+  candidate reads returned HTTP 200, with no browser page errors or
+  cross-origin requests.
+- Hosted docs-only run `39734027278` passed all 15 jobs; code run
+  `39733247468` passed all 15 jobs. This was a development-only loopback scan;
+  no lab subnet or production monitoring, inventory, DNS, or UniFi data was
+  changed.
+- **UNVERIFIED:** reproducible CI packaging of a portable Release binary set,
+  PHP-FPM/Apache behavior, larger-range throughput, service reboot recovery,
+  and independent cross-lab review. The current CI release package test still
+  uses sanitizer-built binaries and needs a runtime dependency gate.

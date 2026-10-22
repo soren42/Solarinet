@@ -8,7 +8,7 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | integration head `f63d4c3` (code candidate `d8ca7e4`, followed by current release evidence and synchronized HTML/PDF documentation) | Forgejo and GitHub `main` are `5e8d688`; both integration refs match at `f63d4c3`. Draft GitHub PR #37 is open. |
+| SolariNet | integration head `2cb099c` (range-enforcement code `c1ce64d`, with synchronized HTML/PDF docs) | Forgejo and GitHub `main` are `5e8d688`; both integration refs match at `2cb099c`. Draft GitHub PR #37 is open. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | `integrate/solarinet-20261021` at `c2a3f7b` | Local repository only; no configured remote and no matching published GitHub/Forgejo repository. Updated manuals and validation are committed locally. |
 
@@ -16,8 +16,13 @@ No main branch has been merged and no release tags exist. The scanner-ingest man
 
 ## Current release-candidate recheck · 2026-10-22
 
-- GitHub PR #37 head `f63d4c35d9480fbc6e7d8f8373bdde523eae573c` is open and draft. Forgejo and GitHub integration refs point to that same commit; both root `main` refs remain `5e8d6889bdb3108cd65c594243395e60a7a68db7`.
-- Hosted run `39727250413` passed on code head `d8ca7e4`; documentation follow-ups `39727902720` and `39728758035` passed on `c6d9425` and `f63d4c3`, respectively. All 17 checks passed on the latest head, including the full server job's authenticated scan-worker/API/SoR adoption integration and live Discovery browser-to-native-worker candidate-ingest flow, plus the dashboard API and ops scripts, RackWire browser flow, platform builds, and RabbitMQ compatibility jobs.
+- Hosted run `39734027278` passed on docs head `2cb099c`; the code candidate run `39733247468` passed all 15 jobs on `c1ce64d`.
+- Cesium development deployment now uses `dev-20261022-2cb099c-static`, source revision `2cb099c442d14eb8e57b140188941512440c8d3f`, with the RackWire gitlink pinned to `a66bd21`. The loopback PHP UI, native server, worker, and isolated MariaDB are running. Authenticated browser acceptance rejected `192.0.2.0/24`; a permitted `127.0.0.1/32` scan completed 1/1 and displayed its one candidate. The UI reported live data, all checked API reads returned 200, with no page errors or external requests.
+- The first candidate package used sanitizer-linked binaries, and the first Release build used a dynamic NNG dependency unavailable on Cesium. Those package attempts failed to start and were replaced by the statically linked pinned NNG/mbedTLS Release build. The package manifest and Cesium runtime were checked. **UNVERIFIED:** the repository does not yet have a repeatable CI release-binary profile with a runtime dependency gate; hosted tests still publish sanitizer build binaries for release-package contract tests.
+- Authenticated startup initially lacked the development DB environment and the UI fell back offline. Configuring the PHP process with the isolated dev database restored live mode. This failure and recovery are recorded to prevent treating offline UI acceptance as runtime verification.
+
+- GitHub PR #37 remains open and draft. Forgejo and GitHub integration refs both point to `2cb099c442d14eb8e57b140188941512440c8d3f`; both root `main` refs remain `5e8d6889bdb3108cd65c594243395e60a7a68db7`.
+- Docs-only hosted run `39734027278` passed on `2cb099c`; code run `39733247468` passed all 15 jobs on `c1ce64d`, including authenticated scan API and browser-to-native-worker candidate ingest. The prior baseline code head `c4b8975` passed all 17 checks in run `39730919455`.
 - RackWire PR #1 remains open and draft at `a66bd218acc89b668a8f1a89291f2c32bb38ac59`; its Forgejo and GitHub integration refs match and both `main` refs remain `5f29f590f601bc277390ef28c6569dde52ea432d`. Its hosted checks are green.
 - `scanner-ingest` remains clean at `c2a3f7b81c7569e408fc26746aa1358791d05b1b`, with no configured Git remote and no release tag. Its tests pass locally, but remote publication cannot proceed until the repository destination and ownership are established.
 - **UNVERIFIED / pending:** independent cross-lab review is unavailable in this session; no main branch was merged, release tag created, or production deployment performed. The installed Cesium candidate remains a loopback-only development deployment. Scanner-ingest physical inventory import is snapshot-based; live device streaming/automatic physical asset ingestion is not claimed.
@@ -116,4 +121,4 @@ The current root code candidate is `c1ce64d315bf959fbd81fa7b44f198188e59d15f`, p
 
 The dashboard API and native C worker now reject scan CIDRs outside RFC1918 private, loopback, and IPv4 link-local space. The whole requested CIDR must fit inside one allowed block, preventing a private starting address from masking a range that crosses into public space. The existing 4,096-host cap remains. Regression coverage accepts block-boundary private examples and rejects RFC 5737 documentation ranges, public IPv4 ranges, and cross-boundary ranges. Related browser fixtures now use intranet scan addresses. Local PHP helper/route tests and full native CTest (37/37) passed; the updated C range cases were rerun (scan/control 2/2). Hosted run `39733247468` passed the database-backed HTTP and browser-to-native-worker scan/adoption checks.
 
-The currently installed Cesium loopback package is still `dev-20261022-c4b8975`; it has not yet been rebuilt with this range-policy change. **UNVERIFIED:** deployed range enforcement, larger-range throughput, PHP-FPM/Apache, and cross-lab review. No production scan or database, DNS, UniFi, main branch, or release tag was changed.
+At the time of the original range-policy note, Cesium had not yet been updated. The follow-up deployment is recorded above. **UNVERIFIED:** larger-range throughput, PHP-FPM/Apache, the repeatable CI Release-binary profile, and cross-lab review. The deployed acceptance used only the isolated loopback development database; production DNS and UniFi were untouched.

@@ -92,11 +92,16 @@
     The new browser follow-up injects an expiry-shaped CSRF rejection, refreshes identity, and succeeds
     against the real barcode/SoR API. Hosted run <code>39720370015</code> for commit
     <code>23aee5b</code> passed the full CI matrix. Actual elapsed-token expiry and deployed PHP-FPM
-    behavior remain unverified. The clean <code>dev-20261022-c4b8975</code> release package is
-    installed as a loopback-only Cesium development instance; the UI returns HTTP 200, unauthenticated
-    scan history returns HTTP 401, and the served assets contain the polling fix. That deployment
-    predates the range-policy patch at <code>c1ce64d</code>; updated API and worker deployment is
-    pending hosted verification. This is not a production deployment.
+    behavior remain unverified. The clean <code>dev-20261022-2cb099c-static</code> package is
+    installed as a loopback-only Cesium development instance. Its Release server and scan worker
+    start with the pinned NNG/mbedTLS libraries statically linked; the earlier sanitizer and dynamic
+    NNG packages could not start on Cesium and were not retained. Authenticated browser acceptance
+    verified the deployed intranet policy rejects <code>192.0.2.0/24</code>, then scanned only
+    <code>127.0.0.1/32</code>: the durable job completed 1/1, saved one candidate, and Discovery
+    displayed it. The page was in live mode, API reads returned HTTP 200, and the browser reported
+    no page errors or cross-origin requests. The first run exposed missing dev DB environment in
+    PHP; after configuring the isolated development DB, acceptance passed. This remains a
+    loopback-only development deployment, not a production release.
     The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
