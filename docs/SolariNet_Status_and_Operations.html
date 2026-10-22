@@ -85,7 +85,7 @@
     acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
     GitHub reports an active Actions incident affecting workflow and step results
     (<a href="https://www.githubstatus.com/api/v2/incidents/unresolved.json">incident q29p76qtnkyk</a>, checked 22 October).
-    Forgejo is the primary remote, but this repository still has no <code>.forgejo/workflows</code> definition and no verified runner. A safe Forgejo CI path must preserve the existing tests' loopback-only scratch DB/broker guards and support their Docker-based upgrade test. No Actions runner was found on Cesium, Benzene, Xenon, Chlorine, or this workspace. Steel is unreachable; other possible runner hosts remain unchecked. Forgejo CI is unverified; see <a href="FORGEJO_CI.md">the Forgejo CI readiness assessment</a>. GitHub remains the only hosted validation path. GitHub reports continuing Actions workflow and step result delays under an active incident.
+    Forgejo remains the authoritative remote, with GitHub as a mirror during service disruptions. A Forgejo workflow now exists at <code>.forgejo/workflows/ci.yml</code>, generated from the GitHub workflow by <code>tools/ci/render_forgejo_workflow.py</code>. It preserves loopback-only scratch DB/broker checks and Docker upgrade behavior by targeting a dedicated disposable host runner. No such runner has been provisioned, so Forgejo execution is unverified; see <a href="FORGEJO_CI.md">the Forgejo CI guide</a>. GitHub reports continuing Actions workflow and step result delays under an active incident.
     The previous docs-only run
     <code>39738275605</code> passed all 15 jobs on <code>46045e9</code>; code run
     <code>39737421770</code> passed all 15 jobs, including the database-backed

@@ -1,0 +1,727 @@
+# SolariNet CI for a dedicated disposable Forgejo host runner.
+#
+# Mirrors the Makefile targets and deploy/bootstrap-xenon.sh staging:
+#   * core      - default zero-dependency Phase 1 core + Unity tests (hard gate)
+#   * server    - full server build (SOLARI_BUILD_SERVER + I/O + SQLite) with
+#                 the §3 dependency set installed the way bootstrap does
+#   * ctest     - the Unity suites via ctest (core + spool required; transport
+#                 loopback best-effort, as bootstrap stages it)
+#   * cross     - the §12 cross matrix (linux-arm64/arm32, windows-x86_64) built
+#                 with cmake/toolchains/*, plus a qemu-user smoke run of the
+#                 cross-built Linux test binaries on non-native arches
+#
+# Native macOS coverage remains in the GitHub-specific workflow.
+
+name: ci-forgejo
+
+on:
+  push:
+    branches: [ main, 'integrate/**' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-forgejo-${{ forgejo.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python-integrations:
+    name: Python integrations (MCP, Opie, alertbridge, UniFi, authbroker)
+    runs-on: solarinet-ci-host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Forgejo workflow adaptation
+        run: python tools/ci/render_forgejo_workflow.py --check
+      - name: Validate systemd directive section placement
+        run: python tests/test_systemd_unit_sections.py
+      - name: Install MCP package and test dependencies
+        run: python -m pip install -e 'integrations/mcp[test]'
+      - name: MCP tools and SQL guard suite
+        run: python -m pytest -q integrations/mcp
+      - name: Alertbridge delivery disposition tests
+        run: python -m unittest discover -s deploy/alertbridge -p 'test_*.py' -v
+      - name: UniFi polling behavior tests
+        run: python -m unittest discover -s deploy/unifi -p 'test_*.py' -v
+      - name: Authbroker fail-closed HTTP token tests
+        run: |
+          python -m pip install -r deploy/authbroker/requirements.txt
+          python -m unittest discover -s deploy/authbroker -p 'test_*.py' -v
+      - name: Authbroker MQTT approval round-trip on isolated loopback broker
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mosquitto
+          cat > /tmp/solarinet-authbroker-mosquitto.conf <<'EOF'
+          listener 18883 127.0.0.1
+          allow_anonymous true
+          persistence false
+          EOF
+          sudo mosquitto -c /tmp/solarinet-authbroker-mosquitto.conf -d
+          python - <<'PY'
+          import socket
+          import time
+          for _ in range(30):
+              try:
+                  with socket.create_connection(("127.0.0.1", 18883), timeout=0.5):
+                      break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("isolated Mosquitto listener did not become ready")
+          PY
+          python deploy/authbroker/loopback_test.py --host 127.0.0.1 --port 18883 --decision approve
+          python deploy/authbroker/loopback_test.py --host 127.0.0.1 --port 18883 --decision deny
+      - name: Notification envelope validation tests
+        run: python -m unittest discover -s deploy/notify -p 'test_*.py' -v
+      - name: Opie MCP probe and service isolation tests
+        run: |
+          python -m pip install -r deploy/opie/requirements.txt
+          python -m unittest discover -s deploy/opie -p 'test_*.py' -v
+
+  sorsync:
+    name: SoR outbox delivery boundary (RabbitMQ ${{ matrix.rabbitmq_release }})
+    runs-on: solarinet-ci-host
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Match production, exercise the upgrade intermediates, and keep the
+          # current RabbitMQ 4 image under regression coverage. Pin OCI index
+          # digests, not floating tags.
+          - rabbitmq_release: '3.13.7'
+            rabbitmq_image: rabbitmq:3.13.7-management@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
+          - rabbitmq_release: '4.2.9 intermediate'
+            rabbitmq_image: rabbitmq:4.2-management@sha256:7ce498399b07a9594a3d23e5a7920edf233edb888e82503c35357c23cefc2e61
+          - rabbitmq_release: '4.3.6'
+            rabbitmq_image: rabbitmq:4.3.6-management@sha256:54cb013d76cd1fd6c0a0708f34062ad61c452bb6f016b434c6c33f1a765d2b58
+          - rabbitmq_release: '4.4.0 forward compatibility'
+            rabbitmq_image: rabbitmq:4@sha256:71be6ca71cd3ad92f29b354ec381b1ee587894aaaac21f185b8cf43fb50d3feb
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start loopback-only disposable broker and database
+        run: |
+          docker rm -f solari-ci-sorsync-rabbitmq solari-ci-sorsync-db >/dev/null 2>&1 || true
+          docker run --detach --name solari-ci-sorsync-rabbitmq \
+            --publish 127.0.0.1:5672:5672 \
+            --env RABBITMQ_DEFAULT_USER=solarinet_fixture \
+            --env RABBITMQ_DEFAULT_PASS=delivery_fixture \
+            --env RABBITMQ_DEFAULT_VHOST=solari \
+            --health-cmd='rabbitmq-diagnostics -q check_running' \
+            --health-interval=5s --health-timeout=5s --health-retries=20 \
+            "${{ matrix.rabbitmq_image }}"
+          docker run --detach --name solari-ci-sorsync-db \
+            --publish 127.0.0.1:3306:3306 \
+            --env MARIADB_ROOT_PASSWORD=sorsync_fixture \
+            --env MARIADB_DATABASE=solarinet_sorsync_ci \
+            --health-cmd='mariadb-admin ping -uroot -psorsync_fixture' \
+            --health-interval=5s --health-timeout=5s --health-retries=20 \
+            mariadb:11
+          wait_healthy() {
+            name="$1"
+            for attempt in $(seq 1 120); do
+              state="$(docker inspect --format '{{.State.Health.Status}}' "$name" 2>/dev/null || true)"
+              [ "$state" = healthy ] && return 0
+              sleep 1
+            done
+            docker logs "$name"
+            return 1
+          }
+          wait_healthy solari-ci-sorsync-rabbitmq
+          wait_healthy solari-ci-sorsync-db
+      - name: Install exercised sync dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mariadb-client bind9 bind9-utils
+          python3 -m venv /tmp/sorsync-ci
+          /tmp/sorsync-ci/bin/pip install -r deploy/sorsync/requirements.txt
+      - name: Apply SoR migrations to the disposable integration database
+        env:
+          MYSQL_PWD: sorsync_fixture
+        run: |
+          mariadb -h127.0.0.1 -P3306 -uroot -e 'ALTER DATABASE solarinet_sorsync_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+          /tmp/sorsync-ci/bin/python tools/migrate.py --database sor \
+            --db-name solarinet_sorsync_ci --host 127.0.0.1 --port 3306 --user root
+      - name: Test SoR delivery, failure recovery, and rendered DNS chain
+        env:
+          SOLARI_TEST_AMQP_URL: amqp://solarinet_fixture:delivery_fixture@127.0.0.1:5672/solari
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_sorsync_ci
+          SOR_DB_USER: root
+          SOR_DB_PASS: sorsync_fixture
+          MYSQL_PWD: sorsync_fixture
+        run: |
+          broker_container="$(docker ps --filter publish=5672 --format '{{.ID}}' | head -n 1)"
+          test -n "$broker_container"
+          export SOLARI_TEST_BROKER_CONTAINER="$broker_container"
+          /tmp/sorsync-ci/bin/python -m unittest discover -s deploy/sorsync -p 'test_*.py' -v
+      - name: Build the pinned RabbitMQ 4.3.7 upgrade intermediate
+        run: |
+          build_context="/tmp/solari-rabbitmq-437-build"
+          rm -rf "$build_context"
+          mkdir -p "$build_context"
+          archive="$build_context/rabbitmq-server-generic-unix-4.3.7.tar.xz"
+          curl -fsSL \
+            https://github.com/rabbitmq/rabbitmq-server/releases/download/v4.3.7/rabbitmq-server-generic-unix-4.3.7.tar.xz \
+            -o "$archive"
+          printf '%s  %s\n' \
+            83692adadc69b171af7c8188305d5c33c98bd17effb1ab993e405c0e9d1ebaef \
+            "$archive" | sha256sum --check --status
+          tar -xJf "$archive" -C "$build_context"
+          cp deploy/sorsync/RabbitMQ-4.3.7.Dockerfile "$build_context/Dockerfile"
+          docker build --tag solari-rabbitmq-upgrade:4.3.7 "$build_context"
+      - name: Rehearse RabbitMQ upgrade and pre-4.4 snapshot restore
+        env:
+          SOLARI_TEST_DOCKER: docker
+          SOLARI_RUN_BROKER_UPGRADE_TEST: '1'
+        run: /tmp/sorsync-ci/bin/python deploy/sorsync/test_broker_upgrade_path.py
+      - name: Remove disposable broker and database
+        if: always()
+        run: docker rm -f solari-ci-sorsync-rabbitmq solari-ci-sorsync-db || true
+  protocol-fuzz:
+    name: SCP protocol parser fuzz smoke
+    runs-on: solarinet-ci-host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Clang and CMake
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang cmake build-essential
+      - name: Build coverage-instrumented protocol parsers
+        run: |
+          CC=clang cmake -S . -B build-fuzz \
+            -DCMAKE_C_FLAGS=-Werror \
+            -DSOLARI_BUILD_CLIENT=OFF \
+            -DSOLARI_BUILD_MONITOR=OFF \
+            -DSOLARI_BUILD_SERVER=OFF \
+            -DSOLARI_BUILD_TESTS=ON \
+            -DSOLARI_BUILD_FUZZERS=ON
+          cmake --build build-fuzz -j
+      - name: Run strict Clang tests and fuzz frame, TLV, and message parsers
+        run: ctest --test-dir build-fuzz --output-on-failure
+
+  # ---- default core: zero external deps, always builds (Makefile `all`) -----
+  core:
+    name: core (default, no deps)
+    runs-on: solarinet-ci-host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install minimal build tooling
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential cmake git pkg-config
+      - name: Configure + build core (tests on)
+        run: cmake -S . -B build -DSOLARI_BUILD_TESTS=ON && cmake --build build -j
+      - name: ctest (core + spool required; loopback best-effort)
+        run: |
+          ctest --test-dir build --output-on-failure -E 'test_net_loopback'
+          ctest --test-dir build --output-on-failure -R 'test_net_loopback' \
+            || echo "::warning::transport loopback not green (best-effort stage)"
+
+  # ---- full server build with the §3 dependency set ------------------------
+  server:
+    name: server (full, IO + SQLite + server)
+    runs-on: solarinet-ci-host
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Start loopback-only disposable server database
+        run: |
+          docker rm -f solari-ci-server-db >/dev/null 2>&1 || true
+          docker run --detach --name solari-ci-server-db \
+            --publish 127.0.0.1:3306:3306 \
+            --env MARIADB_ROOT_PASSWORD=serverci_scratch \
+            --env MARIADB_DATABASE=solarinet_receipts_ci \
+            --health-cmd='mariadb-admin ping -uroot -pserverci_scratch' \
+            --health-interval=5s --health-timeout=5s --health-retries=20 \
+            mariadb:11
+          for attempt in $(seq 1 120); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' solari-ci-server-db 2>/dev/null || true)"
+            [ "$state" = healthy ] && exit 0
+            sleep 1
+          done
+          docker logs solari-ci-server-db
+          exit 1
+      - name: Install full dependency set (mirrors bootstrap-xenon.sh)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential cmake git pkg-config curl jq openssl unzip ca-certificates \
+            libsqlite3-dev libcjson-dev libmariadb-dev mariadb-client python3-yaml php-cli php-mysql bind9 bind9-utils shellcheck
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install pinned browser acceptance runtime
+        run: npm install --prefix /tmp/scan-playwright --no-save playwright@1.64.1
+      - name: Install Chromium and system libraries
+        run: /tmp/scan-playwright/node_modules/.bin/playwright install --with-deps chromium
+      - name: Install pinned mbedTLS and NNG dependencies
+        run: bash deploy/build-pinned-io-deps.sh /tmp/solarinet-io-deps
+      - name: ShellCheck shell scripts including sourced helpers
+        run: find . -type f \( -name '*.sh' -o -name '*.bash' \) -print0 | xargs -0 shellcheck -x -S warning
+      - name: Configure + build full server with ASAN and UBSAN
+        run: |
+          cmake -S . -B build-server \
+            -DCMAKE_PREFIX_PATH=/tmp/solarinet-io-deps \
+            -DCMAKE_C_FLAGS="-I/tmp/solarinet-io-deps/include -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DSOLARI_BUILD_SERVER=ON \
+            -DSOLARI_WITH_IO=ON \
+            -DSOLARI_WITH_DISCOVERY_TOOLS=ON \
+            -DSOLARI_WITH_SQLITE=ON \
+            -DSOLARI_WITH_JSON=ON \
+            -DSOLARI_BUILD_TESTS=ON
+          cmake --build build-server -j
+      - name: Validate isolated DNS generations
+        run: python3 -m unittest discover -s netdb -p test_zone_generation.py -v
+      - name: DNS activation and rollback against isolated BIND
+        run: python3 -m unittest discover -s deploy/dns-release -p test_release.py -v
+      - name: Khadas secondary zone inventory and refresh tests
+        run: python3 -m unittest discover -s deploy/dns-khadas -p 'test_*.py' -v
+      - name: Bare-zone transfer ACL and serial preservation tests
+        run: python3 -m unittest discover -s deploy/dns-bare -p 'test_*.py' -v
+      - name: Steel BIND include chain against isolated fixture
+        run: python3 -m unittest discover -s deploy/dns-steel -p 'test_*.py' -v
+      - name: Stable schema export definer normalization
+        run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+      - name: ctest (full build)
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_receipts_ci
+          MYSQL_PWD: serverci_scratch
+        run: |
+          mariadb -h127.0.0.1 -P3306 -uroot -e 'ALTER DATABASE solarinet_receipts_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+          python3 tools/migrate.py --database monitoring --db-name solarinet_receipts_ci --host 127.0.0.1 --port 3306 --user root
+          ctest --test-dir build-server --output-on-failure -E 'test_net_loopback'
+          ctest --test-dir build-server --output-on-failure -R 'test_net_loopback' \
+            || echo "::warning::transport loopback not green (best-effort stage)"
+      - name: Real HTTPS enrollment through server, database, and CA
+        env:
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_receipts_ci
+          MYSQL_PWD: serverci_scratch
+        run: python3 tests/integration/test_enrollment_e2e.py
+      - name: Two-process primary/standby failover on isolated MariaDB
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_lease_process_ci
+          MYSQL_PWD: serverci_scratch
+        run: |
+          mariadb -h127.0.0.1 -P3306 -uroot \
+            -e 'CREATE DATABASE solarinet_lease_process_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+          python3 tools/migrate.py --database monitoring \
+            --db-name solarinet_lease_process_ci --host 127.0.0.1 --port 3306 --user root
+          python3 tests/integration/test_server_lease_processes.py \
+            build-server/src/server/solariServer \
+            build-server/src/server/solariScanWorker
+      - name: Scan worker, authenticated discovery API, and SoR adoption integration
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_TEST_SOR_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_scan_worker_ci
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_USER: root
+          SOR_DB_PASS: serverci_scratch
+          SOR_DB_NAME: solarinet_scan_worker_sor_ci
+          MYSQL_PWD: serverci_scratch
+        run: |
+          mariadb -h127.0.0.1 -P3306 -uroot \
+            -e 'CREATE DATABASE solarinet_scan_worker_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE solarinet_scan_worker_sor_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+          python3 tools/migrate.py --database monitoring \
+            --db-name solarinet_scan_worker_ci --host 127.0.0.1 --port 3306 --user root
+          python3 tools/migrate.py --database sor \
+            --db-name solarinet_scan_worker_sor_ci --host 127.0.0.1 --port 3306 --user root
+          python3 tests/integration/test_scan_worker_process.py \
+            build-server/src/server/solariScanWorker \
+            build-server/tests/test_ctl_adopt_bridge
+          python3 tests/integration/test_decommission_queue_http.py \
+            build-server/tests/test_ctl_adopt_bridge
+      - name: Live Discovery browser to native scan worker and candidate ingest
+        env:
+          NODE_PATH: /tmp/scan-playwright/node_modules
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_scan_worker_ci
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_USER: root
+          SOR_DB_PASS: serverci_scratch
+          SOR_DB_NAME: solarinet_scan_worker_sor_ci
+          MYSQL_PWD: serverci_scratch
+        run: node tests/browser/test_scan_worker_browser_e2e.cjs build-server/src/server/solariScanWorker build-server/tests/test_ctl_adopt_bridge
+      - name: Build portable Linux Release server binaries
+        run: bash deploy/build-release-binaries.sh /tmp/solarinet-io-deps build-release
+      - name: Exercise Release server and worker against scratch MariaDB
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_lease_process_ci
+          MYSQL_PWD: serverci_scratch
+        run: python3 tests/integration/test_server_lease_processes.py build-release/src/server/solariServer build-release/src/server/solariScanWorker
+      - name: Exercise Release scan worker against scratch MariaDB
+        env:
+          SOLARI_TEST_DB: '1'
+          SOLARI_DB_HOST: 127.0.0.1
+          SOLARI_DB_PORT: '3306'
+          SOLARI_DB_USER: root
+          SOLARI_DB_PASS: serverci_scratch
+          SOLARI_DB_NAME: solarinet_scan_worker_ci
+          MYSQL_PWD: serverci_scratch
+        run: python3 tests/integration/test_scan_worker_process.py build-release/src/server/solariScanWorker build-server/tests/test_ctl_adopt_bridge
+      - uses: actions/upload-artifact@v3
+        name: Upload portable Release server binaries
+        with:
+          name: solarinet-server-binaries
+          path: |
+            build-release/src/server/solariServer
+            build-release/src/server/solariScanWorker
+          if-no-files-found: error
+      - name: Remove disposable server database
+        if: always()
+        run: docker rm -f solari-ci-server-db || true
+  rackwire-browser:
+    name: RackWire offline, accessible, and responsive browser flow
+    runs-on: solarinet-ci-host
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install pinned Playwright test runtime
+        run: npm install --prefix /tmp/rackwire-playwright --no-save playwright@1.64.1
+      - name: Install Chromium and system libraries
+        run: /tmp/rackwire-playwright/node_modules/.bin/playwright install --with-deps chromium
+      - name: Run standalone RackWire browser acceptance
+        env:
+          NODE_PATH: /tmp/rackwire-playwright/node_modules
+        run: node tests/browser/test_rackwire_standalone.cjs
+
+  # ---- dashboard API + operational script guardrails ----------------------
+  dashboard:
+    name: dashboard API + ops scripts
+    runs-on: solarinet-ci-host
+    needs: server
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Start loopback-only disposable dashboard database
+        run: |
+          docker rm -f solari-ci-dashboard-db >/dev/null 2>&1 || true
+          docker run --detach --name solari-ci-dashboard-db \
+            --publish 127.0.0.1:3306:3306 \
+            --env MARIADB_ROOT_PASSWORD=rwci_scratch \
+            --env MARIADB_DATABASE=solarinet_stage \
+            --health-cmd='mariadb-admin ping -uroot -prwci_scratch' \
+            --health-interval=5s --health-timeout=5s --health-retries=20 \
+            mariadb:11
+          for attempt in $(seq 1 120); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' solari-ci-dashboard-db 2>/dev/null || true)"
+            [ "$state" = healthy ] && exit 0
+            sleep 1
+          done
+          docker logs solari-ci-dashboard-db
+          exit 1
+      - uses: actions/download-artifact@v3
+        name: Download portable Release server binaries
+        with:
+          name: solarinet-server-binaries
+          path: build-release/src/server
+      - name: Mark downloaded Release binaries executable
+        run: chmod 0755 build-release/src/server/solariServer build-release/src/server/solariScanWorker
+      - name: Install PHP CLI
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y php-cli php-mysql mariadb-client
+      - name: PHP runtime extension contract
+        run: php tests/dashboard/test_php_runtime_extensions.php
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install pinned dashboard browser test runtime
+        run: npm install --prefix /tmp/dashboard-playwright --no-save playwright@1.64.1
+      - name: Install Chromium and system libraries
+        run: /tmp/dashboard-playwright/node_modules/.bin/playwright install --with-deps chromium
+      - name: Backup runner and failure notification tests
+        run: sudo -n python3 -m unittest discover -s deploy/backups -p 'test_*.py' -v
+      - name: PHP syntax
+        run: find dashboard/api -name '*.php' -print | sort | xargs -n1 php -l
+      - name: Dashboard Apache security header contract
+        run: python3 tests/dashboard/test_security_headers.py
+      - name: Step-ca client verifies the certificate chain and endpoint
+        run: python3 tests/dashboard/test_ca_tls.py
+      - name: PHP bridge tests
+        run: php tests/dashboard/test_solari_ctl.php
+      - name: Discovery scan input and route bounds
+        run: php tests/dashboard/test_discovery_scan_input.php
+      - name: JSON Content-Type exact match
+        run: php tests/dashboard/test_json_content_type.php
+      - name: JSON body HTTP-SAPI integration
+        run: python3 tests/dashboard/test_json_body_http.py
+      - name: HTTPS enrollment API to local control socket
+        run: python3 tests/dashboard/test_enrollments_http.py
+      - name: Local login default-closed gate
+        run: php tests/dashboard/test_local_login_gate.php
+      - name: OIDC claims and session lifecycle
+        run: |
+          php tests/dashboard/test_oidc_claims.php
+          php tests/dashboard/test_auth_session.php
+      - name: Authorization policy, dispatch, enforcement, and route audit
+        run: |
+          php tests/dashboard/test_authz_policy.php
+          php tests/dashboard/test_authz_dispatch.php
+          php tests/dashboard/test_authz_enforce.php
+          php tests/dashboard/test_authz_routes.php
+      - name: RackWire API route tests
+        run: php tests/dashboard/test_rackwire_api.php
+      - name: RackWire UI parse + token bridge tests
+        run: node tests/dashboard/test_rackwire_ui.js
+      - name: Dashboard JSX parse + layout suites
+        run: |
+          node tests/dashboard/test_jsx_parse.js
+          node tests/dashboard/test_layout.js
+          node tests/dashboard/test_scanner_import_ui.js
+          node tests/dashboard/test_capability_maturity.js
+      - name: Service worker authenticated-cache boundary
+        run: node tests/dashboard/test_sw_cache.js
+      - name: Live-data freshness and worker release
+        run: |
+          node tests/dashboard/test_api_freshness.js
+          php tests/dashboard/test_stream_retired.php
+      - name: Authenticated multi-session freshness browser acceptance
+        env:
+          NODE_PATH: /tmp/dashboard-playwright/node_modules
+        run: node tests/browser/test_freshness_sessions_e2e.cjs
+      - name: Lifecycle UI suite
+        run: node tests/dashboard/test_lifecycle_ui.js
+      - name: Panel AW UI suite
+        run: node tests/dashboard/test_panel_aw.js
+      - name: Panel gear PHP mapping tests
+        run: php tests/dashboard/test_panel_gear.php
+      - name: Panel episode-namespace tests (CONTRACT-SW §13 D17)
+        run: php tests/dashboard/test_panel_episode.php
+      - name: Migration 020 against a scratch solarinet_stage DB (CONTRACT-RW §6)
+        env:
+          MYSQL_PWD: rwci_scratch
+        run: |
+          mariadb -h127.0.0.1 -P3306 -uroot -e 'ALTER DATABASE solarinet_stage CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+          MYSQL="mariadb -h127.0.0.1 -P3306 -uroot solarinet_stage"
+          $MYSQL < netdb/sor/schema.sql
+          $MYSQL < netdb/sor/migrations/001-surrogate-pks.sql
+          $MYSQL < netdb/sor/migrations/014_inventory.sql
+          $MYSQL < netdb/sor/migrations/015_barcodes.sql
+          $MYSQL < netdb/sor/migrations/020_rackwire.sql
+          echo "-- re-applying 020 to prove idempotency --"
+          $MYSQL < netdb/sor/migrations/020_rackwire.sql
+      - name: SoR host mirror transaction and retry boundary
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_stage
+          SOR_DB_USER: root
+          SOR_DB_PASS: rwci_scratch
+        run: php tests/dashboard/test_sor_transactions.php
+      - name: Scanner snapshot SoR preview, import, replay, and rollback
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_stage
+          SOR_DB_USER: root
+          SOR_DB_PASS: rwci_scratch
+        run: php tests/dashboard/test_scanner_import.php
+      - name: Scanner import through authenticated dashboard HTTP routes
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_stage
+          SOR_DB_USER: root
+          SOR_DB_PASS: rwci_scratch
+        run: php tests/dashboard/test_scanner_import_http.php
+      - name: Scanner and RackWire integration through the authenticated dashboard browser flow
+        env:
+          NODE_PATH: /tmp/dashboard-playwright/node_modules
+          SOLARI_TEST_SOR_DB: '1'
+          SOR_DB_HOST: 127.0.0.1
+          SOR_DB_PORT: '3306'
+          SOR_DB_NAME: solarinet_stage
+          SOR_DB_USER: root
+          SOR_DB_PASS: rwci_scratch
+        run: node tests/browser/test_scanner_import_e2e.cjs
+      - name: Dashboard release package, activation, and rollback contract
+        env:
+          SOLARI_RELEASE_BIN_DIR: build-release/src/server
+        run: python3 -m unittest discover -s deploy/dashboard -p 'test_release.py' -v
+      - name: Ledgered clean installs for monitoring and SoR
+        env:
+          MYSQL_PWD: rwci_scratch
+        run: |
+          mariadb -h127.0.0.1 -P3306 -uroot -e 'CREATE DATABASE monitoring_migration_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE sor_migration_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
+          python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root
+          python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root
+          python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root --check
+          python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --check
+          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" = 34
+          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 8
+          python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output /tmp/monitoring-schema.sql
+          python3 tools/export_schema.py --database sor --user root --host 127.0.0.1 --port 3306 --output /tmp/sor-schema.sql
+          diff -u db/schema.sql /tmp/monitoring-schema.sql
+          diff -u netdb/sor/schema.snapshot.sql /tmp/sor-schema.sql
+          mariadb -h127.0.0.1 -P3306 -uroot -e 'CREATE DATABASE monitoring_snapshot_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE sor_snapshot_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
+          mariadb -h127.0.0.1 -P3306 -uroot monitoring_snapshot_ci < /tmp/monitoring-schema.sql
+          mariadb -h127.0.0.1 -P3306 -uroot sor_snapshot_ci < /tmp/sor-schema.sql
+          diff -u \
+            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='monitoring_migration_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') AND TABLE_NAME <> 'solari_migration_ledger' ORDER BY TABLE_NAME") \
+            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='monitoring_snapshot_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') ORDER BY TABLE_NAME")
+          diff -u \
+            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='sor_migration_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') AND TABLE_NAME <> 'solari_migration_ledger' ORDER BY TABLE_NAME") \
+            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='sor_snapshot_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') ORDER BY TABLE_NAME")
+          diff -u \
+            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='sor_migration_ci' ORDER BY TRIGGER_NAME") \
+            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='sor_snapshot_ci' ORDER BY TRIGGER_NAME")
+      - name: Deploy script syntax
+        run: |
+          bash -n \
+            deploy/bootstrap-xenon.sh \
+            deploy/cross-build-client.sh \
+            deploy/remote-deploy.sh \
+            deploy/enrollment/solari-enroll.sh \
+            deploy/enrollment/solari-decommission.sh
+      - name: Enrollment certificate identity contract
+        run: bash tests/integration/test_enroll_identity.sh
+
+  # ---- status panel: firmware host suite + daemon codec --------------------
+  # Pure-C state machines compiled with plain gcc — no pico SDK, no toolchain.
+  # The firmware suite runs its renderer tests under ASAN/UBSAN (REVIEW-AW M3).
+      - name: Remove disposable dashboard database
+        if: always()
+        run: docker rm -f solari-ci-dashboard-db || true
+  panel:
+    name: panel firmware host suite + daemon codec
+    runs-on: solarinet-ci-host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential libcurl4-openssl-dev
+      - name: Firmware host suite (builds and runs)
+        # panelParityTest refuses PARITY_REGEN when CI is set, so committed
+        # goldens can never be overwritten from a workflow run (REVIEW-PF1 M1).
+        run: make -C status-panel/firmware/test
+      - name: Daemon codec tests
+        run: make -C status-panel/daemon test
+      - name: Provisioning tool + pty end-to-end smoke (CONTRACT-SW §13)
+        run: make -C status-panel/tools smoke
+      - name: Page/firmware parity suite (JS side)
+        run: node tests/dashboard/test_panel_parity.js
+
+  # ---- cross matrix (§12 toolchains) + qemu-user smoke ---------------------
+  cross:
+    name: cross ${{ matrix.target }}
+    runs-on: solarinet-ci-host
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux cross targets build the full tree (client+monitor) — platLinux
+          # is the reference PAL and works for every Linux ABI.
+          - target: linux-arm64
+            toolchain: cmake/toolchains/linux-arm64.cmake
+            apt: gcc-aarch64-linux-gnu
+            qemu: qemu-aarch64-static
+            qemu_ld: /usr/aarch64-linux-gnu
+            components: ""
+            smoke: true
+          - target: linux-arm32
+            toolchain: cmake/toolchains/linux-arm32.cmake
+            apt: gcc-arm-linux-gnueabihf
+            qemu: qemu-arm-static
+            qemu_ld: /usr/arm-linux-gnueabihf
+            components: ""
+            smoke: true
+          # Windows has no client/monitor PAL yet, so this proves the portable
+          # libsolari core + Unity suites cross-build under mingw (Phase 0 goal).
+          - target: windows-x86_64
+            toolchain: cmake/toolchains/windows-x86_64.cmake
+            apt: gcc-mingw-w64-x86-64
+            qemu: ""
+            qemu_ld: ""
+            components: "-DSOLARI_BUILD_CLIENT=OFF -DSOLARI_BUILD_MONITOR=OFF"
+            smoke: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain + qemu-user
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential cmake git pkg-config ${{ matrix.apt }}
+          if [ -n "${{ matrix.qemu }}" ]; then
+            sudo apt-get install -y qemu-user-static
+          fi
+      # Cross-build the zero-dependency core + Unity tests through the toolchain
+      # file. This proves the §12 cross targets without needing nng/mbedTLS cross
+      # builds in CI (Phase 0 acceptance: "prove an empty libsolari + client
+      # cross-build for arm64 and mingw").
+      - name: Configure + build (${{ matrix.target }})
+        run: |
+          cmake -S . -B build-${{ matrix.target }} \
+            -DCMAKE_TOOLCHAIN_FILE=${{ matrix.toolchain }} \
+            -DSOLARI_BUILD_TESTS=ON ${{ matrix.components }}
+          cmake --build build-${{ matrix.target }} -j
+      # Smoke-test the cross-built Linux test binaries under qemu-user. Loopback
+      # transport is skipped (no I/O layer in this config); core/spool exercise
+      # framing/TLV/crypto on the target ABI.
+      - name: qemu-user smoke (${{ matrix.target }})
+        if: ${{ matrix.smoke }}
+        run: |
+          export QEMU_LD_PREFIX="${{ matrix.qemu_ld }}"
+          found=0
+          while IFS= read -r bin; do
+            found=1
+            echo "== qemu ${{ matrix.qemu }} ${bin} =="
+            ${{ matrix.qemu }} "${bin}" || { echo "::error::${bin} failed under qemu"; exit 1; }
+          done < <(find build-${{ matrix.target }} -type f -name 'test_*' -perm -u+x)
+          if [ "${found}" -eq 0 ]; then
+            echo "::warning::no cross-built test_* binaries found to smoke-test"
+          fi
+
+# Requires runner label solarinet-ci-host:host with capacity=1.
+# Jobs execute on that disposable VM, keep DB/broker fixtures on loopback,
+# and use Docker for short-lived service containers. Never use a shared host.

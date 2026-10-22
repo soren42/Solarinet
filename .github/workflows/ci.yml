@@ -39,6 +39,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Check Forgejo workflow adaptation
+        run: python tools/ci/render_forgejo_workflow.py --check
       - name: Validate systemd directive section placement
         run: python tests/test_systemd_unit_sections.py
       - name: Install MCP package and test dependencies
