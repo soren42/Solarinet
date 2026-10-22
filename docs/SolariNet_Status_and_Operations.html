@@ -77,22 +77,26 @@
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
     is mirrored on Forgejo and GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
-    The integration head <code>c4b8975</code> is pushed to both remotes; it includes the
+    The integration code candidate <code>c1ce64d</code> is pushed to both remotes; it includes the
     realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
-    acceptance, and Discovery polling cancellation/overlap protection. GitHub PR #37 run
-    <code>39730919455</code> passed all 17 checks, including live Discovery worker/API,
+    acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
+    GitHub PR #37 run <code>39733247468</code> passed all 15 jobs, including the database-backed
+    Discovery API and browser-to-native-worker candidate-ingest acceptance. The prior code head
+    <code>c4b8975</code> passed all 17 checks in run <code>39730919455</code>, including live Discovery worker/API,
     candidate adoption, scanner/RackWire browser flow, and release-package/rollback checks.
     RackWire PR #1 at <code>a66bd21</code> has green hosted checks (run
     <code>39719734709</code>). Scanner-ingest documentation is committed locally at
     <code>c2a3f7b</code>, but that repository has no release remote. A read-only Cesium preflight
-    found ample disk and MariaDB but no PHP CLI or container runtime for an isolated app instance.
+    found ample disk and MariaDB but no PHP CLI or container runtime before the isolated dev
+    runtime was assembled.
     The new browser follow-up injects an expiry-shaped CSRF rejection, refreshes identity, and succeeds
     against the real barcode/SoR API. Hosted run <code>39720370015</code> for commit
     <code>23aee5b</code> passed the full CI matrix. Actual elapsed-token expiry and deployed PHP-FPM
     behavior remain unverified. The clean <code>dev-20261022-c4b8975</code> release package is
     installed as a loopback-only Cesium development instance; the UI returns HTTP 200, unauthenticated
-    scan history returns HTTP 401, and the served assets contain the polling fix. This is not a
-    production deployment.
+    scan history returns HTTP 401, and the served assets contain the polling fix. That deployment
+    predates the range-policy patch at <code>c1ce64d</code>; updated API and worker deployment is
+    pending hosted verification. This is not a production deployment.
     The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
     Xenon backup utility is deployed as a local-only recovery path.</p>
@@ -143,7 +147,9 @@
       <li><strong>DNS:</strong> Khadas VIM4 chlorine is active as an authoritative-only secondary
       for 109 zones. Steel at <code>10.0.0.11</code> is unreachable; its ZimaBlade tertiary DNS
       role awaits console redeployment.</li>
-      <li><strong>Network discovery:</strong> operators can start a bounded asynchronous scan;
+      <li><strong>Network discovery:</strong> operators can start a bounded asynchronous scan
+      of RFC1918, loopback, or IPv4 link-local ranges (public and boundary-crossing ranges are
+      rejected by both the API and worker);
       the native worker records live results as reviewable Discovery candidates, which remain
       separate from physical inventory until explicitly handled. The dashboard polls worker
       progress every second and refreshes candidate rows every 2.5 seconds while a scan runs, so
@@ -220,7 +226,11 @@
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
-      <code>39730919455</code> at integration commit <code>c4b8975</code> passed all 17 checks. It includes
+      <code>39733247468</code> at code candidate <code>c1ce64d</code> passed all 15 jobs, including the
+      scan-range policy, authenticated HTTP flow, and native worker browser acceptance. The preceding run
+      <code>39731954897</code> at <code>2f850c3</code> passed after retrying its core job, which had
+      failed before compilation when the hosted runner's Microsoft apt endpoint returned HTTP 403.
+      The prior code run <code>39730919455</code> at <code>c4b8975</code> passed all 17 checks. It includes
       realtime Discovery poll cancellation/overlap coverage, scan/candidate ingest, scanner/RackWire
       browser acceptance, release package activation/rollback, broker recovery, and clean install checks.
       The prior run <code>39720370015</code> at integration commit <code>23aee5b</code> passed the full

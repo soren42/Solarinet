@@ -2698,10 +2698,11 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   Native parser and scan-plan tests cover the same public-range rejection and
   private-range boundary behavior. Local validation passed: PHP input/route
   tests, full CTest (37/37), the updated scan/control C tests (2/2), and
-  Node/Python syntax checks. The latest hosted
-  CI run passed before this range-policy patch; a new hosted run is pending.
+  Node/Python syntax checks. Hosted run `39733247468` passed all 15 jobs,
+  including the database-backed scan/adoption API test and browser-to-native
+  worker candidate-ingest acceptance.
 - The scanner/import HTML manual now describes the allowed ranges and realtime
   polling cancellation behavior, and its matching Letter PDF was regenerated.
-- **UNVERIFIED:** hosted integration/browser CI and deployment of the updated
-  worker/API to the Cesium loopback development instance. No production scan,
+- **UNVERIFIED:** deployment of the updated worker/API to the Cesium loopback
+  development instance. No production scan,
   database, DNS, or UniFi state was changed.
