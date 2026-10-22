@@ -546,8 +546,8 @@ jobs:
           test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 8
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output /tmp/monitoring-schema.sql
           python3 tools/export_schema.py --database sor --user root --host 127.0.0.1 --port 3306 --output /tmp/sor-schema.sql
-          cmp /tmp/monitoring-schema.sql db/schema.sql
-          cmp /tmp/sor-schema.sql netdb/sor/schema.snapshot.sql
+          diff -u db/schema.sql /tmp/monitoring-schema.sql
+          diff -u netdb/sor/schema.snapshot.sql /tmp/sor-schema.sql
           mariadb -h127.0.0.1 -P3306 -uroot -e 'CREATE DATABASE monitoring_snapshot_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE sor_snapshot_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
           mariadb -h127.0.0.1 -P3306 -uroot monitoring_snapshot_ci < /tmp/monitoring-schema.sql
           mariadb -h127.0.0.1 -P3306 -uroot sor_snapshot_ci < /tmp/sor-schema.sql

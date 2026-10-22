@@ -33,11 +33,13 @@ def normalizeDefiners(sql: str) -> str:
     )
     # MariaDB 11.8.9 omits the terminator after this executable comment, while
     # earlier dump versions include it. Keep checked-in snapshots stable.
-    return re.sub(
-        r"(?m)^(\/\*M!100616 SET @OLD_NOTE_VERBOSITY=.*\*\/);?$",
-        r"\1;",
-        sql,
-    )
+    normalizedLines: list[str] = []
+    for line in sql.splitlines(keepends=True):
+        if line.startswith("/*M!100616 SET @OLD_NOTE_VERBOSITY="):
+            ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            line = line.rstrip("\r\n").rstrip().rstrip(";") + ";" + ending
+        normalizedLines.append(line)
+    return "".join(normalizedLines)
 
 
 def commonClientArgs(args: argparse.Namespace) -> list[str]:

@@ -40,6 +40,7 @@ class DefinerNormalizationTests(unittest.TestCase):
 
         self.assertEqual(normalizeDefiners(line + "\n"), line + ";\n")
         self.assertEqual(normalizeDefiners(line + ";\n"), line + ";\n")
+        self.assertEqual(normalizeDefiners(line + "  \r\n"), line + ";\r\n")
 
 
 if __name__ == "__main__":

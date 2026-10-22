@@ -75,7 +75,7 @@
   <section class="status-now" aria-labelledby="status-now-title">
     <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
     <p>The integration candidate is not released: as of this snapshot, the local branch is
-    29 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
+    31 commits ahead of Forgejo and GitHub <code>main</code>, whose refs match
     at <code>5e8d688</code>. The worktree is clean. The public review branch is open as GitHub
     draft PR <code>#37</code>; no main branch merge or release tag exists. The Xenon backup
     utility is deployed as a local-only recovery path.</p>
@@ -165,10 +165,11 @@
       out the RackWire gitlink. Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. Root PR CI is being used to
-      expose further issues; the latest run at <code>c18e1fb</code> passed 14 of 15 checks. The
-      remaining clean-install schema comparison differs because MariaDB 11.8.9 omits a
-      terminator on one executable-comment line. The exporter now normalizes that version-specific
-      dump detail. Earlier runs also found a date-sensitive DNS assertion and
+      expose further issues; run <code>39701235974</code> at <code>686d802</code> passed 14 of 15
+      jobs, including realtime scan and candidate-ingest browser acceptance. Its remaining clean-install
+      schema comparison still fails in hosted CI, although an equivalent local MariaDB 11.8.9 export
+      matches the snapshot. The exporter now canonicalizes the version-specific executable-comment
+      line and CI prints a unified diff for the next run. Earlier runs also found a date-sensitive DNS assertion and
       checkout/artifact wiring defects. Keep the PRs in draft
       until all checks and independent review pass.</li>
     </ul>
@@ -459,7 +460,8 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   date-dependent SOA serial test, a missing RackWire mirror, a missing server-binary artifact in
   the dashboard job, server checkout omitting the RackWire submodule, and clean-install schema
   formatting across MariaDB 11.8 patch versions. The first four fixes passed in hosted CI;
-  executable-comment normalization now has a focused regression test and awaits a hosted rerun.</p>
+  executable-comment normalization and failure diff output now have focused regression coverage
+  and await a hosted rerun.</p>
   <ul>
     <li><code>core</code> — the default zero-dependency build and CTest suite.</li>
     <li><code>server</code> — full server build with ASan/UBSan, database migrations,
