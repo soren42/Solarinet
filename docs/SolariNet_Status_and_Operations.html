@@ -80,7 +80,7 @@
     The code-bearing commit <code>789b1d3</code> and status-documentation commit
     <code>04e80be</code> are pushed to both remotes. The realtime Discovery retry, payload-bound idempotency,
     SoR ingest acceptance, CI, and review documentation are committed on both remotes.
-    GitHub PR #37 run <code>39715807073</code> passed all 15 jobs, including the authenticated
+    GitHub PR #37 run <code>39716727270</code> passed all 15 jobs, including the authenticated
     scanner/RackWire browser flow. Scanner-ingest documentation is committed locally at
     <code>c2a3f7b</code>, but that repository has no release remote. The public review branch is
     open as GitHub draft PR <code>#37</code>; no main branch merge or release tag exists. The
@@ -203,10 +203,10 @@
       Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
       repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
       authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
-      <code>39715807073</code> at documentation commit <code>04e80be</code>, passed all 15 hosted
-      jobs. The preceding code-bearing commit <code>789b1d3</code> also passed all 15 jobs in
-      run <code>39715155684</code>; <code>04e80be</code> adds only verification/status documentation.
-      The earlier
+      <code>39716727270</code> at status-documentation commit <code>b81e2cc</code>, passed all 15
+      hosted jobs. The preceding documentation commit <code>04e80be</code> passed all 15 jobs in
+      run <code>39715807073</code>; code-bearing commit <code>789b1d3</code> passed all 15 in
+      run <code>39715155684</code>. These follow-ups changed documentation only. The earlier
       code-bearing run <code>39705502734</code> at <code>0a322eb</code> passed the real-time
       scan/candidate-ingest, scanner/RackWire browser, and release-package checks. During an earlier
       run, the clean-install snapshot check exposed MariaDB client-version drift: hosted 10.11 emits
@@ -550,11 +550,13 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
     tests pass, and the server builds with the feature both off and on. No live switch or
     router query has verified credentials, device OID support, data freshness, or persisted
     results in this release candidate.</li>
-    <li><strong>Production systemd and hosted CI acceptance remain open.</strong> The
+    <li><strong>Production systemd acceptance remains open.</strong> The
     section-placement check passes for 43 service files. Structural verification of 49
     candidate unit files still returns 14 missing-executable diagnostics for binaries or
     virtual environments absent from this workspace. Enrollment and decommission scripts passed ShellCheck with sourced-file
-    analysis. The GitHub workflow parses locally but has not run on GitHub from this session.</li>
+    analysis. The code-bearing candidate and its status documentation passed GitHub PR runs
+    <code>39715155684</code> and <code>39716727270</code>, with 15/15 jobs successful in each.
+    Live systemd deployment remains unverified.</li>
   </ul>
   </div>
 

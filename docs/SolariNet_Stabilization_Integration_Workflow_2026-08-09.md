@@ -2421,6 +2421,18 @@ Sources: [RabbitMQ upgrade guide](https://www.rabbitmq.com/docs/upgrade),
   whether the user prefers creating a private hosted repository for the local
   scanner-ingest app. The production-like DNS and UniFi systems were untouched.
 
+## 2026-10-22 — deployment boundary and final status verification
+
+- The status-documentation update records the Xenon deployment mismatch and
+  was committed as `b81e2cc`, then pushed to the matching GitHub and Forgejo
+  integration refs. Hosted PR run `39716727270` passed all 15 jobs. Earlier
+  code-bearing commit `789b1d3` passed run `39715155684` (15/15), including the
+  browser scan-to-SoR and scanner/RackWire paths.
+- **UNVERIFIED:** no candidate has been activated on Xenon or Cesium. Xenon
+  remains on its separate dirty checkout, with no `/opt/solarinet/current` and
+  no active scan worker; the documented atomic release contract is not wired
+  to that host. No main branch merge, release tag, or deployment was performed.
+
 ## 2026-10-22 — RabbitMQ live health and upgrade gate recheck
 
 - Read-only Benzene inspection found the rootful Podman container `rabbitmq`
