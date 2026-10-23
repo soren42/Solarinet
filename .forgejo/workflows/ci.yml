@@ -262,6 +262,9 @@ jobs:
     runs-on: solarinet-ci-host
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RACKWIRE_READ_TOKEN }}
+          submodules: recursive
       - name: Start loopback-only disposable server database
         run: |
           docker rm -f solari-ci-server-db >/dev/null 2>&1 || true

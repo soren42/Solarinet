@@ -2,13 +2,20 @@
 
 *2026-07-06. Standard-C control plane + PHP dashboard, per `CLAUDE.md`. Repo: github.com/soren42/Solarinet. This is a snapshot for handing the workstream off (agents moving to QuakeKit); it records what's live, what's committed, and what's next.*
 
-## Active continuation checkpoint · 2026-10-23 10:45 UTC
+## Prior continuation checkpoint · 2026-10-23 10:45 UTC
 
 - **Candidate state:** Forgejo branch `integrate/phase0-reconcile-20261022` is at `60e4245effc02d9e0b6734447657e2edcf91edfe`. Three local ShellCheck fixes are uncommitted. The scanner/RackWire and SoR changes remain on this candidate; there is no main promotion or release.
 - **Forgejo run 74:** terminal failure for `60e4245` (status 2). Python integrations, all four RabbitMQ compatibility jobs, SCP fuzz, core, RackWire browser, and panel jobs passed. The full server job failed at ShellCheck; its dashboard dependent was skipped, and the cross jobs remained waiting. Findings: SC2034 in `deploy/forgejo-runner/test_guard_namespace.sh`, SC2154 in `deploy/forgejo-runner/guest-runner.sh`, and three SC2068 errors in `tests/netdb/test_sor_migration_rollback.sh`.
 - **ShellCheck fix:** changed the readiness loop to a referenced C-style counter, moved the guest ERR handler to a function that captures the original exit code, and quoted all MariaDB command-array expansions. The exact tree-wide CI ShellCheck command passes locally with ShellCheck 0.11.0; `bash -n` passes on all three files. Claude's independent review passed and confirmed the changes preserve behavior. **UNVERIFIED:** hosted CI for the fix; no retry has been pushed yet.
 - **Runner state correction:** the earlier plain `virsh list` ran in Jason's session and did not observe the system libvirt VM. The authoritative check is `sudo virsh list --all`; it showed `solarinet-ci-runner` running while run 74 was executing. Forgejo database metadata confirms run 74's job states; no raw Action logs or credential fields were read.
 - **Next:** publish the reviewed ShellCheck fixes, then inspect the new hosted run through read-only Actions metadata and address any server/build or downstream failures before promotion.
+
+## Active continuation checkpoint · 2026-10-23 11:19 UTC
+
+- **Candidate state:** Forgejo integration branch remains at `ff81283c309743d15467e91f0a1cedb35324a452`. The uncommitted local candidate restores recursive RackWire submodule checkout for the server job in both CI workflows. No main promotion or release has occurred.
+- **Forgejo run 75:** terminal overall failure. The server job cleared ShellCheck, full sanitizer build, DNS, inventory/configuration, schema, ctest, enrollment, failover, and scan worker/SoR checks, then failed when the Discovery browser's RackWire iframe returned 404. The checkout did not initialize `dashboard/public/rackwire`. Python integrations, all four RabbitMQ jobs, protocol fuzz, core, panel, and dedicated RackWire browser passed; dashboard was skipped.
+- **Workflow fix and review:** server checkout now uses the existing token-scoped recursive submodule setup, matching the working RackWire and dashboard jobs. Forgejo workflow render/parity check passed; Claude cross-lab review passed. The `RACKWIRE_READ_TOKEN` value was not read. **UNVERIFIED:** hosted CI for this fix and eventual downstream completion. A later read-only database query confirmed `cross linux-arm64` passed; arm32 and Windows remained waiting after the run failed.
+- **Next:** verify the CI docs and renderer, publish the reviewed fix to the Forgejo candidate branch, then inspect its fresh full run. Keep main promotion, GitHub release sync, tags, and deployment behind the complete candidate gate.
 
 ## Prior continuation checkpoint · 2026-10-23 10:14 UTC
 

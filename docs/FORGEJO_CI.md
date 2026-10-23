@@ -216,14 +216,16 @@ Run `69`, commit `65cbb4a244a4ae3cfdfeba444feb4148921a90bc`, terminated with fai
 The independent SoR, Python, protocol-fuzz, core, panel, and cross jobs passed. The `server` and
 `rackwire-browser` jobs failed during recursive checkout because the per-repository workflow
 token received HTTP 403 for private Forgejo repository `jason/RackWire`; no server or browser
-tests ran. The dashboard remained blocked behind `needs: server`. The next candidate removes the
-unneeded submodule checkout from `server` and passes the existing Forgejo secret
-`RACKWIRE_READ_TOKEN` to the RackWire and dashboard checkouts. The secret name is configured;
-its value was not read. GitHub's RackWire repository is anonymously readable, so GitHub's
-default workflow token can read the same relative submodule URL there. Forgejo's dependency
-condition remains `needs: server`; no diagnostic `if: true` override is present. A new push can
-now start a fresh run without cancelling run 69. Forgejo documents that `needs` prerequisites
-must complete successfully before a dependent job runs
+tests ran. The dashboard remained blocked behind `needs: server`. The subsequent candidate
+removed the recursive submodule checkout from the server job on the assumption that it did not
+need RackWire, while passing the existing Forgejo secret `RACKWIRE_READ_TOKEN` to the RackWire
+and dashboard checkouts. Run 75 later disproved that assumption: the server's Discovery browser
+acceptance loads the planner at `/rackwire/index.html`. The server job now needs the same
+token-scoped recursive submodule checkout. The secret name is configured; its value was not read.
+GitHub's RackWire repository is anonymously readable, so GitHub's default workflow token can read
+the same relative submodule URL there. Forgejo's dependency condition remains `needs: server`; no
+diagnostic `if: true` override is present. Forgejo documents that `needs` prerequisites must
+complete successfully before a dependent job runs
 ([Actions reference](https://forgejo.org/docs/v15.0/user/actions/reference/)).
 
 Run `70` exercised commit `69997a2af27b` after the checkout fix. Seven jobs passed,
@@ -267,6 +269,22 @@ the corrected DNS path allowed the server job to advance to ShellCheck, where it
 The full Forgejo matrix remains a release gate. GitHub run `39898481633` completed successfully
 for older commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on 2026-10-23; GitHub remains a
 secondary mirror and verification path when available.
+
+**Run 75, 2026-10-23:** commit `ff81283c309743d15467e91f0a1cedb35324a452` cleared the server
+ShellCheck gate, then failed in the Discovery browser acceptance because its RackWire iframe
+returned 404 for `/rackwire/index.html`. The run's Python integrations, all four RabbitMQ
+compatibility jobs, protocol fuzz, core, panel, and dedicated RackWire browser jobs passed. The
+server job had also passed ShellCheck, the ASAN/UBSAN build, DNS generation and rollback checks,
+inventory/configuration tests, schema checks, ctest, HTTPS enrollment, two-process failover, and
+scan worker/API/SoR adoption before the browser failure. The dashboard job was skipped behind
+the failed server dependency. The `cross linux-arm64` job later completed successfully; the arm32
+and Windows cross jobs remained waiting after the run failed. The run's overall status was failure.
+The server workflow checkout had not initialized `dashboard/public/rackwire`, although the
+browser job using that planner did. The candidate fix adds recursive submodule checkout and the
+existing read-scoped token to the server job in both Forgejo and GitHub workflows. Local workflow
+render/parity validation passes, and Claude cross-lab review passed the workflow fix. **UNVERIFIED:**
+hosted CI has not yet exercised the restored checkout, and downstream dashboard/cross completion
+on a passing server run remains unverified.
 
 ## Forgejo references
 
