@@ -79,6 +79,16 @@ CI network while leaving the nftables rules installed; restarting the guard and 
 restored both. The CI network currently has no attached guest. The runner VM must use this
 network and a tested per-job reset mechanism before registration.
 
+**Tap-name correction, 2026-10-23:** libvirt reserves interface-name prefixes `vnet`, `vif`,
+`macvtap`, and `macvlan` and may ignore a requested target using one of them. The runner tap
+contract is now `ci-tap0`; the deployment regression test checks the firewall and guest
+configuration files for reserved targets. The candidate nft file passed `nft -c` locally and
+on Benzene. With no CI guest attached, it was installed on Benzene and the active guard
+service reloaded. The installed file hash matches the candidate (`fa201207…cb70208`), and
+the active table contains `ci-tap0` matches in both input and forward chains. Cross-lab
+review approved the change. **UNVERIFIED:** a running libvirt guest has not yet proven that
+the requested tap name is honored or exercised the updated rules.
+
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private; this does not establish whether the repository Actions unit is
 enabled. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15 defaults
