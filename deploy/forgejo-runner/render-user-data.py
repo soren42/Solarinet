@@ -33,6 +33,7 @@ users:
 package_update: true
 package_upgrade: false
 bootcmd:
+  - [bash, -c, "printf '\\nSOLARINET_CI_STAGE=cloud-init-bootcmd\\n' >/dev/ttyS0"]
   - [systemd-run, --unit=solarinet-ci-bootstrap-deadline, --on-active=45m, /usr/bin/systemctl, poweroff, --force]
 packages:
   - ca-certificates

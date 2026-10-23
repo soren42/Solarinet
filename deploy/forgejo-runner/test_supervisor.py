@@ -66,8 +66,9 @@ class ForgejoRunnerSupervisorTests(unittest.TestCase):
             bootstrap.index("systemctl start docker.service"),
         )
         self.assertEqual(config["runcmd"], [["bash", "/usr/local/sbin/solarinet-ci-guest-bootstrap"]])
+        self.assertIn("SOLARINET_CI_STAGE=cloud-init-bootcmd", config["bootcmd"][0][2])
         self.assertIn("NOPASSWD:ALL", config["users"][0]["sudo"][0])
-        self.assertEqual(config["bootcmd"][0][2], "--on-active=45m")
+        self.assertEqual(config["bootcmd"][1][2], "--on-active=45m")
         self.assertIn("iproute2", config["packages"])
         self.assertIn("nftables", config["packages"])
 
