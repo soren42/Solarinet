@@ -307,6 +307,13 @@ and logs each failed attempt. The preflight no longer checks Cesium separately: 
 has already exercised that internal host path, while the GitHub runner uses GitHub's RackWire
 mirror. **UNVERIFIED:** GitHub CI for the retry change and the dependent dashboard job.
 
+**Run 78, 2026-10-23:** commit `3c04c01e71c27d35925aab6d3e33067083f81492` completed successfully
+(status `1`); all 14 jobs passed. This run exercised the five-attempt CDN DNS preflight on the
+Forgejo runner, full server build and Discovery browser acceptance, dashboard, all four RabbitMQ
+versions, RackWire browser, protocol fuzz, core, panel, Python integrations, and all three cross
+builds. The retry step passed on Forgejo. **UNVERIFIED:** the retry behavior on GitHub's hosted
+runner; the existing GitHub PR branch has not yet advanced to this commit.
+
 ## Forgejo references
 
 - [Actions administrator guide](https://forgejo.org/docs/v15.0/admin/actions/) — runner
