@@ -292,9 +292,20 @@ checkout, dashboard, RackWire browser, all four RabbitMQ compatibility jobs, pro
 panel, Python integrations, and Linux ARM64, Linux ARM32, and Windows cross builds. The dashboard
 job also passed scanner import through authenticated HTTP routes, scanner/RackWire browser
 integration, packaged release-tree browser acceptance, and deployment/rollback contracts. This
-verifies the CI checkout fix on Forgejo. **UNVERIFIED:** the GitHub workflow run for this commit;
-main promotion, synchronized release publication, and service deployment remain behind the wider
-RC review.
+verifies the CI checkout fix on Forgejo. GitHub PR CI has since run and failed at its DNS
+preflight, described below; main promotion, synchronized release publication, and service
+deployment remain behind the wider RC review.
+
+GitHub PR run `39955259779` on `e282938b1d24768e271607b2ccefcf94ed554679` completed with failure.
+All jobs except `server` and its dependent `dashboard` passed; `cross linux-arm64` completed
+successfully after a long toolchain-install step. The server failed at its Playwright CDN DNS
+preflight. The narrowed job log showed the first `getent ahostsv4 cdn.playwright.dev` invocation
+printed no address and exited `2`; the second Cesium lookup was not reached. **INFERENCE:** this
+indicates a DNS resolution failure on the hosted runner before browser setup, not a Playwright
+test failure. The generated Forgejo/GitHub workflow pair now attempts the public CDN lookup up to five times
+and logs each failed attempt. The preflight no longer checks Cesium separately: Forgejo checkout
+has already exercised that internal host path, while the GitHub runner uses GitHub's RackWire
+mirror. **UNVERIFIED:** GitHub CI for the retry change and the dependent dashboard job.
 
 ## Forgejo references
 

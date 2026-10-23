@@ -277,8 +277,17 @@ jobs:
           node-version: '20'
       - name: Verify Playwright CDN DNS before browser download
         run: |
-          getent ahostsv4 cdn.playwright.dev
-          getent ahostsv4 cesium.akoria.net
+          for attempt in 1 2 3 4 5; do
+            if getent ahostsv4 cdn.playwright.dev; then
+              exit 0
+            fi
+            echo "Playwright CDN DNS lookup attempt $attempt/5 failed" >&2
+            if [ "$attempt" -lt 5 ]; then
+              sleep 2
+            fi
+          done
+          echo "Playwright CDN DNS lookup failed after 5 attempts" >&2
+          exit 1
       - name: Install pinned browser acceptance runtime
         run: npm install --prefix /tmp/scan-playwright --no-save playwright@1.64.1
       - name: Install Chromium and system libraries

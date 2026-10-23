@@ -2,7 +2,7 @@
 
 *2026-07-06. Standard-C control plane + PHP dashboard, per `CLAUDE.md`. Repo: github.com/soren42/Solarinet. This is a snapshot for handing the workstream off (agents moving to QuakeKit); it records what's live, what's committed, and what's next.*
 
-## Active continuation checkpoint · 2026-10-23 11:59 UTC
+## Prior continuation checkpoint · 2026-10-23 11:59 UTC
 
 - **Candidate state:** Forgejo integration branch is at `63fd675cccc2150815c26d54fd3244fa759afca2`. Run documentation and this checkpoint are now being updated locally; no main promotion or release has occurred.
 - **Forgejo run 76:** complete success (status 1). All 14 jobs passed, including full server and dashboard jobs, the Discovery scanner/RackWire browser, four RabbitMQ versions, panel, protocol fuzz, Python integrations, core, and ARM64/ARM32/Windows cross builds. The server job's RackWire iframe acceptance passed with the restored recursive submodule checkout. Dashboard acceptance also covered scanner authenticated HTTP import, Scanner/RackWire browser flow, packaged release tree, clean installs, and rollback contracts.
@@ -10,6 +10,15 @@
 - **Temporary filesystem correction:** `/tmp` is a 7.5 GiB tmpfs with 1.3 GiB available; the systemd `tmp.mount` unit and live mount enable `usrquota`. A 3 MiB scratch write returned `EDQUOT`, but the exact per-user limit and usage could not be read because `Q_GETQUOTA` returns `ENOTBLK` on tmpfs and the `quota` utility is absent. The earlier handoff wording overclaimed the effective per-user quota; corrected wording now records the observed error and unknown limit. No setting changed.
 - **UNVERIFIED:** GitHub CI for `63fd675`, whether broader RC audit findings are all closed, synchronized release publication, and the planned service deployments.
 - **Next:** complete the audit follow-ups and docs corrections, publish that review checkpoint to Forgejo, then run the matching GitHub candidate workflow when reachable. Continue toward Forgejo main, synchronized GitHub release, and deployment only after the full project gates are satisfied.
+
+## Active continuation checkpoint · 2026-10-23 13:08 UTC
+
+- **Candidate state:** the retry follow-up is based on integration commit `e282938b1d24768e271607b2ccefcf94ed554679`. GitHub draft PR [#38](https://github.com/soren42/Solarinet/pull/38) targets `main`; it remains unmerged.
+- **Forgejo:** run 77 completed successfully (status 1), all 14 jobs. Run 76 also passed all 14 jobs on the preceding workflow fix commit.
+- **GitHub:** PR run `39955259779` completed with failure. Twelve jobs passed, ARM64 cross passed after extended toolchain installation, and the server failed at the CDN DNS preflight; dashboard was skipped. The exact step log showed the first CDN `getent` command returned no answer and exit status 2. The internal Cesium lookup was not reached. **INFERENCE:** hosted runner DNS lookup for the public Playwright CDN failed before browser setup; it was not a Playwright test failure.
+- **Workflow fix:** the generated Forgejo/GitHub preflight pair now retries the public CDN lookup up to five times, logs failed attempts, and omits a separate Cesium lookup; Forgejo checkout already exercises its internal host path. Renderer parity, YAML validation, and diff checks pass. Claude's independent cross-lab review passed; its low severity suggestion to log each retry has been applied. **UNVERIFIED:** hosted CI for this adjustment and dashboard on a green server run.
+- **Temporary filesystem:** fetching the GitHub job log through `gh run view` failed because its CLI cache tried to write under `/tmp` and received `EDQUOT`. A direct API stream with targeted filtering retrieved only the failing DNS lines without storing the archive. `/tmp` remains unchanged; the effective user limit remains unknown.
+- **Next:** publish this retry follow-up to Forgejo and the existing GitHub PR, then inspect the fresh Forgejo and GitHub runs. Keep merge, release, and deployment behind green checks and the remaining SoR/host rollout review.
 
 ## Prior continuation checkpoint · 2026-10-23 10:45 UTC
 
