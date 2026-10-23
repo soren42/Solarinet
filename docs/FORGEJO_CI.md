@@ -204,7 +204,7 @@ before closing its master descriptor, preventing the intermittent final-ACK `EIO
 under repetition. The panel smoke passed 10 consecutive local runs after that change, and the
 daemon listener/codec suite passed. The firmware host suite passed 107 tests and the
 page/firmware parity suite passed 59 checks locally. The firmware build used `TMPDIR=/var/tmp`
-because this development host's `/tmp` hit its user quota during ASAN compilation.
+because `/tmp` returned `EDQUOT` during ASAN compilation despite available tmpfs space; the exact per-user limit remains unknown.
 
 **Follow-up runs, 2026-10-23:** Forgejo's stored numeric statuses distinguish success (`1`),
 failure (`2`), cancelled (`3`), skipped (`4`), waiting (`5`), running (`6`), and blocked (`7`)
@@ -285,6 +285,16 @@ existing read-scoped token to the server job in both Forgejo and GitHub workflow
 render/parity validation passes, and Claude cross-lab review passed the workflow fix. **UNVERIFIED:**
 hosted CI has not yet exercised the restored checkout, and downstream dashboard/cross completion
 on a passing server run remains unverified.
+
+**Run 76, 2026-10-23:** commit `63fd675cccc2150815c26d54fd3244fa759afca2` completed successfully
+(status `1`). All 14 jobs passed, including the server Discovery browser with recursive RackWire
+checkout, dashboard, RackWire browser, all four RabbitMQ compatibility jobs, protocol fuzz, core,
+panel, Python integrations, and Linux ARM64, Linux ARM32, and Windows cross builds. The dashboard
+job also passed scanner import through authenticated HTTP routes, scanner/RackWire browser
+integration, packaged release-tree browser acceptance, and deployment/rollback contracts. This
+verifies the CI checkout fix on Forgejo. **UNVERIFIED:** the GitHub workflow run for this commit;
+main promotion, synchronized release publication, and service deployment remain behind the wider
+RC review.
 
 ## Forgejo references
 
