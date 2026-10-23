@@ -252,14 +252,21 @@ repository is private. Forgejo run `65` confirms that Actions are enabled and di
 this repository. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15
 defaults Actions to enabled).
 
-Therefore the complete Forgejo matrix for the current candidate is **UNVERIFIED**. Run 70
-confirms checkout, the SoR migration/delivery tests, and RabbitMQ compatibility, but did not
-reach the full server, RackWire browser, dashboard, firmware, or cross-platform jobs. Run 71
-was expected to exercise the DNS preflight and then continue through the full matrix; its
-result and the workflow started by `b4c0fa7` must be inspected before promotion.
-GitHub run `39898481633`
-completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
-2026-10-23; GitHub remains a secondary mirror and verification path when available.
+**Run 74, 2026-10-23:** commit `60e4245effc02d9e0b6734447657e2edcf91edfe` reached the full
+server job. Python integrations, RabbitMQ 3.13.7/4.2.9/4.3.6/4.4.0, SCP fuzz, core, RackWire
+browser, and panel jobs passed. The server job failed at `ShellCheck shell scripts including
+sourced helpers`: SC2034 in `deploy/forgejo-runner/test_guard_namespace.sh`, SC2154 in
+`deploy/forgejo-runner/guest-runner.sh`, and SC2068 in three invocations in
+`tests/netdb/test_sor_migration_rollback.sh`. The dashboard job was skipped because it depends
+on the server job; the cross jobs remained waiting after the run failed. A reviewed local fix
+addresses those findings and passes the tree-wide ShellCheck command. **UNVERIFIED:** hosted CI
+for that fix and all downstream server, dashboard, and cross jobs on a passing run.
+
+Run 74 exposed why green results from isolated earlier runs are insufficient for promotion:
+the corrected DNS path allowed the server job to advance to ShellCheck, where it found issues.
+The full Forgejo matrix remains a release gate. GitHub run `39898481633` completed successfully
+for older commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on 2026-10-23; GitHub remains a
+secondary mirror and verification path when available.
 
 ## Forgejo references
 

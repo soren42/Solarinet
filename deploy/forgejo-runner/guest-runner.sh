@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
-trap 'rc=$?; /usr/bin/systemctl poweroff --force || true; exit "$rc"' ERR
+on_error() {
+  local rc=$?
+  /usr/bin/systemctl poweroff --force || true
+  exit "$rc"
+}
+trap on_error ERR
 
 guest_status() {
   printf '\nSOLARINET_CI_STAGE=%s\n' "$1" >/dev/ttyS0 2>/dev/null || true

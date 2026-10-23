@@ -26,13 +26,13 @@ expect_zero "entity to hardware-unit associations" "$link_rows"
 
 # Prove the rollback SQL itself refuses to erase associations, even when
 # invoked directly instead of through this test's preflight wrapper.
-${MYSQL[@]} -e "SET FOREIGN_KEY_CHECKS=0; INSERT INTO entity_hardware_unit_links (hardware_unit_id,entity_id) VALUES (4294967294,18446744073709551614); SET FOREIGN_KEY_CHECKS=1"
+"${MYSQL[@]}" -e "SET FOREIGN_KEY_CHECKS=0; INSERT INTO entity_hardware_unit_links (hardware_unit_id,entity_id) VALUES (4294967294,18446744073709551614); SET FOREIGN_KEY_CHECKS=1"
 if "${MYSQL[@]}" < "$rollback_sql" >/dev/null 2>&1; then
   echo "Rollback SQL unexpectedly accepted a populated entity/unit registry." >&2
   exit 1
 fi
-${MYSQL[@]} -e "DELETE FROM entity_hardware_unit_links WHERE hardware_unit_id=4294967294 AND entity_id=18446744073709551614"
-${MYSQL[@]} -e "DROP PROCEDURE IF EXISTS _solarinet_rollback_m028_assert_empty"
+"${MYSQL[@]}" -e "DELETE FROM entity_hardware_unit_links WHERE hardware_unit_id=4294967294 AND entity_id=18446744073709551614"
+"${MYSQL[@]}" -e "DROP PROCEDURE IF EXISTS _solarinet_rollback_m028_assert_empty"
 expect_zero "entity to hardware-unit associations after refusal check" "$(query "SELECT COUNT(*) FROM entity_hardware_unit_links")"
 
 # Ensure this really is a post-migration scratch schema before dropping anything.

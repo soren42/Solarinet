@@ -43,7 +43,7 @@ trap 'exit 130' INT TERM
 
 wait_for_listener() {
   local namespace="$1" port="$2" attempt
-  for attempt in {1..100}; do
+  for ((attempt = 0; attempt < 100; attempt++)); do
     if ip netns exec "$namespace" ss -H -lnt "sport = :$port" | grep -q .; then
       return 0
     fi
