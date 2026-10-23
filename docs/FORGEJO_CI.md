@@ -314,6 +314,16 @@ versions, RackWire browser, protocol fuzz, core, panel, Python integrations, and
 builds. The retry step passed on Forgejo. **UNVERIFIED:** the retry behavior on GitHub's hosted
 runner; the existing GitHub PR branch has not yet advanced to this commit.
 
+**Run 79, 2026-10-23:** commit `778c0a75ed38eb1a4be8e238b660f8ffa1578b6b` completed successfully
+(status `1`); all 14 jobs passed. The dashboard and Windows cross-build jobs, which were still
+queued/running at the first observation, later completed successfully. This validates the latest
+candidate on Forgejo.
+
+GitHub PR run `39964578731` completed successfully for the same commit; all 15 jobs passed,
+including server, dashboard, and the cross-build matrix. The five-attempt Playwright CDN DNS
+preflight passed on both hosted CI systems. The candidate is synchronized on Forgejo and GitHub;
+the draft PR remains unmerged pending the broader release-candidate review.
+
 ## Forgejo references
 
 - [Actions administrator guide](https://forgejo.org/docs/v15.0/admin/actions/) — runner

@@ -2,6 +2,15 @@
 
 *2026-07-06. Standard-C control plane + PHP dashboard, per `CLAUDE.md`. Repo: github.com/soren42/Solarinet. This is a snapshot for handing the workstream off (agents moving to QuakeKit); it records what's live, what's committed, and what's next.*
 
+## Active continuation checkpoint · 2026-10-23 14:35 UTC
+
+- **Candidate state:** Forgejo and GitHub both have integration commit `778c0a75ed38eb1a4be8e238b660f8ffa1578b6b`. GitHub draft PR [#38](https://github.com/soren42/Solarinet/pull/38) targets `main` and remains open, draft, and unmerged. No main promotion, release tag, or service deployment has occurred in this checkpoint.
+- **Forgejo run 79:** terminal success (status `1`); all 14 jobs passed, including the retried CDN DNS preflight, full server and dashboard suites, scanner/RackWire browser acceptance, four RabbitMQ versions, protocol fuzz, panel, Python integrations, and ARM64, ARM32, and Windows cross builds.
+- **GitHub run `39964578731`:** terminal success for the same commit; all 15 jobs passed, including server, dashboard, and all cross builds. The earlier GitHub CDN preflight failure is resolved by the bounded retry change on this candidate.
+- **PHP security response:** the PHP Foundation fixes CVE-2026-109618 and CVE-2026-109619 in upstream PHP 8.5.12, 8.4.27, 8.3.36, and 8.2.35. Ubuntu's USN-8948-1 identifies Xenon's `8.5.4-0ubuntu1.5` packages as fixed for its release. A fresh root-context check at 14:33 UTC confirmed Xenon's CLI, common, FPM, and Apache module packages at that revision; `php8.5-fpm` and Apache are active, the FPM configuration test passes, Apache reports `Syntax OK`, and `https://dashboard.akoria.net/` returns HTTP 200. Cesium was also rechecked at `php8-8.5.12-4.1`; Nitrogen's latest SSH recheck timed out, so its earlier 23 October package verification remains the latest evidence.
+- **PHP inventory scope:** a service-version scan covered the 49 IPv4 host addresses currently listed in `netdb/akoria-hosts.yml`, across SSH, HTTP/S, common app ports, and the PHP-FPM port. It found Xenon's known web stack plus nginx, Tomcat, Keycloak, scanner, and appliance services; no additional PHP web endpoint was identified. **UNVERIFIED:** hosts not reachable for SSH, unlisted addresses, services on unscanned ports, and PHP runtimes inside containers that were not enumerated. This scan does not prove every appliance or runtime is PHP-free.
+- **Next:** continue the release-candidate audit across remaining platform and subproject gates, then complete cross-lab review and deployment planning. Main-branch promotion, release publication, and service deployment remain outstanding.
+
 ## Prior continuation checkpoint · 2026-10-23 11:59 UTC
 
 - **Candidate state:** Forgejo integration branch is at `63fd675cccc2150815c26d54fd3244fa759afca2`. Run documentation and this checkpoint are now being updated locally; no main promotion or release has occurred.
