@@ -2,6 +2,7 @@
 """Local cryptographic and failure-atomicity checks for activate_crl.py."""
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import http.server
 import pathlib
@@ -15,6 +16,38 @@ import time
 import urllib.error
 import unittest
 from unittest.mock import patch
+
+
+def corrupt_crl_signature(crl_pem: bytes) -> bytes:
+    """Flip one signature octet while preserving the DER/PEM structure."""
+    begin = b"-----BEGIN X509 CRL-----"
+    end = b"-----END X509 CRL-----"
+    body = crl_pem.split(begin, 1)[1].split(end, 1)[0]
+    der = bytearray(base64.b64decode(body))
+
+    def tlv(offset: int) -> tuple[int, int, int]:
+        tag = der[offset]
+        first = der[offset + 1]
+        if first < 0x80:
+            length, value_start = first, offset + 2
+        else:
+            count = first & 0x7F
+            length = int.from_bytes(der[offset + 2:offset + 2 + count], "big")
+            value_start = offset + 2 + count
+        return tag, value_start, value_start + length
+
+    outer_tag, outer_start, outer_end = tlv(0)
+    if outer_tag != 0x30 or outer_end != len(der):
+        raise AssertionError("generated CRL has unexpected outer DER structure")
+    _, _, tbs_end = tlv(outer_start)
+    _, _, algorithm_end = tlv(tbs_end)
+    signature_tag, signature_start, signature_end = tlv(algorithm_end)
+    if signature_tag != 0x03 or signature_end != outer_end or signature_end - signature_start < 2:
+        raise AssertionError("generated CRL has unexpected signature DER structure")
+    der[signature_end - 1] ^= 0x01
+    encoded = base64.b64encode(der).decode("ascii")
+    lines = "\n".join(encoded[index:index + 64] for index in range(0, len(encoded), 64))
+    return begin + b"\n" + lines.encode("ascii") + b"\n" + end + b"\n"
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import activate_crl as activator  # noqa: E402
@@ -164,6 +197,7 @@ class ActivateCrlTests(unittest.TestCase):
             "-addext", "basicConstraints=critical,CA:TRUE",
             "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         ], check=True, capture_output=True)
+        self.assertNotEqual(other_cert.read_bytes(), self.ca_cert.read_bytes())
         other = other_dir / "other.cnf"
         other.write_text(self.config.read_text(encoding="ascii").replace(
             str(self.ca_dir), str(other_dir)).replace(str(self.ca_cert), str(other_cert)).replace(
@@ -174,7 +208,25 @@ class ActivateCrlTests(unittest.TestCase):
         (other_dir / "index.txt").write_text("", encoding="ascii")
         (other_dir / "serial").write_text("01\n", encoding="ascii")
         (other_dir / "other-crlnumber").write_text("09\n", encoding="ascii")
-        wrong = self.make_crl(9, config=other)
+        wrong_signed = self.make_crl(9, config=other)
+        wrong_path = other_dir / "wrong-signer.crl.pem"
+        wrong_path.write_bytes(wrong_signed)
+        verifies_with_other = subprocess.run(
+            ["openssl", "crl", "-in", str(wrong_path), "-noout", "-verify",
+             "-CAfile", str(other_cert)], capture_output=True)
+        rejects_with_configured = subprocess.run(
+            ["openssl", "crl", "-in", str(wrong_path), "-noout", "-verify",
+             "-CAfile", str(self.ca_cert)], capture_output=True)
+        self.assertEqual(verifies_with_other.returncode, 0, "fixture CRL must verify with its signer")
+        self.assertNotEqual(rejects_with_configured.returncode, 0,
+                            "fixture CRL must not verify with the configured issuer")
+        with patch.object(activator, "fetch_crl", return_value=wrong_signed), \
+                patch.object(activator, "restart_service") as restart, \
+                self.assertRaisesRegex(ValueError, "openssl failed"):
+            activator.activate("https://crl.example.test/current.pem", self.base_bundle,
+                               self.ca_cert, self.active, "solari-client.service")
+        restart.assert_not_called()
+        wrong = corrupt_crl_signature(wrong_signed)
         with patch.object(activator, "fetch_crl", return_value=wrong), \
                 patch.object(activator, "restart_service") as restart, \
                 self.assertRaisesRegex(ValueError, "openssl failed"):
