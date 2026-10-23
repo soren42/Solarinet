@@ -8,7 +8,7 @@
 
 | Component | Candidate | Base / publication state |
 |---|---|---|
-| SolariNet | Working tree `integrate/phase0-reconcile-20261022`, HEAD `c1fd5879` | Candidate is published to both Forgejo and GitHub as `integrate/stability-20261020` and `integrate/phase0-reconcile-20261022`; `main` is `5e8d6889` on both. GitHub PR #37 targets `main` and is open/draft. Product-code parent `411f1791` passed all 15 jobs; later commits only update handoff/review docs, with run `39873540098` pending. |
+| SolariNet | Working tree `integrate/phase0-reconcile-20261022`, HEAD `026eb4b0` | Candidate is published to Forgejo and GitHub as `integrate/phase0-reconcile-20261022`; the remotes also retain `integrate/stability-20261020`. `main` is `5e8d6889` on both. GitHub PR #37 targets `main` and is open/draft. Product-code parent `411f1791` passed all 15 jobs. Run `39874020483` targeting `026eb4b0` passed all 15 jobs, including linux-arm32. RackWire autosave/cache/manual changes in the current worktree are uncommitted and have not received hosted CI. |
 | RackWire | `integrate/solarinet-20261021` at `a66bd21` | Draft GitHub PR #1 is open; its CI is green. Root candidate pins this gitlink. |
 | scanner-ingest | Local branch `integrate/solarinet-20261021`, HEAD `b0c6d20` | Local repository only, with `VALIDATION.md` modified and no configured remote. Earlier lookup found no matching published GitHub/Forgejo repository; remote ownership remains unresolved. |
 
@@ -18,7 +18,7 @@ No main branch has been merged and no release tags exist. Older checkpoints belo
 
 GitHub run `39872287455` completed successfully on `411f1791`: all 15 jobs passed, including the full server/core builds, cross-platform targets, RabbitMQ compatibility matrix, dashboard and SoR integration, scanner/RackWire browser flow, clean schema installs, package activation/rollback, and packaged-release browser acceptance. It supersedes run `39871759430`, which remains stuck in progress. The preceding failure was reproduced locally: `tools/test_migrate.py` incorrectly required migrations 022 and 023 to be final despite later valid migrations 024–027. Its assertion now checks presence and ordering, and all 23 tool tests pass.
 
-The candidate checkout is clean at `411f1791`. No cross-lab reviewer is available in the current session; internal agent audits are not cross-lab review and do not satisfy that gate. Mainline merge, release tags, release publication, and promotion remain outstanding.
+The published candidate checkout at `026eb4b0` passed its recorded hosted workflow. The current local worktree adds uncommitted RackWire API, UI, test, and manual changes. Claude Fable is authenticated and has completed read-only cross-lab review of those RackWire changes; the broader non-RackWire candidate has not yet received cross-lab review. Mainline merge, release tags, release publication, and promotion remain outstanding.
 
 **Target runtime follow-up:** a direct read-only schema query through Xenon’s active PHP-FPM socket succeeded. Cesium `sor` has 45 base tables, four views, and 24 triggers; all four taxonomy tables, both outbox tables, and 21 core CDC triggers exist. Migration 024/026 CDC triggers, migration 025 allocator fields/index, and migration 027 cable-detail columns are absent. There is no `solari_migration_ledger`; the ledgered migrator correctly refuses automatic adoption. This confirms the current live baseline without reading application rows or changing the database. The earlier CLI 1045 came from the probe’s simplistic parsing of the PHP-FPM configuration; the actual FPM path works. A clean-source candidate package from `77ee2c6` is installed to Cesium’s separate preflight root, with all 181 payload hashes, PHP syntax/extensions, and binary libraries verified; no service was started. Run `39872287455` passed all 15 jobs on code commit `411f1791`; docs-only runs `39873267956` and `39873540098` are in progress on commits `77ee2c6` and `c1fd587`, respectively.
 
@@ -59,6 +59,18 @@ The dirty preflight package is also installed under a separate Cesium developmen
 
 ## Evidence available
 
+### Current RackWire cross-lab follow-up · 2026-10-23
+
+Fable's earlier independent reviews identified and drove fixes for shared-plan preflight/reload races, late writes, restore compare-and-save, stale local baselines, and related UI recovery issues. The current recovery path adds deleted-plan tombstones, explicit save-as-new recovery, exact lost-create reconciliation, and bounded lock waits. Fable's cross-lab follow-up confirmed F-1 lock timeout handling, F-3 restore retry documentation, and F-4 omitted metadata documentation as fixed. The expectedHash/cache revision CI assertion is in place. F-2 is fixed in the local candidate: submodule commit `953c97f` is created and the parent gitlink is staged to it. Verification passed RackWire UI 141/141, API 79/79, standalone Chromium acceptance, PHP syntax and whitespace checks, and the disposable MariaDB suite: nine RackWire commit/CAS checks, 12 network allocator checks, provisioning and UniFi CDC, ten UniFi import tests, and allocator concurrency proofs. Scratch teardown completed. `Sor::pdo()` constructs PDO without `PDO::ATTR_PERSISTENT`; the session lock timeout therefore does not carry across reused request connections. Hosted Forgejo CI remains **UNVERIFIED** because the runner contract requires an isolated disposable VM and no runner is provisioned. All work remains candidate-only; no live service, database, branch, release, or remote ref has changed.
+
+### Candidate-wide local gate follow-up · 2026-10-23
+
+The native `make test` build and CTest passed 17/17. Forgejo CI parity passed; systemd unit section checks passed for 46 service files; `tools/` passed 23/23; generated DNS zone tests passed 5/5 on rerun, BIND zone tests 2/2, DNS release tests 17/17, Khadas secondary configuration tests 16 passed with one opt-in live AXFR test skipped, and Steel configuration passed 1/1. One parallel invocation of the isolated zone-generation suite failed in the child generator without exposing captured stderr; direct reproduction succeeded and a sequential rerun passed. No DNS source change was made. The CMake `build/` tree is ignored local output. These checks do not replace hosted Forgejo CI or the independent review gate.
+
+### RackWire cache and manual refresh · 2026-10-23
+
+Updated the dashboard embed cache revision to `20261023a` so both the embedded iframe and standalone link fetch the current RackWire app. The dashboard UI suite now checks that both URLs share one revision token and passes 136/136. The single-file RackWire user manual now explains shared-plan save status, conflict recovery, exact retry disclosure, shared snapshots, restore concurrency, and the standalone offline boundary; its paired US Letter PDF was regenerated as seven pages. PDF text extraction confirms the new guidance and the save/restore page was visually inspected. Standalone Chromium acceptance passed. The documentation remains labeled as an integration candidate, not a deployed-release reference.
+
 - Root GitHub PR #37: integration commit `23aee5b` passed hosted run `39720370015` across the full workflow matrix; status/docs head `4790dcd` passed run `39720900951`. Earlier runs `39718723877` and `39719780873` also passed. Coverage includes dashboard/API, scanner/RackWire browser acceptance, server/database tests, cross-platform builds, RabbitMQ versions, and release package activation/rollback.
 - RackWire GitHub PR #1 at `a66bd21`: behavioral CSRF retry tests and combined browser acceptance are covered by the pinned root candidate; hosted RackWire run `39719734709` passed.
 - Root candidate browser/integration suite previously exercised scanner import, RackWire plan persistence, barcode resolution, authenticated scan admission, native worker progress, and candidate visibility. A direct, bounded `10.0.0.0/24` acceptance processed 254 addresses and produced 14 reviewable candidates in a disposable database.
@@ -75,13 +87,12 @@ The dirty preflight package is also installed under a separate Cesium developmen
 
 ## Open release questions
 
-- Cross-lab review has not run: Claude CLI currently reports no authenticated session.
+- Claude Fable's read-only review of current RackWire changes found no blocking defects. Cross-lab review of the remaining platform and subproject changes is still pending.
 - RackWire stale-CSRF retry behavior passed local client-harness and browser-to-real-PHP/SoR tests after an injected expiry-shaped 403. Actual elapsed-token expiry/denial by the live PHP session guard remains unverified.
 - Candidate authenticated browser behavior on deployed PHP-FPM remains unverified.
 - scanner-ingest publication ownership and remote remain unresolved; the app is not published to either GitHub or Forgejo.
 - Live migration adoption and rollback against the current SoR remain unverified.
 - UniFi reports a broad `10.0.0.0/8` while the SoR has 16 named `/24` segments; source authority and safe reconciliation remain unresolved. Keep comparison read-only.
-- The scanner-ingest publication destination and ownership are unresolved.
 - Mosquitto application-client authentication has not been verified; Authbroker is absent on Xenon.
 
 ## Review questions
@@ -143,3 +154,7 @@ The current root code candidate is `c1ce64d315bf959fbd81fa7b44f198188e59d15f`, p
 The dashboard API and native C worker now reject scan CIDRs outside RFC1918 private, loopback, and IPv4 link-local space. The whole requested CIDR must fit inside one allowed block, preventing a private starting address from masking a range that crosses into public space. The existing 4,096-host cap remains. Regression coverage accepts block-boundary private examples and rejects RFC 5737 documentation ranges, public IPv4 ranges, and cross-boundary ranges. Related browser fixtures now use intranet scan addresses. Local PHP helper/route tests and full native CTest (37/37) passed; the updated C range cases were rerun (scan/control 2/2). Hosted run `39733247468` passed the database-backed HTTP and browser-to-native-worker scan/adoption checks.
 
 At the time of the original range-policy note, Cesium had not yet been updated. The follow-up deployment is recorded above. **UNVERIFIED:** larger-range throughput, PHP-FPM/Apache, and cross-lab review. The deployed acceptance used only the isolated loopback development database; production DNS and UniFi were untouched.
+
+## RackWire cross-lab review closeout · 2026-10-23
+
+Claude Fable completed read-only reviews of the RackWire API, embed/cache, frontend persistence, and integration-test diffs. Verdict: no blocking defects in the transaction-scoped response reads, persisted-row hash checks, cache revision wiring, or main-snapshot dirty state. The real-DB test remains sequential, so the specific concurrent response race is not stress-tested. Update/restore retries are accepted by matching effective content, which cannot distinguish the originating retry from another writer that independently submitted the same content; this is safe for data integrity and is described in the contract/manual. Review also found and helped close gaps in cache-tag membership, duplicate API fixture hash serialization, encoded query parsing, and missing-submodule handling. The UI test now checks the exact 14 runtime assets, ignores commented-out tags, handles `&amp;` and multiple query parameters, and cleanly skips RackWire-specific checks when the submodule is absent. The suite passed with the submodule present (137/0); Fable simulated ENOENT and observed a clean 21/0 skip run. The API fixture uses one hash helper. The PDF was regenerated and text-checked. **UNVERIFIED:** a deterministic two-writer DB race test, hosted CI, production delivery, and cross-lab review of non-RackWire platform components.

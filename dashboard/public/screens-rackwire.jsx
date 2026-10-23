@@ -51,7 +51,7 @@
   // Release tag, in step with the ?v= on the script tags in public/index.html.
   // The frame is a separate document, so the SPA's own cache-bust does not reach
   // it — without this an operator keeps a stale planner after a deploy.
-  const RW_V = "20261021c";
+  const RW_V = "20261023a";
 
   function currentTheme() {
     return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";

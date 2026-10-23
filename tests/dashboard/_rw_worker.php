@@ -140,8 +140,16 @@ final class RwFakePdo extends PDO
     {
         $this->executed[] = ['sql' => $sql, 'params' => $params];
         $norm = preg_replace('/\s+/', ' ', trim($sql)) ?? $sql;
+        if ($norm === 'SET SESSION innodb_lock_wait_timeout = 5') {
+            return [[], 0];
+        }
         foreach ($this->resolvers as $r) {
             if (str_contains($norm, $r['match'])) {
+                if (isset($r['throw'])) {
+                    $error = new PDOException((string) ($r['message'] ?? 'simulated database error'), (int) ($r['driverCode'] ?? 0));
+                    $error->errorInfo = [(string) ($r['sqlState'] ?? 'HY000'), (int) ($r['driverCode'] ?? 0), (string) ($r['message'] ?? 'simulated database error')];
+                    throw $error;
+                }
                 if (isset($r['insertId'])) {
                     $this->insertId = (string) $r['insertId'];
                 }
@@ -248,25 +256,110 @@ function rw_worker_scenario(string $name): array
         case 'update-plan':
             return [
                 $sourceRow,
-                // More specific first: this query text also contains the
-                // shorter 'FROM rw_plans WHERE id = :id' used for the re-read.
-                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL', 'rows' => [['id' => 5, 'source_id' => 7]]],
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [
+                    ['id' => 5, 'source_id' => 7, 'name' => 'Rack A', 'plan_json' => '{"devices":[],"cables":[]}', 'thumbnail' => null, 'notes' => null],
+                ]],
                 ['match' => 'WHERE id = :id AND deleted_at IS NULL AND source_id = :src', 'rows' => [], 'affected' => 1],
                 ['match' => 'FROM rw_plans WHERE id = :id', 'rows' => [
                     ['id' => 5, 'name' => 'Rack A2', 'slug' => 'rack-a2', 'plan_json' => '{"devices":[],"cables":[]}',
                      'thumbnail' => null, 'updated_at' => '2026-08-07 00:00:00', 'created_at' => '2026-07-01 00:00:00'],
                 ]],
             ];
+        case 'update-plan-stale':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [
+                    ['id' => 5, 'source_id' => 7, 'name' => 'Rack A', 'plan_json' => '{"devices":[{"uid":"newer"}],"cables":[]}', 'thumbnail' => null, 'notes' => null],
+                ]],
+            ];
+        case 'update-plan-lock-timeout':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'throw' => true,
+                 'driverCode' => 1205, 'sqlState' => 'HY000', 'message' => 'Lock wait timeout exceeded'],
+            ];
+        case 'update-plan-idempotent':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [[
+                    'id' => 5, 'source_id' => 7, 'name' => 'Rack A2', 'slug' => 'rack-a2', 'plan_json' => '{"devices":[],"cables":[]}',
+                    'thumbnail' => null, 'notes' => null,
+                ]]],
+                ['match' => 'FROM rw_plans WHERE id = :id', 'rows' => [[
+                    'id' => 5, 'name' => 'Rack A2', 'slug' => 'rack-a2', 'plan_json' => '{"devices":[],"cables":[]}',
+                    'thumbnail' => null, 'notes' => null, 'updated_at' => '2026-08-07 00:00:00', 'created_at' => '2026-07-01 00:00:00',
+                ]]],
+            ];
+        case 'update-plan-no-hash':
+            return [$sourceRow];
+        case 'restore-plan-stale':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [
+                    ['id' => 5, 'source_id' => 7, 'name' => 'Rack A', 'plan_json' => '{"devices":[{"uid":"newer"}],"cables":[]}', 'thumbnail' => null, 'notes' => null],
+                ]],
+                ['match' => 'FROM rw_plan_versions WHERE id = :vid AND plan_id = :pid', 'rows' => [['id' => 77, 'plan_json' => '{"devices":[{"uid":"restored"}],"cables":[]}']]],
+            ];
+        case 'restore-plan-deadlock':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'throw' => true,
+                 'driverCode' => 1213, 'sqlState' => '40001', 'message' => 'Deadlock found when trying to get lock'],
+            ];
+        // Update and restore validate ownership inside their row-locking CAS
+        // query. Delete and version still use the ordinary write guard query.
+        case 'plan-for-write-foreign':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [['id' => 5, 'source_id' => 99, 'name' => 'Rack A', 'plan_json' => '{"devices":[],"cables":[]}', 'thumbnail' => null, 'notes' => null]]],
+            ];
         case 'plan-foreign':
             return [
                 $sourceRow,
                 ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL', 'rows' => [['id' => 5, 'source_id' => 99]]],
+            ];
+        case 'restore-plan-foreign':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [['id' => 5, 'source_id' => 99, 'name' => 'Rack A', 'plan_json' => '{"devices":[],"cables":[]}', 'thumbnail' => null, 'notes' => null]]],
+            ];
+        case 'restore-plan-success':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [
+                    ['id' => 5, 'source_id' => 7, 'name' => 'Rack A', 'plan_json' => '{"devices":[],"cables":[]}', 'thumbnail' => null, 'notes' => null],
+                ]],
+                ['match' => 'FROM rw_plan_versions WHERE id = :vid AND plan_id = :pid', 'rows' => [['id' => 77, 'plan_json' => '{"devices":[{"uid":"restored"}],"cables":[]}']]],
+                ['match' => 'UPDATE rw_plans SET plan_json = :pj', 'rows' => [], 'affected' => 1],
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL', 'rows' => [[
+                    'id' => 5, 'name' => 'Rack A', 'slug' => 'rack-a', 'plan_json' => '{"devices":[{"uid":"restored"}],"cables":[]}',
+                    'thumbnail' => null, 'notes' => null, 'updated_at' => '2026-08-07 00:00:00', 'created_at' => '2026-07-01 00:00:00',
+                ]]],
+            ];
+        case 'restore-plan-idempotent':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'rows' => [[
+                    'id' => 5, 'source_id' => 7, 'name' => 'Rack A', 'plan_json' => '{"devices":[{"uid":"restored"}],"cables":[]}', 'thumbnail' => null, 'notes' => null,
+                ]]],
+                ['match' => 'FROM rw_plan_versions WHERE id = :vid AND plan_id = :pid', 'rows' => [['id' => 77, 'plan_json' => '{"devices":[{"uid":"restored"}],"cables":[]}']]],
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL', 'rows' => [[
+                    'id' => 5, 'name' => 'Rack A', 'slug' => 'rack-a', 'plan_json' => '{"devices":[{"uid":"restored"}],"cables":[]}',
+                    'thumbnail' => null, 'notes' => null, 'updated_at' => '2026-08-07 00:00:00', 'created_at' => '2026-07-01 00:00:00',
+                ]]],
             ];
         case 'delete-found':
             return [
                 $sourceRow,
                 ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL', 'rows' => [['id' => 5, 'source_id' => 7]]],
                 ['match' => 'UPDATE rw_plans SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL AND source_id = :src', 'rows' => [], 'affected' => 1],
+            ];
+        case 'delete-lock-timeout':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL', 'rows' => [['id' => 5, 'source_id' => 7]]],
+                ['match' => 'UPDATE rw_plans SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
+                 'throw' => true, 'driverCode' => 1205, 'sqlState' => 'HY000', 'message' => 'Lock wait timeout exceeded'],
             ];
         case 'delete-not-found':
             return [
@@ -285,6 +378,12 @@ function rw_worker_scenario(string $name): array
                     ['id' => 77, 'plan_id' => 5, 'version_name' => 'before rewire',
                      'created_by' => 'tester', 'created_at' => '2026-08-07 12:00:00'],
                 ]],
+            ];
+        case 'save-version-lock-timeout':
+            return [
+                $sourceRow,
+                ['match' => 'FROM rw_plans WHERE id = :id AND deleted_at IS NULL FOR UPDATE', 'throw' => true,
+                 'driverCode' => 1205, 'sqlState' => 'HY000', 'message' => 'Lock wait timeout exceeded'],
             ];
         case 'save-version-prune':
             // 27 rows on file: the cap-25 prune must run (and must run against

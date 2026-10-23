@@ -117,7 +117,7 @@ return static function (Router $router): void {
         $router->get('/api/rackwire/plans/{id}', static function (array $p): void {
             $id  = rw_id_param($p['id']);
             $row = rw_row(
-                'SELECT id, name, slug, plan_json, thumbnail, updated_at, created_at
+                'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
                    FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
                 [':id' => $id]
             );
@@ -306,8 +306,10 @@ return static function (Router $router): void {
 
             $name      = rw_str_required($b, 'name', 128);
             $planJson  = rw_plan_json_required($b);
+            $hasThumbnail = array_key_exists('thumbnail', $b);
             $thumbnail = isset($b['thumbnail']) && is_string($b['thumbnail']) && $b['thumbnail'] !== ''
                 ? $b['thumbnail'] : null;
+            $hasNotes = array_key_exists('notes', $b);
             $notes = isset($b['notes']) && is_string($b['notes']) && $b['notes'] !== '' ? $b['notes'] : null;
             [$deviceCount, $cableCount] = rw_plan_counts($b['plan']);
             $srcId = rw_source_id();
@@ -315,35 +317,116 @@ return static function (Router $router): void {
             $id = isset($b['id']) && $b['id'] !== null && $b['id'] !== ''
                 ? rw_id_param((string) $b['id']) : null;
 
+            $row = null;
             if ($id !== null) {
-                rw_plan_for_write($id);
-                rw_write(
-                    'UPDATE rw_plans
-                        SET name = :name, slug = :slug, plan_json = :pj, thumbnail = :th,
-                            device_count = :dc, cable_count = :cc, updated_by = :ub, notes = :notes,
-                            asserted_kind = \'human\', asserted_at = NOW()
-                      WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
-                    [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
-                     ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
-                     ':ub' => $operator, ':notes' => $notes, ':src' => $srcId, ':id' => $id]
-                );
+                $expectedHash = $b['expectedHash'] ?? null;
+                if (!is_string($expectedHash) || preg_match('/^[a-f0-9]{64}$/i', $expectedHash) !== 1) {
+                    Response::error('plan_hash_required', 'Reload the shared plan before updating it; its current version is required.', 409);
+                }
+                $db = Sor::db();
+                rw_plan_lock_timeout();
+                $db->beginTransaction();
+                try {
+                    $current = rw_row(
+                        'SELECT id, source_id, name, slug, plan_json, thumbnail, notes FROM rw_plans
+                          WHERE id = :id AND deleted_at IS NULL FOR UPDATE',
+                        [':id' => $id]
+                    );
+                    if ($current === null) {
+                        $db->rollBack();
+                        Response::error('not_found', "No plan $id", 404);
+                    }
+                    if ((int) $current['source_id'] !== $srcId) {
+                        $db->rollBack();
+                        Response::error('conflict', "Plan $id is owned by another source; RackWire will not overwrite it.", 409);
+                    }
+                    if (!$hasThumbnail) $thumbnail = $current['thumbnail'] ?? null;
+                    if (!$hasNotes) $notes = $current['notes'] ?? null;
+                    $actualHash = rw_plan_hash($current);
+                    $alreadyApplied = false;
+                    if (!hash_equals($actualHash, strtolower($expectedHash))) {
+                        $alreadyApplied = (string) $current['name'] === $name
+                            && (string) ($current['slug'] ?? '') === rw_slug($name)
+                            && (string) ($current['plan_json'] ?? '') === $planJson
+                            && ($current['thumbnail'] ?? null) === $thumbnail
+                            && ($current['notes'] ?? null) === $notes;
+                        if (!$alreadyApplied) {
+                            $db->rollBack();
+                            Response::error('plan_conflict', 'The shared plan changed after this copy was loaded. Reload or save a separate copy before syncing.', 409);
+                        }
+                    }
+                    if (!$alreadyApplied) {
+                        rw_exec(
+                            'UPDATE rw_plans
+                                SET name = :name, slug = :slug, plan_json = :pj, thumbnail = :th,
+                                    device_count = :dc, cable_count = :cc, updated_by = :ub, notes = :notes,
+                                    asserted_kind = \'human\', asserted_at = NOW()
+                              WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
+                            [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
+                             ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
+                             ':ub' => $operator, ':notes' => $notes, ':src' => $srcId, ':id' => $id]
+                        );
+                    }
+                    // Capture the response while this transaction still owns
+                    // the row lock. A post-commit read could observe another
+                    // writer and return their hash beside this request's plan.
+                    $row = rw_row(
+                        'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
+                           FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
+                        [':id' => $id]
+                    );
+                    if ($row === null) {
+                        $db->rollBack();
+                        Response::error('not_found', "No plan $id", 404);
+                    }
+                    $db->commit();
+                } catch (\PDOException $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    rw_plan_lock_failure($e);
+                    if ((string) $e->getCode() === '23000') {
+                        Response::error('conflict', 'Duplicate or constraint violation.', 409);
+                    }
+                    throw $e;
+                } catch (\Throwable $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    throw $e;
+                }
             } else {
-                rw_write(
-                    'INSERT INTO rw_plans (name, slug, plan_json, thumbnail, device_count, cable_count,
-                                            updated_by, notes, source_id, asserted_kind, asserted_at)
-                     VALUES (:name, :slug, :pj, :th, :dc, :cc, :ub, :notes, :src, \'human\', NOW())',
-                    [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
-                     ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
-                     ':ub' => $operator, ':notes' => $notes, ':src' => $srcId]
-                );
-                $id = (int) Sor::db()->lastInsertId();
+                $db = Sor::db();
+                rw_plan_lock_timeout();
+                $db->beginTransaction();
+                try {
+                    rw_exec(
+                        'INSERT INTO rw_plans (name, slug, plan_json, thumbnail, device_count, cable_count,
+                                                updated_by, notes, source_id, asserted_kind, asserted_at)
+                         VALUES (:name, :slug, :pj, :th, :dc, :cc, :ub, :notes, :src, \'human\', NOW())',
+                        [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
+                         ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
+                         ':ub' => $operator, ':notes' => $notes, ':src' => $srcId]
+                    );
+                    $id = (int) $db->lastInsertId();
+                    $row = rw_row(
+                        'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
+                           FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
+                        [':id' => $id]
+                    );
+                    if ($row === null) {
+                        $db->rollBack();
+                        Response::error('not_found', "No plan $id", 404);
+                    }
+                    $db->commit();
+                } catch (\PDOException $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    rw_plan_lock_failure($e);
+                    if ((string) $e->getCode() === '23000') {
+                        Response::error('conflict', 'Duplicate or constraint violation.', 409);
+                    }
+                    throw $e;
+                } catch (\Throwable $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    throw $e;
+                }
             }
-
-            $row = rw_row(
-                'SELECT id, name, slug, plan_json, thumbnail, updated_at, created_at
-                   FROM rw_plans WHERE id = :id',
-                [':id' => $id]
-            );
             Response::ok(rw_plan_full_row($row), 201);
         });
 
@@ -351,12 +434,18 @@ return static function (Router $router): void {
         $router->post('/api/rackwire/plans/{id}/delete', static function (array $p): void {
             Operator::requireOperator();
             $id = rw_id_param($p['id']);
-            rw_plan_for_write($id);
-            $n = rw_write(
-                'UPDATE rw_plans SET deleted_at = NOW()
-                  WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
-                [':id' => $id, ':src' => rw_source_id()]
-            );
+            rw_plan_lock_timeout();
+            try {
+                rw_plan_for_write($id);
+                $n = rw_write(
+                    'UPDATE rw_plans SET deleted_at = NOW()
+                      WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
+                    [':id' => $id, ':src' => rw_source_id()]
+                );
+            } catch (\PDOException $e) {
+                rw_plan_lock_failure($e);
+                throw $e;
+            }
             if ($n === 0) {
                 Response::error('not_found', "No plan $id", 404);
             }
@@ -384,8 +473,8 @@ return static function (Router $router): void {
             // a snapshot of the same plan at once would otherwise both read a
             // pre-insert count of 25, both conclude no prune was due, and leave
             // 27 rows behind the cap. Serialising on the plan row also means
-            // the snapshot always pairs with the plan_json the lock holder saw.
             $db = Sor::db();
+            rw_plan_lock_timeout();
             $db->beginTransaction();
             try {
                 $plan = rw_row(
@@ -428,6 +517,7 @@ return static function (Router $router): void {
                 if ($db->inTransaction()) {
                     $db->rollBack();
                 }
+                rw_plan_lock_failure($e);
                 if ((string) $e->getCode() === '23000') {
                     Response::error('conflict', 'Duplicate or constraint violation.', 409);
                 }
@@ -456,32 +546,76 @@ return static function (Router $router): void {
                 Response::error('bad_request', 'versionId is required.', 400);
             }
             $versionId = rw_id_param((string) $b['versionId'], 'versionId');
+            $expectedHash = $b['expectedHash'] ?? null;
+            if (!is_string($expectedHash) || preg_match('/^[a-f0-9]{64}$/i', $expectedHash) !== 1) {
+                Response::error('plan_hash_required', 'Reload the shared plan before restoring a snapshot; its current version is required.', 409);
+            }
             $srcId = rw_source_id();
-            rw_plan_for_write($id);
+            $db = Sor::db();
+            rw_plan_lock_timeout();
+            $db->beginTransaction();
+            try {
+                $current = rw_row(
+                    'SELECT id, source_id, name, plan_json, thumbnail, notes FROM rw_plans
+                      WHERE id = :id AND deleted_at IS NULL FOR UPDATE',
+                    [':id' => $id]
+                );
+                if ($current === null) {
+                    $db->rollBack();
+                    Response::error('not_found', "No plan $id", 404);
+                }
+                if ((int) $current['source_id'] !== $srcId) {
+                    $db->rollBack();
+                    Response::error('conflict', "Plan $id is owned by another source; RackWire will not overwrite it.", 409);
+                }
+                $ver = rw_row(
+                    'SELECT id, plan_json FROM rw_plan_versions WHERE id = :vid AND plan_id = :pid',
+                    [':vid' => $versionId, ':pid' => $id]
+                );
+                if ($ver === null) {
+                    $db->rollBack();
+                    Response::error('not_found', "No version $versionId for plan $id", 404);
+                }
 
-            $ver = rw_row(
-                'SELECT id, plan_json FROM rw_plan_versions WHERE id = :vid AND plan_id = :pid',
-                [':vid' => $versionId, ':pid' => $id]
-            );
-            if ($ver === null) {
-                Response::error('not_found', "No version $versionId for plan $id", 404);
+                $alreadyApplied = !hash_equals(rw_plan_hash($current), strtolower($expectedHash))
+                    && (string) ($current['plan_json'] ?? '') === (string) $ver['plan_json'];
+                if (!hash_equals(rw_plan_hash($current), strtolower($expectedHash)) && !$alreadyApplied) {
+                    $db->rollBack();
+                    Response::error('plan_conflict', 'The shared plan changed after this copy was loaded. Reload or save a separate copy before restoring.', 409);
+                }
+
+                if (!$alreadyApplied) {
+                    rw_exec(
+                        'UPDATE rw_plans
+                            SET plan_json = :pj, asserted_kind = \'human\', asserted_at = NOW()
+                          WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
+                        [':pj' => $ver['plan_json'], ':src' => $srcId, ':id' => $id]
+                    );
+                }
+                // Return the version/hash observed under the lock, not a
+                // possible later writer's row fetched after commit.
+                $row = rw_row(
+                    'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
+                       FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
+                    [':id' => $id]
+                );
+                if ($row === null) {
+                    $db->rollBack();
+                    Response::error('not_found', "No plan $id", 404);
+                }
+                $db->commit();
+            } catch (\PDOException $e) {
+                if ($db->inTransaction()) $db->rollBack();
+                rw_plan_lock_failure($e);
+                if ((string) $e->getCode() === '23000') {
+                    Response::error('conflict', 'Duplicate or constraint violation.', 409);
+                }
+                throw $e;
+            } catch (\Throwable $e) {
+                if ($db->inTransaction()) $db->rollBack();
+                throw $e;
             }
 
-            rw_write(
-                'UPDATE rw_plans
-                    SET plan_json = :pj, asserted_kind = \'human\', asserted_at = NOW()
-                  WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
-                [':pj' => $ver['plan_json'], ':src' => $srcId, ':id' => $id]
-            );
-
-            $row = rw_row(
-                'SELECT id, name, slug, plan_json, thumbnail, updated_at, created_at
-                   FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
-                [':id' => $id]
-            );
-            if ($row === null) {
-                Response::error('not_found', "No plan $id", 404);
-            }
             Response::ok(rw_plan_full_row($row));
         });
 
@@ -830,6 +964,21 @@ function rw_exec(string $sql, array $params = []): int
     return $st->rowCount();
 }
 
+/** Bound row-lock waits below rwFetch's 15-second client abort window. */
+function rw_plan_lock_timeout(): void
+{
+    rw_exec('SET SESSION innodb_lock_wait_timeout = 5');
+}
+
+/** Surface row-lock contention as a retryable service response. */
+function rw_plan_lock_failure(\PDOException $e): void
+{
+    $driverCode = isset($e->errorInfo[1]) ? (int) $e->errorInfo[1] : 0;
+    if ($driverCode === 1205 || $driverCode === 1213) {
+        Response::error('busy', 'The shared plan is being updated. Retry the save shortly.', 503);
+    }
+}
+
 /**
  * Parameterised write for the non-transactional mutation handlers: SQLSTATE
  * 23000 (unique/FK violation — e.g. a duplicate live plan name) becomes a
@@ -977,15 +1126,30 @@ function rw_plan_summary_row(array $r): array
 /** @param array<string,mixed> $r */
 function rw_plan_full_row(array $r): array
 {
+    $planJson = (string) ($r['plan_json'] ?? '');
     return [
         'id'        => (int) $r['id'],
         'name'      => $r['name'],
         'slug'      => $r['slug'],
-        'plan'      => Coerce::json($r['plan_json'] ?? null),
+        'plan'      => Coerce::json($planJson),
+        'planHash'  => rw_plan_hash($r),
         'thumbnail' => $r['thumbnail'] ?? null,
+        'notes'     => $r['notes'] ?? null,
         'updatedAt' => Coerce::iso($r['updated_at'] ?? null),
         'createdAt' => Coerce::iso($r['created_at'] ?? null),
     ];
+}
+
+/** Hash every field that a plan update can replace, using JSON to delimit values. */
+function rw_plan_hash(array $r): string
+{
+    $material = json_encode([
+        (string) ($r['name'] ?? ''),
+        $r['thumbnail'] ?? null,
+        $r['notes'] ?? null,
+        (string) ($r['plan_json'] ?? ''),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    return hash('sha256', $material);
 }
 
 /** @param array<string,mixed> $r */
