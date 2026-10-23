@@ -56,6 +56,10 @@ class ForgejoRunnerSupervisorTests(unittest.TestCase):
         self.assertIn("node_version='24.10.0'", bootstrap)
         self.assertIn("2642f4428869aca32443660fd71b3918e2be1277a899bdcaeb64c93b54b5af17", bootstrap)
         self.assertIn("node --version", bootstrap)
+        self.assertIn("guest_status runner-download", bootstrap)
+        self.assertIn("guest_status node-download", bootstrap)
+        self.assertIn("guest_status docker-start", bootstrap)
+        self.assertIn("SOLARINET_CI_RUNNER_CONNECTING", bootstrap)
         self.assertIn("sudo -n /usr/bin/tee /dev/ttyS0", bootstrap)
         self.assertGreater(
             bootstrap.index("systemctl stop solarinet-ci-bootstrap-deadline.timer"),

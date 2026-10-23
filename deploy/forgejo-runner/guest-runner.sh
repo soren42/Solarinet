@@ -2,26 +2,34 @@
 set -euo pipefail
 trap 'rc=$?; /usr/bin/systemctl poweroff --force || true; exit "$rc"' ERR
 
+guest_status() {
+  printf '\nSOLARINET_CI_STAGE=%s\n' "$1" >/dev/ttyS0 2>/dev/null || true
+}
+
 runner_version='13.2.0'
 runner_sha256='fadaec897f5e6641c363f87ecaf75f866f99c81b7097ec6b433e4c48123fcad1'
 node_version='24.10.0'
 node_sha256='2642f4428869aca32443660fd71b3918e2be1277a899bdcaeb64c93b54b5af17'
 
 systemctl mask --now serial-getty@ttyS0.service
+guest_status bootstrap-start
 install -d -o runner -g runner -m 0700 /var/lib/solarinet-ci
 install -d -o runner -g runner -m 0700 /var/lib/runner/work
 install -d -o root -g root -m 0755 /usr/local/lib/solarinet-ci
 chown runner:runner /etc/solarinet-ci/runner-token /etc/solarinet-ci/runner-uuid
 chmod 0600 /etc/solarinet-ci/runner-token /etc/solarinet-ci/runner-uuid
 
+guest_status runner-download
 curl --fail --location --retry 4 --retry-delay 2 \
   --connect-timeout 15 --max-time 1800 \
   "https://code.forgejo.org/forgejo/runner/releases/download/v${runner_version}/forgejo-runner-${runner_version}-linux-amd64" \
   -o /usr/local/bin/forgejo-runner
 printf '%s  %s\n' "$runner_sha256" /usr/local/bin/forgejo-runner | sha256sum --check --status
 chmod 0755 /usr/local/bin/forgejo-runner
+guest_status runner-installed
 
 node_archive="/tmp/node-v${node_version}-linux-x64.tar.xz"
+guest_status node-download
 curl --fail --location --retry 4 --retry-delay 2 \
   --connect-timeout 15 --max-time 900 \
   "https://nodejs.org/dist/v${node_version}/node-v${node_version}-linux-x64.tar.xz" \
@@ -35,12 +43,14 @@ ln -sfn "$node_dir/bin/npm" /usr/local/bin/npm
 ln -sfn "$node_dir/bin/npx" /usr/local/bin/npx
 rm -f "$node_archive"
 node --version
+guest_status node-installed
 
 cat >/usr/local/lib/solarinet-ci/execute-one-job <<'EOF'
 #!/bin/bash
 set -u
 cd /var/lib/solarinet-ci || exit 1
 set -uo pipefail
+printf '\nSOLARINET_CI_RUNNER_CONNECTING\n' | sudo -n /usr/bin/tee /dev/ttyS0 >/dev/null
 /usr/local/bin/forgejo-runner one-job \
   --url http://10.1.0.200:3000 \
   --uuid "$(cat /etc/solarinet-ci/runner-uuid)" \
@@ -78,7 +88,9 @@ TimeoutStartSec=infinity
 EOF
 
 systemctl daemon-reload
+guest_status docker-start
 systemctl enable docker.service
 systemctl start docker.service
 systemctl stop solarinet-ci-bootstrap-deadline.timer 2>/dev/null || true
+guest_status runner-start
 systemctl start solarinet-ci-runner.service

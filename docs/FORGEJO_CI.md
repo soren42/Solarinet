@@ -86,15 +86,15 @@ has been provisioned. A dedicated disposable VM on Benzene remains the selected 
 default libvirt NAT network remains untouched. A recheck on 2026-10-23 found no defined
 `solarinet-ci` network (`virsh net-list --all` was empty), despite a stale active oneshot
 systemd state. The installer now defines the dedicated network when absent, restarts its
-unit, and checks that the bridge is `virbr-ci0` before starting it. Until deployed, the
-network and current tap attachment remain unverified.
+unit, and checks that the bridge is `virbr-ci0` before starting it. The current deployment
+state appears below.
 Before applying the guard, the host had no active `firewalld`/`nftables` service and the
 default libvirt NAT network allowed broad guest egress. A temporary network-namespace probe
 verified the new policy: Forgejo TCP 3000, gateway DNS, and public TCP 443 connected; Cesium
 MariaDB TCP 3306 and Benzene SSH TCP 22 did not. Stopping the guard service took down the
 CI network while leaving the nftables rules installed; restarting the guard and network
 restored both. That earlier check had no guest attached. The later 2026-10-23 recheck found
-the network definition missing, as recorded above.
+the network definition missing; the current deployment state appears below.
 
 **Tap-name correction, 2026-10-23:** libvirt reserves interface-name prefixes `vnet`, `vif`,
 `macvtap`, and `macvlan` and may ignore a requested target using one of them. The runner tap
@@ -111,8 +111,10 @@ revision before removal of an unreachable hairpin-drop rule. The candidate hash 
 installer replaces the deployed file and reloads the guard. The new isolated
 namespace packet test allows HTTPS egress and established replies, and asserts the inbound
 forwarding drop and disallowed private HTTPS and SSH egress increment their exact nftables
-drop-rule counters. It passed locally and on Benzene. **UNVERIFIED:** a running guest has not yet
-exercised the live rules or proven the tap name at runtime.
+drop-rule counters. It passed locally and on Benzene. A live disposable guest is now attached
+to the verified `ci-tap0` on `virbr-ci0`; its DHCP and DNS traffic passed the guard.
+**UNVERIFIED:** public package download, Forgejo connectivity, and a complete CI job have not
+yet passed from inside the guest.
 
 **Disposable runner implementation, 2026-10-23:** the candidate adds a root supervisor on
 Benzene, Ubuntu 24.04 cloud-init guests, a 24-hour idle-job wait and a fresh 24-hour job
@@ -132,20 +134,31 @@ and the supervisor checks the libvirt XML before waiting for a job. Benzene's ex
 image matches the pinned SHA-256. The VM exposes a serial console for first-boot logs; guest
 login remains locked and the ttyS0 serial getty is masked to keep its login prompt out of
 the status stream. A bounded host-side serial parser retains at most 4 MiB of log output
-and extracts CRLF-safe job-start and exit markers separately. The guest reports job start
+and extracts CRLF-safe job-start and exit markers separately. Fixed secret-free stage markers
+show guest bootstrap progress. The guest reports job start
 and one-job exit status over its serial console using the runner account's unrestricted
 passwordless sudo, which host-mode workflow jobs already require. The supervisor treats
 missing or nonzero status as a failed cycle and backs off before
 registering another runner. Stopping the supervisor/network tears down the disposable VM
 and cancels any active job. Local tests cover cloud-init rendering, credential shape, shell
 syntax, forced-command installation, tap selection, and bounded serial capture under output
-flood. **UNVERIFIED:** installation of the
-forced key, first guest boot, serial-result capture, tap attachment, complete Forgejo job
-execution, and teardown have not yet been exercised. The registration-key installer checks
-that Jason can run the Forgejo CLI as the `forgejo` account before it changes SSH access.
+flood. **UNVERIFIED:** first-boot completion, serial-result capture, complete Forgejo job
+execution, and teardown have not yet been exercised. The source-restricted forced key is
+installed on Cesium; its installer checked Jason's noninteractive Forgejo CLI access before
+changing `authorized_keys`.
 The first independent review found serial-log growth and CRLF-marker issues; both are fixed
 and covered by a serial flood/marker test. A second cross-lab review found no deployment
 blockers in network ordering, registration, firewall, or bounded serial parsing.
+
+**Deployment, 2026-10-23:** Benzene now has the candidate firewall hash
+`2040ee96893d2405387a79d0dcde590bb3104aa9c78c9ec69c2d2790e29ca084`, an active isolated
+`solarinet-ci` network with bridge `virbr-ci0` and autostart disabled, and an active supervisor.
+The live disposable VM is named `solarinet-ci-runner`, has the verified `ci-tap0` attachment,
+and received `192.168.123.41`. The guest has sent DHCP and DNS traffic; captured network
+counters show no TCP package downloads or Forgejo requests yet. Public NTP over UDP 123 is
+blocked by the intended egress policy. The capped serial log contains no runner-connected or
+job-start marker, so first boot is not yet a successful runner test. Secret-free bootstrap
+stage markers have been added to the next guest boot to localize where it stops.
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private; this does not establish whether the repository Actions unit is
