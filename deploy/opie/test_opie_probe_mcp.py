@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 try:
+    import mcp
     import opie_probe_mcp
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -20,6 +21,11 @@ class ProbeMcpTests(unittest.TestCase):
             params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(Path(__file__).with_name("opie_probe_mcp.py"))],
+                # The MCP client intentionally gives child processes a
+                # restricted environment that omits PYTHONPATH. Preserve the
+                # package location used by this interpreter so the server can
+                # import the same installed MCP SDK in CI and virtualenvs.
+                env={"PYTHONPATH": str(Path(mcp.__file__).resolve().parent.parent)},
             )
             async with stdio_client(params) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
