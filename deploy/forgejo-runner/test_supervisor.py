@@ -26,6 +26,15 @@ def wait_until(predicate, timeout: float = 5) -> bool:
 
 
 class ForgejoRunnerSupervisorTests(unittest.TestCase):
+    def test_registration_advertises_workflow_label_name(self):
+        registration = (HERE / "register-ephemeral.sh").read_text()
+        guest = (HERE / "guest-runner.sh").read_text()
+        workflow = (HERE.parent.parent / ".forgejo/workflows/ci.yml").read_text()
+        self.assertIn("--labels solarinet-ci-host \\", registration)
+        self.assertNotIn("--labels solarinet-ci-host:host", registration)
+        self.assertIn("--label solarinet-ci-host:host", guest)
+        self.assertIn("runs-on: solarinet-ci-host", workflow)
+
     def test_cloud_init_contains_scoped_single_job_credentials_and_bootstrap(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -21,7 +21,7 @@ printf '%s' "$secret" | /usr/bin/sudo -n -u forgejo /bin/bash -c '
     forgejo-cli actions register \
     --name solarinet-ci-ephemeral \
     --scope jason/Solarinet \
-    --labels solarinet-ci-host:host \
+    --labels solarinet-ci-host \
     --ephemeral \
     --secret-file "$secret_file"
 '
