@@ -18,14 +18,22 @@ except ImportError as exc:
 class ProbeMcpTests(unittest.TestCase):
     def test_stdio_server_exposes_only_the_probe_tool(self):
         async def inspect_server():
+            child_env = {
+                "PYTHONPATH": str(Path(mcp.__file__).resolve().parent.parent),
+            }
+            # setup-python installs relocatable CPython under the Actions
+            # tool-cache and exports its lib directory through LD_LIBRARY_PATH.
+            # The MCP stdio client deliberately filters inherited variables,
+            # so preserve this loader path for the same interpreter process.
+            loader_path = os.environ.get("LD_LIBRARY_PATH")
+            if loader_path:
+                child_env["LD_LIBRARY_PATH"] = loader_path
             params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(Path(__file__).with_name("opie_probe_mcp.py"))],
-                # The MCP client intentionally gives child processes a
-                # restricted environment that omits PYTHONPATH. Preserve the
-                # package location used by this interpreter so the server can
-                # import the same installed MCP SDK in CI and virtualenvs.
-                env={"PYTHONPATH": str(Path(mcp.__file__).resolve().parent.parent)},
+                # Preserve only the import and dynamic-loader paths needed by
+                # this interpreter; the client otherwise keeps its safe env.
+                env=child_env,
             )
             async with stdio_client(params) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:

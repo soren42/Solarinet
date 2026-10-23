@@ -22,7 +22,7 @@ requirements and the RabbitMQ upgrade test's Docker access and dynamically publi
 Tests and their live-SoR guards remain unchanged.
 
 This contract requires a **dedicated, disposable Linux VM** with Docker, `sudo`, and the
-Forgejo runner installed in host mode using label `solarinet-ci-host:host`. Configure runner
+Forgejo runner installed in host mode using label `solarinet-ci-host`. Configure runner
 capacity to `1`; jobs share fixed loopback ports. Host mode does not isolate job code. Never
 register a shared application, database, DNS, workstation, or production host. The VM must
 hold no production credentials or writable production mounts and must be reverted or
@@ -111,10 +111,10 @@ revision before removal of an unreachable hairpin-drop rule. The candidate hash 
 installer replaces the deployed file and reloads the guard. The new isolated
 namespace packet test allows HTTPS egress and established replies, and asserts the inbound
 forwarding drop and disallowed private HTTPS and SSH egress increment their exact nftables
-drop-rule counters. It passed locally and on Benzene. A live disposable guest is now attached
-to the verified `ci-tap0` on `virbr-ci0`; its DHCP and DNS traffic passed the guard.
-**UNVERIFIED:** public package download, Forgejo connectivity, and a complete CI job have not
-yet passed from inside the guest.
+drop-rule counters. It passed locally and on Benzene. At this checkpoint, a live disposable
+guest was attached to the verified `ci-tap0` on `virbr-ci0`; its DHCP and DNS traffic passed
+the guard, while public package download and Forgejo connectivity were still unverified. The
+later replacement-guest checks below supersede that initial status.
 
 **Disposable runner implementation, 2026-10-23:** the candidate adds a root supervisor on
 Benzene, Ubuntu 24.04 cloud-init guests, a 24-hour idle-job wait and a fresh 24-hour job
@@ -142,10 +142,11 @@ missing or nonzero status as a failed cycle and backs off before
 registering another runner. Stopping the supervisor/network tears down the disposable VM
 and cancels any active job. Local tests cover cloud-init rendering, credential shape, shell
 syntax, forced-command installation, tap selection, and bounded serial capture under output
-flood. **UNVERIFIED:** first-boot completion, serial-result capture, complete Forgejo job
-execution, and teardown have not yet been exercised. The source-restricted forced key is
-installed on Cesium; its installer checked Jason's noninteractive Forgejo CLI access before
-changing `authorized_keys`.
+flood. At this implementation checkpoint, first-boot completion, serial-result capture,
+complete Forgejo job execution, and teardown had not yet been exercised; the deployment
+results below supersede this earlier status. The source-restricted forced key is installed on
+Cesium; its installer checked Jason's noninteractive Forgejo CLI access before changing
+`authorized_keys`.
 The first independent review found serial-log growth and CRLF-marker issues; both are fixed
 and covered by a serial flood/marker test. A second cross-lab review found no deployment
 blockers in network ordering, registration, firewall, or bounded serial parsing.
@@ -163,24 +164,42 @@ separate serial markers and bounded apt retries/timeouts.
 
 The replacement guest reached package update/install, verified package installation, fetched
 the SHA-256-pinned Forgejo runner and Node.js runtime, started Docker, connected to Forgejo,
-and fetched a job. Host firewall counters recorded HTTPS egress and Forgejo traffic on TCP
-3000; the guest remains isolated from other private/reserved destinations. Forgejo's live
-database showed older queued tasks from run `57` on the new runner. The RabbitMQ 3.13.7 and
-4.2.9 SoR tasks completed successfully, including checkout, disposable database/broker setup,
-migrations, rollback/recovery, DNS-chain checks, and snapshot recovery. Its 4.3.6 task was
-running at the last check. The Python-integration task failed only at the Opie MCP subprocess
-test: the parent could import the SDK, but the SDK's restricted child environment omitted its
-package path. Commit `682426f` passes the complete Opie suite with dependencies installed in
-an isolated user site and is queued as Forgejo run `63`. The current branch's matrix is not yet
-verified.
+and fetched jobs. Host firewall counters recorded HTTPS egress and Forgejo traffic on TCP
+3000; the guest remains isolated from other private/reserved destinations. Run `57`'s RabbitMQ
+3.13.7 and 4.2.9 SoR tasks completed successfully, including checkout, disposable
+database/broker setup, migrations, rollback/recovery, DNS-chain checks, and snapshot recovery.
+Runs `63` and `65` then exercised later commits on the candidate branch.
+
+**Latest observed run, 2026-10-23:** Forgejo run `65` used commit
+`f0508d93bcbe5b64ad8347977084710be8c63546`. The ephemeral runner registered under the
+workflow's `solarinet-ci-host` label and fetched the job. The Python integration job failed at
+the Opie MCP subprocess step because the child interpreter could not load the dynamic Python
+runtime from the Actions tool cache. The runner's constrained subprocess environment omits
+`LD_LIBRARY_PATH`; the candidate fix now passes that path alongside the MCP package path.
+The exact Opie suite passes 9 tests under Python 3.12 in a disposable container. The SoR
+RabbitMQ 3.13.7, 4.2.9, and 4.3.6 jobs passed, including the 4.3.7 upgrade intermediate and
+pre-4.4 snapshot restore. The standalone RackWire browser job passed its recursive checkout
+and browser flow. Core, full server, SCP fuzz, panel, and Linux/Windows cross jobs passed.
+Forgejo recorded the dashboard job as skipped; the available run metadata does not establish
+the reason, so it is not attributed to the Python failure. The full dashboard gate and the
+candidate fixes still need a new Forgejo run; this run is not a green matrix.
+
+The candidate now adds `pkg-config` and OpenSSL development headers to the panel workflow
+dependencies. The panel PTY test double now waits for five consecutive empty-queue checks
+before closing its master descriptor, preventing the intermittent final-ACK `EIO` observed
+under repetition. The panel smoke passed 10 consecutive local runs after that change, and the
+daemon listener/codec suite passed. The firmware host suite passed 107 tests and the
+page/firmware parity suite passed 59 checks locally. The firmware build used `TMPDIR=/var/tmp`
+because this development host's `/tmp` hit its user quota during ASAN compilation. These
+candidate changes have not yet run in Forgejo.
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
-repository is private; this does not establish whether the repository Actions unit is
-enabled. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15 defaults
-Actions to enabled), but repository unit state still needs authenticated verification.
+repository is private. Forgejo run `65` confirms that Actions are enabled and dispatch jobs for
+this repository. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15
+defaults Actions to enabled).
 
 Therefore the complete Forgejo matrix is **UNVERIFIED**. Do not describe this workflow as a
-green hosted gate until the current branch has run the complete matrix. GitHub run `39898481633`
+green hosted gate until the current candidate has run the complete matrix. GitHub run `39898481633`
 completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
 2026-10-23; GitHub remains a secondary mirror and verification path when available.
 
