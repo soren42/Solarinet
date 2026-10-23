@@ -304,6 +304,108 @@ solariStatus serverIngestValidate(serverContext *ctx,
 
 /* ------------------------------------------------------------- dispatch */
 
+static bool serverIngestLowerHex(const char *value, size_t length)
+{
+    size_t i;
+    for (i = 0; i < length; ++i)
+        if (!((value[i] >= '0' && value[i] <= '9') ||
+              (value[i] >= 'a' && value[i] <= 'f'))) return false;
+    return true;
+}
+
+static solariStatus serverIngestParseCrlActivation(const uint8_t *payload,
+                                                    size_t payloadLen,
+                                                    bool *found,
+                                                    char issuerFp[65],
+                                                    uint64_t *crlNumber,
+                                                    char crlFp[65])
+{
+    solariTlvReader reader;
+    const uint8_t *value;
+    uint16_t type, valueLen;
+    solariStatus rc;
+
+    if ((!payload && payloadLen) || !found || !issuerFp || !crlNumber || !crlFp)
+        return ERR_INVALID_ARG;
+    *found = false;
+    issuerFp[0] = '\0'; crlFp[0] = '\0'; *crlNumber = 0;
+    solariTlvReaderInit(&reader, payload, payloadLen);
+    while ((rc = solariTlvNext(&reader, &type, &value, &valueLen)) == SOLARI_OK) {
+        char text[151];
+        char *first, *second;
+        size_t i, digits;
+        uint64_t number = 0;
+        if (type != TLV_CRL_ACTIVATION) continue;
+        if (*found || valueLen < 131 || valueLen > 150) return ERR_INVALID_ARG;
+        memcpy(text, value, valueLen);
+        text[valueLen] = '\0';
+        first = strchr(text, ':');
+        if (!first || first - text != 64) return ERR_INVALID_ARG;
+        second = strchr(first + 1, ':');
+        if (!second || second - first < 2 || strlen(second + 1) != 64 ||
+            strchr(second + 1, ':')) return ERR_INVALID_ARG;
+        digits = (size_t)(second - first - 1);
+        if (digits > 20 || !serverIngestLowerHex(text, 64) ||
+            !serverIngestLowerHex(second + 1, 64) ||
+            (digits > 1 && first[1] == '0')) return ERR_INVALID_ARG;
+        for (i = 0; i < digits; ++i) {
+            unsigned digit;
+            char c = first[1 + i];
+            if (c < '0' || c > '9') return ERR_INVALID_ARG;
+            digit = (unsigned)(c - '0');
+            if (number > (UINT64_MAX - digit) / 10u) return ERR_INVALID_ARG;
+            number = number * 10u + digit;
+        }
+        if (!number) return ERR_INVALID_ARG;
+        memcpy(issuerFp, text, 64); issuerFp[64] = '\0';
+        memcpy(crlFp, second + 1, 64); crlFp[64] = '\0';
+        *crlNumber = number;
+        *found = true;
+    }
+    return rc == ERR_TLV_END ? SOLARI_OK : rc;
+}
+
+static solariStatus serverIngestApplyCrlActivation(serverContext *ctx,
+                                                    const solariFrameHeader *hdr,
+                                                    const uint8_t *payload,
+                                                    size_t payloadLen)
+{
+    char issuerFp[65], crlFp[65];
+    uint64_t crlNumber = 0;
+    bool found = false;
+    solariStatus rc = serverIngestParseCrlActivation(payload, payloadLen, &found,
+                                                      issuerFp, &crlNumber, crlFp);
+    if (rc != SOLARI_OK) {
+        /* Receipt metadata is optional. The report was persisted before this
+         * helper runs, so malformed metadata must not turn an accepted report
+         * into a retry loop. The parser still rejects it for focused tests. */
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest ignored malformed CRL receipt src=0x%llx status=%s",
+                   (unsigned long long)hdr->sourceNodeId, solariStrError(rc));
+        return SOLARI_OK;
+    }
+    if (!found) return SOLARI_OK;
+    rc = serverDbCertificateCrlAcknowledge(ctx->db, hdr->sourceNodeId,
+                                            issuerFp, crlNumber, crlFp);
+    if (rc == ERR_REJECTED) {
+        solariLogf(SOLARI_LOG_INFO,
+                   "ingest rejected stale or unpublished CRL receipt src=0x%llx issuer=%s number=%llu",
+                   (unsigned long long)hdr->sourceNodeId, issuerFp,
+                   (unsigned long long)crlNumber);
+        return SOLARI_OK; /* accept the report; only the stale receipt is ignored */
+    }
+    if (rc != SOLARI_OK) {
+        /* Acknowledgement persistence is supplemental to a report already
+         * committed. Later reports carry the receipt again, so a DB outage or
+         * unapplied migration must not make the durable report retry forever. */
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest could not store CRL receipt src=0x%llx issuer=%s number=%llu status=%s",
+                   (unsigned long long)hdr->sourceNodeId, issuerFp,
+                   (unsigned long long)crlNumber, solariStrError(rc));
+    }
+    return SOLARI_OK;
+}
+
 /* Reports carry a restart-safe identity. Receipt insertion happens only in
  * the same transaction as current/history writes, never during validation. */
 static solariStatus serverReportIdentity(const solariFrameHeader *hdr,
@@ -442,11 +544,15 @@ solariStatus serverIngestDispatch(serverContext *ctx,
     if (len > 0 && !payload) return ERR_INVALID_ARG;
 
     switch (hdr->msgType) {
-    case SCP_MSG_CLIENT_REPORT:
-        return serverIngestClientReport(ctx, hdr, payload, len);
+    case SCP_MSG_CLIENT_REPORT: {
+        solariStatus rc = serverIngestClientReport(ctx, hdr, payload, len);
+        return rc == SOLARI_OK ? serverIngestApplyCrlActivation(ctx, hdr, payload, len) : rc;
+    }
 
-    case SCP_MSG_MONITOR_REPORT:
-        return serverIngestMonitorReport(ctx, hdr, payload, len);
+    case SCP_MSG_MONITOR_REPORT: {
+        solariStatus rc = serverIngestMonitorReport(ctx, hdr, payload, len);
+        return rc == SOLARI_OK ? serverIngestApplyCrlActivation(ctx, hdr, payload, len) : rc;
+    }
 
     case SCP_MSG_WATCHDOG:
         return serverIngestWatchdog(ctx, hdr);
@@ -457,8 +563,10 @@ solariStatus serverIngestDispatch(serverContext *ctx,
     case SCP_MSG_TOPOLOGY_REPORT:
         return serverTopologyOnReport(ctx, hdr->sourceNodeId, payload, len);
 
-    case SCP_MSG_SURVEY_RESP:
-        return serverIngestMonitorReport(ctx, hdr, payload, len);
+    case SCP_MSG_SURVEY_RESP: {
+        solariStatus rc = serverIngestMonitorReport(ctx, hdr, payload, len);
+        return rc == SOLARI_OK ? serverIngestApplyCrlActivation(ctx, hdr, payload, len) : rc;
+    }
 
     case SCP_MSG_CONTROL_RESULT:
         return serverControlOnResult(ctx, hdr->sourceNodeId,

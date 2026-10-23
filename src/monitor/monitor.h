@@ -116,10 +116,24 @@ solariStatus monitorHandleControl(monitorControlState *st, monitorConfig *cfg,
                                   size_t *resultLen, uint16_t *resultTlvCount,
                                   monitorControlOutcome *out);
 
+/* Stage a control directive, durably save the resulting config and epoch, then
+ * activate them in memory. A persistence failure returns a failed result at the
+ * previous epoch and never reports convergence. */
+solariStatus monitorHandleControlDurable(monitorControlState *st,
+                                         monitorConfig *cfg,
+                                         uint64_t selfNodeId,
+                                         const uint8_t *payload,
+                                         size_t payloadLen,
+                                         uint8_t *resultBuf,
+                                         size_t resultCap,
+                                         size_t *resultLen,
+                                         uint16_t *resultTlvCount,
+                                         monitorControlOutcome *out);
+
 /* Applied-state persistence ("<epoch>\n<blob>"; file I/O only, no sockets).
  * Load floors appliedEpoch at cfg->configEpoch and re-applies a newer stored
- * blob so a restart keeps pushed config; save is write+rename. Both are
- * no-ops (OK) when no state path resolves (no ctrlStateFile and no spoolDb). */
+ * blob so a restart keeps pushed config; save uses fsync + atomic rename. A
+ * missing state path is an error so control cannot acknowledge volatile state. */
 void         monitorControlStatePath(const monitorConfig *cfg, char *out, size_t cap);
 solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg);
 solariStatus monitorControlStateSave(const monitorConfig *cfg,

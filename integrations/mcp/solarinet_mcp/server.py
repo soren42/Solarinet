@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from mcp.server.fastmcp import FastMCP
 
 from .config import Config, load_config
-from .db import HARD_MAX_ROWS, DbClient, DbError
+from .db import HARD_MAX_ROWS, DbClient, DbError, DbQuery
 from .formatting import ResponseFormat, md_kv, md_table, to_json
 from .rest import RestClient, SolariApiError
 
@@ -146,7 +146,7 @@ class PushConfigInput(_Base):
 
 
 class DbHostHistoryInput(_Base):
-    node_id: str = Field(..., min_length=1, description="Node id (decimal).")
+    node_id: str = Field(..., min_length=1, max_length=20, description="Node id (decimal).")
     limit: int = Field(default=50, ge=1, le=HARD_MAX_ROWS, description="Max history rows.")
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 
@@ -718,12 +718,8 @@ async def solarinet_db_node_summary(params: FormatOnlyInput) -> str:
 
     Returns: markdown table or JSON of {nodeId, role, hostFqdn, state, lastSeenAt}.
     """
-    sql = (
-        "SELECT nodeId, role, hostFqdn, state, lastSeenAt, arch, osName "
-        "FROM node ORDER BY role, hostFqdn"
-    )
     try:
-        result = await _db().query(sql, max_rows=HARD_MAX_ROWS)
+        result = await _db().query(DbQuery.NODE_SUMMARY, max_rows=HARD_MAX_ROWS)
         return _render_db(result, params.response_format, "Node summary")
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -735,14 +731,8 @@ async def solarinet_db_active_alerts(params: FormatOnlyInput) -> str:
 
     Returns: markdown table or JSON of active alert events, newest first.
     """
-    sql = (
-        "SELECT e.eventId, e.firedAt, e.severity, e.detail, e.nodeId, e.targetId, "
-        "r.metric, r.op, r.threshold "
-        "FROM alertEvent e LEFT JOIN alertRule r ON e.ruleId = r.ruleId "
-        "WHERE e.clearedAt IS NULL ORDER BY e.firedAt DESC"
-    )
     try:
-        result = await _db().query(sql, max_rows=HARD_MAX_ROWS)
+        result = await _db().query(DbQuery.ACTIVE_ALERTS, max_rows=HARD_MAX_ROWS)
         return _render_db(result, params.response_format, "Active alerts")
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -755,13 +745,11 @@ async def solarinet_db_host_history(params: DbHostHistoryInput) -> str:
     Args: node_id (decimal), limit.
     Returns: markdown table or JSON, newest sample first.
     """
-    sql = (
-        "SELECT sampledAt, cpuAvgMilli, ramUsedKb, swapUsedKb, diskMinFreePct "
-        "FROM hostHistory WHERE nodeId = %s ORDER BY sampledAt DESC"
-    )
     try:
         # node_id is bound as a parameter; accept decimal ids here.
-        result = await _db().query(sql, params=[params.node_id], max_rows=params.limit)
+        result = await _db().query(
+            DbQuery.HOST_HISTORY, params=[params.node_id], max_rows=params.limit
+        )
         return _render_db(result, params.response_format, f"Host history (node {params.node_id})")
     except Exception as exc:  # noqa: BLE001
         return _err(exc)

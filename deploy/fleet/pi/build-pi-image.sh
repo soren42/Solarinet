@@ -37,6 +37,7 @@
 #     own disks; it only ever mounts the loop device it created.
 # =============================================================================
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/provisioning-guard.sh"
 
 # ---- pretty logging (matches deploy/enrollment/solari-enroll.sh style) ------
 log()  { printf '\033[1;36m[pi-image]\033[0m %s\n' "$*"; }
@@ -84,6 +85,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+fleet_require_unverified_override || exit 1
 
 # ---- validation -------------------------------------------------------------
 [ "$(id -u)" -eq 0 ] || die "must run as root (loop mounts). Re-run with sudo."

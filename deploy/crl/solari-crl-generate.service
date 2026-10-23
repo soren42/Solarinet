@@ -1,0 +1,44 @@
+[Unit]
+Description=Generate the SolariNet certificate revocation list
+Documentation=https://github.com/soren42/Solarinet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=solari
+Group=solari-crl-publisher
+SupplementaryGroups=solari
+StateDirectory=solari-crl
+StateDirectoryMode=0750
+UMask=0027
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/libexec/solarinet/generate_crl.py --database solarinet --user solari_crl --defaults-file /etc/solarinet/crl-generator.my.cnf --ca-cert /var/lib/solarinet/pki/ca.pem --ca-key /var/lib/solarinet/pki/ca.key --output /var/lib/solari-crl/current.pem --crl-hours 24
+
+# The signer may read the CA key and dedicated DB credential. Its CRL output is
+# group-readable only by the isolated publisher identity; the public endpoint
+# remains a separate static web-server configuration.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/solari-crl

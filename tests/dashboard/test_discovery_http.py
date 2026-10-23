@@ -57,7 +57,7 @@ if ($path === '/__fixture_session') {{
     $role = (string)($_GET['role'] ?? 'operator');
     if (!in_array($role, ['viewer', 'operator'], true)) {{ http_response_code(400); exit; }}
     $user = $role === 'operator' ? 'scan-worker-process-test' : 'scan-http-viewer';
-    Auth::establishSession(['username'=>$user,'role'=>$role,'source'=>'oidc']);
+    Auth::establishSession(['username'=>$user,'role'=>$role,'source'=>'directory']);
     header('Content-Type: application/json'); echo '{{"ready":true}}'; exit;
 }}
 if (is_string($path) && str_starts_with($path, '/api/')) {{ require {json.dumps(str(API_ENTRY))}; exit; }}

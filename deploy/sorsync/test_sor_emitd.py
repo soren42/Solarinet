@@ -2,6 +2,8 @@
 import sys
 import types
 import unittest
+import configparser
+from unittest.mock import patch
 
 # The publishing decision needs no broker or DB client. Supply only the import
 # shape on minimal CI runners; a production venv exercises the real pika class.
@@ -59,6 +61,29 @@ class FakeChannel:
 
 
 class PublishBoundaryTest(unittest.TestCase):
+    def test_emitter_uses_its_separate_database_identity(self):
+        config = configparser.ConfigParser()
+        config.read_string("""
+[sor]
+host = base-host
+port = 3306
+user = read-only
+password = read-secret
+name = sor
+[sor_emit]
+host = emitter-host
+port = 3307
+user = emitter
+password = emitter-secret
+name = emitter_db
+""")
+        with patch.object(sor_emitd.pymysql, "connect", create=True) as connect:
+            sor_emitd.db_connect(config)
+        self.assertEqual("emitter", connect.call_args.kwargs["user"])
+        self.assertEqual("emitter-secret", connect.call_args.kwargs["password"])
+        self.assertEqual("emitter-host", connect.call_args.kwargs["host"])
+        self.assertEqual(3307, connect.call_args.kwargs["port"])
+
     def test_confirmed_batch_advances_checkpoint_once(self):
         db, ch = FakeDb(), FakeChannel()
         self.assertEqual(12, sor_emitd.publish_batch(ch, db, ROWS, "sor.events", 10))

@@ -702,11 +702,21 @@
   function mapCa(w) {
     w = w || {};
     var A = function (v) { return Array.isArray(v) ? v : []; };
+    var crl = w.crl || {};
+    var generations = A(crl.generations).map(function (g) {
+      g = g || {};
+      return Object.assign({}, g, {
+        counts: g.counts || { current: 0, stale: 0, pending: 0, offline: 0, expired: 0 },
+        peers: A(g.peers),
+        excludedPeers: A(g.excludedPeers),
+      });
+    });
     return {
       stepCa: w.stepCa || { available: false, status: null, reason: "unavailable", url: null },
       roots: A(w.roots),
       provisioners: A(w.provisioners),
       nodeCerts: A(w.nodeCerts),
+      crl: Object.assign({}, crl, { available: !!crl.available, generations: generations }),
       warnDays: w.warnDays != null ? w.warnDays : 60,
     };
   }

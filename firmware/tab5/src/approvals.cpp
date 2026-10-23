@@ -10,16 +10,13 @@
 
 #include "config.h"
 #include "mqttbus.h"
+#include "approval_protocol.h"
 
 // ===========================================================================
 // SCAFFOLD STATUS
-// The approval flow (subscribe, prompt, sign, publish) is implemented against
-// the same canonical signing bytes the broker verifies (deploy/authbroker/).
-// Signing uses mbedTLS ECDSA over secp256r1 (P-256) + SHA-256, which is present
-// in the IDF's bundled mbedTLS. Two steps are TODO-marked: (a) first-boot key
-// GENERATION UI wiring, and (b) confirming the exact NVS private-key encoding
-// on the pinned core. The private scalar is stored in the encrypted `secrets`
-// NVS partition (namespace "dev"); the broker only ever holds the public key.
+// The device verifies broker-signed v2 requests before display and signs
+// responses bound to the verified request digest. Broker trust is imported via
+// the attached USB serial console and stored in encrypted NVS.
 // ===========================================================================
 
 namespace solari {
@@ -28,7 +25,58 @@ static Approvals g_approvals;
 Approvals& approvals() { return g_approvals; }
 
 namespace {
-constexpr int kProtoVersion = 1;
+constexpr int kProtoVersion = 2;
+constexpr uint32_t kMaxRequestBytes = 2048;
+constexpr int64_t kAllowedClockSkewSec = 30;
+
+std::string asUtf8(const String& value) {
+  return std::string(value.c_str(), value.length());
+}
+
+std::vector<uint8_t> canonicalRequest(const ApprovalRequest& r) {
+  return approval_protocol::canonicalRequest({{
+      std::to_string(kProtoVersion), asUtf8(r.brokerKeyId), asUtf8(r.id),
+      std::to_string((long)r.ts),
+      std::to_string(r.ttl), asUtf8(r.action), asUtf8(r.subject),
+      asUtf8(r.detail), asUtf8(r.sourceIp), asUtf8(r.nonce),
+      asUtf8(r.targetDevice),
+  }});
+}
+
+std::vector<uint8_t> canonicalResponse(const ApprovalRequest& r,
+                                       const char* decision,
+                                       const String& deviceId) {
+  return approval_protocol::canonicalResponse({{
+      std::to_string(kProtoVersion), asUtf8(r.id), decision,
+      asUtf8(r.nonce), asUtf8(deviceId), asUtf8(r.reqDigest),
+  }});
+}
+
+int hexValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+bool decodeHex(const String& hex, std::vector<uint8_t>& out) {
+  if ((hex.length() & 1) != 0) return false;
+  out.clear();
+  out.reserve(hex.length() / 2);
+  for (size_t i = 0; i < hex.length(); i += 2) {
+    int hi = hexValue(hex[i]), lo = hexValue(hex[i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out.push_back((uint8_t)((hi << 4) | lo));
+  }
+  return true;
+}
+
+bool isHex(const String& value, size_t exactLength) {
+  if (value.length() != exactLength) return false;
+  for (size_t i = 0; i < exactLength; ++i)
+    if (hexValue(value[i]) < 0) return false;
+  return true;
+}
 
 // mbedTLS RNG seeded from the ESP hardware TRNG (esp_random via entropy source).
 struct Rng {
@@ -78,8 +126,8 @@ void Approvals::begin() {
   }
 
   mqttBus().subscribe("auth/request/#",
-                      [this](const char*, const uint8_t* p, unsigned l) {
-                        handleRequest_(p, l);
+                      [this](const char* topic, const uint8_t* p, unsigned l) {
+                        handleRequest_(topic, p, l);
                       });
 }
 
@@ -102,27 +150,14 @@ uint32_t Approvals::secondsLeft(const ApprovalRequest& r) const {
   return elapsed >= r.ttl ? 0 : r.ttl - elapsed;
 }
 
-void Approvals::handleRequest_(const uint8_t* payload, unsigned len) {
+void Approvals::handleRequest_(const char* topic, const uint8_t* payload,
+                               unsigned len) {
+  if (!payload || len == 0 || len > kMaxRequestBytes) return;
   JsonDocument doc;
   if (deserializeJson(doc, payload, len)) return;  // ignore malformed
-  if ((int)(doc["v"] | 0) != kProtoVersion) return;
 
   ApprovalRequest r;
-  r.id = String((const char*)(doc["id"] | ""));
-  if (r.id.isEmpty()) return;
-  r.action = String((const char*)(doc["action"] | "login"));
-  r.subject = String((const char*)(doc["subject"] | ""));
-  r.detail = String((const char*)(doc["detail"] | ""));
-  r.sourceIp = String((const char*)(doc["source_ip"] | ""));
-  r.nonce = String((const char*)(doc["nonce"] | ""));
-  if (r.nonce.isEmpty()) return;  // no anti-replay nonce => reject
-  r.ts = doc["ts"] | (long)time(nullptr);
-  r.ttl = doc["ttl"] | 60;
-  r.receivedMs = millis();
-
-  // If a specific device was targeted, ignore requests for other devices.
-  const char* target = doc["device"] | "";
-  if (target[0] && deviceId() != target) return;
+  if (!verifyRequest_(doc, r, topic)) return;
 
   // De-dupe (QoS re-delivery) and bound the queue.
   for (const auto& q : queue_) if (q.id == r.id) return;
@@ -130,6 +165,112 @@ void Approvals::handleRequest_(const uint8_t* payload, unsigned len) {
   while (queue_.size() > kMaxQueue) queue_.pop_front();
 
   if (alert_) alert_(queue_.back());
+}
+
+bool Approvals::verifyRequest_(JsonDocument& doc, ApprovalRequest& r,
+                               const char* topic) const {
+  if (!doc.is<JsonObject>() || doc.as<JsonObjectConst>().size() != 12)
+    return false;
+  for (JsonPairConst member : doc.as<JsonObjectConst>()) {
+    const char* key = member.key().c_str();
+    if (strcmp(key, "v") && strcmp(key, "kid") && strcmp(key, "id") && strcmp(key, "ts") &&
+        strcmp(key, "ttl") && strcmp(key, "action") && strcmp(key, "subject") &&
+        strcmp(key, "detail") && strcmp(key, "source_ip") &&
+        strcmp(key, "nonce") && strcmp(key, "device") && strcmp(key, "sig"))
+      return false;
+  }
+  if (!doc["v"].is<int>() || doc["v"].as<int>() != kProtoVersion ||
+      !doc["kid"].is<const char*>() || !doc["id"].is<const char*>() ||
+      !doc["ts"].is<uint32_t>() ||
+      !doc["ttl"].is<uint32_t>() || !doc["action"].is<const char*>() ||
+      !doc["subject"].is<const char*>() || !doc["detail"].is<const char*>() ||
+      !doc["source_ip"].is<const char*>() || !doc["nonce"].is<const char*>() ||
+      !doc["device"].is<const char*>() ||
+      !doc["sig"].is<const char*>()) return false;
+
+  r.brokerKeyId = doc["kid"].as<String>();
+  r.id = doc["id"].as<String>();
+  r.action = doc["action"].as<String>();
+  r.subject = doc["subject"].as<String>();
+  r.detail = doc["detail"].as<String>();
+  r.sourceIp = doc["source_ip"].as<String>();
+  r.nonce = doc["nonce"].as<String>();
+  r.targetDevice = doc["device"].as<String>();
+
+  const uint32_t issuedAt = doc["ts"].as<uint32_t>();
+  const uint32_t ttl = doc["ttl"].as<uint32_t>();
+  if (r.brokerKeyId.isEmpty() || r.brokerKeyId.length() > 14 ||
+      !isHex(r.id, 32) || r.action.isEmpty() || r.action.length() > 32 ||
+      r.subject.isEmpty() || r.subject.length() > 128 ||
+      r.detail.length() > 256 || r.sourceIp.length() > 64 ||
+      r.nonce.length() != 44 || r.targetDevice.length() > 64 ||
+      ttl == 0 || ttl > 120) return false;
+  for (size_t i = 0; i < r.nonce.length(); ++i) {
+    const char c = r.nonce[i];
+    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+          (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '='))
+      return false;
+  }
+  if (!topic || String(topic) != "auth/request/" + r.id) return false;
+  if (!r.targetDevice.isEmpty() && r.targetDevice != deviceId()) return false;
+
+  // The RTC/SNTP clock is part of the approval trust boundary. Never reset a
+  // delayed request's countdown on receipt or accept a request without time.
+  const time_t now = time(nullptr);
+  if (now < 1700000000) return false;
+  const int64_t delta = (int64_t)issuedAt - (int64_t)now;
+  if (delta > kAllowedClockSkewSec ||
+      (int64_t)now >= (int64_t)issuedAt + ttl) return false;
+  const int64_t remaining = (int64_t)issuedAt + ttl - (int64_t)now;
+  if (remaining <= 0) return false;
+  r.ts = (time_t)issuedAt;
+  r.ttl = ttl;  // canonical request uses the original signed TTL
+
+  for (size_t i = 0; i < r.brokerKeyId.length(); ++i) {
+    const char c = r.brokerKeyId[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+          c == '_' || c == '-')) return false;
+  }
+  const String brokerKeyHex = config().loadBrokerRequestPubHex(r.brokerKeyId);
+  const String signatureB64 = doc["sig"].as<String>();
+  std::vector<uint8_t> brokerKey, signature;
+  if (!decodeHex(brokerKeyHex, brokerKey) || brokerKey.size() != 65 ||
+      brokerKey[0] != 0x04 || signatureB64.isEmpty() ||
+      signatureB64.length() > 128) return false;
+  signature.resize(96);
+  size_t signatureLen = 0;
+  if (mbedtls_base64_decode(signature.data(), signature.size(), &signatureLen,
+                            (const uint8_t*)signatureB64.c_str(),
+                            signatureB64.length()) != 0 ||
+      signatureLen == 0 || signatureLen > 72) return false;
+  signature.resize(signatureLen);
+
+  const std::vector<uint8_t> canonical = canonicalRequest(r);
+  uint8_t digest[32];
+  if (mbedtls_sha256(canonical.data(), canonical.size(), digest, 0) != 0)
+    return false;
+
+  mbedtls_ecdsa_context ctx;
+  mbedtls_ecdsa_init(&ctx);
+  bool valid = false;
+  do {
+    if (mbedtls_ecp_group_load(&ctx.MBEDTLS_PRIVATE(grp),
+                               MBEDTLS_ECP_DP_SECP256R1) != 0) break;
+    if (mbedtls_ecp_point_read_binary(&ctx.MBEDTLS_PRIVATE(grp),
+                                      &ctx.MBEDTLS_PRIVATE(Q), brokerKey.data(),
+                                      brokerKey.size()) != 0) break;
+    if (mbedtls_ecdsa_read_signature(&ctx, digest, sizeof(digest),
+                                     signature.data(), signature.size()) != 0)
+      break;
+    valid = true;
+  } while (false);
+  mbedtls_ecdsa_free(&ctx);
+  if (!valid) return false;
+
+  r.reqDigest = toHex(digest, sizeof(digest));
+  r.ttl = (uint32_t)remaining;
+  r.receivedMs = millis();
+  return true;
 }
 
 void Approvals::approve() {
@@ -147,10 +288,8 @@ void Approvals::deny() {
 }
 
 bool Approvals::respond_(const ApprovalRequest& r, const char* decision) {
-  // Canonical bytes MUST match the broker: "<v>\n<id>\n<decision>\n<nonce>\n<dev>"
   String dev = deviceId();
-  String canonical = String(kProtoVersion) + "\n" + r.id + "\n" + decision +
-                     "\n" + r.nonce + "\n" + dev;
+  const std::vector<uint8_t> canonical = canonicalResponse(r, decision, dev);
   String sig;
   if (!signCanonical_(canonical, sig)) return false;
 
@@ -161,6 +300,7 @@ bool Approvals::respond_(const ApprovalRequest& r, const char* decision) {
   doc["decision"] = decision;
   doc["device_id"] = dev;
   doc["nonce"] = r.nonce;
+  doc["req_digest"] = r.reqDigest;
   doc["sig"] = sig;
   String out;
   serializeJson(doc, out);
@@ -168,13 +308,15 @@ bool Approvals::respond_(const ApprovalRequest& r, const char* decision) {
 }
 
 // ---- ECDSA-P256/SHA-256 signing -------------------------------------------
-bool Approvals::signCanonical_(const String& canonical, String& sigB64Out) const {
+bool Approvals::signCanonical_(const std::vector<uint8_t>& canonical,
+                               String& sigB64Out) const {
   std::vector<uint8_t> priv;
   if (!config().loadDeviceKey(priv) || priv.size() != 32) return false;
   if (!rng().ok) return false;
 
   uint8_t hash[32];
-  mbedtls_sha256((const uint8_t*)canonical.c_str(), canonical.length(), hash, 0);
+  if (mbedtls_sha256(canonical.data(), canonical.size(), hash, 0) != 0)
+    return false;
 
   mbedtls_ecdsa_context ctx;
   mbedtls_ecdsa_init(&ctx);

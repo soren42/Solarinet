@@ -22,6 +22,7 @@
 # =============================================================================
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/fleet-lib.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/provisioning-guard.sh"
 
 HTTP_BASE_ARG=""; DO_ENABLE=0
 while [ $# -gt 0 ]; do
@@ -31,6 +32,7 @@ while [ $# -gt 0 ]; do
     *) fdie "unknown arg: $1" ;;
   esac; shift
 done
+fleet_require_unverified_override || exit 1
 BOOT_URL="${HTTP_BASE_ARG:-${HTTP_BASE}}/ipxe/boot.ipxe"
 TFTP_ROOT="${PROV_ROOT}/netboot/tftp"
 

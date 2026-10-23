@@ -67,7 +67,8 @@ python3 deploy/unifi/unifi_network_sor.py
 ```
 
 Review the output, then `--apply` writes the fetched snapshot to the SoR using
-the `[sor]` connection in `deploy/sorsync/sorsync.conf`. It never changes
+the `[sor_unifi]` connection in `deploy/sorsync/sorsync.conf` (falling back to
+`[sor]` during staged upgrades). It never changes
 controller configuration. The writes are transactional and serialized with a
 MariaDB advisory lock.
 

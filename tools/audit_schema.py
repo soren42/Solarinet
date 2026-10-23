@@ -18,6 +18,9 @@ from export_schema import commonClientArgs, normalizeDefiners
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 LEDGER = "solari_migration_ledger"
+VIEW_PLACEHOLDER = re.compile(
+    r"(?s)(/\*!50001 CREATE VIEW `[^`]+` AS SELECT\n)(.*?)(\*/;)"
+)
 
 
 def snapshotPath(database: str) -> pathlib.Path:
@@ -39,6 +42,19 @@ def snapshotBody(text: str) -> str:
 def normalizeSchemaDdl(sql: str) -> str:
     """Ignore dump-only account, ID-counter, and delimiter formatting differences."""
     sql = normalizeDefiners(sql)
+    # mariadb-dump serializes the temporary view-column stubs differently
+    # across server versions (11.8 emits 1; 12.3 emits NULL). These are replaced
+    # by the full view definition later in the dump, so compare only the column
+    # aliases in these generated stubs.
+    def normalizeViewPlaceholder(match: re.Match[str]) -> str:
+        body = re.sub(
+            r"(?m)^([ \t]*)(?:1|NULL)([ \t]+AS[ \t]+`[^`]+`)(,?)([ \t]*)(?=\*/;|$)",
+            r"\1NULL\2\3\4",
+            match.group(2),
+        )
+        return match.group(1) + body + match.group(3)
+
+    sql = VIEW_PLACEHOLDER.sub(normalizeViewPlaceholder, sql)
     sql = re.sub(r"\sAUTO_INCREMENT=\d+\b", "", sql)
     return re.sub(r"[ \t]*\n[ \t]*\*/;;", " */;;", sql)
 

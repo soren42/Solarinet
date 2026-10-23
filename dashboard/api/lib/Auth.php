@@ -258,12 +258,16 @@ final class Auth
             'role'        => strtolower((string) ($principal['role'] ?? 'viewer')),
             'displayName' => (string) ($principal['displayName'] ?? ($principal['username'] ?? '')),
             'source'      => (string) ($principal['source'] ?? 'directory'),
+            'oidcSubject' => (string) ($principal['oidcSubject'] ?? ''),
         ];
         session_regenerate_id(true);          // prevent fixation
         $_SESSION[self::SESS_KEY]  = $principal;
         $_SESSION[self::CSRF_KEY]  = self::newCsrfToken();   // fresh token per login
         $_SESSION[self::CREATED_KEY] = time();
         $_SESSION[self::SEEN_KEY] = time();
+        if ($principal['source'] === 'oidc') {
+            $_SESSION['solari_oidc_role_checked_at'] = time();
+        }
         return $principal;
     }
 
@@ -323,6 +327,17 @@ final class Auth
             }
             $p['displayName'] = (string) ($account['displayName'] ?? $p['username']);
             $_SESSION[self::SESS_KEY] = $p;
+        } elseif (($p['source'] ?? '') === 'oidc') {
+            require_once __DIR__ . '/Oidc.php';
+            if (!Oidc::revalidateCurrentSession()) {
+                self::logout();
+                return null;
+            }
+            $p = $_SESSION[self::SESS_KEY] ?? null;
+            if (!is_array($p)) {
+                self::logout();
+                return null;
+            }
         }
         $_SESSION[self::SEEN_KEY] = $now;
         return $p;

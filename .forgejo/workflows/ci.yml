@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   python-integrations:
-    name: Python integrations (MCP, Opie, alertbridge, UniFi, authbroker)
+    name: Python integrations (PKI, MCP, Opie, alertbridge, UniFi, authbroker)
     runs-on: solarinet-ci-host
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +43,17 @@ jobs:
         run: python tools/ci/render_forgejo_workflow.py --check
       - name: Validate systemd directive section placement
         run: python tests/test_systemd_unit_sections.py
+      - name: Validate CRL publisher system identity declaration
+        run: sudo systemd-sysusers --dry-run deploy/crl/solari-crl-publisher.sysusers.conf
+      - name: Verify CRL systemd units
+        run: sudo systemd-analyze verify deploy/crl/solari-crl-generate.service deploy/crl/solari-crl-generate.timer deploy/crl/solari-crl-publish.service deploy/crl/solari-crl-publish.timer deploy/crl/solari-crl-activate@.service deploy/crl/solari-crl-activate@.timer
+      - name: CRL generation, publication, and activation cryptographic tests
+        run: |
+          TMPDIR="${RUNNER_TEMP:-/dev/shm}" python3 deploy/crl/test_generate_crl.py
+          TMPDIR="${RUNNER_TEMP:-/dev/shm}" python3 -m unittest discover -s deploy/crl -p 'test_publish_crl.py' -v
+          TMPDIR="${RUNNER_TEMP:-/dev/shm}" python3 deploy/crl/test_activate_crl.py
+      - name: CA trust portal artifact tests
+        run: TMPDIR="${RUNNER_TEMP:-/dev/shm}" python3 -m unittest discover -s deploy/pki -p 'test_*.py' -v
       - name: Install isolated runner firewall test dependencies
         run: |
           sudo apt-get update -y
@@ -54,7 +65,7 @@ jobs:
         run: sudo bash deploy/forgejo-runner/test_guard_namespace.sh
       - name: Install MCP package and test dependencies
         run: python -m pip install -e 'integrations/mcp[test]'
-      - name: MCP tools and SQL guard suite
+      - name: MCP tools and fixed database query boundary
         run: python -m pytest -q integrations/mcp
       - name: Alertbridge delivery disposition tests
         run: python -m unittest discover -s deploy/alertbridge -p 'test_*.py' -v
@@ -64,6 +75,13 @@ jobs:
         run: |
           python -m pip install -r deploy/authbroker/requirements.txt
           python -m unittest discover -s deploy/authbroker -p 'test_*.py' -v
+      - name: Tab5 approval canonicalization host vector
+        run: |
+          test_tmp="${RUNNER_TEMP:-/dev/shm}"
+          g++ -std=c++17 -Wall -Wextra -Werror \
+            firmware/tab5/test/approval_protocol_test.cpp \
+            -o "$test_tmp/solarinet-approval-protocol-test"
+          "$test_tmp/solarinet-approval-protocol-test"
       - name: Authbroker MQTT approval round-trip on isolated loopback broker
         run: |
           cat > /tmp/solarinet-authbroker-mosquitto.conf <<'EOF'
@@ -158,6 +176,15 @@ jobs:
             --db-name solarinet_sorsync_ci --host 127.0.0.1 --port 3306 --user root
           mariadb -h127.0.0.1 -P3306 -uroot solarinet_sorsync_ci -e \
             "CREATE TABLE _solarinet_test_scratch (marker VARCHAR(64) PRIMARY KEY); INSERT INTO _solarinet_test_scratch VALUES ('solarinet-ci-scratch-v1')"
+      - name: Verify separated SoR sync worker privileges
+        env:
+          SOR_RUNTIME_TEST_DB: solarinet_sorsync_ci
+          SOR_RUNTIME_TEST_ALLOW_CREATE_USERS: '1'
+          SOR_RUNTIME_TEST_ADMIN_HOST: 127.0.0.1
+          SOR_RUNTIME_TEST_PORT: '3306'
+          SOR_RUNTIME_TEST_USER_HOST: '%'
+          MYSQL_PWD: sorsync_fixture
+        run: /tmp/sorsync-ci/bin/python tests/deploy/test_sorsync_runtime_grants.py
       - name: Rehearse SoR candidate rollback and forward recovery
         env:
           SOLARI_TEST_SOR_DB: '1'
@@ -354,6 +381,7 @@ jobs:
           ctest --test-dir build-server --output-on-failure -E 'test_net_loopback'
           ctest --test-dir build-server --output-on-failure -R 'test_net_loopback' \
             || echo "::warning::transport loopback not green (best-effort stage)"
+          python3 tests/dashboard/test_ca_crl_sql.py
       - name: Real HTTPS enrollment through server, database, and CA
         env:
           SOLARI_DB_HOST: 127.0.0.1
@@ -532,6 +560,8 @@ jobs:
         run: python3 tests/dashboard/test_security_headers.py
       - name: Step-ca client verifies the certificate chain and endpoint
         run: python3 tests/dashboard/test_ca_tls.py
+      - name: CRL acknowledgement API projection
+        run: python3 tests/dashboard/test_ca_crl_status.py
       - name: PHP bridge tests
         run: php tests/dashboard/test_solari_ctl.php
       - name: Discovery scan input and route bounds
@@ -548,6 +578,7 @@ jobs:
         run: |
           php tests/dashboard/test_oidc_claims.php
           php tests/dashboard/test_auth_session.php
+          php tests/dashboard/test_oidc_userinfo_session.php
       - name: Authorization policy, dispatch, enforcement, and route audit
         run: |
           php tests/dashboard/test_authz_policy.php
@@ -561,6 +592,7 @@ jobs:
       - name: Dashboard JSX parse + layout suites
         run: |
           node tests/dashboard/test_jsx_parse.js
+          node tests/dashboard/test_ca_crl_ui.js
           node tests/dashboard/test_layout.js
           node tests/dashboard/test_scanner_import_ui.js
           node tests/dashboard/test_capability_maturity.js
@@ -771,6 +803,13 @@ jobs:
             deploy/remote-deploy.sh \
             deploy/enrollment/solari-enroll.sh \
             deploy/enrollment/solari-decommission.sh
+      - name: F-07 fleet provisioning fails closed
+        run: bash tests/deploy/test_fleet_provisioning_gate.sh
+      - name: F-07 signed release manifest contract
+        run: |
+          command -v openssl
+          openssl version
+          python3 -m unittest discover -s tests/deploy -p 'test_fleet_release_manifest.py' -v
       - name: Enrollment certificate identity contract
         run: bash tests/integration/test_enroll_identity.sh
 
@@ -804,6 +843,7 @@ jobs:
   cross:
     name: cross ${{ matrix.target }}
     runs-on: solarinet-ci-host
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -837,10 +877,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install cross toolchain + qemu-user
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y build-essential cmake git pkg-config ${{ matrix.apt }}
+          timeout 10m sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -y
+          timeout 10m sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+            install -y build-essential cmake git pkg-config ${{ matrix.apt }}
           if [ -n "${{ matrix.qemu }}" ]; then
-            sudo apt-get install -y qemu-user-static
+            timeout 10m sudo apt-get -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+              install -y qemu-user-static
           fi
       # Cross-build the zero-dependency core + Unity tests through the toolchain
       # file. This proves the §12 cross targets without needing nng/mbedTLS cross

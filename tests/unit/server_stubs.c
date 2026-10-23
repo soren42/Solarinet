@@ -79,6 +79,9 @@ WEAK solariStatus serverDbCertificateRevocationConfirm(serverDb *db, uint64_t n,
     const char *issuer, const char *serial, const char *fp, const char *reason,
     const char *op, const char hash[65], uint64_t now)
 { (void)db;(void)n;(void)issuer;(void)serial;(void)fp;(void)reason;(void)op;(void)hash;(void)now; return ERR_DB; }
+WEAK solariStatus serverDbCertificateCrlAcknowledge(serverDb *db, uint64_t n,
+    const char *issuer, uint64_t number, const char *fp)
+{ (void)db;(void)n;(void)issuer;(void)number;(void)fp; return ERR_DB; }
 WEAK solariStatus serverDbGetLeafCertificateIssuer(serverDb *db, uint64_t n,
     const char *serial, const char *fp, char issuer[65], uint64_t *resolvedNodeId)
 { (void)db;(void)n;(void)serial;(void)fp; if (issuer) issuer[0] = '\0';
@@ -123,8 +126,18 @@ WEAK solariStatus serverDbSetNodeTargetEpoch(serverDb *db, uint64_t n,
     uint64_t e, const char *j) { (void)db;(void)n;(void)e;(void)j; return ERR_DB; }
 WEAK solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t n, uint64_t e,
     const char *r, uint64_t w) { (void)db;(void)n;(void)e;(void)r;(void)w; return ERR_DB; }
+WEAK solariStatus serverDbControlDirectiveAdd(serverDb *db, uint64_t n,
+    uint32_t c, uint8_t v, uint64_t e) { (void)db;(void)n;(void)c;(void)v;(void)e; return SOLARI_OK; }
+WEAK solariStatus serverDbControlDirectiveCancel(serverDb *db, uint64_t n,
+    uint32_t c) { (void)db;(void)n;(void)c; return SOLARI_OK; }
+WEAK solariStatus serverDbControlResultApply(serverDb *db, uint64_t n,
+    uint32_t c, uint8_t v, uint64_t e, bool haveEpoch, uint16_t x,
+    const char *r, uint64_t w)
+{ (void)db;(void)n;(void)c;(void)v;(void)e;(void)haveEpoch;(void)x;(void)r;(void)w; return ERR_DB; }
 WEAK solariStatus serverDbLeaseClaim(serverDb *db, uint64_t s, uint32_t t,
     bool *won, uint64_t *e) { (void)db;(void)s;(void)t; if (won)*won=false; if(e)*e=0; return ERR_DB; }
+WEAK solariStatus serverDbLeaseRelease(serverDb *db, uint64_t s, uint64_t e)
+{ (void)db;(void)s;(void)e; return ERR_DB; }
 WEAK solariStatus serverDbLeaseRead(serverDb *db, uint64_t *h, uint64_t *e)
 { (void)db; if(h)*h=0; if(e)*e=0; return ERR_DB; }
 WEAK solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,

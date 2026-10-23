@@ -7,6 +7,7 @@ constexpr const char* kCfgNs = "cfg";
 constexpr const char* kTotpNs = "totp";
 constexpr const char* kPmNs = "pm";
 constexpr const char* kDevNs = "dev";
+constexpr const char* kTrustNs = "trust";
 // The Preferences library selects a partition by label. "secrets" matches the
 // encrypted NVS partition declared in partitions.csv.
 constexpr const char* kSecretsPart = "secrets";
@@ -37,9 +38,22 @@ bool Config::begin() {
   // Secret namespaces live in the encrypted partition. begin(partition_label)
   // overload selects it. TODO(idf): confirm this Preferences overload exists
   // in the pinned core; otherwise use nvs_flash_init_partition + raw nvs API.
-  prefsTotp_.begin(kTotpNs, false, kSecretsPart);
-  prefsPm_.begin(kPmNs, false, kSecretsPart);
-  prefsDev_.begin(kDevNs, false, kSecretsPart);
+  if (!prefsTotp_.begin(kTotpNs, false, kSecretsPart)) {
+    prefsCfg_.end();
+    return false;
+  }
+  if (!prefsPm_.begin(kPmNs, false, kSecretsPart)) {
+    prefsTotp_.end(); prefsCfg_.end();
+    return false;
+  }
+  if (!prefsDev_.begin(kDevNs, false, kSecretsPart)) {
+    prefsPm_.end(); prefsTotp_.end(); prefsCfg_.end();
+    return false;
+  }
+  if (!prefsTrust_.begin(kTrustNs, false, kSecretsPart)) {
+    prefsDev_.end(); prefsPm_.end(); prefsTotp_.end(); prefsCfg_.end();
+    return false;
+  }
   return true;
 }
 
@@ -162,10 +176,101 @@ bool Config::saveDevicePubHex(const String& hex) {
 
 String Config::loadDevicePubHex() { return prefsDev_.getString("pubhex", ""); }
 
+namespace {
+bool validBrokerKeyId(const String& keyId) {
+  if (keyId.isEmpty() || keyId.length() > 14) return false;
+  for (size_t i = 0; i < keyId.length(); ++i) {
+    const char c = keyId[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+          c == '_' || c == '-')) return false;
+  }
+  return true;
+}
+}
+
+std::vector<String> Config::brokerRequestKeyIds() {
+  std::vector<String> ids;
+  const String list = prefsTrust_.getString("brokerkids", "");
+  int start = 0;
+  while (start < list.length()) {
+    int end = list.indexOf(',', start);
+    if (end < 0) end = list.length();
+    String id = list.substring(start, end);
+    if (validBrokerKeyId(id)) ids.push_back(id);
+    start = end + 1;
+  }
+  return ids;
+}
+
+bool Config::saveBrokerRequestPubHex(const String& keyId, const String& hex) {
+  if (!validBrokerKeyId(keyId)) return false;
+  if (hex.length() != 130 || !hex.startsWith("04")) return false;
+  for (size_t i = 0; i < hex.length(); ++i) {
+    const char c = hex[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+          (c >= 'A' && c <= 'F'))) return false;
+  }
+  auto ids = brokerRequestKeyIds();
+  bool found = false;
+  for (const auto& id : ids) if (id == keyId) found = true;
+  if (!found && ids.size() >= 8) return false;
+  if (prefsTrust_.putString(("k" + keyId).c_str(), hex) != hex.length())
+    return false;
+  if (!found) {
+    if (!ids.empty()) ids.emplace_back(",");
+    ids.push_back(keyId);
+    String list;
+    for (const auto& id : ids) list += id;
+    if (prefsTrust_.putString("brokerkids", list) != list.length()) return false;
+  }
+  return true;
+}
+
+String Config::loadBrokerRequestPubHex(const String& keyId) {
+  if (!validBrokerKeyId(keyId)) return "";
+  return prefsTrust_.getString(("k" + keyId).c_str(), "");
+}
+
+bool Config::removeBrokerRequestKey(const String& keyId) {
+  if (!validBrokerKeyId(keyId)) return false;
+  auto ids = brokerRequestKeyIds();
+  std::vector<String> kept;
+  bool found = false;
+  for (const auto& id : ids) {
+    if (id == keyId) found = true;
+    else kept.push_back(id);
+  }
+  if (!found) return false;
+  prefsTrust_.remove(("k" + keyId).c_str());
+  String list;
+  for (size_t i = 0; i < kept.size(); ++i) {
+    if (i) list += ",";
+    list += kept[i];
+  }
+  if (kept.empty()) return prefsTrust_.remove("brokerkids");
+  return prefsTrust_.putString("brokerkids", list) == list.length();
+}
+
+bool Config::saveMqttCaPem(const String& pem) {
+  if (pem.length() < 64 || pem.length() > 4096 ||
+      !pem.startsWith("-----BEGIN CERTIFICATE-----") ||
+      pem.indexOf("-----END CERTIFICATE-----") < 0) return false;
+  return prefsTrust_.putString("mqttca", pem) == pem.length();
+}
+
+String Config::loadMqttCaPem() {
+  return prefsTrust_.getString("mqttca", "");
+}
+
+bool Config::clearApprovalTrust() {
+  return prefsTrust_.clear();
+}
+
 void Config::panicWipeSecrets() {
   prefsTotp_.clear();
   prefsPm_.clear();
   prefsDev_.clear();
+  prefsTrust_.clear();
 }
 
 }  // namespace solari

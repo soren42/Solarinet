@@ -16,6 +16,7 @@
 
 #include <mbedtls/entropy.h>
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,56 @@
 #define REP_URL_MAX   256
 #define REP_PATH_MAX  256
 #define REP_DRAIN_MAX 64
+#define REP_CRL_RECEIPT_MAX 151
+
+static bool reporterHexLower(const char *s, size_t len)
+{
+    size_t i;
+    for (i = 0; i < len; ++i)
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
+            return false;
+    return true;
+}
+
+/* Read the public receipt adjacent to the reporter's configured TLS CA bundle.
+ * The receipt is a local activation hint, not a cryptographic attestation. */
+static size_t reporterReadCrlReceipt(const char *caFile, char out[REP_CRL_RECEIPT_MAX])
+{
+    char path[REP_PATH_MAX + sizeof ".activated"];
+    char buffer[REP_CRL_RECEIPT_MAX + 1];
+    FILE *f;
+    size_t n, i, digits = 0;
+    char *first, *second;
+    unsigned long long number = 0;
+
+    if (!caFile || !caFile[0] || strlen(caFile) + sizeof ".activated" > sizeof path)
+        return 0;
+    snprintf(path, sizeof path, "%s.activated", caFile);
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    n = fread(buffer, 1, sizeof buffer, f);
+    if (ferror(f) || !feof(f)) { fclose(f); return 0; }
+    fclose(f);
+    if (n < 132 || n > REP_CRL_RECEIPT_MAX || buffer[n - 1] != '\n') return 0;
+    buffer[--n] = '\0';
+    first = strchr(buffer, ':');
+    if (!first || first - buffer != 64) return 0;
+    second = strchr(first + 1, ':');
+    if (!second || second - first < 2 || strlen(second + 1) != 64 ||
+        strchr(second + 1, ':')) return 0;
+    if (!reporterHexLower(buffer, 64) || !reporterHexLower(second + 1, 64)) return 0;
+    for (i = (size_t)(first - buffer) + 1; i < (size_t)(second - buffer); ++i) {
+        unsigned digit;
+        if (buffer[i] < '0' || buffer[i] > '9') return 0;
+        digit = (unsigned)(buffer[i] - '0');
+        if (number > (ULLONG_MAX - digit) / 10u) return 0;
+        number = number * 10u + digit;
+        digits++;
+    }
+    if (!digits || number == 0 || (digits > 1 && first[1] == '0')) return 0;
+    memcpy(out, buffer, n);
+    return n;
+}
 
 struct solariReporter {
     char         primaryUrl[REP_URL_MAX];
@@ -297,15 +348,21 @@ solariStatus solariReporterFrameCorr(solariReporter *r, uint8_t msgType, uint8_t
     if (msgType == SCP_MSG_CLIENT_REPORT || msgType == SCP_MSG_MONITOR_REPORT ||
         msgType == SCP_MSG_SURVEY_RESP) {
         solariTlvWriter writer;
-        if ((!payload && payloadLen) || payloadLen > SOLARI_MAX_FRAME - 20 ||
+        char receipt[REP_CRL_RECEIPT_MAX];
+        size_t receiptLen;
+        if ((!payload && payloadLen) || payloadLen > SOLARI_MAX_FRAME - 180 ||
             tlvCount == UINT16_MAX) return ERR_BUFFER_FULL;
-        reportPayload = (uint8_t *)malloc(payloadLen + 20);
+        reportPayload = (uint8_t *)malloc(payloadLen + 180);
         if (!reportPayload) return ERR_PLATFORM;
         if (payloadLen) memcpy(reportPayload, payload, payloadLen);
-        solariTlvWriterInit(&writer, reportPayload, payloadLen + 20);
+        solariTlvWriterInit(&writer, reportPayload, payloadLen + 180);
         writer.len = payloadLen;
         writer.count = tlvCount;
         rc = solariTlvAppend(&writer, TLV_REPORT_SESSION, r->session, sizeof r->session);
+        receiptLen = reporterReadCrlReceipt(r->hasCa ? r->caFile : NULL, receipt);
+        if (rc == SOLARI_OK && receiptLen)
+            rc = solariTlvAppend(&writer, TLV_CRL_ACTIVATION, receipt,
+                                 (uint16_t)receiptLen);
         if (rc == SOLARI_OK) {
             h.tlvCount = writer.count;
             rc = solariFrameBuild(&h, reportPayload, writer.len, out, cap, outLen);

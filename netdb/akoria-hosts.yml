@@ -20,7 +20,10 @@ ad_domain: akoria.org          # authoritative on radium (AD/BIND9_DLZ); mirrore
 
 hosts:
   # ---- core networking (10.0.0.1-20) ----
-  chemistry:  { ip: 10.0.0.1,   hw: "UDR7 Dream Router 7",  role: "gateway / firewall / UniFi" }
+  # UniFi Integration API read-only observation 2026-10-23: name=chemistry,
+  # model=UDM Pro Max, state=ONLINE. Its reported device IP differs from this
+  # LAN address; retain this host mapping until the API field is confirmed.
+  chemistry:  { ip: 10.0.0.1,   hw: "UDM Pro Max",          role: "gateway / firewall / UniFi" }
   halogen:    { ip: 10.0.0.2,   hw: "UGC Max",              role: "old primary router", status: "offline (pending minirack redeploy)" }
   laboratory: { ip: 10.0.0.3,   hw: "USW Pro Max 16",       role: "primary switch (etherlighting)" }
   beaker:     { ip: 10.0.0.7,   hw: "Ubiquiti U7 Pro",      role: "WiFi 7 AP" }

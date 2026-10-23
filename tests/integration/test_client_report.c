@@ -292,6 +292,66 @@ static void test_reporter_restart_has_distinct_identity(void)
     solariReporterClose(reporter);
 }
 
+static void test_reporter_attaches_only_a_valid_activation_receipt(void)
+{
+    solariReporterOpts options;
+    solariReporter *reporter = NULL;
+    char caPath[256], receiptPath[280];
+    const char *receipt = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:42:"
+                          "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n";
+    uint8_t frame[512];
+    const uint8_t *payload = NULL, *value = NULL;
+    size_t frameLen = 0, payloadLen = 0;
+    uint16_t type, valueLen;
+    solariFrameHeader header;
+    solariTlvReader reader;
+    bool found;
+    FILE *f;
+
+    TEST_ASSERT_TRUE(solariTestTempPath(caPath, sizeof caPath, "solari-receipt-test.pem"));
+    TEST_ASSERT_TRUE(snprintf(receiptPath, sizeof receiptPath, "%s.activated", caPath) > 0);
+    memset(&options, 0, sizeof options);
+    options.primaryUrl = URL_LIVE;
+    options.caFile = caPath;
+    options.nodeId = 42;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariReporterOpen(&options, &reporter));
+
+    f = fopen(receiptPath, "wb");
+    TEST_ASSERT_NOT_NULL(f);
+    TEST_ASSERT_EQUAL_UINT(strlen(receipt), fwrite(receipt, 1, strlen(receipt), f));
+    fclose(f);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariReporterFrame(reporter,
+        SCP_MSG_CLIENT_REPORT, 0, NULL, 0, 0, frame, sizeof frame, &frameLen));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameParse(frame, frameLen, &header, &payload, &payloadLen, NULL));
+    solariTlvReaderInit(&reader, payload, payloadLen);
+    found = false;
+    while (solariTlvNext(&reader, &type, &value, &valueLen) == SOLARI_OK) {
+        if (type != TLV_CRL_ACTIVATION) continue;
+        TEST_ASSERT_FALSE(found);
+        TEST_ASSERT_EQUAL_UINT(strlen(receipt) - 1, valueLen);
+        TEST_ASSERT_EQUAL_MEMORY(receipt, value, valueLen);
+        found = true;
+    }
+    TEST_ASSERT_TRUE(found);
+
+    f = fopen(receiptPath, "wb");
+    TEST_ASSERT_NOT_NULL(f);
+    TEST_ASSERT_EQUAL_UINT(4, fwrite("bad\n", 1, 4, f));
+    fclose(f);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariReporterFrame(reporter,
+        SCP_MSG_CLIENT_REPORT, 0, NULL, 0, 0, frame, sizeof frame, &frameLen));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameParse(frame, frameLen, &header, &payload, &payloadLen, NULL));
+    solariTlvReaderInit(&reader, payload, payloadLen);
+    found = false;
+    while (solariTlvNext(&reader, &type, &value, &valueLen) == SOLARI_OK)
+        if (type == TLV_CRL_ACTIVATION) found = true;
+    TEST_ASSERT_FALSE(found);
+    unlink(receiptPath);
+    solariReporterClose(reporter);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -301,5 +361,6 @@ int main(void)
     RUN_TEST(test_discovery_frame);
     RUN_TEST(test_topology_frame);
     RUN_TEST(test_reporter_restart_has_distinct_identity);
+    RUN_TEST(test_reporter_attaches_only_a_valid_activation_receipt);
     return UNITY_END();
 }

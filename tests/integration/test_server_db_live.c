@@ -10,19 +10,22 @@
  *   SOLARI_TEST_DB  - set to anything to enable this suite
  *   SOLARI_DB_HOST  (default 127.0.0.1)   SOLARI_DB_PORT (default 13306)
  *   SOLARI_DB_NAME  (default solarinet)   SOLARI_DB_USER (default solari)
- *   SOLARI_DB_PASS  (default empty)
- * The target schema must include the complete monitoring stream through 032.
+ *   SOLARI_DB_PASS  (default empty)   SOLARI_DB_SOCKET (optional)
+ * The target schema must include the complete monitoring stream through 036.
  */
 #include "unity.h"
 #include "solari/solariCommon.h"
 #include "solari/solariError.h"
 #include "solari/solariMsg.h"
+#include "solari/solariFrame.h"
 #include "solari/solariTlv.h"
 #include "solari/solariTime.h"
 #include "server.h"
+#include "../test_temp_path.h"
 
 #include <mariadb/mysql.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,7 +109,43 @@ static uint64_t liveNodeAppliedEpoch(uint64_t nodeId)
 /* ---- connection is alive ---- */
 static void test_open_ping(void)
 {
+    MYSQL *conn = serverDbConn(g_db);
+    MYSQL *killer;
+    MYSQL_RES *res;
+    MYSQL_ROW row;
+    char killSql[80];
+    unsigned long threadId;
+    const char *sock = g_cfg.dbSocket[0] != '\0' ? g_cfg.dbSocket : NULL;
+    TEST_ASSERT_NOT_NULL(conn);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbPing(g_db));
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(conn, "SELECT @@session.time_zone"));
+    res = mysql_store_result(conn);
+    TEST_ASSERT_NOT_NULL(res);
+    row = mysql_fetch_row(res);
+    TEST_ASSERT_NOT_NULL(row);
+    TEST_ASSERT_EQUAL_STRING("+00:00", row[0]);
+    mysql_free_result(res);
+
+    threadId = mysql_thread_id(conn);
+    killer = mysql_init(NULL);
+    TEST_ASSERT_NOT_NULL(killer);
+    TEST_ASSERT_NOT_NULL(mysql_real_connect(killer, g_cfg.dbHost, g_cfg.dbUser,
+        g_cfg.dbPass, g_cfg.dbName, g_cfg.dbPort, sock, CLIENT_MULTI_STATEMENTS));
+    (void)snprintf(killSql, sizeof killSql, "KILL CONNECTION %lu", threadId);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(killer, killSql));
+    mysql_close(killer);
+
+    /* mysql_ping triggers the configured reconnect; the init command must
+     * restore UTC before the connection is reused. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbPing(g_db));
+    TEST_ASSERT_TRUE(threadId != mysql_thread_id(conn));
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(conn, "SELECT @@session.time_zone"));
+    res = mysql_store_result(conn);
+    TEST_ASSERT_NOT_NULL(res);
+    row = mysql_fetch_row(res);
+    TEST_ASSERT_NOT_NULL(row);
+    TEST_ASSERT_EQUAL_STRING("+00:00", row[0]);
+    mysql_free_result(res);
 }
 
 /* ---- node upsert / touch / state (incl. the 'retired' enum from 002) ---- */
@@ -148,6 +187,165 @@ static void test_node_lifecycle(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbNodeCertMatches(g_db, ITEST_NODE, "itest-cn-reissued", &matches));
     TEST_ASSERT_TRUE(matches); /* fresh approved HELLO reactivates retired ID */
+}
+
+/* Verify pooled transaction cleanup on commit and rollback: autocommit is
+ * restored and the driver's reconnect option remains effective afterward. */
+static void liveKillPoolConnAndVerifyReconnect(void)
+{
+    MYSQL *conn = serverDbConn(g_db);
+    MYSQL *killer;
+    MYSQL_RES *res;
+    MYSQL_ROW row;
+    char killSql[80];
+    unsigned long threadId;
+    const char *sock = g_cfg.dbSocket[0] != '\0' ? g_cfg.dbSocket : NULL;
+    TEST_ASSERT_NOT_NULL(conn);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(conn, "SELECT @@autocommit"));
+    res = mysql_store_result(conn);
+    TEST_ASSERT_NOT_NULL(res);
+    row = mysql_fetch_row(res);
+    TEST_ASSERT_NOT_NULL(row);
+    TEST_ASSERT_EQUAL_STRING("1", row[0]);
+    mysql_free_result(res);
+
+    threadId = mysql_thread_id(conn);
+    killer = mysql_init(NULL);
+    TEST_ASSERT_NOT_NULL(killer);
+    TEST_ASSERT_NOT_NULL(mysql_real_connect(killer, g_cfg.dbHost, g_cfg.dbUser,
+        g_cfg.dbPass, g_cfg.dbName, g_cfg.dbPort, sock, CLIENT_MULTI_STATEMENTS));
+    (void)snprintf(killSql, sizeof killSql, "KILL CONNECTION %lu", threadId);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(killer, killSql));
+    mysql_close(killer);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbPing(g_db));
+    TEST_ASSERT_TRUE(threadId != mysql_thread_id(conn));
+}
+
+static void test_transaction_session_reset(void)
+{
+    const uint64_t commitNode = ITEST_NODE + 0x100;
+    const char tokenHash[65] = "0000000000000000000000000000000000000000000000000000000000000000";
+    uint64_t generation = 0;
+    char sql[128];
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbUpsertNode(g_db, commitNode, ROLE_CLIENT, "txn.itest",
+                           "txn-itest-cn", "linux", "x86_64", 1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbRetireNode(g_db, commitNode));
+    liveKillPoolConnAndVerifyReconnect();
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbRetireNode(g_db, commitNode + 2));
+
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbDecommissionConfirm(g_db, commitNode + 1, 1, "txn-test",
+                                    tokenHash, solariNowUnixMs(), &generation));
+    liveKillPoolConnAndVerifyReconnect();
+
+    (void)snprintf(sql, sizeof sql, "DELETE FROM node WHERE nodeId=%llu",
+                   (unsigned long long)commitNode);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+}
+
+static void test_pending_control_directive_match(void)
+{
+    const uint32_t correlation = 0x7e570001U;
+    const uint32_t missingEpochCorrelation = 0x7e570002U;
+    const uint32_t failedCorrelation = 0x7e570003U;
+    const uint32_t nonconvergentCorrelation = 0x7e570006U;
+    const uint32_t zeroEpochCorrelation = 0x7e570007U;
+    const uint64_t targetEpoch = 91;
+    const uint32_t staleCorrelation = 0x7e570004U;
+    char staleSql[256];
+    (void)snprintf(staleSql, sizeof staleSql,
+        "DELETE FROM pendingControlDirective WHERE nodeId=%llu",
+        (unsigned long long)ITEST_NODE);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), staleSql));
+    (void)snprintf(staleSql, sizeof staleSql,
+        "INSERT INTO pendingControlDirective(nodeId,correlationId,verb,targetEpoch,issuedAt) "
+        "VALUES(%llu,%u,%u,0,UTC_TIMESTAMP(6)-INTERVAL 8 DAY)",
+        (unsigned long long)ITEST_NODE, staleCorrelation, CTRL_RESTART);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), staleSql));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveAdd(g_db, ITEST_NODE, 0x7e570005U,
+                                    CTRL_RESTART, 0));
+    (void)snprintf(staleSql, sizeof staleSql,
+        "SELECT COUNT(*) FROM pendingControlDirective WHERE nodeId=%llu AND correlationId=%u",
+        (unsigned long long)ITEST_NODE, staleCorrelation);
+    /* Expired-record maintenance is scheduled separately; an aged orphan must
+     * not make operator sends depend on the cleanup query succeeding. */
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(staleSql));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveCancel(g_db, ITEST_NODE, 0x7e570005U));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbSetNodeTargetEpoch(g_db, ITEST_NODE, targetEpoch, "{}"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveAdd(g_db, ITEST_NODE, correlation,
+                                    CTRL_SET_CONFIG, targetEpoch));
+    /* Wrong verb and wrong successful epoch must leave the record pending. */
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbControlResultApply(g_db, ITEST_NODE, correlation,
+                                   CTRL_RESTART, targetEpoch, true, 0, "ok", 1700000000000ULL));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbControlResultApply(g_db, ITEST_NODE, correlation,
+                                   CTRL_SET_CONFIG, targetEpoch + 1, true, 0, "ok", 1700000000000ULL));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbControlResultApply(g_db, ITEST_NODE, correlation,
+                                   CTRL_SET_CONFIG, 0, true, 0, "ok", 1700000000000ULL));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlResultApply(g_db, ITEST_NODE, correlation,
+                                   CTRL_SET_CONFIG, targetEpoch, true, 0, "ok", 1700000000000ULL));
+    TEST_ASSERT_EQUAL_UINT64(targetEpoch, liveNodeAppliedEpoch(ITEST_NODE));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbControlResultApply(g_db, ITEST_NODE, correlation,
+                                   CTRL_SET_CONFIG, targetEpoch, true, 0, "ok", 1700000000000ULL));
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveAdd(g_db, ITEST_NODE, nonconvergentCorrelation,
+                                    CTRL_RESTART, 0));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlResultApply(g_db, ITEST_NODE, nonconvergentCorrelation,
+                                   CTRL_RESTART, 0, false, 0, "ok",
+                                   1700000000000ULL));
+    TEST_ASSERT_EQUAL_UINT64(targetEpoch, liveNodeAppliedEpoch(ITEST_NODE));
+
+    /* A legacy successful config result without an epoch is consumed but must
+     * not claim convergence; later reconciliation can issue a fresh directive. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbSetNodeTargetEpoch(g_db, ITEST_NODE, targetEpoch + 1, "{}"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveAdd(g_db, ITEST_NODE, missingEpochCorrelation,
+                                    CTRL_SET_CONFIG, targetEpoch + 1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlResultApply(g_db, ITEST_NODE, missingEpochCorrelation,
+                                   CTRL_SET_CONFIG, 0, false, 0, "epoch-missing",
+                                   1700000000000ULL));
+    TEST_ASSERT_EQUAL_UINT64(targetEpoch, liveNodeAppliedEpoch(ITEST_NODE));
+
+    /* A failed config result likewise records its outcome without replacing
+     * the last successfully applied epoch. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbSetNodeTargetEpoch(g_db, ITEST_NODE, targetEpoch + 2, "{}"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveAdd(g_db, ITEST_NODE, failedCorrelation,
+                                    CTRL_SET_CONFIG, targetEpoch + 2));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlResultApply(g_db, ITEST_NODE, failedCorrelation,
+                                   CTRL_SET_CONFIG, 0, false, 9, "err:9",
+                                   1700000000000ULL));
+    TEST_ASSERT_EQUAL_UINT64(targetEpoch, liveNodeAppliedEpoch(ITEST_NODE));
+
+    /* Epoch zero is a valid baseline when it matches the directive, distinct
+     * from a present but mismatching zero against a nonzero target. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbSetNodeTargetEpoch(g_db, ITEST_NODE, 0, "{}"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveAdd(g_db, ITEST_NODE, zeroEpochCorrelation,
+                                    CTRL_SET_CONFIG, 0));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlResultApply(g_db, ITEST_NODE, zeroEpochCorrelation,
+                                   CTRL_SET_CONFIG, 0, true, 0, "ok",
+                                   1700000000001ULL));
+    TEST_ASSERT_EQUAL_UINT64(0, liveNodeAppliedEpoch(ITEST_NODE));
 }
 
 static void test_decommission_challenge(void)
@@ -466,6 +664,167 @@ static void test_certificate_revocation_ledger(void)
         "completedBy=NULL WHERE singletonId=1"));
 }
 
+static solariStatus buildCrlReceiptReportFrame(uint64_t nodeId, uint32_t seqNo,
+                                               const uint8_t session[16],
+                                               const char *receipt,
+                                               uint8_t *frame, size_t frameCap,
+                                               size_t *frameLen)
+{
+    solariFrameHeader header;
+    solariTlvWriter writer;
+    uint8_t payload[256];
+    solariStatus rc;
+
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    rc = solariTlvAppend(&writer, TLV_REPORT_SESSION, session, 16);
+    if (rc != SOLARI_OK) return rc;
+    rc = solariTlvAppend(&writer, TLV_CRL_ACTIVATION, receipt,
+                         (uint16_t)strlen(receipt));
+    if (rc != SOLARI_OK) return rc;
+    memset(&header, 0, sizeof header);
+    header.magic[0] = SCP_MAGIC_0;
+    header.magic[1] = SCP_MAGIC_1;
+    header.protoVersion = SCP_PROTO_VERSION;
+    header.msgType = SCP_MSG_CLIENT_REPORT;
+    header.flags = SCP_FLAG_ACK_REQ;
+    header.tlvCount = writer.count;
+    header.sourceNodeId = nodeId;
+    header.sendTimeUnixMs = solariNowUnixMs();
+    header.seqNo = seqNo;
+    return solariFrameBuild(&header, payload, writer.len, frame, frameCap, frameLen);
+}
+
+static void test_certificate_crl_acknowledgement(void)
+{
+    const uint64_t nodeId = 0x7e57c0de0099ULL;
+    const char *issuer = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *fp1 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const char *fp2 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const char *receiptText =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:20:"
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const char *receiptText21 =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:21:"
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    char sql[512];
+    serverContext ctx;
+    solariFrameHeader header;
+    const uint8_t *payload = NULL;
+    uint8_t frame[512];
+    uint8_t reportSession[16] = {
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef
+    };
+    size_t frameLen = 0, payloadLen = 0;
+
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbUpsertNode(g_db, nodeId, ROLE_CLIENT,
+        "crl-ack.itest", "client.crl-ack.itest", "linux", "x86_64", 1));
+    (void)snprintf(sql, sizeof sql,
+        "DELETE FROM certificateCrlAcknowledgement WHERE nodeId=%llu",
+        (unsigned long long)nodeId);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+    (void)snprintf(sql, sizeof sql,
+        "DELETE FROM certificateCrlState WHERE issuerFp='%s'", issuer);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+    (void)snprintf(sql, sizeof sql,
+        "INSERT INTO certificateCrlState(issuerFp,nextNumber,publishedNumber,crlFp,nextUpdate) "
+        "VALUES('%s',21,20,'%s',UTC_TIMESTAMP(6)+INTERVAL 1 DAY)", issuer, fp1);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+
+    /* Construct the reporter's two report TLVs directly, keeping this live DB
+     * target independent of the optional transport + SQLite reporter library. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        buildCrlReceiptReportFrame(nodeId, 1, reportSession, receiptText,
+                                   frame, sizeof frame, &frameLen));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameParse(frame, frameLen, &header, &payload, &payloadLen, NULL));
+    memset(&ctx, 0, sizeof ctx);
+    ctx.db = g_db;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestValidate(&ctx, &header, "client.crl-ack.itest"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestDispatch(&ctx, &header, payload, payloadLen));
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(
+        "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
+        "AND crlNumber=20 AND crlFp='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 20, fp1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 20, fp1));
+    TEST_ASSERT_EQUAL_INT(ERR_REJECTED,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 19, fp1));
+    TEST_ASSERT_EQUAL_INT(ERR_REJECTED,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 20, fp2));
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(
+        "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
+        "AND crlNumber=20 AND crlFp='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"));
+
+    (void)snprintf(sql, sizeof sql,
+        "UPDATE certificateCrlState SET publishedNumber=21,crlFp='%s',"
+        "nextUpdate=UTC_TIMESTAMP(6)+INTERVAL 1 DAY WHERE issuerFp='%s'", fp2, issuer);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+    reportSession[0]++;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        buildCrlReceiptReportFrame(nodeId, 2, reportSession, receiptText,
+                                   frame, sizeof frame, &frameLen));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameParse(frame, frameLen, &header, &payload, &payloadLen, NULL));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestValidate(&ctx, &header, "client.crl-ack.itest"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestDispatch(&ctx, &header, payload, payloadLen));
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(
+        "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
+        "AND crlNumber=20 AND crlFp='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"));
+    TEST_ASSERT_EQUAL_INT(ERR_REJECTED,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 20, fp1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 21, fp2));
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db),
+        "UPDATE certificateCrlAcknowledgement SET acknowledgedAt='2000-01-01 00:00:00.000000' "
+        "WHERE nodeId=0x7e57c0de0099 AND crlNumber=21"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 21, fp2));
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(
+        "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
+        "AND crlNumber=21 AND acknowledgedAt>'2000-01-01 00:00:00.000000'"));
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(
+        "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
+        "AND crlNumber=21 AND crlFp='cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'"));
+
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db),
+        "UPDATE certificateCrlAcknowledgement SET acknowledgedAt='2000-01-01 00:00:00.000000' "
+        "WHERE nodeId=0x7e57c0de0099 AND crlNumber=21"));
+
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db),
+        "UPDATE certificateCrlState SET nextUpdate=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND "
+        "WHERE issuerFp='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"));
+    reportSession[0]++;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        buildCrlReceiptReportFrame(nodeId, 3, reportSession, receiptText21,
+                                   frame, sizeof frame, &frameLen));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariFrameParse(frame, frameLen, &header, &payload, &payloadLen, NULL));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestValidate(&ctx, &header, "client.crl-ack.itest"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestDispatch(&ctx, &header, payload, payloadLen));
+    TEST_ASSERT_EQUAL_INT(ERR_REJECTED,
+        serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 21, fp2));
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(
+        "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
+        "AND crlNumber=21 AND acknowledgedAt='2000-01-01 00:00:00.000000'"));
+
+    (void)snprintf(sql, sizeof sql, "DELETE FROM node WHERE nodeId=%llu",
+                   (unsigned long long)nodeId);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+    TEST_ASSERT_EQUAL_UINT64(0, liveCount(
+        "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099"));
+    (void)snprintf(sql, sizeof sql,
+        "DELETE FROM certificateCrlState WHERE issuerFp='%s'", issuer);
+    TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+}
+
 /* ---- the heavy writer: hostCurrent upsert + hostHistory append, one txn ---- */
 static void test_client_report(void)
 {
@@ -631,6 +990,9 @@ static void test_lifecycle_transition_rolls_back_cascade(void)
     size_t count = 2;
     bool active = false;
 
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbLifecycleTransition(g_db, 0x7e57c0defffeULL,
+                                    "decommissioned", targets, 0));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbUpsertAsset(g_db, ip, "lc-rollback.itest", "lc rollback",
                             "host", 0, NULL, NULL, true, &assetId));
@@ -661,6 +1023,8 @@ static void test_lifecycle_transition_rolls_back_cascade(void)
              (unsigned long long)firedEvent);
     TEST_ASSERT_EQUAL_UINT64(0, liveCount(sql));
 
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbPurgeAsset(g_db, 0x7e57c0deffffULL, NULL, 0));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbPurgeAsset(g_db, assetId, targets, count));
     snprintf(sql, sizeof sql,
              "DELETE FROM alertEvent WHERE eventId=%llu OR openedEventId=%llu",
@@ -1039,7 +1403,7 @@ static void test_lease(void)
     serverDb *contenderDb = NULL;
     const uint64_t contender = ITEST_NODE + 1;
     bool won = false;
-    uint64_t epoch = 0, holder = 0, rEpoch = 0;
+    uint64_t epoch = 0, holder = 0, rEpoch = 0, formerEpoch = 0;
 
     /* Isolate this election case from a previous interrupted test run. */
     TEST_ASSERT_EQUAL_INT(0,
@@ -1086,6 +1450,7 @@ static void test_lease(void)
         serverDbLeaseClaim(contenderDb, contender, 15, &won, &rEpoch));
     TEST_ASSERT_TRUE(won);
     TEST_ASSERT_EQUAL_UINT64(epoch + 1, rEpoch);
+    formerEpoch = epoch;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbLeaseClaim(contenderDb, contender, 15, &won, &epoch));
     TEST_ASSERT_TRUE(won);
@@ -1093,6 +1458,21 @@ static void test_lease(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbLeaseRead(g_db, &holder, &epoch));
     TEST_ASSERT_EQUAL_UINT64(contender, holder);
+    TEST_ASSERT_EQUAL_UINT64(rEpoch, epoch);
+
+    /* A stale former holder cannot release the successor's live fencing token. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbLeaseRelease(g_db, ITEST_NODE, formerEpoch));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbLeaseRead(g_db, &holder, &epoch));
+    TEST_ASSERT_EQUAL_UINT64(contender, holder);
+    TEST_ASSERT_EQUAL_UINT64(rEpoch, epoch);
+    /* The current holder can relinquish only its own token. */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbLeaseRelease(contenderDb, contender, rEpoch));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbLeaseRead(g_db, &holder, &epoch));
+    TEST_ASSERT_EQUAL_UINT64(0, holder);
     TEST_ASSERT_EQUAL_UINT64(rEpoch, epoch);
 
     /* Repeated barrier-released races use two independent DB handles. Exactly
@@ -1411,7 +1791,9 @@ int main(void)
     snprintf(g_cfg.dbName, sizeof g_cfg.dbName, "%s", envOr("SOLARI_DB_NAME", "solarinet"));
     snprintf(g_cfg.dbUser, sizeof g_cfg.dbUser, "%s", envOr("SOLARI_DB_USER", "solari"));
     snprintf(g_cfg.dbPass, sizeof g_cfg.dbPass, "%s", envOr("SOLARI_DB_PASS", ""));
-    g_cfg.dbSocket[0] = '\0';   /* force TCP host/port */
+    snprintf(g_cfg.dbSocket, sizeof g_cfg.dbSocket, "%s",
+             envOr("SOLARI_DB_SOCKET", ""));
+    if (g_cfg.dbSocket[0] != '\0') g_cfg.dbHost[0] = '\0';
 
     if (serverDbOpen(&g_cfg, &g_db) != SOLARI_OK) {
         printf("FATAL test_server_db_live: serverDbOpen failed for %s:%u/%s\n",
@@ -1422,8 +1804,11 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_open_ping);
     RUN_TEST(test_node_lifecycle);
+    RUN_TEST(test_transaction_session_reset);
+    RUN_TEST(test_pending_control_directive_match);
     RUN_TEST(test_decommission_challenge);
     RUN_TEST(test_certificate_revocation_ledger);
+    RUN_TEST(test_certificate_crl_acknowledgement);
     RUN_TEST(test_client_report);
     RUN_TEST(test_failed_report_does_not_poison_receipt);
     RUN_TEST(test_monitor_report_is_persisted_once);

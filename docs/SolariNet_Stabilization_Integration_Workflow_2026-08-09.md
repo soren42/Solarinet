@@ -85,25 +85,25 @@ another finding's fix).
 | **F-03** | No CSRF / Origin defense on cookie-auth writes | **High — live now**, compounds F-02. | **Adopt.** Synchronizer token + Origin/Referer + require Content-Type. | Stability / Ph 1 |
 | **F-05** | Viewer-triggerable scan starves the leadership lease | **Medium-High.** Single-thread block is real even fleet-of-one (ingest + control stall). | **Adopt, split:** gate scan behind operator *now* (rides F-02); real fix = job runner. | Stability / Ph 1 gate, Ph 3 fix |
 | **F-11** | solariCtl wire unsafe both ends (4 KiB single read; PHP partial-write = success) | **Medium.** Truncation/desync on large config/control payloads. (This is dossier BUG-C18.) | **Adopt.** Length-prefixed framed I/O + looped I/O + deadlines + caps. | Stability / Ph 1 |
-| **F-01** | Node cert not bound to frame `sourceNodeId`; gossip accepts unbound IDs | **Medium.** Requires an *already-enrolled* compromised client. Trusted LAN, ~9 hosts → lower than the exposed dashboard, but it is the identity foundation. | **Adopt, sequence after F-02/03.** CSR CN syntax matches the dotted-role parser and has a regression test. Approval compare-and-sets PENDING and atomically stores the node row, public certificate, and decision while clearing the CSR. Token-backed submission, digest-only token storage, expiry, repeatable signed-certificate pickup, and client acknowledgement/revocation are implemented. Fresh-schema MariaDB tests exercise the approval transaction and token lifecycle; installer tests cover successful/failed forced renewal with key/certificate preservation and `--resume` recovery after failed ACK without replacing a changed leaf. Verified manually on 2026-10-20 against a disposable MariaDB schema, the full IO-enabled `solariServer`, a temporary CA, and the PHP enrollment API: TLS-verified HTTPS→PHP→solariCtl→MariaDB token submission; over the same real bridge, pending→approved transaction, CA certificate pickup and OpenSSL chain validation, and token acknowledgement/cleanup. A CSR with a host-only CN was rejected; a role-prefixed CN with the enrolled DNS SAN was approved. The automated HTTPS fixture test also passes, and `tests/integration/test_enrollment_e2e.py` now repeats the full real-server exchange against a scratch schema; it passes locally and is wired into the full-server CI job. CI execution remains pending. The ingest/control gate matches authenticated CN to `sourceNodeId` on every frame, and HELLO requires role and FQDN to match that CN before node upsert; unit tests cover wrong node ID, CN, role, FQDN, and absent identity. The DB identity query now rejects `state='retired'`; approved enrollment resets a retired node to `unknown`. The MariaDB integration test verifies reject-after-retirement and reactivation after the enrollment upsert. Migration 024 stores the issued leaf DER SHA-256 fingerprint and serial atomically with approval. NNG 1.x exposes peer CN/SAN but no peer DER, so live leaf fingerprint comparison remains open. Gossip requires mutual TLS and binds each PEER_ALIVE source ID to authenticated `monitor.<fqdn>` CN; the loopback test verifies convergence, forged-ID rejection, and rejection of a CA-signed leaf revoked by an X.509 CRL bundled with the CA PEM. This verifies enforcement through pinned NNG 1.8.0 / mbedTLS 3.6.2, not operational TLS revocation: the candidate has an operator-only, two-step revocation ledger command for the active leaf, but no historical issuance inventory/backfill, safe CRL generation, freshness policy, or distribution/activation for enrolled nodes. The command reports `tls_effective=0`. The node ID contract is resolved for this release: a read-only production query on 2026-10-21 found all nine deployed IDs match FNV-1a-64(`hostFqdn|roleNumber`), so retain `solariNodeIdFromFqdnRole()` and remove the nonce formula unless a future nonce lifecycle and migration are designed. The same query found all nine DB `certCn` values are host-only, while the candidate requires role-prefixed CNs; this is a certificate migration gate, not evidence independently validating leaf subjects or SANs. Do not cut over the stricter candidate until certificates are re-enrolled or a reviewed compatibility transition is ready. Remaining identity work: implement and test the CA revocation lifecycle, select a supported peer-certificate API or verified handshake callback for fingerprint enforcement, and add a server-signed monitor-membership epoch. | Stability + **I1** / Ph 2 |
-| **F-04** | PHP + server share the `jason` account; API served from writable checkout | **Medium-High.** "PHP holds no CA material" is convention, not a boundary; source-write = code-exec. | **Adopt.** Split least-priv accounts; immutable artifacts outside the tree; `SO_PEERCRED`; canonical hardened units. | Stability / Ph 2 |
-| **F-06** | Tab5 approval display not cryptographically bound to the signed decision | Only if enabled. | **Contain now** (keep non-production), fix if/when promoted. | Contain / Ph 0 |
-| **F-07** | PXE executes unauthenticated artifacts as root | Only when provisioning runs. | **Contain now** (gate behind an explicit, isolated run), signed-manifest fix later. | Contain / Ph 0, Ph 3 fix |
+| **F-01** | Node cert not bound to frame `sourceNodeId`; gossip accepts unbound IDs | **Medium.** Requires an *already-enrolled* compromised client. Trusted LAN, ~9 hosts → lower than the exposed dashboard, but it is the identity foundation. | **Adopt, sequence after F-02/03.** CSR CN syntax matches the dotted-role parser and has a regression test. Approval compare-and-sets PENDING and atomically stores the node row, public certificate, and decision while clearing the CSR. Token-backed submission, digest-only token storage, expiry, repeatable signed-certificate pickup, and client acknowledgement/revocation are implemented. Fresh-schema MariaDB tests exercise the approval transaction and token lifecycle; installer tests cover successful/failed forced renewal with key/certificate preservation and `--resume` recovery after failed ACK without replacing a changed leaf. Verified manually on 2026-10-20 against a disposable MariaDB schema, the full IO-enabled `solariServer`, a temporary CA, and the PHP enrollment API: TLS-verified HTTPS→PHP→solariCtl→MariaDB token submission; over the same real bridge, pending→approved transaction, CA certificate pickup and OpenSSL chain validation, and token acknowledgement/cleanup. A CSR with a host-only CN was rejected; a role-prefixed CN with the enrolled DNS SAN was approved. The automated HTTPS fixture test also passes, and `tests/integration/test_enrollment_e2e.py` now repeats the full real-server exchange against a scratch schema; it passes locally and is wired into the full-server CI job. CI execution remains pending. The ingest/control gate matches authenticated CN to `sourceNodeId` on every frame, and HELLO requires role and FQDN to match that CN before node upsert; unit tests cover wrong node ID, CN, role, FQDN, and absent identity. The DB identity query now rejects `state='retired'`; approved enrollment resets a retired node to `unknown`. The MariaDB integration test verifies reject-after-retirement and reactivation after the enrollment upsert. Migration 024 stores the issued leaf DER SHA-256 fingerprint and serial atomically with approval. NNG 1.x exposes peer CN/SAN but no peer DER, so live leaf fingerprint comparison remains open. Gossip requires mutual TLS and binds each PEER_ALIVE source ID to authenticated `monitor.<fqdn>` CN; the loopback test verifies convergence, forged-ID rejection, and rejection of a CA-signed leaf revoked by an X.509 CRL bundled with the CA PEM. This verifies enforcement through pinned NNG 1.8.0 / mbedTLS 3.6.2, not operational TLS revocation: the candidate has an operator-only, two-step revocation ledger command, historical issuance inventory/backfill, and a CA-signed CRL generator. The command reports `tls_effective=0`; an HTTPS validator/atomic installer, per-service timer, and issuer-scoped static publisher now exist locally. No peer-trusted HTTPS vhost or peer is configured to use them. Missing-CRL rollout policy and central acknowledgements remain open. The node ID contract is resolved for this release: a read-only production query on 2026-10-21 found all nine deployed IDs match FNV-1a-64(`hostFqdn|roleNumber`), so retain `solariNodeIdFromFqdnRole()` and remove the nonce formula unless a future nonce lifecycle and migration are designed. The same query found all nine DB `certCn` values are host-only, while the candidate requires role-prefixed CNs; this is a certificate migration gate, not evidence independently validating leaf subjects or SANs. Do not cut over the stricter candidate until certificates are re-enrolled or a reviewed compatibility transition is ready. Remaining identity work: complete and test fleet CRL distribution/activation and freshness enforcement; select a supported peer-certificate API or verified handshake callback for fingerprint enforcement; and add a server-signed monitor-membership epoch. | Stability + **I1** / Ph 2 |
+| **F-04** | PHP + server share the `jason` account; API served from writable checkout | **Medium-High.** “PHP holds no CA material” is convention, not a boundary; source-write = code-exec. | **Candidate implemented and disposable-boundary tested:** hardened service identities, immutable release paths, `SO_PEERCRED`, queued privileged requests, and scoped dashboard grants. Keep open until the full boundary is installed and verified on Xenon. | Stability / Ph 2; candidate complete, host cutover open |
+| **F-06** | Tab5 approval request and response binding | Only if enabled. | **Contain now** (keep non-production); v2 broker/firmware contract is implemented in the local candidate, with broker and host canonical-vector tests passing. Complete disposable-MQTT, pinned-core firmware, trust rotation, and hardware gates in the [approval-binding contract](rework/F06-approval-binding-contract.md) before promotion. | Contain / Ph 0; implementation partial, verification open |
+| **F-07** | PXE executes unauthenticated artifacts as root | Only when provisioning runs. | **Open P0:** five entry points fail closed by default. A CMS-signed release manifest/stager covers payload paths, sizes, modes, hashes, target, and validity; offline tamper/path/trust tests pass. Authenticated iPXE + Secure Boot, installer/firstboot verification, and isolated VM acceptance remain unimplemented. Keep PXE isolated and disabled until [F-07 gates](rework/F07-signed-provisioning-contract.md) pass. | Contain / Ph 0; candidate partial, integration Ph 3 |
 
 ### P1 — required for a trustworthy stabilization release
 
 | ID | Finding | Disposition | Track / Phase |
 |---|---|---|---|
-| **F-08** | SoR CDC not actually at-least-once (no publisher confirms; consumers ack before apply; no reconcile) | **Adopt.** Confirms+mandatory before checkpoint; ack after all targets; periodic full reconcile; fault-injection tests. | Stability + **I2** / Ph 2 |
-| **F-10** | Health/convergence records can lie (double-write; epoch advanced before durable; missing error = success) | **Adopt.** Persist reports once; save/fsync/activate before advancing epoch; correlate directives. | Stability + **I3** / Ph 2 |
+| **F-08** | SoR CDC can lose events across broker/target failures | **Candidate implements** publisher confirms + mandatory routing before checkpoint, apply-before-ack consumers, and periodic reconciliation; 11 local fault-boundary tests pass. Disposable-broker/DNS-chain tests exist; deployed restart and multi-target recovery remain open. | Stability + **I2** / Ph 2; verification open |
+| **F-10** | Health/convergence records can lie | Duplicate monitor report persistence is removed; client and monitor config controls stage, fsync, and persist before activation/ack (monitor fault suite 5/5). Migration 034 binds generic results to a persisted node/correlation/verb/epoch record and atomically consumes it with convergence; isolated migration/export and live DB tests pass. | Candidate implemented; full integration/release verification remains |
 | **F-12** | Schema lifecycle not reproducible (no ledger; duplicate ordinal 016; `--init-db` applies a stale hybrid) | **Adopt.** Candidate has one migrator per DB, immutable full-file IDs + checksums + version ledger, and deterministic ordering for both 016 files. Monitoring and SoR snapshots are generated from clean migration runs and checked by CI. Legacy database adoption remains open. | Stability + **I2** / Ph 2 |
 | **F-13** | Original review found cached authenticated GETs presented as live and SSE holding FPM workers | **Candidate implements core and per-source freshness:** API requests are network-only; core failure retains real data with a stale label, age, and mutation pause; optional endpoints retain their last successful payload and expose `fresh|stale|unknown` plus last success/attempt and a partial-data banner; retired SSE route returns 204. Two-session authenticated Chromium acceptance now verifies stale labeling, blocked writes, independent session state, and recovery; staged production verification remains open. | **SHARED: Stability + I3** / Ph 1 |
-| **F-14** | OIDC accepts tokens w/o `exp`; break-glass local login always callable + unrate-limited; roles never revalidated | **Adopt.** Require standard claims + bounded state age; independently disable break-glass; rate-limit; idle/absolute expiry; revalidate role. | Stability / Ph 1 |
-| **F-09** | Server HA internally inconsistent (standby writes; lease epoch churn; bind-fail keeps renewing) | **Adapt.** Real defect, but **production is fleet-of-one** — no second server exists to conflict. Fix the state machine as designed; **prove it in Phase 3/4, don't let it block Ph 1–2.** | Stability / Ph 3 |
+| **F-14** | OIDC accepts tokens w/o `exp`; break-glass local login always callable + unrate-limited; roles never revalidated | **Candidate implemented, runtime verification partial:** OIDC claim/state checks, opt-in local login with private-directory rate limiting, idle/absolute expiry, and local-account role revalidation have focused tests. HTTPS UserInfo now refreshes OIDC groups/roles every 60 seconds with subject binding and refresh-token rotation; provider errors downgrade the session to viewer. Verify deployed provider claims/configuration and hosted CI before closing. | Stability / Ph 1 |
+| **F-09** | Server HA lease and activation semantics | Standby bridge is read-only for three scoped verbs; bind failure releases its exact token and backs off one TTL. Two-process test passed on a disposable MariaDB schema, including standby takeover, lease renewal during a slow scan, and orphaned-job recovery. Production HA remains unverified. | Candidate implementation verified locally; release verification remains open |
 | **F-15** | Opie "read-only" not confidentiality-safe (alert text → prompt; generic Read/Grep tools; runs as `jason`) | **Contain now** (dedicated sandboxed account, drop generic file tools, inventory allowlist), then harden. | Contain / Ph 0, Ph 3 harden |
 | **F-16** | Fleet provisioning leaves server-minted key material staged; firstboot never enrolls | **Adopt.** Node-generated keys + one-time CSR token; atomic cleanup; prove PXE→first-report in a VM. | Stability / Ph 3 |
 | **F-17** | DNS/AD apply lacks safe deploy semantics (direct zone overwrite; no `named-checkzone`; creds in argv) | **Adopt.** Render+validate+atomic-switch+health-check+rollback; durable serial state; protected AD credential channel. | Stability + **I2** / Ph 2–3 |
-| **F-18** | Arbitrary MCP SQL guarded only by a token regex | **Contain now:** replace arbitrary SQL with fixed tools/views + dedicated read-only account. | Contain / Ph 0 |
+| **F-18** | MCP database query policy | **Code containment implemented:** closed fixed-query registry, bound and validated values, result caps, adversarial boundary tests. Still verify dedicated read-only MariaDB grants and review server-side resource limits. | Contain done / deployment verification open |
 
 ### P2 — before scale/HA/maintainability claims (Phase 3–4)
 
@@ -271,9 +271,11 @@ data as live; the freshness badge renders on at least the alerts and nodes pages
    binding open until the project selects a supported NNG release or adds a
    verified handshake callback. Separately, pinned NNG 1.8.0 supports CRLs in
    the configured CA PEM bundle: the loopback gossip integration test confirms
-   a revoked client leaf is rejected. The test does not supply the missing
-   production revocation lifecycle (CA index, CRL generation, freshness, and
-   fleet distribution). The transport wrapper now explicitly requires
+   a revoked client leaf is rejected. The candidate includes historical issuance
+   inventory/backfill, a CA-signed CRL generator, and a peer updater that
+   verifies and activates one issuer CRL. No publisher or configured peer exists;
+   missing-CRL rollout policy and fleet acknowledgements remain open. The
+   transport wrapper now explicitly requires
    `NNG_OPT_TLS_VERIFIED == true` on the received pipe before returning its peer
    CN. The loopback mTLS convergence test passes for trusted peers and rejects
    the revoked leaf; a plaintext pipe is also rejected as lacking a verified
@@ -2761,3 +2763,319 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   artifacts, and passed dashboard archive activation/rollback using them.
 - **UNVERIFIED:** independent cross-lab review. This CI-profile patch changed
   no installed binary or production service.
+
+
+## 2026-10-23 — F-01 status reconciliation
+
+- Reconciled the current F-01 findings-table summary with the candidate contract:
+  issuance inventory/backfill and CA-signed CRL generation exist locally; peer
+  distribution, activation/freshness enforcement, fleet acknowledgements, and
+  rollout remain open. Historical dated implementation notes are unchanged.
+- Re-ran the OpenSSL-backed CRL generator suite (5/5) and pinned-stack gossip
+  CRL handshake integration (`ctest -R gossip`, 1/1); both passed.
+- **UNVERIFIED:** end-to-end fleet delivery/activation, stale-CRL policy,
+  acknowledgement tracking, deployed migration/backfill, and independent
+  cross-lab security review. This documentation reconciliation made no live
+  network or service changes.
+
+## 2026-10-23 — F-01 scheduled generation candidate
+
+- Added a hardened systemd oneshot and six-hour timer for the CRL generator.
+  It runs as `solari`, reads the CA key within that service boundary, uses a
+  dedicated MariaDB defaults file and grants, and writes only to a private
+  state directory. Added operator setup and verification notes.
+- `sudo systemd-analyze verify` passed for both units; the calendar expression
+  resolves to a six-hour cadence. The OpenSSL-backed generator tests passed
+  5/5. Added the verifier to both GitHub and Forgejo CI workflows; the local
+  workflow parity check passed. Hosted CI has not run for these edits. No host
+  files or services were changed.
+- **UNVERIFIED:** deployment-specific DB grants/credential, installed CA paths
+  and permissions, timer execution, publication, peer activation, freshness
+  enforcement, and acknowledgement reporting. The generated CRL remains local
+  and does not make TLS revocation effective on peers.
+
+
+## 2026-10-23 — F-01 peer activation candidate
+
+- Added `activate_crl.py`: it requires HTTPS, validates the issuing CA is in the
+  immutable base bundle, verifies CRL signature/issuer/number/freshness, rejects
+  rollback and conflicts, atomically installs the bundle, restarts an
+  allowlisted SolariNet service, and restores the prior bundle if the restart or
+  active-state check fails. A per-service activation marker makes interrupted
+  installs reconcile on the next run. A templated hourly systemd timer supports
+  separate per-service configuration.
+- Added seven tests covering verified local HTTPS, valid install, signature and
+  expiry rejection, rollback rejection, idempotence, interrupted-activation
+  recovery, service allowlisting, and restart rollback. Both CRL test suites,
+  systemd unit verification, unit-section checks, Forgejo workflow parity, and
+  whitespace validation pass locally. CI jobs now include both cryptographic
+  suites and both timer/service unit checks.
+- **UNVERIFIED:** publisher endpoint, deployment configuration, multiple issuer
+  bundle merging, central acknowledgement reporting, hosted CI, and fleet
+  behavior. No host or live service was changed.
+
+## 2026-10-23 — F-14 authentication candidate reconciliation
+
+- Re-ran `test_auth_session.php`, `test_oidc_claims.php`, and the new
+  HTTPS-backed `test_oidc_userinfo_session.php`; all pass with
+  `TMPDIR=/dev/shm`. PHP syntax checks pass for `Auth.php` and `Oidc.php`.
+- The candidate requires signed OIDC issuer/audience/subject/expiry/issued-at/
+  nonce claims and a bounded one-shot state transaction. Local password login
+  is disabled unless explicitly enabled and a private rate-limit directory is
+  configured; attempts are capped per account/source. Sessions have idle and
+  absolute limits, local sessions re-read role changes, and disabling local
+  login revokes existing local sessions.
+- OIDC sessions now refresh group-derived roles over HTTPS UserInfo every 60
+  seconds, require the stable OIDC subject to match, rotate expiring access
+  tokens through the refresh grant, and downgrade to viewer on provider
+  transport/service errors. Discovery issuer identity is checked and every
+  authorization, token, JWKS, and UserInfo endpoint must use HTTPS on the
+  issuer origin or an explicitly configured `allowedEndpointOrigins` entry.
+  OIDC HTTP response bodies are capped at 1 MiB. Subject mismatch revokes the
+  session; transport, service, and oversized-response failures demote it to
+  viewer.
+- **OPEN:** deployed provider UserInfo group claims and refresh-token behavior,
+  production configuration, hosted CI, and independent cross-lab review remain
+  **UNVERIFIED**. No authentication service or live configuration was changed.
+
+## 2026-10-23 — reconciliation regression sweep
+
+- Built the current server profile and ran `TMPDIR=/dev/shm ctest
+  --test-dir build-server --output-on-failure -E test_net_loopback`: all 38
+  configured tests passed. `test_net_loopback` is excluded by the repository's
+  normal CI command and was not run here. The first attempt without `TMPDIR`
+  failed multiple temporary-file tests with `Disk quota exceeded`; all 11
+  affected core tests passed on retry with `/dev/shm`.
+- Authbroker passed 20 tests, MCP passed 48, CRL generation/activation passed
+  17, fleet manifest passed 17, the F-07 provisioning gate passed, and the
+  Tab5 canonical approval host-vector compiled with warnings as errors and
+  passed. Dashboard PHP syntax checks, auth/session/OIDC, authorization, route,
+  security-header, TLS, JSON, RackWire API/UI, and local scanner UI suites passed.
+- The standalone scanner-ingest suite completed 63 tests: 48 passed and 15
+  MariaDB-backed tests were skipped because no disposable DB credentials were
+  configured. The running scanner app answered a read-only loopback export
+  request with schema v1, two catalog items, and two assets; its socket is
+  bound only to `127.0.0.1:8765`. No inventory content was logged or changed.
+- A read-only SSH check reached Cesium, but its MariaDB root account rejected
+  socket access without a password. No database or account was created. SoR
+  importer integration is therefore **UNVERIFIED in this sweep**; earlier
+  disposable-database evidence remains recorded above.
+- Rechecked PHP after the Foundation's 2026-10-23 session-progress notice.
+  Cesium's sole active PHP listener is fixed PHP 8.5.12 on loopback; effective
+  `session.serialize_handler` is `php`, and deployed PHP source does not change
+  it at runtime. Xenon's FPM reports upload progress `Off`; Nitrogen has fixed
+  PHP 8.4.27 CLI and no PHP service. No restart was needed: the PHP notice says
+  the additional unusual trigger requires a runtime serializer switch, which
+  this code does not perform. See [PHP security disposition](PHP_Critical_Update_2026-10-23.md).
+- Added a 1 MiB response cap to OIDC HTTP reads and tested oversized UserInfo
+  downgrade behavior. Discovery identity and HTTPS origin checks cover the
+  issuer and authorization, token, JWKS, and UserInfo endpoints. The
+  Directory Services HTML/PDF guide now describes this candidate behavior; the
+  regenerated PDF has four A4 pages and was visually checked on pages 3–4.
+- **OPEN:** independent cross-lab review remains unavailable in this harness:
+  the operator-required `model-routing` skill/roster is absent. Hosted CI,
+  disposable SoR integration in this sweep, browser acceptance against the
+  live provider, publication, and deployment remain **UNVERIFIED**. No code was
+  pushed and no service, production database, DNS, UniFi, or network state was
+  changed.
+
+### 2026-10-23 — scanner-to-SoR and RackWire database integration
+
+- Ran `tests/dashboard/test_scanner_import_http.php` against a fresh
+  `solarinet_scanner_it` MariaDB database initialized from
+  `netdb/sor/schema.snapshot.sql`. The test passed its authenticated scanner
+  preview/apply, provenance, SoR persistence, explicit entity association,
+  RackWire model profile save/readback, pagination, stale-fingerprint, and
+  idempotent replay checks.
+- The isolated fixture included the `manual`, `dashboard`, and `rackwire`
+  source rows required by those API paths. The schema snapshot contains the
+  tables and triggers but does not seed those rows; without them the API
+  correctly rejected audit/profile writes through foreign-key/source checks.
+- The scratch MariaDB used a dedicated datadir on Cesium, bound only to
+  `127.0.0.1:13317`, and was reached through a temporary SSH tunnel. The
+  scratch database, MariaDB process, tunnel, and datadir were removed after
+  the run. Cesium's existing MariaDB services, shared SoR, and scanner app
+  inventory were not used or changed.
+- This verifies the real dashboard API/database integration path. Physical
+  scanner/iPhone use and a live shared-SoR import remain unverified. Hosted
+  CI, publication, deployment, and independent cross-lab review remain open.
+- By Jason's explicit request, the standalone scanner-ingest development app
+  was rebound from loopback to `0.0.0.0:8765` for iPhone barcode-scanner use.
+  Its current host address is `10.0.0.20`; the API responds through that
+  interface with two items and two assets. This remains a foreground,
+  unauthenticated HTTP process with no TLS, not a durable service deployment;
+  network reachability from the iPhone itself is still unverified.
+- Checked the standalone repository's expected publish destinations. Neither
+  `jason/scanner-ingest` on Forgejo nor `soren42/scanner-ingest` on GitHub
+  exists, and its local Git config has no remotes. The Forgejo HTTPS API was
+  unavailable during this check. No repository was created and nothing was
+  pushed; a confirmed destination is still required before publishing this
+  separately rooted subproject.
+
+### 2026-10-23 — OIDC hardening re-review and TLS fixture rerun
+
+- An independent review confirmed that issuer identity and HTTPS origin
+  enforcement now cover authorization, token, JWKS, refresh, and UserInfo
+  requests through the shared transport; redirects are disabled, explicit
+  split-host origins are exact-origin matched, and responses are capped at
+  1 MiB. No code edits were requested.
+- Re-ran `test_oidc_claims.php` and `test_oidc_userinfo_session.php` with
+  `TMPDIR=/dev/shm`; both passed. The TLS fixture exercised token rotation,
+  role downgrade on service/oversized UserInfo responses, and session revocation
+  on subject mismatch. This resolves the earlier quota-related test gap.
+- **OPEN:** production OIDC configuration and a real identity provider remain
+  unverified. In particular, the explicit development-only
+  `insecureSkipVerify` option is false by default, but deployed values were not
+  inspected. Independent cross-lab review remains open.
+
+### 2026-10-23 — CRL peer activation regression check
+
+- Re-ran `python3 -m unittest deploy.crl.test_activate_crl -v`; all 12
+  activation tests passed, including verified HTTPS, issuer/signature and
+  freshness rejection, rollback protection, atomic install, service-restart
+  recovery, and idempotent reconciliation after interruption.
+- The activation code remains a local candidate. **UNVERIFIED:** real CRL
+  publication endpoint, missing/expired-CRL fleet policy, central peer
+  acknowledgements, deployment configuration, and independent cross-lab review.
+- Rechecked the scanner-ingest process after the LAN-use request: the host
+  listener is `0.0.0.0:8765`, and `http://10.0.0.20:8765/` returns HTTP 200.
+  The earlier loopback-only note records the prior state; this later check is
+  authoritative. Authentication, TLS, and iPhone reachability remain
+  **UNVERIFIED**.
+
+### 2026-10-23 — F-01 static CRL publisher candidate
+
+- Added `deploy/crl/publish_crl.py`: it verifies an exact single PEM CRL, its
+  issuer, signature, number, and bounded freshness; publishes under a
+  fingerprint-derived filename; prevents number rollback; and uses an atomic,
+  fsynced replacement. The separate unprivileged system account has read access to the
+  generated CRL and public CA certificate but no CA-key or DB credential
+  access. A one-minute timer checks for generator updates, and a sample Apache
+  HTTPS-vhost include serves the static files without directory listing or
+  dotfile access.
+- Added six publisher tests for normal publication, rollback prevention,
+  expired-output recovery, peer-aligned time bounds, and explicit key/credential
+  masking. Wired them, the publisher sysuser
+  declaration, and all CRL systemd units,
+  into both GitHub and Forgejo CI definitions. Local publisher tests passed 6/6;
+  `sudo systemd-analyze verify` passed for the generator, publisher, and
+  activation service/timer definitions.
+- **UNVERIFIED:** no TLS vhost or endpoint was installed, no remote peer fetched
+  this URL, no peer activation was deployed, and cross-lab review remains open.
+  F-01 remains a release blocker because missing-CRL policy and fleet
+  acknowledgement/convergence are not complete.
+
+### 2026-10-23 — live SoR grant and replica audit
+
+- Read-only connection through Xenon's deployed SoR-sync configuration
+  confirmed Cesium MariaDB 12.3.2 is writable and currently has 45 base tables
+  and four views. The service identity `solari` has no global privileges, but
+  its `sor` schema grant includes `ALTER`, `CREATE`, `DROP`, `CREATE ROUTINE`,
+  `CREATE VIEW`, and `TRIGGER` in addition to data privileges. The deployment
+  uses this account for SoR synchronization; these DDL privileges exceed the
+  observed runtime role and violate the planned least-privilege boundary.
+- The Benzene `sor-replica` MariaDB 11.8.8 container is read-only. A direct
+  `SHOW SLAVE STATUS` check reports both replication threads running, zero lag,
+  and zero I/O/SQL errors. A recent container log has one binlog-read retry;
+  the current replication status is healthy.
+- No application rows were dumped and no grants, schema, replica, or service
+  state were changed. **OPEN:** split migration/administration privileges from
+  runtime identities; map each SoR worker's actual SQL needs; validate the
+  exact grants against disposable MariaDB 11.8 and 12.3 schemas; then plan a
+  reviewed live grant transition with service-account rollback. Until that
+  work closes, treat SoR runtime credential compromise as DDL-capable and keep
+  production SoR schema adoption blocked.
+
+### 2026-10-23 — cross-lab PKI and CRL hardening
+
+- A fresh read-only Claude review found no High findings and two Medium
+  findings: generated CRLs lacked the RFC 5280 Authority Key Identifier, and
+  the trust publisher did not require an independently verified expected root
+  fingerprint. Lower findings covered unspecified reason codes, CRL mode under
+  restrictive umask, stale migration-runbook counts, missing rollback/mode and
+  CRL monotonic-guard tests, plus an exact-artifact transfer caveat.
+- The CRL generator now emits AKI from the CA's subject key identifier and
+  rejects a candidate if that identifier is absent or mismatched; an
+  `unspecified` revocation omits the reason-code extension; generated public
+  CRLs are mode 0644. New tests cover AKI, restrictive umask, unspecified
+  reason handling, number rollback, ledger drift during generation, and a
+  failed state commit after file replacement. The generator suite passes
+  9/9 and all CRL tests pass 33/33.
+- The trust publisher now requires `--expect-sha256`, validates it before any
+  filesystem change, and compares it with the generated root's fingerprint. A
+  separate `--activate-release` path verifies a retained release by exact file
+  set, ownership, modes, checksums, release-name fingerprint, and independent
+  root pin without rebuilding artifacts from possibly changed templates.
+  The README pins the currently recorded Akoria root and explains transfer of
+  only the five expected artifacts. Tests cover mismatch/malformed pins,
+  colon-delimited fingerprints, rollback across builder-template changes,
+  retained-release integrity and modes, and bad directory modes. PKI tests pass
+  35/35; CRL tests pass 33/33 with an emitted-CRL check for omitted reasonCode.
+- The migration runbook now distinguishes historical SoR counts from the
+  current candidate (12 source files through 028; 46 tables, four views, 47
+  triggers), and lists the current monitoring set as 36 migration files through
+  035 while preserving the historical 34-file scratch result through 033. Its
+  paired Letter PDF is six pages with the final-page footer checked visually. The browser fixture's SQL string encoder now uses UTF-8
+  hex literals instead of quote-only escaping.
+- **UNVERIFIED:** a cross-lab review covered the prior PKI/CRL fixes but did not execute tests. The retained-release activation addition and emitted-CRL reason assertion have not yet had a follow-up review. Hosted CI, portal HTTPS publication and device/browser trust remain release
+  gates. The public CA fingerprint and SKI were rechecked over verified SSH;
+  no CA key or live trust configuration was changed. Nothing was committed, pushed,
+  deployed, or written to a live database.
+
+### 2026-10-23 — SoR runtime privilege split
+
+- Static SQL review enumerated the SoR operations in the DNS renderer/appliers,
+  outbox emitter, adopted-discovery reconciler, and UniFi snapshot importer.
+  Added four separate runtime sections: read-only DNS (`[sor]`), outbox checkpoint
+  (`[sor_emit]`), adopted discovery inserts (`[sor_discovery]`), and UniFi-owned
+  network facts (`[sor_unifi]`). Missing sections retain the old `[sor]` fallback
+  for staged config rollout; the candidate grants use newly provisioned accounts
+  and leave the existing `solari` account untouched.
+- `deploy/sorsync/sor-runtime-grants.sql` scopes grants to exact tables and views.
+  It gives the emitter SELECT plus checkpoint INSERT/UPDATE; discovery SELECT on
+  source/IP ownership and INSERT on entities/IPs; the UniFi importer SELECT and
+  owned table INSERT/UPDATE; and DNS rendering only the zone/view reads. None of
+  the four identities receives DDL, DELETE, GRANT OPTION, or global rights.
+- Added a disposable MariaDB integration test that creates ephemeral worker
+  identities, applies the grants to a sentinel-marked scratch schema, exercises
+  permitted queries and writes, verifies excess DML/DDL denial, then invokes the
+  actual UniFi importer twice using `[sor_unifi]` and rolls back/removes all
+  fixtures. `netdb/sor/test_allocator_db.sh` passed end-to-end: the role test,
+  provisioning CDC, UniFi import (10/10), allocator API (12/12), RackWire DB
+  commit (15/15), and all allocator concurrency scenarios. Its EXIT cleanup
+  dropped the scratch schema and temporary users.
+- SoR sync unit suite: 51 tests passed, 6 integration cases skipped because no
+  isolated broker/database was configured for that invocation. Forgejo workflow
+  parity, Python compilation, and `git diff --check` pass.
+- **OPEN:** the live `solari@10.0.0.0/255.0.0.0` account remains unchanged and
+  DDL-capable. Provision the four accounts with unique secrets, stage the
+  per-host configs, rehearse worker cutover/rollback, then remove legacy grants
+  only after inventorying every deployed consumer. Independent cross-lab review
+  and hosted CI remain release gates; this candidate has not been committed,
+  pushed, or deployed.
+
+### 2026-10-23 — SoR privilege split gate and repository status
+
+- Re-ran the exact scratch SoR integration after the four-identity config became
+  section-atomic and the grant test began checking `SHOW GRANTS`: all runtime
+  reads/writes passed, global rights and extra DML/DDL remained denied, and the
+  actual UniFi import with DHCP ran twice. The full scratch harness passed
+  (UniFi 10/10, allocator API 12/12, RackWire DB 15/15, all concurrency
+  proofs), then dropped `sor_test` and all generated users; a metadata recheck
+  found zero remaining schema/users.
+- Final local SoR sync suite: 51 passed, 6 skipped for separately gated RabbitMQ
+  and live-schema cases. Python compilation, Forgejo workflow parity, and
+  `git diff --check` pass.
+- The authenticated GitHub PR for
+  `integrate/phase0-reconcile-20261022` is #38, open with no reviews. Its 17
+  reported checks passed for pushed commit `d93b40e`; that run predates the
+  current dirty local tree and does not exercise the new privilege split. Both
+  remote candidate refs still point to `d93b40e` and both `main` refs to
+  `5e8d688`; 143 paths are locally modified/untracked. No commit or push was
+  made.
+- `claude auth status` currently reports Claude Code authenticated. The project
+  model-routing skill still marks non-interactive Fable invocation and harness
+  reachability as pending; no command or route is documented, so no reviewer
+  invocation was guessed. **OPEN:** independent Fable review of these changes,
+  current-candidate hosted CI, live account/config cutover and rollback, the
+  remaining platform release gates, and deployment.

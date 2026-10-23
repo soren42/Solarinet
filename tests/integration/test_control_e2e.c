@@ -143,7 +143,7 @@ static void test_config_push_end_to_end(void)
 
     /* --- ingest side: the CONTROL_RESULT arrives with the correlation echo
      * and the applied epoch (what serverControlOnResult folds into
-     * serverDbSetNodeApplied -> convergence clears). --- */
+     * durable directive consumption -> convergence clears). --- */
     for (tries = 0; tries < 40 && !converged; tries++) {
         const uint8_t *rx = NULL, *payload = NULL;
         size_t rlen = 0, plen = 0;

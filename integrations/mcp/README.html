@@ -168,7 +168,7 @@ python -m solarinet_mcp --check        # prints config + the 26 tools, no server
   <h2>Safety model</h2>
   <ul>
     <li><strong>Read vs. write are clearly separated</strong> and annotated (<code>readOnlyHint</code>/<code>destructiveHint</code>) so clients can gate the eight control tools.</li>
-    <li><strong>Database access uses fixed query functions.</strong> MCP callers cannot supply SQL. The internal DB client still enforces read-only syntax, a table allow-list, and row caps; pair it with a SELECT-only DB grant for defense in depth.</li>
+    <li><strong>Database access uses a closed set of fixed queries.</strong> MCP callers cannot supply SQL or identifiers; values are bound, parameters are validated, and returned rows are capped. Use a dedicated SELECT-only DB grant as a second boundary.</li>
     <li><strong>No secrets in source.</strong> All credentials come from the environment, matching SolariNet's own §13 convention.</li>
   </ul>
 

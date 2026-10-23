@@ -38,7 +38,7 @@ if (is_string($scenario) && $scenario !== '') {
     $tok = bin2hex(str_repeat("\x11", 32));
     $mk  = static fn(string $role): array => [
         'username' => 'tester', 'role' => $role,
-        'displayName' => 'Tester', 'source' => 'oidc',
+        'displayName' => 'Tester', 'source' => 'directory',
     ];
 
     $method = 'POST';

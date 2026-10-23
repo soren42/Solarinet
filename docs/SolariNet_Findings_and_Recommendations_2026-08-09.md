@@ -60,11 +60,15 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 ### F-01 · Node certificates are not bound to frame identity — P0
 
-**[Observed]** `serverIngestValidate()` derives a role from the peer certificate CN but never binds that certificate to `sourceNodeId` (`src/server/serverIngest.c:217-249`). Dispatch then uses the frame-supplied ID for telemetry, liveness, topology, survey, and control-result writes (`serverIngest.c:273-286,315-328,338-377`). HELLO also persists the header ID plus a self-declared FQDN and role (`src/server/serverMaster.c:199-218`). Monitor gossip accepts `sourceNodeId` into HRW membership without certificate-to-node binding (`src/monitor/monitorGossip.c:118-127`).
+**[Baseline observed in reviewed commit `586cac1`]** `serverIngestValidate()` derived a role from the peer certificate CN but did not bind that certificate to `sourceNodeId`. Dispatch then used the frame-supplied ID for telemetry, liveness, topology, survey, and control-result writes. HELLO persisted the header ID plus a self-declared FQDN and role. Monitor gossip accepted `sourceNodeId` into HRW membership without certificate-to-node binding.
 
 **Impact.** A compromised enrolled client can impersonate another client, keep it falsely alive, or falsify its health/topology/convergence. A gossip peer can add invented monitor IDs that win HRW ownership, causing real monitors to relinquish targets to nonexistent owners.
 
 **[Candidate status, observed 2026-10-20]** The enrollment script's CSR CN now uses the dotted `<role>.<fqdn>` form consumed by server role parsing; an executable CSR test checks both CN and DNS SAN. This closes the enrollment-format mismatch only. Certificate-to-node/FQDN binding, certificate fingerprint persistence, stale-certificate handling, and authenticated monitor membership remain open.
+
+**[Candidate status, verified 2026-10-23]** The current server validates every ingested frame's `sourceNodeId` against the enrolled node row and exact registered certificate CN using `serverDbNodeCertMatches()`. HELLO role/FQDN must also match the authenticated CN. Monitor peers bind their deterministic node ID and monitor role to the verified peer CN. `test_server_ingest` and `test_peers` both pass. This closes the frame-ID/CN binding gap for the currently registered identity; it does not identify the exact presented leaf certificate, enforce the stored leaf fingerprint, or establish signed monitor membership. Certificate revocation distribution, activation/freshness, and fleet acknowledgements also remain open, so F-01 remains a release blocker.
+
+**[Revocation lifecycle update, candidate verified 2026-10-23]** The CRL generator, issuer-scoped static publisher, and peer activation updater now exist with passing local OpenSSL-backed tests and systemd unit checks. The candidate publisher exposes CRLs for static hosting under HTTPS but no TLS vhost or endpoint is deployed. Missing-CRL rollout policy, fleet acknowledgement/convergence, and exact leaf-certificate enforcement remain open; F-01 remains a release blocker.
 
 **Recommendation.** Define one canonical identity contract and enforce it on every ingress path: certificate SAN/CN, immutable node ID, role, and registered FQDN must agree. Persist certificate fingerprint/serial against the node. Reject HELLO and gossip mismatches. Add negative tests for cross-node, cross-role, stale-cert, wrong-CA, and wrong-name cases. A server-signed monitor-membership epoch is preferable to trusting peer advertisements as membership authority.
 
@@ -108,11 +112,11 @@ deployed browser verification remain open.
 
 ### F-04 · The PHP/C “trust boundary” is not isolated — P0
 
-**[Observed]** php-fpm runs as `jason` so it can read the credential file and reach solariCtl (`deploy/dashboard/php-fpm-solarinet.conf:1-18`). `solariServer` also runs as `jason` from a build tree (`deploy/dashboard/solarinet-server.service:20-28`). PHP executes its API directly from the working repository (`deploy/dashboard/apache-solarinet.conf:23-26`). The C socket has no explicit owner/mode setup or `SO_PEERCRED` verification (`src/server/solariCtl.c:1034-1079`).
+**[Historical baseline; candidate state]** The legacy root-level PHP-FPM/server templates still run as `jason` and serve code from the checkout. The candidate now includes a hardened UID split, immutable `/opt/solarinet` release paths, socket `SO_PEERCRED` ACLs, a durable privileged-request queue, scoped dashboard DB grants, and a disposable end-to-end boundary harness. `deploy/dashboard/hardened/CONTRACT-AND-REVIEW.md` records passing C/DB/build and boundary checks plus cross-lab review. These changes have not been applied to Xenon; the deployed boundary is therefore **unverified** and F-04 remains open until the full host cutover passes.
 
 **Impact.** “PHP holds no CA material” is a code convention, not a privilege boundary. Compromised PHP code inherits the operator account’s filesystem, repository, socket, and potentially private-key reach. Serving API code from a writable checkout also turns source write access into persistent production code execution.
 
-**Recommendation.** Deploy immutable release artifacts outside the working tree. Use distinct least-privilege accounts for Apache/php-fpm, the control server, CA signer, and integrations. Put CA signing behind a dedicated minimal service. Give the PHP account only group write access to a mode-controlled socket; verify peer credentials in C. Use canonical hardened systemd units rather than host-specific copies.
+**Recommendation.** Keep the hardened candidate and its release package as the only supported cutover path. F-04 closes only after Xenon is migrated to the separate service identities, immutable package paths, enforced peer ACL and queue, scoped grants, and the verifier passes against the running host. Do not infer deployment from candidate tests.
 
 ### F-05 · A viewer-triggerable scan can starve the leadership lease — P0
 
@@ -134,11 +138,11 @@ acceptance evidence is in [the scan-worker contract](rework/F05-scan-worker-cont
 
 ### F-06 · Tab5 approval display is not cryptographically bound to approval — P0 when enabled
 
-**[Observed]** Authbroker sends unsigned approval requests (`deploy/authbroker/authbrokerd.py:15-24`). The device displays action, subject, detail, source, and timing, but its response signature covers only version, request ID, decision, nonce, and device ID (`authbrokerd.py:216-224,243-257`; `firmware/tab5/src/approvals.cpp:105-167`). The sample broker uses plaintext MQTT (`deploy/authbroker/authbroker.conf.example:11-18`), and firmware CA validation remains TODO (`firmware/tab5/src/mqttbus.cpp:43-48`).
+**[Observed at baseline review]** Authbroker sent unsigned approval requests and the device response did not bind the displayed fields. The local candidate now signs the complete v2 request, verifies it before display, binds the response to the canonical request digest, requires TLS/CA configuration, and imports broker trust by USB serial. Twenty broker unit tests and the C++ host canonical-vector check pass. Full MQTT round-trip, pinned-core firmware build, and hardware acceptance have not been run.
 
 **Impact.** A LAN/MQTT-path attacker can preserve a legitimate ID and nonce while changing the displayed action to something benign; the signed approval then authorizes the broker’s original sensitive request.
 
-**Recommendation.** Keep Tab5 explicitly non-production. Require authenticated MQTT TLS, a broker-signed complete request envelope, device verification, and a response signature over a canonical digest of every security-relevant request field. Add replay, expiry, substitution, wrong-device, and channel-tamper tests.
+**Recommendation.** Keep Tab5 explicitly non-production until the remaining acceptance gates pass. The selected protocol and USB key-provisioning contract, current evidence, and release gates are in [the F-06 approval-binding contract](rework/F06-approval-binding-contract.md).
 
 ### F-07 · PXE provisioning executes unauthenticated artifacts as root — P0 when enabled
 
@@ -146,23 +150,29 @@ acceptance evidence is in [the scan-worker contract](rework/F05-scan-worker-cont
 
 **Impact.** Provisioning-network tampering yields root on new machines or can alter disk targets and persistent credentials.
 
-**Recommendation.** Sign an immutable manifest containing digests for every kernel, initrd, config, installer, and binary; verify before execution. Prefer pinned HTTPS/signed iPXE, but retain signatures as the trust root. Test the destructive flow in an isolated VM network before enabling it on hardware.
+**[Candidate status]** The [F-07 signed-provisioning contract](rework/F07-signed-provisioning-contract.md) defines the trust chain and acceptance gates. A fail-closed guard blocks the five current provisioning entry points by default. A local CMS signer/verifier stages read-only release trees with a canonical manifest binding paths, sizes, executable modes, hashes, target, validity, and a pinned signer; offline tests cover trust, expiry, target, path, read-only modes, and tampering. It is not wired into iPXE, installer configs, firstboot, or release activation, and the isolated-lab override still permits unsafe provisioning. The end-to-end finding remains open.
+
+**Recommendation.** Keep PXE and firstboot provisioning isolated and disabled until the contract is implemented end to end. The trust root must authenticate the initial loader as well as every later script, kernel, initrd, installer config, and binary; a manifest plus checksum served over the existing HTTP channel is insufficient.
 
 ## 5. High-priority correctness and security findings
 
 ### F-08 · SoR CDC can permanently lose events — P1
 
-**[Observed]** `sor_emitd` advances its DB checkpoint after ordinary `basic_publish()` without publisher confirms (`deploy/sorsync/sor_emitd.py:75-100`). DNS and Pi-hole consumers acknowledge deliveries before applying; if application fails, the loop reconnects and discards its in-memory dirty state although the deliveries were already acknowledged (`deploy/sorsync/sor_apply_dnsd.py:164-174`; `sor_apply_pihole.py:128-138`). They have no periodic full reconcile.
+**[Observed at baseline]** `sor_emitd` advanced its DB checkpoint after ordinary `basic_publish()` without publisher confirms; consumers acknowledged before applying and lacked periodic reconciliation.
 
 **Impact.** Broker or target failures can leave downstream state indefinitely stale while the pipeline appears healthy. The documented “at-least-once” property is false.
 
-**Recommendation.** Use publisher confirms plus mandatory routing before checkpoint advance. Ack consumers only after all required targets succeed; requeue transient failures. Add a periodic authoritative full reconcile and fault-injection tests for broker loss, consumer crash, partial apply, and duplicate delivery.
+**[Candidate status]** The outbox emitter now enables publisher confirms and mandatory routing before checkpoint advancement; DNS, Pi-hole, and AD consumers acknowledge only after successful apply and run periodic full reconciliation. Local boundary tests cover broker failure/replay, delayed ack, failed and partial applies, periodic reconcile, and loss during in-flight apply (11 passed). Disposable RabbitMQ and full DNS-chain integration tests exist, but deployed daemon restart and multi-target recovery remain unverified. See [SoR sync status](../deploy/sorsync/README.md).
+
+**Recommendation.** Preserve the confirm/mandatory, apply-before-ack, and periodic-reconcile invariants. Complete the isolated-broker failure drills and deployed restart/multi-target verification before closing F-08.
 
 ### F-09 · Server HA semantics are internally inconsistent — P1
 
 **[Observed]** The operator bridge is opened and polled even on standby servers (`src/server/main.c:387-395,312-313`), allowing standby writes. Losing standby lease claims increment `leaseEpoch` because the UPSERT changes epoch when the proposed holder differs without first requiring expiry (`src/server/serverDb.c:1804-1814`). A bind failure is retried but the winner can continue renewing while not serving traffic.
 
 **Impact.** Multiple servers can accept conflicting commands; config/failover epochs churn without takeover; lease ownership can say active while endpoints are unavailable.
+
+**[Candidate status]** The standby operator bridge permits only `PING`, scoped request status, and discovery status; every other command is rejected before dispatch. Unit coverage verifies a standby cannot edit asset metadata, and a two-process test verifies standby claims do not change the active holder or epoch. Listener bind failures release the exact owned fencing token and enforce a one-TTL local retry cooldown. The process test passed against a disposable local MariaDB schema: the healthy standby took over after bind failure, remained active across the failed server's cooldown, renewed its lease during slow scan enrichment, and recovered an orphaned scan after the original worker lost its lease. The test database was dropped after the run. Production HA behavior remains unverified.
 
 **Recommendation.** Choose and enforce one model: only the active server exposes authoritative writes, or every command transaction verifies current lease holder and epoch. Make lease acquisition, epoch increment, and endpoint activation one observable state machine. Exercise it with two real DB connections and bind-failure/failover tests.
 
@@ -172,7 +182,9 @@ acceptance evidence is in [the scan-worker contract](rework/F05-scan-worker-cont
 
 **Impact.** Trend data is distorted, DB load doubles, and the server can report convergence that will disappear on restart or belongs to a stale/spoofed command.
 
-**Recommendation.** Persist monitor reports exactly once. Save/fsync/atomically activate config before advancing the applied epoch. Persist directives keyed by node, correlation, verb, and epoch; require all result fields and consume one matching pending directive.
+**[Candidate status]** Monitor reports are persisted once; reconciliation now updates derived health only. Client control config is staged and saved before its epoch/config become active. Monitor control now follows the same order, writes and fsyncs a unique temporary state file, atomically renames it, syncs the parent directory, and returns a failed result with the prior epoch if persistence fails. Five fault tests cover restart restoration, file/directory sync failure, rename failure, and absent state path. Server-side result handling requires verb, error, epoch, and nonzero correlation fields. Migration 034 persists each published generic directive by node/correlation/verb/target epoch; a matching result consumes it in the same transaction as the convergence update, successful config results must report the target epoch, and duplicate, stale, wrong-verb, or wrong-epoch results are rejected. Migration/export and live MariaDB coverage pass on an isolated scratch schema. Decommission acknowledgements retain their separate generation-matched lifecycle path. F-10 candidate implementation is complete; full platform integration and release remain open.
+
+**Recommendation.** Preserve the one-write report path and durable config-before-ack behavior. Persist directives keyed by node, correlation, verb, and epoch, then consume only one exact matching pending directive before recording convergence.
 
 ### F-11 · The solariCtl wire protocol is unsafe on both ends — P1
 
@@ -210,6 +222,21 @@ acceptance evidence is in [the scan-worker contract](rework/F05-scan-worker-cont
 
 **Recommendation.** Require the standard OIDC claims and bounded state age; use a maintained OIDC/JWT implementation when compatible with project policy. Independently disable the break-glass endpoint when unused, rate-limit by account and source, add idle/absolute session expiry, and revalidate role/revocation.
 
+**[Candidate status, observed 2026-10-23]** OIDC ID-token validation requires
+issuer, audience, subject, `exp`, `iat`, and nonce, and auth transactions have a
+bounded one-shot state. Local password login is opt-in and requires a private
+rate-limit directory; failed attempts are capped per account and source. Idle
+and absolute session limits apply, local sessions reload roles, and disabling
+local login invalidates existing local sessions. OIDC sessions now refresh
+group-derived roles through HTTPS UserInfo every 60 seconds, bind the returned
+subject to the original identity, refresh access tokens, and downgrade to viewer
+when the provider is unavailable. Discovery issuer identity is matched and
+metadata endpoints are restricted to the issuer origin or explicitly configured
+HTTPS origins, and OIDC response bodies are limited to 1 MiB. Subject mismatch
+revokes the session. Focused claim, session, and TLS-backed UserInfo tests pass.
+**Open:** deployed provider
+group claims, refresh-token behavior, and configuration remain unverified.
+
 ### F-15 · Opie’s “read-only” model is not confidentiality-safe — P1
 
 **[Observed]** Alert DB text is interpolated into the model prompt, which receives generic Read/Grep/Glob tools plus a diagnostic wrapper (`deploy/opie/opied.py:186-252`). The service runs as `jason` with the operator home/CLI authentication (`deploy/opie/opied.service:10-16`). The probe accepts broad `10.*` targets, auto-suffixes hostnames, accepts new SSH keys, and exposes logs, process arguments, unit config, and SMART output (`deploy/opie/opie-probe.sh:18-57`).
@@ -241,6 +268,8 @@ acceptance evidence is in [the scan-worker contract](rework/F05-scan-worker-cont
 **Impact.** An LLM-facing query can reach unadvertised tables, consume excessive resources, or read DB-host files if grants permit.
 
 **Recommendation.** Prefer fixed tools/views over arbitrary SQL. Otherwise use a real MariaDB parser with a narrow AST allowlist, a dedicated per-view account, no FILE/routine privileges, read-only transactions, statement timeout, row/byte caps, and concurrency limits.
+
+**2026-10-23 implementation update.** The MCP `DbClient` now accepts only three enum-selected statements (node summary, active alerts, host history); caller-supplied SQL and identifiers have been removed. Host-history values are bound and checked against the `BIGINT UNSIGNED` range. Query and result caps have direct tests. The local MCP suite passed 48 tests. This closes the arbitrary SQL path in application code. **UNVERIFIED:** the deployment's MariaDB account grants and server-side resource/concurrency limits have not been checked, so the broader least-privilege and resource-control recommendation remains open.
 
 ## 6. Structural findings to address next
 

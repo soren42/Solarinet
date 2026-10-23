@@ -125,6 +125,7 @@ struct serverContext {
     uint64_t            nodeId;      /* this server's id                    */
     serverRoleState     role;        /* current lease role                  */
     uint64_t            epoch;       /* lease epoch (advances on fresh claim)*/
+    uint64_t            leaseRetryAfterMs; /* bind failure cooldown          */
 
     /* bound transport endpoints (owned here; NULL until serverApplyRole) */
     solariConn         *ingest;      /* PULL sink                           */
@@ -210,6 +211,12 @@ solariStatus serverDbCertificateRevocationConfirm(
     serverDb *db, uint64_t nodeId, const char *issuerFp, const char *serialHex,
     const char *leafCertFp, const char *reason, const char *requestedBy,
     const char tokenHash[65], uint64_t nowUnixMs);
+/* Accept a receipt only when it matches the currently published, unexpired
+ * CRL for that issuer. A stale receipt returns ERR_REJECTED without writing. */
+solariStatus serverDbCertificateCrlAcknowledge(serverDb *db, uint64_t nodeId,
+                                              const char *issuerFp,
+                                              uint64_t crlNumber,
+                                              const char *crlFp);
 /* Resolve the issuer recorded atomically with the current leaf identity. */
 solariStatus serverDbGetLeafCertificateIssuer(serverDb *db, uint64_t nodeId,
                                                const char *serialHex,
@@ -395,6 +402,20 @@ solariStatus serverDbSetNodeTargetEpoch(serverDb *db, uint64_t nodeId,
 solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t nodeId,
                                     uint64_t appliedEpoch, const char *lastResult,
                                     uint64_t whenUnixMs);
+/* Persist an outbound control before publication; cancel it if publication
+ * fails. A result is accepted only once for its node/correlation/verb tuple,
+ * then consumed atomically with the node convergence update. */
+solariStatus serverDbControlDirectiveAdd(serverDb *db, uint64_t nodeId,
+                                         uint32_t correlationId, uint8_t verb,
+                                         uint64_t targetEpoch);
+solariStatus serverDbControlDirectiveCancel(serverDb *db, uint64_t nodeId,
+                                            uint32_t correlationId);
+solariStatus serverDbControlResultApply(serverDb *db, uint64_t nodeId,
+                                        uint32_t correlationId, uint8_t verb,
+                                        uint64_t appliedEpoch, bool haveAppliedEpoch,
+                                        uint16_t errorCode,
+                                        const char *lastResult,
+                                        uint64_t whenUnixMs);
 
 /* ---- lease ops (§10 serverLease) ---- */
 /* The conditional UPDATE that IS the election: claim/renew the single lease row
@@ -403,6 +424,10 @@ solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t nodeId,
  * from a different/expired holder). Single txn. */
 solariStatus serverDbLeaseClaim(serverDb *db, uint64_t selfNodeId,
                                 uint32_t ttlSec, bool *won, uint64_t *epoch);
+/* Relinquish only the exact live fencing token owned by selfNodeId. A stale
+ * process cannot expire a successor's lease. */
+solariStatus serverDbLeaseRelease(serverDb *db, uint64_t selfNodeId,
+                                  uint64_t epoch);
 /* Read the current lease holder + epoch (for WHO_IS_PRIMARY answers). *holder
  * is 0 if the lease is unheld/expired. */
 solariStatus serverDbLeaseRead(serverDb *db, uint64_t *holder, uint64_t *epoch);

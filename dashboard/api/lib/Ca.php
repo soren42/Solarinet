@@ -74,7 +74,143 @@ final class Ca
             'roots'        => $roots,
             'provisioners' => self::PROVISIONERS,
             'nodeCerts'    => self::nodeCerts(),
+            'crl'          => self::crlRollout(),
             'warnDays'     => self::WARN_DAYS,
+        ];
+    }
+
+    /**
+     * Latest generated CRL generation and its client/monitor reporting peers.
+     * Server-role peers do not yet send this receipt type and are deliberately
+     * outside the acknowledgement denominator.
+     *
+     * @return array<string,mixed>
+     */
+    private static function crlRollout(): array
+    {
+        try {
+            $generations = Db::rows(
+                'SELECT issuerFp, publishedNumber AS crlNumber, crlFp, generatedAt, nextUpdate,
+                        (nextUpdate IS NULL OR nextUpdate <= UTC_TIMESTAMP(6)) AS expired
+                   FROM certificateCrlState
+                  WHERE publishedNumber IS NOT NULL AND publishedNumber > 0
+                  ORDER BY issuerFp'
+            );
+            $nodes = Db::rows(
+                'SELECT n.nodeId, n.hostFqdn, n.role, n.state, n.leafIssuerFp AS issuerFp,
+                        n.lastSeenAt, TIMESTAMPDIFF(SECOND, n.lastSeenAt, UTC_TIMESTAMP()) AS staleSec
+                   FROM node n
+                  WHERE n.role IN (\'client\',\'monitor\') AND n.state <> \'retired\'
+                  ORDER BY n.hostFqdn'
+            );
+            $acknowledgements = Db::rows(
+                'SELECT a.nodeId, a.issuerFp, a.crlNumber, a.crlFp, a.acknowledgedAt
+                   FROM certificateCrlAcknowledgement a
+                   JOIN node n ON n.nodeId=a.nodeId
+                  WHERE n.role IN (\'client\',\'monitor\') AND n.state <> \'retired\''
+            );
+        } catch (\Throwable $e) {
+            error_log('Ca::crlRollout read failed: ' . $e->getMessage());
+            return [
+                'available' => false,
+                'reason' => 'CRL acknowledgement data unavailable',
+                'scope' => 'Client and monitor agents whose current leaf issuer matches the generation',
+                'generations' => [],
+            ];
+        }
+
+        $ackByNodeIssuer = [];
+        foreach ($acknowledgements as $ack) {
+            $ackByNodeIssuer[(string) $ack['nodeId']][(string) $ack['issuerFp']] = $ack;
+        }
+        $out = [];
+        foreach ($generations as $generation) {
+            $issuer = (string) $generation['issuerFp'];
+            $number = (string) $generation['crlNumber'];
+            $fingerprint = (string) ($generation['crlFp'] ?? '');
+            $expired = (bool) $generation['expired'];
+            $peers = [];
+            $excludedPeers = [];
+            $unknownIssuerCount = 0;
+            $otherIssuerCount = 0;
+            $counts = ['current' => 0, 'stale' => 0, 'pending' => 0, 'offline' => 0, 'expired' => 0];
+            foreach ($nodes as $node) {
+                if (!is_string($node['issuerFp']) || $node['issuerFp'] === '') {
+                    $unknownIssuerCount++;
+                    $excludedPeers[] = [
+                        'nodeId' => (string) $node['nodeId'],
+                        'hostFqdn' => (string) $node['hostFqdn'],
+                        'role' => (string) $node['role'],
+                        'reason' => 'unknown_issuer',
+                    ];
+                    continue;
+                }
+                if ($node['issuerFp'] !== $issuer) {
+                    $otherIssuerCount++;
+                    $excludedPeers[] = [
+                        'nodeId' => (string) $node['nodeId'],
+                        'hostFqdn' => (string) $node['hostFqdn'],
+                        'role' => (string) $node['role'],
+                        'reason' => 'different_issuer',
+                        'issuerFp' => (string) $node['issuerFp'],
+                    ];
+                    continue;
+                }
+                $ack = $ackByNodeIssuer[(string) $node['nodeId']][$issuer] ?? null;
+                $ackNumber = $ack === null || $ack['crlNumber'] === null
+                    ? null : (string) $ack['crlNumber'];
+                $ackFp = $ack === null || $ack['crlFp'] === null
+                    ? null : (string) $ack['crlFp'];
+                $matches = $ackNumber === $number && $ackFp === $fingerprint;
+                $isCurrent = !$expired && $matches;
+                $staleSec = $node['staleSec'] === null ? null : (int) $node['staleSec'];
+                if ($staleSec === null || $staleSec > 900 || $node['state'] === 'down') {
+                    $status = 'offline';
+                } elseif ($expired && $matches) {
+                    $status = 'expired';
+                } elseif ($matches) {
+                    $status = 'current';
+                } elseif ($ackNumber !== null) {
+                    $status = 'stale';
+                } else {
+                    $status = 'pending';
+                }
+                $counts[$status]++;
+                $peers[] = [
+                    'nodeId' => (string) $node['nodeId'],
+                    'hostFqdn' => (string) $node['hostFqdn'],
+                    'role' => (string) $node['role'],
+                    'status' => $status,
+                    'acknowledgementCurrent' => $isCurrent,
+                    'acknowledgedNumber' => $ackNumber,
+                    'acknowledgedFp' => $ackFp,
+                    'acknowledgedAt' => Coerce::iso($ack['acknowledgedAt'] ?? null),
+                    'lastSeenAt' => Coerce::iso($node['lastSeenAt'] ?? null),
+                    'staleSec' => $staleSec,
+                ];
+            }
+            $out[] = [
+                'issuerFp' => $issuer,
+                'crlNumber' => $number,
+                'crlFp' => $fingerprint,
+                'generatedAt' => Coerce::iso($generation['generatedAt'] ?? null),
+                'nextUpdate' => Coerce::iso($generation['nextUpdate'] ?? null),
+                'expired' => $expired,
+                'counts' => $counts,
+                'peerCount' => count($peers),
+                'excludedPeerCount' => count($excludedPeers),
+                'unknownIssuerCount' => $unknownIssuerCount,
+                'otherIssuerCount' => $otherIssuerCount,
+                'excludedPeers' => $excludedPeers,
+                'peers' => $peers,
+            ];
+        }
+        return [
+            'available' => true,
+            'reason' => null,
+            'scope' => 'Client and monitor agents whose current leaf issuer matches the generation',
+            'offlineAfterSeconds' => 900,
+            'generations' => $out,
         ];
     }
 

@@ -17,14 +17,16 @@
  *
  *   serverControlOnResult    - consume an inbound CONTROL_RESULT (0x31): parse
  *     the node's outcome TLVs (echoed verb + error magnitude, optional applied
- *     epoch) and fold it into per-node convergence via serverDbSetNodeApplied.
+ *     epoch) and fold it into per-node convergence after consuming its durable
+ *     pending directive record.
  *
  *   SURVEY_RESP uses the durable monitor-report path in serverIngest.c.
  *
  * The wire contract for CONTROL_RESULT mirrors what the monitor emits
  * (monitorControl.c): TLV_CTRL_VERB (u8) + TLV_ERROR_CODE (u16, 0 == success),
- * with an optional TLV_CTRL_TARGET_EPOCH (u64) reporting the epoch the node has
- * now applied. Parsing and the lastResult string formatting are factored into
+ * with TLV_CTRL_TARGET_EPOCH (u64) required for successful config convergence
+ * and optional for other verbs or failed results. Parsing and lastResult
+ * formatting are factored into
  * pure static helpers (no I/O) so they are unit-testable without a live MariaDB
  * or any sockets; only the two On* entry points touch serverDb / serverMaster.
  *
@@ -191,10 +193,10 @@ typedef struct {
     bool     haveLifeGeneration;
 } serverControlResult;
 
-/* Parse a CONTROL_RESULT payload into res. Tolerant of unknown/extra TLVs and of
- * missing fields (a bare ACK-style result is legal: success is then assumed).
- * Pure: no I/O. Returns ERR_TLV_TRUNCATED on a malformed payload, else
- * SOLARI_OK. *res is zeroed first. */
+/* Parse a CONTROL_RESULT payload into res. Tolerant of unknown/extra TLVs;
+ * required-field validation happens at the state-changing boundary below.
+ * Pure: no I/O. Returns ERR_TLV_TRUNCATED on malformed payload, else SOLARI_OK.
+ * *res is zeroed first. */
 static solariStatus serverControlParseResult(const uint8_t *payload, size_t len,
                                              serverControlResult *res)
 {
@@ -272,6 +274,14 @@ solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
         return rc;
     }
 
+    /* A bare or uncorrelated ACK must never be interpreted as convergence. */
+    if (!correlationId || !res.haveVerb || !res.haveErr || res.verb == 0) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "control: incomplete or uncorrelated result from node=0x%llx (corr=%u)",
+                   (unsigned long long)nodeId, (unsigned)correlationId);
+        return ERR_INVALID_ARG;
+    }
+
     serverControlFormatResult(&res, lastResult, sizeof lastResult);
     whenMs = solariNowUnixMs();
 
@@ -307,16 +317,32 @@ solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
         return SOLARI_OK;
     }
 
-    /* Record convergence. If the node did not report an applied epoch we still
-     * record the outcome (epoch 0 leaves the stored applied epoch logically
-     * "unknown for this round"); the lastResult string is the operative signal
-     * the dashboard surfaces. */
-    rc = serverDbSetNodeApplied(ctx->db, nodeId, res.appliedEpoch,
-                                lastResult, whenMs);
+    /* Only config convergence can change appliedEpoch. Older agents may omit
+     * the optional epoch on non-config results. A successful convergence result
+     * without an epoch is recorded as unverified and never advances the epoch. */
+    if (res.errCode == 0 &&
+        (res.verb == CTRL_SET_CONFIG || res.verb == CTRL_PROVISION) &&
+        !res.haveEpoch) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "control: result without applied epoch from node=0x%llx (corr=%u)",
+                   (unsigned long long)nodeId, (unsigned)correlationId);
+        (void)snprintf(lastResult, sizeof lastResult, "epoch-missing");
+    }
+
+    /* Record convergence only after the required result fields were validated. */
+    rc = serverDbControlResultApply(ctx->db, nodeId, correlationId, res.verb,
+                                    res.appliedEpoch, res.haveEpoch, res.errCode,
+                                    lastResult, whenMs);
     if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_ERROR,
-                   "control: record applied for node=0x%llx (%s) failed: %s",
-                   (unsigned long long)nodeId, lastResult, solariStrError(rc));
+        if (rc == ERR_AUTH_ROLE) {
+            solariLogf(SOLARI_LOG_INFO,
+                       "control: ignored unmatched or duplicate result from node=0x%llx (corr=%u)",
+                       (unsigned long long)nodeId, (unsigned)correlationId);
+        } else {
+            solariLogf(SOLARI_LOG_ERROR,
+                       "control: record applied for node=0x%llx (%s) failed: %s",
+                       (unsigned long long)nodeId, lastResult, solariStrError(rc));
+        }
         return rc;
     }
 

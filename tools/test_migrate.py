@@ -13,6 +13,25 @@ import migrate
 
 
 class MigrationPreflightTests(unittest.TestCase):
+    def test_monitoring_stream_includes_crl_ack_node_cascade(self) -> None:
+        entries = migrate.migrationFiles("monitoring")
+        ids = [migration_id for migration_id, _path, _checksum in entries]
+        self.assertIn("035_certificate_crl_acknowledgements", ids)
+        self.assertIn("036_crl_acknowledgement_node_cascade", ids)
+        self.assertLess(ids.index("035_certificate_crl_acknowledgements"),
+                        ids.index("036_crl_acknowledgement_node_cascade"))
+        migration = next(path.read_text(encoding="utf-8")
+                         for migration_id, path, _checksum in entries
+                         if migration_id == "036_crl_acknowledgement_node_cascade")
+        self.assertIn("DROP FOREIGN KEY fk_certificateCrlAck_node", migration)
+        self.assertIn("REFERENCES node (nodeId) ON DELETE CASCADE", migration)
+        checksum = next(checksum for migration_id, _path, checksum in entries
+                        if migration_id == "036_crl_acknowledgement_node_cascade")
+        snapshot = (migrate.ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
+        self.assertIn(f"036_crl_acknowledgement_node_cascade sha256={checksum}", snapshot)
+        self.assertIn("FOREIGN KEY (`nodeId`) REFERENCES `node` (`nodeId`) ON DELETE CASCADE",
+                      snapshot)
+
     def test_sor_stream_owns_transactional_outbox_and_cdc_triggers(self) -> None:
         entries = migrate.migrationFiles("sor")
         ids = [migration_id for migration_id, _path, _checksum in entries]

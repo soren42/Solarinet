@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import sys
 import threading
@@ -30,7 +31,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 import authbrokerd
-from authbrokerd import Broker, canonical_response, PROTO_VERSION
+from authbrokerd import (
+    Broker, canonical_request, canonical_response, verify_request_signature,
+    PROTO_VERSION,
+)
 
 
 class DeviceSim:
@@ -58,13 +62,17 @@ class DeviceSim:
 
     def _on_message(self, client, userdata, msg):
         req = json.loads(msg.payload.decode())
+        broker_pubkey = self.cfg["request_signing_key"].public_key()
+        if not verify_request_signature(broker_pubkey, req):
+            return
         self.saw_request.set()
         req_id = req["id"]
         print(f"  [device] got request {req_id}: "
               f"{req.get('action')} '{req.get('subject')}' "
               f"from {req.get('source_ip')} -> answering {self.decision.upper()}")
+        req_digest = hashlib.sha256(canonical_request(req)).hexdigest()
         canonical = canonical_response(PROTO_VERSION, req_id, self.decision,
-                                       req["nonce"], self.device_id)
+                                       req["nonce"], self.device_id, req_digest)
         sig = self.privkey.sign(canonical, ec.ECDSA(hashes.SHA256()))
         resp = {
             "v": PROTO_VERSION,
@@ -73,6 +81,7 @@ class DeviceSim:
             "decision": self.decision,
             "device_id": self.device_id,
             "nonce": req["nonce"],
+            "req_digest": req_digest,
             "sig": base64.b64encode(sig).decode(),
         }
         client.publish(f"{self.prefix}/response/{req_id}",
@@ -106,6 +115,7 @@ def main(argv=None) -> int:
         return 2
 
     priv = ec.generate_private_key(ec.SECP256R1())
+    request_signer = ec.generate_private_key(ec.SECP256R1())
     pub_pem = priv.public_key().public_bytes(
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -116,6 +126,9 @@ def main(argv=None) -> int:
         "username": args.username, "password": args.password,
         "topic_prefix": "auth", "request_ttl_sec": "15",
         "client_id": "authbrokerd-loopback",
+        "allow_plaintext_dev": True,
+        "request_signing_key": request_signer,
+        "request_signing_key_id": "test-key",
         "devices": {args.device_id: serialization.load_pem_public_key(pub_pem.encode())},
     }
 

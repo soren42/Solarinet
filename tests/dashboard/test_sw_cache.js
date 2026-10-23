@@ -30,7 +30,7 @@ const context = {
   },
   caches: {
     open: async () => cache,
-    keys: async () => ["solari-v6-api", "solari-v6-shell", "solari-v7-shell"],
+    keys: async () => ["solari-v6-api", "solari-v6-shell", "solari-v7-shell", "solari-v8-shell", "solari-v9-shell"],
     delete: async (key) => { deleted.push(key); return true; },
     match: async () => oldPrivate,
   },
@@ -79,7 +79,7 @@ function dispatchFetch(url) {
   const activate = { waitUntil(promise) { this.done = promise; } };
   handlers.activate(activate);
   await activate.done;
-  assert.deepEqual(deleted.sort(), ["solari-v6-api", "solari-v6-shell"]);
+  assert.deepEqual(deleted.sort(), ["solari-v6-api", "solari-v6-shell", "solari-v7-shell", "solari-v8-shell", "solari-v9-shell"]);
 
   console.log("service worker API privacy and shell fallback passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -20,6 +20,7 @@ import time
 
 import pika
 import pymysql
+from db_config import database_options
 
 CONF = os.environ.get("SORSYNC_CONF",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "sorsync.conf"))
@@ -39,12 +40,10 @@ def load_cfg():
 
 
 def db_connect(c):
+    db = database_options(c, "sor_emit")
     return pymysql.connect(
-        host=c.get("sor", "host", fallback="10.1.0.200"),
-        port=c.getint("sor", "port", fallback=3306),
-        user=c.get("sor", "user", fallback="solari"),
-        password=c.get("sor", "password"),
-        database=c.get("sor", "name", fallback="sor"),
+        host=db["host"], port=db["port"], user=db["user"],
+        password=db["password"], database=db["name"],
         autocommit=True, connect_timeout=10,
         cursorclass=pymysql.cursors.DictCursor,
     )

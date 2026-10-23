@@ -4,8 +4,31 @@
 [sor]
 host = 10.1.0.200
 port = 3306
-user = solari
-password = CHANGME-sor-app-pw
+user = solari_sor_ro
+password = REPLACE_WITH_UNIQUE_SECRET
+name = sor
+
+# Separate identities limit compromise of each worker. For a staged migration,
+# omitted sections retain the [sor] fallback until their credentials are ready.
+[sor_emit]
+host = 10.1.0.200
+port = 3306
+user = solari_sor_emit
+password = REPLACE_WITH_UNIQUE_SECRET
+name = sor
+
+[sor_discovery]
+host = 10.1.0.200
+port = 3306
+user = solari_sor_discovery
+password = REPLACE_WITH_UNIQUE_SECRET
+name = sor
+
+[sor_unifi]
+host = 10.1.0.200
+port = 3306
+user = solari_sor_unifi
+password = REPLACE_WITH_UNIQUE_SECRET
 name = sor
 
 [amqp]

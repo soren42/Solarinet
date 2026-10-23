@@ -23,7 +23,7 @@ void tearDown(void) {}
 #define SELF_NODE 0x1111222233334444ULL
 
 /* Mirror of serverControlParseResult's TLV walk (serverControl.c): the wire
- * contract the server folds into serverDbSetNodeApplied. */
+ * contract the server folds into convergence after matching the durable directive. */
 typedef struct {
     uint8_t  verb;
     uint16_t errCode;

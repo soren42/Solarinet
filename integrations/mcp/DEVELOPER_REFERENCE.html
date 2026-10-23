@@ -50,7 +50,7 @@ table{border-collapse:collapse;width:100%;margin:14px 0 20px;font-size:14px}th,t
 <tr><td><code>solarinet_mcp/server.py</code></td><td>FastMCP registration, typed tool inputs, REST/DB dispatch, response formatting, and transport startup.</td></tr>
 <tr><td><code>solarinet_mcp/config.py</code></td><td>Environment-only configuration. Parses REST, database, transport, and listener-port settings.</td></tr>
 <tr><td><code>solarinet_mcp/rest.py</code></td><td>Async HTTPX client; bearer auth, TLS verification, timeout, JSON envelope validation, and normalized API errors.</td></tr>
-<tr><td><code>solarinet_mcp/db.py</code></td><td>PyMySQL access via <code>asyncio.to_thread</code>, read-only query guard, table allow-list, parameter binding, and row limits.</td></tr>
+<tr><td><code>solarinet_mcp/db.py</code></td><td>PyMySQL access via <code>asyncio.to_thread</code>, fixed query registry, parameter binding, and row limits.</td></tr>
 <tr><td><code>solarinet_mcp/formatting.py</code></td><td>JSON and Markdown rendering helpers shared by the tools.</td></tr>
 <tr><td><code>solarinet_mcp/__main__.py</code></td><td>CLI entry point and non-starting <code>--check</code> configuration/tool listing.</td></tr>
 <tr><td><code>tests/</code></td><td>Unit tests using mocked HTTP, injected DB runners, configuration cases, and tool behavior.</td></tr>
@@ -101,7 +101,7 @@ table{border-collapse:collapse;width:100%;margin:14px 0 20px;font-size:14px}th,t
 <ul>
 <li><strong>HTTP exposure:</strong> the tested FastMCP 1.30.0 runtime defaults to <code>127.0.0.1</code>; this project does not implement MCP-client authentication. Keep HTTP local or put remote access behind an authenticated, access-controlled tunnel or proxy. Do not expose the listener directly to an untrusted network.</li>
 <li><strong>REST writes:</strong> MCP annotations help clients distinguish read-only and side-effecting tools, but annotations are not authorization. The dashboard API's bearer token and RBAC checks enforce access.</li>
-<li><strong>Database reads:</strong> no MCP tool accepts SQL. Internal query validation is defense-in-depth; it is not a full SQL parser. Use a MariaDB account granted only the needed SELECT privileges.</li>
+<li><strong>Database reads:</strong> no MCP tool or DB client method accepts caller-supplied SQL. The client selects from a closed registry of reviewed statements, validates parameter count and node identifiers, binds values, and caps rows. Use a MariaDB account granted only the needed SELECT privileges.</li>
 <li><strong>Transport security:</strong> REST TLS verification defaults on. Disabling it weakens server identity checks and is intended only for controlled testing.</li>
 <li><strong>Secret handling:</strong> supply tokens and database passwords through the process environment/secret manager, never source files or command-line arguments. Do not include real values in diagnostic output.</li>
 </ul>
@@ -110,7 +110,7 @@ table{border-collapse:collapse;width:100%;margin:14px 0 20px;font-size:14px}th,t
 <section>
 <h2>6. Errors, bounds, and execution model</h2>
 <p>The REST client requires the dashboard's JSON envelope with a <code>data</code> member, maps API error envelopes and HTTP 401/403/404 responses to concise tool errors, and reports timeout or transport failures explicitly. The database driver is synchronous, so queries run in a worker thread to avoid blocking the async tool loop.</p>
-<p>The DB guard strips comments, accepts a single SELECT/WITH statement, rejects stacked statements and file export clauses, checks referenced tables against an allow-list, binds values as parameters, and limits result rows (default 100, hard maximum 1000). These checks reduce accidental exposure; the database grant is the enforcement boundary if code or parser assumptions fail.</p>
+<p>Database reads use a closed registry of three reviewed statements. Callers select a query identifier and supply only validated values; SQL text, table names, and other identifiers cannot be submitted. Each tool applies its own row limit, capped at 1000, with one extra fetched row used to report truncation. The database grant remains the privilege boundary and should be restricted to the columns or tables this service needs.</p>
 <p>Tool inputs use Pydantic models with extra fields forbidden and explicit bounds where relevant. Response formatting is JSON for machine use or compact Markdown for readable summaries. Tests inject HTTP transports and database runners rather than reaching production services.</p>
 </section>
 

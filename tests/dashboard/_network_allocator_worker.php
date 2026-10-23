@@ -155,7 +155,7 @@ if (getenv('NA_AUTH') === '1') {
     session_save_path($sessionDir);
     session_id('network-allocator-test-' . getmypid());
     session_start();
-    $_SESSION['solari'] = ['username' => 'fixture-operator', 'role' => (string) (getenv('NA_ROLE') ?: 'operator'), 'source' => 'oidc'];
+    $_SESSION['solari'] = ['username' => 'fixture-operator', 'role' => (string) (getenv('NA_ROLE') ?: 'operator'), 'source' => 'directory'];
     $_SESSION['solari_created_at'] = time();
     $_SESSION['solari_seen_at'] = time();
 }

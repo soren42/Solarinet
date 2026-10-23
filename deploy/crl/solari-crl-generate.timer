@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the SolariNet certificate revocation list regularly
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*-*-* 00/6:00:00
+RandomizedDelaySec=10min
+Persistent=true
+Unit=solari-crl-generate.service
+
+[Install]
+WantedBy=timers.target

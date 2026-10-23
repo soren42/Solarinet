@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Real dashboard → authenticated PHP routes → scratch SoR browser acceptance.
+// Real dashboard → authenticated PHP/SoR routes plus fixture-backed Discovery UI polling.
 // This test refuses a non-loopback or non-scratch database by construction.
 const assert = require('node:assert/strict');
 const { spawn, spawnSync } = require('node:child_process');
@@ -53,7 +53,8 @@ function sql(query) {
 }
 
 function quote(value) {
-  return "'" + String(value).replaceAll("'", "''") + "'";
+  const hex = Buffer.from(String(value), 'utf8').toString('hex');
+  return hex ? `CONVERT(0x${hex} USING utf8mb4)` : "CONVERT(X'' USING utf8mb4)";
 }
 
 function freePort() {
@@ -85,7 +86,7 @@ $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 if ($path === '/__health') { header('Content-Type: text/plain'); echo 'ok'; exit; }
 if ($path === '/__fixture_session') {
     require_once ${JSON.stringify(AUTH_LIB)};
-    Auth::establishSession(['username' => ${JSON.stringify(sessionUser)}, 'role' => 'operator', 'source' => 'oidc']);
+    Auth::establishSession(['username' => ${JSON.stringify(sessionUser)}, 'role' => 'operator', 'source' => 'directory']);
     header('Content-Type: application/json'); echo json_encode(['ready' => true]); exit;
 }
 if ($path === '/api/discovery/scan' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
@@ -294,6 +295,7 @@ async function main() {
     const browserConsole = [];
     const externalRequests = [];
     const scanJobsResponses = [];
+    const locationResponses = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('console', (message) => {
       if (message.type() === 'error') browserConsole.push(message.text());
@@ -302,6 +304,11 @@ async function main() {
       if (!request.url().startsWith(base + '/') && !request.url().startsWith('file://')) externalRequests.push(request.url());
     });
     page.on('response', async (response) => {
+      if (response.url().includes('/api/inventory/locations')) {
+        let body = '';
+        try { body = await response.text(); } catch (_) { /* response body may be unavailable */ }
+        locationResponses.push(`${response.status()} ${response.url()} ${body.slice(0, 800)}`);
+      }
       if (response.url().includes('/api/discovery/scan-jobs')) {
         let body = '';
         try { body = await response.text(); } catch (_) { /* response body may be unavailable */ }
@@ -329,8 +336,13 @@ async function main() {
       buffer: exportPath ? fs.readFileSync(exportPath) : Buffer.from(JSON.stringify(snapshot)),
     });
     await page.getByText(`${scannerExportName}: ${snapshot.items.length} catalog items, ${snapshot.assets.length} assets.`).waitFor();
-    assert(await page.getByRole('note').getByText('Some SoR locations share a name').isVisible(),
-      'duplicate SoR names should be called out');
+    const duplicateLocationNote = page.getByRole('note').getByText('Some SoR locations share a name');
+    await duplicateLocationNote.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+    const duplicateNoteVisible = await duplicateLocationNote.isVisible().catch(() => false);
+    const locationOptionText = await page.locator('select[aria-label^="SoR destination for source location"]').allTextContents();
+    assert(duplicateNoteVisible,
+      `duplicate SoR names should be called out; location options=${JSON.stringify(locationOptionText)}; ` +
+      `location responses=${JSON.stringify(locationResponses)}; PHP=${phpErrors}`);
     for (const locationName of sourceLocations) {
       await page.getByLabel(`SoR destination for source location ${locationName}`).selectOption(String(locationChoices[locationName][1]));
     }
@@ -486,6 +498,8 @@ async function main() {
     await rackwireFrame.getByRole('button', { name: 'Look up', exact: true }).click();
     const barcodeLookup = await barcodeLookupWait;
     assert.equal(barcodeLookup.status(), 200, 'RackWire barcode scan must resolve a scanner-imported inventory unit');
+    assert(Number(sql(`SELECT COUNT(*) FROM barcode_scans WHERE code=${quote(tag)} AND operator=${quote(sessionUser)} AND action='lookup'`)) > 0,
+      'successful RackWire lookup must append its barcode audit event');
     assert.equal(csrfRetry.firstExpired, true, 'the first barcode request must receive a simulated expired-token rejection');
     assert.equal(csrfRetry.lookupAttempts, 2, 'RackWire must issue exactly one lookup retry');
     assert.equal(csrfRetry.whoamiRefreshes, 2, 'RackWire must fetch identity once for the stale token and once to refresh it');
@@ -690,16 +704,21 @@ async function main() {
       // Hold the response longer than Discovery's one-second interval to
       // prove slow status reads never overlap or race their own results.
       if (delayStatusResponses) {
-        const aborted = new Promise((resolve) => route.request().once('requestfailed', () => resolve(true)));
-        const delayed = new Promise((resolve) => setTimeout(() => resolve(false), 1500));
-        if (await Promise.race([aborted, delayed])) return;
+        const aborted = page.waitForEvent('requestfailed', {
+          predicate: (request) => request === route.request(),
+          timeout: 1500,
+        }).then(() => true, () => false);
+        if (await aborted) return;
       }
       if (route.request().failure()) return;
       try {
         const response = await route.fetch();
         await route.fulfill({ response });
       } catch (error) {
-        if (!route.request().failure() && !page.isClosed()) throw error;
+        if (!route.request().failure() && !page.isClosed()) {
+          failure = failure || new Error(`Discovery status route failed: ${error.message}`);
+          try { await route.abort('failed'); } catch (_) { /* request or page already ended */ }
+        }
       }
     });
     const pendingAdmissionResponse = page.waitForResponse((response) =>
@@ -835,9 +854,9 @@ async function main() {
 
     assert.deepEqual(pageErrors, [], 'browser reported no JavaScript errors');
     assert.deepEqual(externalRequests, [], 'browser made no external requests');
-    console.log('Dashboard integration browser E2E passed: scanner import, operator-reviewed SoR entity association, RackWire profile creation, barcode resolution, UI port mapping and interface-level cable commit with replay, missing/unknown-port entity fallback, plan persistence, and Discovery scan lifecycle.');
+    console.log('Dashboard browser integration passed: real scanner/SoR/RackWire routes; fixture-backed Discovery UI admission and polling lifecycle. Native Discovery worker behavior is covered by test_scan_worker_browser_e2e.cjs.');
   } catch (error) {
-    failure = error;
+    failure = failure || error;
   } finally {
     if (browser) await browser.close();
     if (child && child.exitCode === null) child.kill('SIGTERM');
@@ -850,6 +869,7 @@ async function main() {
         : '';
       const cleanup = `SET @source_id=(SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1);
         DELETE FROM audit_log WHERE actor_label=${quote(actor)};
+        DELETE FROM barcode_scans WHERE operator=${quote(sessionUser)};
         DELETE FROM interconnects WHERE label IN (${quote(committedCableLabel)},${quote(mappedCableLabel)},${quote(unknownPortCableLabel)});
         ${entityCleanup}
         DELETE FROM barcodes WHERE subject_table='hardware_units' AND subject_id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
@@ -860,6 +880,8 @@ async function main() {
         ${rackwirePlanId ? `DELETE FROM rw_plan_versions WHERE plan_id=${rackwirePlanId}; DELETE FROM rw_plans WHERE id=${rackwirePlanId};` : ''}
         ${sourceExistedBefore ? '' : "DELETE FROM sources WHERE id=@source_id AND NOT EXISTS (SELECT 1 FROM external_refs WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_models WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_units WHERE source_id=@source_id);"}`;
       sql(cleanup);
+      const remainingScanRows = Number(sql(`SELECT COUNT(*) FROM barcode_scans WHERE operator=${quote(sessionUser)}`));
+      assert.equal(remainingScanRows, 0, 'browser fixture cleanup must remove its barcode scan audit rows');
     } catch (cleanupError) {
       failure = failure || cleanupError;
     }

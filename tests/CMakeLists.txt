@@ -139,6 +139,13 @@ if(TARGET monitorcore)
   add_executable(test_monitor_control unit/test_monitor_control.c)
   target_link_libraries(test_monitor_control PRIVATE monitorcore unity)
   add_test(NAME test_monitor_control COMMAND test_monitor_control)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(test_monitor_control_persistence unit/test_monitor_control_persistence.c)
+    target_link_libraries(test_monitor_control_persistence PRIVATE monitorcore unity)
+    target_link_options(test_monitor_control_persistence PRIVATE
+      "-Wl,--wrap=fsync" "-Wl,--wrap=rename")
+    add_test(NAME test_monitor_control_persistence COMMAND test_monitor_control_persistence)
+  endif()
 endif()
 
 # Monitor reporting + gossip - need the transport (and spool).
@@ -198,6 +205,14 @@ if(TARGET servercore)
       $<TARGET_PROPERTY:servercore,INTERFACE_LINK_LIBRARIES>)
     add_test(NAME ${t} COMMAND ${t})
   endforeach()
+
+  add_executable(test_server_control_result
+    unit/test_server_control_result.c unit/server_stubs.c
+    ${CMAKE_SOURCE_DIR}/src/server/serverControl.c)
+  target_include_directories(test_server_control_result PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src/server)
+  target_link_libraries(test_server_control_result PRIVATE solari unity)
+  add_test(NAME test_server_control_result COMMAND test_server_control_result)
 
   # Exercise the production mbedTLS enrollment signer with generated CA/CSR
   # material. This covers identity rejection and preserves the SAN in the leaf.

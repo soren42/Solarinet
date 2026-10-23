@@ -196,7 +196,7 @@ try {
         . "if (\$path === '/__fixture_session') {\n"
         . " require_once " . var_export(__DIR__ . '/../../dashboard/api/lib/Auth.php', true) . ";\n"
         . "\$role = (\$_GET['role'] ?? 'operator') === 'viewer' ? 'viewer' : 'operator';\n"
-        . " Auth::establishSession(['username' => 'scanner-http-test', 'role' => \$role, 'source' => 'oidc']);\n"
+        . " Auth::establishSession(['username' => 'scanner-http-test', 'role' => \$role, 'source' => 'directory']);\n"
         . " header('Content-Type: application/json'); echo json_encode(['csrf' => Auth::csrfToken()]); exit;\n"
         . "}\n"
         . "if (is_string(\$path) && str_starts_with(\$path, '/api/')) { require " . $apiIndex . "; exit; }\n"

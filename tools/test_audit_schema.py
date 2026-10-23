@@ -36,6 +36,24 @@ class SchemaAuditTests(unittest.TestCase):
         self.assertEqual("INSERT INTO t VALUES ('x') */;;\n",
                          audit_schema.normalizeSchemaDdl(sql))
 
+    def test_view_column_stub_placeholder_is_normalized_across_mariadb_versions(self) -> None:
+        old_dump = (
+            "/*!50001 CREATE VIEW `v_sample` AS SELECT\n"
+            " 1 AS `first_column`,\n 1 AS `second_column` */;\n"
+        )
+        new_dump = (
+            "/*!50001 CREATE VIEW `v_sample` AS SELECT\n"
+            " NULL AS `first_column`,\n NULL AS `second_column` */;\n"
+        )
+        self.assertEqual(audit_schema.normalizeSchemaDdl(old_dump),
+                         audit_schema.normalizeSchemaDdl(new_dump))
+
+    def test_view_placeholder_normalization_does_not_hide_real_view_drift(self) -> None:
+        expected = "/*!50001 CREATE ALGORITHM=UNDEFINED VIEW `v_sample` AS SELECT 1 AS `value` */;\n"
+        actual = "/*!50001 CREATE ALGORITHM=UNDEFINED VIEW `v_sample` AS SELECT NULL AS `value` */;\n"
+        self.assertNotEqual(audit_schema.normalizeSchemaDdl(expected),
+                            audit_schema.normalizeSchemaDdl(actual))
+
     def test_matching_audit_is_explicitly_limited_to_schema_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

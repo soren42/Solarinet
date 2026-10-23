@@ -65,7 +65,7 @@
     <tr><td>Fleet join proof</td><td>tungsten 10.5.0.5</td><td class="ok">joined · SSO login + auto-home + TGT verified</td></tr>
     <tr><td>NFS home export</td><td>cesium <code>/export/home</code></td><td class="ok">live · root_squash, crossmnt</td></tr>
     <tr><td>Ansible roles: directory-join / shared-home / dev-tools</td><td>deploy/fleet/ansible</td><td class="warn">authored + validated (check-mode) · uncommitted</td></tr>
-    <tr><td>Dashboard OIDC login</td><td>dashboard/api + public</td><td class="warn">code done + verified · not deployed/committed</td></tr>
+    <tr><td>Dashboard OIDC login</td><td>dashboard/API candidate</td><td class="warn">locally tested candidate · unpublished and not deployed</td></tr>
   </table>
   <p class="sub">Credentials (AD Administrator, Keycloak admin, DB, dashboard client secret, AD user
      <code>jason</code>) are stored in agent memory and in <code>/root/.kc-*</code> on radium — deliberately
@@ -90,15 +90,23 @@ ansible-playbook -i inventory playbooks/site.yml --limit &lt;host&gt; --tags ad 
   -e solari_ad_enabled=true -e solari_ad_join_password='&lt;AD admin pw&gt;'</pre>
 
   <div class="gap">
-    <strong>Dashboard OIDC — finalize before it goes live.</strong> The code is complete, additive, and
-    keeps local login untouched, but is intentionally <em>not deployed or committed</em>. To turn it on:
+    <strong>Dashboard OIDC — candidate gate.</strong> The current SolariNet worktree contains the
+    implementation and local test coverage, but it is <em>not published or deployed</em>. Local
+    password login is a separate, disabled-by-default break-glass path. OIDC sessions recheck group
+    membership through UserInfo every 60 seconds, bind the returned subject to the original identity,
+    refresh expiring access tokens, downgrade to viewer on provider errors, and revoke on subject
+    mismatch. Discovery metadata must identify the configured issuer; authorization, token, JWKS,
+    and UserInfo endpoints are limited to HTTPS on the issuer origin or an explicitly configured
+    <code>allowedEndpointOrigins</code> origin. Provider responses are capped at 1 MiB. Before it goes live:
     <ol>
       <li>Add the dashboard's public callback (<code>https://&lt;dashboard-host&gt;/api/auth/oidc/callback</code>)
         as a Valid Redirect URI on the <code>solarinet-dashboard</code> Keycloak client; add a
         <em>Group Membership</em> mapper (claim <code>groups</code>) so <code>domain admins</code> maps to the admin role.</li>
       <li>In <code>solari-auth.json</code> → <code>oidc</code>: set <code>enabled:true</code>,
         <code>redirectUri</code>, and <code>caBundle</code> to a PEM trusting radium's cert
-        (<code>openssl s_client -connect sso.akoria.org:8443 … &gt; radium-ca.pem</code>).</li>
+        (<code>openssl s_client -connect sso.akoria.org:8443 … &gt; radium-ca.pem</code>). Configure
+        <code>allowedEndpointOrigins</code> only if the provider uses additional HTTPS origins; entries
+        must be origins such as <code>https://sso.akoria.org:8443</code>, with no path.</li>
       <li>Ensure the dashboard host resolves/reaches <code>sso.akoria.org:8443</code>; deploy; browser-test
         the "Sign in with Akoria SSO" button.</li>
     </ol>

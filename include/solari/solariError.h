@@ -35,6 +35,7 @@ enum solariError {
     ERR_LEASE_LOST        = -51,  /* Active server failed to renew lease; demote. */
 
     ERR_UNKNOWN_MSG       = -60,  /* Unrecognized message type that must parse.   */
+    ERR_REJECTED          = -61,  /* Well-formed operation rejected by current state. */
 
     ERR_PLATFORM          = -70   /* PAL call failed (OS-specific detail logged). */
 };

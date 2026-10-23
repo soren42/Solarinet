@@ -23,6 +23,7 @@ const char *solariStrError(solariStatus st)
     case ERR_DB:                return "database error";
     case ERR_LEASE_LOST:        return "server lease lost";
     case ERR_UNKNOWN_MSG:       return "unknown message type";
+    case ERR_REJECTED:          return "operation rejected by current state";
     case ERR_PLATFORM:          return "platform call failed";
     default:                    return "unknown error";
     }

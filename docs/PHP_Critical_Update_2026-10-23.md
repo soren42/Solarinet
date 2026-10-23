@@ -47,3 +47,27 @@ Several inventoried devices could not be verified over SSH because they were off
 ## Result
 
 Every PHP runtime found on an accessible host is already at a fixed release. No patch installation was required during this audit. Xenon's active PHP-FPM process is running after the fixed Ubuntu package installation; Cesium's active development server runs PHP 8.5.12; Nitrogen has the fixed CLI runtime and no PHP web server. No vulnerable PHP runtime was identified. Offline and inaccessible inventory devices remain the outstanding verification boundary.
+
+## PHP 8.5 session-progress follow-up — 2026-10-23 17:03 UTC
+
+The PHP Foundation's 23 October informational advisory recommends
+`session.upload_progress.enabled=0` until its next regular bugfix release, but
+states that applications which do not change `session.serialize_handler` at
+runtime can keep upload progress enabled. It describes the unusual trigger as
+configuring `php_binary` or `php_serialize`, switching to `php` before
+`session_start()`, and leaving upload progress enabled.
+
+Fresh read-only checks found one PHP process on Cesium: the staged SolariNet
+dashboard's PHP 8.5.12 built-in server on `127.0.0.1:17701`. Its effective
+settings are `session.serialize_handler=php`,
+`session.upload_progress.enabled=On`, and `fatal_error_backtraces=On`. The
+installed dashboard PHP source contains no runtime serializer change. Xenon's
+PHP 8.5 FPM reports upload progress `Off`; Nitrogen is PHP 8.4.27 CLI with no
+PHP-serving process, serializer `php`, and no runtime serializer change in the
+project source. The scanner-ingest app on port 8765 is Python, not PHP.
+
+No extra restart or INI change was made: the supported PHP CVE fixes are
+loaded, and the advisory's additional trigger is absent from the deployed
+dashboard code. Reassess if code begins changing the serializer at runtime or
+when the next PHP bugfix release is available. The official advisory is at
+[php.net](https://www.php.net/archive/2026.php#2026-10-23-1).

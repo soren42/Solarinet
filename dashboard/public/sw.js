@@ -20,7 +20,7 @@
 "use strict";
 
 // Bump the version to evict API responses cached by earlier service workers.
-const CACHE_VERSION = "solari-v7";
+const CACHE_VERSION = "solari-v10";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
 
 // App shell: everything index.html pulls in to render the last view.

@@ -26,6 +26,7 @@ enum solariTlvType {
     TLV_HOST_FQDN         = 0x0103,  /* utf8 string                        */
     TLV_CONFIG_EPOCH      = 0x0104,  /* uint64                             */
     TLV_REPORT_SESSION    = 0x0105,  /* 16 random bytes per reporter incarnation */
+    TLV_CRL_ACTIVATION    = 0x0106,  /* ASCII issuerFp:number:crlFp receipt */
     /* --- host metrics (0x10xx) --- */
     TLV_OS_NAME           = 0x1001,  /* utf8                               */
     TLV_ARCH              = 0x1002,  /* utf8                               */

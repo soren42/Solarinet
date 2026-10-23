@@ -1,3 +1,7 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 /*
  * monitorControl.c - SCP_MSG_CONTROL handling on the monitor (sec 8, sec 9.1,
  * Phase 3 Handoff sec 4.2/7.4).
@@ -19,7 +23,7 @@
  * The monitor answers each addressed directive with SCP_MSG_CONTROL_RESULT
  * (verb echo + error magnitude + applied epoch) whose correlationId echoes the
  * directive frame's seqNo; the server folds it into per-node convergence
- * (serverControlOnResult -> serverDbSetNodeApplied).
+ * (serverControlOnResult consumes the matching durable pending directive).
  *
  * Layering mirrors serverControl.c and clientControl.c: parse/apply/decide is
  * pure over caller memory (unit-testable, no I/O); the state file is small
@@ -35,6 +39,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 /* Bounds for hot-applied probe tuning (defensive; the dashboard validates
  * tighter ranges - the agent only refuses the absurd). */
@@ -280,7 +292,8 @@ solariStatus monitorControlStateLoad(monitorControlState *st, monitorConfig *cfg
     fclose(f);
 
     if (epoch > st->appliedEpoch) {
-        if (!blob || monitorControlApplyBlob(cfg, blob, blobLen) == SOLARI_OK) {
+        if (blob && monitorControlApplyBlob(cfg, blob, blobLen) == SOLARI_OK) {
+            cfg->configEpoch = epoch;
             st->appliedEpoch = epoch;
             solariLogf(SOLARI_LOG_INFO,
                        "control: restored applied epoch %llu from %s",
@@ -298,21 +311,106 @@ solariStatus monitorControlStateSave(const monitorConfig *cfg,
                                      const monitorControlState *st,
                                      const uint8_t *blob, uint16_t blobLen)
 {
-    char  path[sizeof cfg->ctrlStateFile + 8];
-    char  tmp[sizeof cfg->ctrlStateFile + 16];
-    FILE *f;
+    char path[sizeof cfg->ctrlStateFile + 8];
+    char tmp[sizeof cfg->ctrlStateFile + 32];
+    FILE *f = NULL;
+    int fd = -1, failed = 0;
 
-    if (!cfg || !st) return ERR_INVALID_ARG;
+    if (!cfg || !st || !blob || blobLen == 0 ||
+        blobLen > MONITOR_CTRL_BLOB_MAX)
+        return ERR_INVALID_ARG;
     monitorControlStatePath(cfg, path, sizeof path);
-    if (path[0] == '\0') return SOLARI_OK;      /* persistence off */
+    if (path[0] == '\0') return ERR_INVALID_ARG;
 
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    f = fopen(tmp, "wb");
-    if (!f) return ERR_PLATFORM;
-    fprintf(f, "%llu\n", (unsigned long long)st->appliedEpoch);
-    if (blob && blobLen > 0) fwrite(blob, 1, blobLen, f);
-    if (fclose(f) != 0) { remove(tmp); return ERR_PLATFORM; }
+    if (snprintf(tmp, sizeof tmp, "%s.tmp.XXXXXX", path) >= (int)sizeof tmp)
+        return ERR_BUFFER_FULL;
+#ifdef _WIN32
+    if (_mktemp_s(tmp, strlen(tmp) + 1) != 0) return ERR_PLATFORM;
+    fd = _open(tmp, _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
+               _S_IREAD | _S_IWRITE);
+    f = fd < 0 ? NULL : _fdopen(fd, "wb");
+#else
+    fd = mkstemp(tmp);
+    f = fd < 0 ? NULL : fdopen(fd, "wb");
+#endif
+    if (!f) {
+        if (fd >= 0) {
+#ifdef _WIN32
+            _close(fd);
+#else
+            close(fd);
+#endif
+            remove(tmp);
+        }
+        return ERR_PLATFORM;
+    }
+    if (fprintf(f, "%llu\n", (unsigned long long)st->appliedEpoch) < 0 ||
+        (blobLen && fwrite(blob, 1, blobLen, f) != blobLen) || fflush(f) != 0)
+        failed = 1;
+#ifdef _WIN32
+    if (!failed && _commit(fd) != 0) failed = 1;
+#else
+    if (!failed && fsync(fd) != 0) failed = 1;
+#endif
+    if (fclose(f) != 0) failed = 1;
+    if (failed) { remove(tmp); return ERR_PLATFORM; }
     if (rename(tmp, path) != 0) { remove(tmp); return ERR_PLATFORM; }
+#ifndef _WIN32
+    {
+        char directory[sizeof path];
+        char *slash;
+        int dirfd;
+        (void)snprintf(directory, sizeof directory, "%s", path);
+        slash = strrchr(directory, '/');
+        if (!slash) (void)snprintf(directory, sizeof directory, ".");
+        else if (slash == directory) slash[1] = '\0';
+        else *slash = '\0';
+        dirfd = open(directory, O_RDONLY);
+        if (dirfd < 0) return ERR_PLATFORM;
+        failed = fsync(dirfd) != 0;
+        if (close(dirfd) != 0) failed = 1;
+        if (failed) return ERR_PLATFORM;
+    }
+#endif
+    return SOLARI_OK;
+}
+
+solariStatus monitorHandleControlDurable(monitorControlState *st,
+                                         monitorConfig *cfg,
+                                         uint64_t selfNodeId,
+                                         const uint8_t *payload,
+                                         size_t payloadLen,
+                                         uint8_t *resultBuf,
+                                         size_t resultCap,
+                                         size_t *resultLen,
+                                         uint16_t *resultTlvCount,
+                                         monitorControlOutcome *out)
+{
+    monitorConfig candidate;
+    monitorControlState proposed;
+    solariStatus rc;
+
+    if (!st || !cfg || !out) return ERR_INVALID_ARG;
+    candidate = *cfg;
+    proposed = *st;
+    rc = monitorHandleControl(&proposed, &candidate, selfNodeId,
+                              payload, payloadLen, resultBuf, resultCap,
+                              resultLen, resultTlvCount, out);
+    if (rc != SOLARI_OK || !out->applied) return rc;
+    rc = monitorControlStateSave(&candidate, &proposed, out->blob, out->blobLen);
+    if (rc != SOLARI_OK) {
+        out->applied = false;
+        if (buildResult(out->verb, rc, st->appliedEpoch, resultBuf, resultCap,
+                        resultLen, resultTlvCount) != SOLARI_OK)
+            out->wantReply = false;
+        solariLogf(SOLARI_LOG_ERROR,
+                   "control: durable save failed; epoch remains %llu",
+                   (unsigned long long)st->appliedEpoch);
+        return rc;
+    }
+    candidate.configEpoch = proposed.appliedEpoch;
+    *cfg = candidate;
+    *st = proposed;
     return SOLARI_OK;
 }
 
@@ -436,18 +534,9 @@ void monitorControlPoll(monitorControlIo *io, monitorContext *ctx,
                 hdr.msgType == SCP_MSG_CONTROL &&
                 handled < MONITOR_CTRL_BURST) {
                 handled++;
-                (void)monitorHandleControl(st, cfg, ctx->nodeId, payload, plen,
-                                           tlv, sizeof tlv, &tlvLen, &tlvCount,
-                                           &oc);
-                if (oc.applied &&
-                    monitorControlStateSave(cfg, st, oc.blob, oc.blobLen) != SOLARI_OK)
-                    /* Hot-apply succeeded; only restart-durability failed. Loud,
-                     * not silent (the convergence ack is truthful for the
-                     * running monitor). */
-                    solariLogf(SOLARI_LOG_ERROR,
-                               "control: applied epoch %llu but state persist "
-                               "failed; config will not survive a restart",
-                               (unsigned long long)st->appliedEpoch);
+                (void)monitorHandleControlDurable(st, cfg, ctx->nodeId,
+                                           payload, plen, tlv, sizeof tlv,
+                                           &tlvLen, &tlvCount, &oc);
                 if (oc.wantReply) {
                     if (!solariReporterConnected(ctx->rep))
                         (void)solariReporterConnect(ctx->rep);

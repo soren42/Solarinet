@@ -37,6 +37,9 @@
 --   031_certificate_issuance_inventory sha256=cf0dab6d904902404512276339d839256850c2c046c736768b7e3b046ba7b26d
 --   032_certificate_crl_generation sha256=c558a48754b41c9ba01f31ced46e34614733a9272995f5d8a6e4b5493036923d
 --   033_redact_queued_decommission_tokens sha256=05964bd1791f558a3b2b00aa4c95767e50f03266dd71edbe1e22d2c10ff20344
+--   034_pending_control_directives sha256=8db3d2344579412603ad9636d762950ecb327ab052d392b96032acaaa1e751c8
+--   035_certificate_crl_acknowledgements sha256=537b56d27b9101989735e42793edfcbcecc2af30d9bb2c530ec36f15884d3c70
+--   036_crl_acknowledgement_node_cascade sha256=a6c7462b422fcf39137f4c585934ac620963c7384e22b614e90d08c4f41c4ffc
 
 /*M!999999\- enable the sandbox mode */
 
@@ -131,6 +134,21 @@ CREATE TABLE `buildArtifact` (
   `publishedAt` datetime DEFAULT NULL,
   PRIMARY KEY (`buildId`),
   UNIQUE KEY `arch` (`arch`,`os`,`version`,`channel`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `certificateCrlAcknowledgement`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `certificateCrlAcknowledgement` (
+  `nodeId` bigint(20) unsigned NOT NULL,
+  `issuerFp` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `crlNumber` bigint(20) unsigned NOT NULL,
+  `crlFp` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `acknowledgedAt` datetime(6) NOT NULL,
+  PRIMARY KEY (`nodeId`,`issuerFp`),
+  KEY `ix_certificateCrlAck_generation` (`issuerFp`,`crlNumber`,`crlFp`),
+  CONSTRAINT `fk_certificateCrlAck_node` FOREIGN KEY (`nodeId`) REFERENCES `node` (`nodeId`) ON DELETE CASCADE,
+  CONSTRAINT `chk_certificateCrlAck_number` CHECK (`crlNumber` > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `certificateCrlState`;
@@ -623,6 +641,19 @@ CREATE TABLE `panelState` (
   `reportedAt` datetime(6) NOT NULL,
   PRIMARY KEY (`stateId`),
   CONSTRAINT `panelStateSingleton` CHECK (`stateId` = 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `pendingControlDirective`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `pendingControlDirective` (
+  `nodeId` bigint(20) unsigned NOT NULL,
+  `correlationId` int(10) unsigned NOT NULL,
+  `verb` tinyint(3) unsigned NOT NULL,
+  `targetEpoch` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `issuedAt` datetime(6) NOT NULL DEFAULT current_timestamp(6),
+  PRIMARY KEY (`nodeId`,`correlationId`),
+  KEY `ix_pending_control_issued` (`issuedAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `pool`;

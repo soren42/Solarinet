@@ -7,7 +7,8 @@ remain allocator-ineligible until a human explicitly approves them.
 
 API access requires UNIFI_GW, UNIFI_API_KEY, and UNIFI_CA_FILE. The CA file must
 verify the controller certificate; this importer does not disable TLS checks.
-Database credentials come from the existing SORSYNC_CONF [sor] section.
+Database credentials come from SORSYNC_CONF [sor_unifi], with [sor] retained
+as the backwards-compatible staged-upgrade fallback.
 """
 import argparse
 import configparser
@@ -27,6 +28,9 @@ except ImportError:  # Normalization and dry-run tests do not need a DB driver.
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_SORSYNC_CONF = HERE.parent / "sorsync" / "sorsync.conf"
+sys.path.insert(0, str(HERE.parent / "sorsync"))
+from db_config import database_options
+
 IMPORT_LOCK = "solarinet-unifi-network-import"
 API_ROOT = "/proxy/network/integration/v1"
 
@@ -497,13 +501,12 @@ def _db_connect(config_path):
     if pymysql is None:
         raise RuntimeError("PyMySQL is required to apply a UniFi network import")
     config = configparser.ConfigParser()
-    if not config.read(config_path) or not config.has_section("sor"):
+    if not config.read(config_path):
         raise RuntimeError(f"cannot read SoR connection settings from {config_path}")
-    sor = config["sor"]
+    sor = database_options(config, "sor_unifi")
     return pymysql.connect(
-        host=sor.get("host", "10.1.0.200"), port=sor.getint("port", fallback=3306),
-        user=sor.get("user", "solari"), password=sor.get("password"),
-        database=sor.get("name", "sor"), charset="utf8mb4", autocommit=False)
+        host=sor["host"], port=sor["port"], user=sor["user"], password=sor["password"],
+        database=sor["name"], charset="utf8mb4", autocommit=False)
 
 
 def _client_from_env():

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,6 +31,7 @@ class CrlGenerationTests(unittest.TestCase):
             "-subj", "/CN=SolariNet CRL Test CA", "-set_serial", "0x10",
             "-addext", "basicConstraints=critical,CA:TRUE",
             "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+            "-addext", "subjectKeyIdentifier=hash",
         ], check=True, capture_output=True)
         self.args = SimpleNamespace(
             ca_cert=str(self.caCert), ca_key=str(self.caKey), output=str(self.output),
@@ -39,6 +42,22 @@ class CrlGenerationTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    @staticmethod
+    def _mysql_for(rows, number, updated_rows=1):
+        def fake_mysql(_args, sql):
+            if "SELECT complete FROM certificateInventoryState" in sql:
+                return [["1"]]
+            if "FROM certificateRevocation WHERE issuerFp=" in sql:
+                return rows
+            if sql.startswith("SELECT DISTINCT issuerFp FROM certificateRevocation"):
+                return []
+            if sql.startswith("INSERT IGNORE INTO certificateCrlState"):
+                return [[str(number)]]
+            if "UPDATE certificateCrlState SET publishedNumber" in sql:
+                return [[str(updated_rows)]]
+            raise AssertionError("unexpected SQL in CRL generation")
+        return fake_mysql
+
     def test_generated_crl_has_valid_signature_number_reason_and_serials(self) -> None:
         revoked_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
         rows = [["A01", "keyCompromise", str(revoked_at)],
@@ -48,7 +67,7 @@ class CrlGenerationTests(unittest.TestCase):
 
         def fake_mysql(_args, sql):
             calls.append(sql)
-            if sql.startswith("SELECT complete"):
+            if "SELECT complete FROM certificateInventoryState" in sql:
                 return [["1"]]
             if "FROM certificateRevocation WHERE issuerFp=" in sql:
                 return rows
@@ -56,12 +75,17 @@ class CrlGenerationTests(unittest.TestCase):
                 return []
             if sql.startswith("INSERT IGNORE INTO certificateCrlState"):
                 return [["7"]]
-            if sql.startswith("UPDATE certificateCrlState SET publishedNumber"):
+            if "UPDATE certificateCrlState SET publishedNumber" in sql:
                 return [["1"]]
             raise AssertionError("unexpected SQL in CRL generation")
 
-        with patch.object(generator, "mysql", side_effect=fake_mysql):
-            generator.generate(self.args)
+        previous_umask = os.umask(0o077)
+        try:
+            with patch.object(generator, "mysql", side_effect=fake_mysql):
+                generator.generate(self.args)
+        finally:
+            os.umask(previous_umask)
+        self.assertEqual(0o644, self.output.stat().st_mode & 0o777)
 
         number, last_update, next_update, serials, der = generator.parse_crl_metadata(self.output)
         self.assertEqual(7, number)
@@ -75,15 +99,27 @@ class CrlGenerationTests(unittest.TestCase):
                                    "-noout", "-text"], check=True,
                                   capture_output=True, text=True).stdout
         self.assertIn("X509v3 CRL Reason Code", crl_text)
+        self.assertIn("X509v3 Authority Key Identifier", crl_text)
         self.assertIn("Key Compromise", crl_text)
         self.assertIn("Superseded", crl_text)
+        revoked_entries = crl_text.split("Revoked Certificates:", 1)[1]
+        entries = re.split(r"(?=\s*Serial Number:)", revoked_entries)
+        unspecified_entry = next(entry for entry in entries
+                                 if re.search(r"Serial Number: (?:0)?A0?3\b", entry))
+        self.assertNotIn("X509v3 CRL Reason Code", unspecified_entry)
         self.assertTrue(any("publishedNumber=7" in sql for sql in calls))
+        state_sql = next(sql for sql in calls if "UPDATE certificateCrlState SET publishedNumber" in sql)
+        self.assertIn("SET time_zone='+00:00';", state_sql)
+        self.assertTrue(any(sql.startswith("SET time_zone='+00:00'; SELECT complete")
+                            for sql in calls))
+        self.assertTrue(any(sql.startswith("SET time_zone='+00:00'; SELECT serialHex")
+                            for sql in calls))
 
     def test_bad_ledger_row_leaves_previous_crl_unchanged(self) -> None:
         revoked_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
         def make_mysql(rows, number):
             def fake_mysql(_args, sql):
-                if sql.startswith("SELECT complete"):
+                if "SELECT complete FROM certificateInventoryState" in sql:
                     return [["1"]]
                 if "FROM certificateRevocation WHERE issuerFp=" in sql:
                     return rows
@@ -91,7 +127,7 @@ class CrlGenerationTests(unittest.TestCase):
                     return []
                 if sql.startswith("INSERT IGNORE INTO certificateCrlState"):
                     return [[str(number)]]
-                if sql.startswith("UPDATE certificateCrlState SET publishedNumber"):
+                if "UPDATE certificateCrlState SET publishedNumber" in sql:
                     return [["1"]]
                 raise AssertionError("unexpected SQL in CRL generation")
             return fake_mysql
@@ -104,7 +140,7 @@ class CrlGenerationTests(unittest.TestCase):
 
         def fake_mysql(_args, sql):
             calls.append(sql)
-            if sql.startswith("SELECT complete"):
+            if "SELECT complete FROM certificateInventoryState" in sql:
                 return [["1"]]
             if "FROM certificateRevocation WHERE issuerFp=" in sql:
                 return [["A01", "unknown-reason", str(revoked_at)]]
@@ -120,6 +156,66 @@ class CrlGenerationTests(unittest.TestCase):
         self.assertEqual(before, self.output.read_bytes())
         self.assertFalse(any("publishedNumber=" in sql for sql in calls))
 
+    def test_unspecified_revocation_reason_has_no_reason_code_extension(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        index = generator.crl_index([("A01", "unspecified", int(now.timestamp() * 1000)),
+                                     ("A02", "keyCompromise", int(now.timestamp() * 1000))],
+                                    now).decode("ascii")
+        self.assertNotIn(",unspecified", index)
+        self.assertIn(",keyCompromise", index)
+
+    def test_existing_crl_number_cannot_be_rolled_back(self) -> None:
+        revoked_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+        rows = [["A01", "keyCompromise", str(revoked_at)]]
+        with patch.object(generator, "mysql", side_effect=self._mysql_for(rows, 1)):
+            generator.generate(self.args)
+        before = self.output.read_bytes()
+
+        with patch.object(generator, "mysql", side_effect=self._mysql_for(rows, 1)), \
+                self.assertRaisesRegex(ValueError, "roll back the existing publication"):
+            generator.generate(self.args)
+        self.assertEqual(before, self.output.read_bytes())
+
+    def test_ledger_change_during_generation_preserves_active_crl(self) -> None:
+        revoked_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+        rows = [["A01", "keyCompromise", str(revoked_at)]]
+        with patch.object(generator, "mysql", side_effect=self._mysql_for(rows, 1)):
+            generator.generate(self.args)
+        before = self.output.read_bytes()
+        changed_rows = rows + [["A02", "superseded", str(revoked_at)]]
+        revocation_reads = 0
+
+        def changing_ledger(_args, sql):
+            nonlocal revocation_reads
+            if "SELECT complete FROM certificateInventoryState" in sql:
+                return [["1"]]
+            if "FROM certificateRevocation WHERE issuerFp=" in sql:
+                revocation_reads += 1
+                return rows if revocation_reads == 1 else changed_rows
+            if sql.startswith("SELECT DISTINCT issuerFp FROM certificateRevocation"):
+                return []
+            if sql.startswith("INSERT IGNORE INTO certificateCrlState"):
+                return [["2"]]
+            raise AssertionError("publication state must not advance after ledger drift")
+
+        with patch.object(generator, "mysql", side_effect=changing_ledger), \
+                self.assertRaisesRegex(ValueError, "ledger changed during CRL generation"):
+            generator.generate(self.args)
+        self.assertEqual(before, self.output.read_bytes())
+
+    def test_failed_state_commit_is_reported_after_crl_publish(self) -> None:
+        revoked_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+        rows = [["A01", "keyCompromise", str(revoked_at)]]
+        with patch.object(generator, "mysql", side_effect=self._mysql_for(rows, 1)):
+            generator.generate(self.args)
+        before = self.output.read_bytes()
+
+        with patch.object(generator, "mysql", side_effect=self._mysql_for(rows, 2, updated_rows=0)), \
+                self.assertRaisesRegex(ValueError, "could not be committed monotonically"):
+            generator.generate(self.args)
+        self.assertNotEqual(before, self.output.read_bytes())
+        self.assertEqual(2, generator.parse_crl_metadata(self.output)[0])
+
     def test_candidate_rejects_future_this_update(self) -> None:
         ca_dir = self.root / "future-this-update"
         ca_dir.mkdir()
@@ -133,7 +229,9 @@ class CrlGenerationTests(unittest.TestCase):
             f"dir = {ca_dir}\ndatabase = $dir/index.txt\nnew_certs_dir = $dir/newcerts\n"
             f"certificate = {self.caCert}\nprivate_key = {self.caKey}\n"
             "serial = $dir/serial\ncrlnumber = $dir/crlnumber\n"
-            "default_md = sha256\npolicy = policy\n[ policy ]\ncommonName = supplied\n",
+            "crl_extensions = crl_ext\ndefault_md = sha256\npolicy = policy\n"
+            "[ policy ]\ncommonName = supplied\n"
+            "[ crl_ext ]\nauthorityKeyIdentifier = keyid:always\n",
             encoding="ascii")
         future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
         later = future + datetime.timedelta(days=1)

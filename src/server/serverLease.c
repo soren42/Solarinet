@@ -39,6 +39,7 @@
 #include "solari/solariNet.h"
 #include "solari/solariTlv.h"
 #include "solari/solariLog.h"
+#include "solari/solariTime.h"
 
 #include <string.h>
 
@@ -196,6 +197,17 @@ solariStatus serverLeaseTick(serverContext *ctx, serverRoleState *state,
     if (epoch) *epoch = 0;
     if (!ctx || !ctx->cfg || !ctx->db) return ERR_INVALID_ARG;
 
+    /* A listener-bind failure means we cannot serve as primary. Release the
+     * exact fencing token and wait at least one TTL before retrying, so this
+     * process cannot immediately reacquire and starve a healthy standby. */
+    if (ctx->leaseRetryAfterMs &&
+        solariMonotonicMicros() / 1000u < ctx->leaseRetryAfterMs) {
+        if (state) *state = SRV_STANDBY;
+        if (epoch) *epoch = ctx->epoch;
+        return ERR_LEASE_LOST;
+    }
+    ctx->leaseRetryAfterMs = 0;
+
     wasActive = (ctx->role == SRV_ACTIVE);
 
     /* The election: claim or renew the single lease row. *won reflects whether
@@ -223,6 +235,17 @@ solariStatus serverLeaseTick(serverContext *ctx, serverRoleState *state,
         solariLogf(SOLARI_LOG_ERROR, "lease: applyRole(%s) failed: %s -> standby",
                    serverLeaseRoleName(newRole), solariStrError(applyRc));
         serverApplyRole(ctx, SRV_STANDBY);
+        if (newRole == SRV_ACTIVE && claimRc == SOLARI_OK && won) {
+            solariStatus releaseRc = serverDbLeaseRelease(ctx->db, ctx->nodeId,
+                                                          leaseEpoch);
+            if (releaseRc != SOLARI_OK)
+                solariLogf(SOLARI_LOG_ERROR,
+                           "lease: could not release after bind failure: %s; "
+                           "local retry waits for TTL",
+                           solariStrError(releaseRc));
+            ctx->leaseRetryAfterMs = solariMonotonicMicros() / 1000u +
+                (uint64_t)ctx->cfg->leaseTtlSec * UINT64_C(1000);
+        }
         if (state) *state = SRV_STANDBY;
         if (epoch) *epoch = ctx->epoch;
         return applyRc;

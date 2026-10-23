@@ -739,7 +739,8 @@ solariStatus serverProvisionConfirmCertificateRevocation(
     if (st != SOLARI_OK) return st;
     solariLogf(SOLARI_LOG_WARN,
                "provision/revoke-cert: durable ledger updated node=%llu serial=%s by=%s; "
-               "CRL publication and peer activation are not implemented",
+               "CRL generator/publisher/updater are candidate-only; no peer activation "
+               "or fleet acknowledgement is deployed",
                (unsigned long long)nodeId, serialHex, operator_);
     return SOLARI_OK;
 }
@@ -957,8 +958,8 @@ solariStatus serverProvisionAdoptTarget(serverContext *ctx, uint64_t discId,
  * 2. Build-convergence "tracking" for /api/builds is served by the existing
  *    serverDbBuildConvergence() (join over nodeConfig.appliedEpoch); this file
  *    drives the inputs to it via serverDbSetNodeTargetEpoch() on provision and
- *    relies on serverControl.c calling serverDbSetNodeApplied() when a node's
- *    CONTROL_RESULT lands. No extra query was needed here.
+ *    relies on serverControl.c consuming the matching pending directive when
+ *    a node's CONTROL_RESULT lands. No extra query is needed here.
  *
  * 3. SCP_PROTO_VERSION's numeric value is pinned locally (default 1) because it
  *    is not re-exported through a server symbol; align with solariCommon.h if it

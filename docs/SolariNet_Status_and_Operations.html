@@ -482,18 +482,15 @@ systemctl enable --now solari-client.service       # on each monitored host</pre
   </ul>
 
   <h3>Database access boundary</h3>
-  <p>MCP callers cannot provide SQL. Three fixed database tools use internal queries;
-  the DB client enforces an explicit table allow-list
-  (<code>solarinet_mcp/db.py</code>) alongside SELECT/WITH-only,
-  anti-stacking, no-OUTFILE checks. <code>_enforce_table_allow_list()</code> extracts every
-  <code>FROM</code>/<code>JOIN</code> target, exempts CTE names declared via <code>WITH</code>,
-  and rejects anything unlisted — blocking <code>information_schema</code> / <code>mysql</code>
-  / <code>performance_schema</code> exfiltration. The allow-list covers the §10 base tables
-  plus the new §5 tables (<code>segment</code>, <code>networkGear</code>, <code>lldpEdge</code>,
-  <code>discovered</code>, <code>enrollment</code>, <code>buildArtifact</code>).</p>
+  <p>MCP callers cannot provide SQL or identifiers. The database client accepts only three
+  registered query identifiers (fleet roster, active alerts, and host history); values are
+  bound as parameters, node IDs are checked against the decimal <code>BIGINT UNSIGNED</code>
+  range, and each query is limited to at most 1000 rows. It fetches one extra row to report
+  truncation. The MCP database account's SELECT-only grants remain an external configuration
+  requirement and must be checked on the target deployment.</p>
 
   <pre># run the MCP test suite
-cd integrations/mcp && .venv/bin/python -m pytest -q     # 81 passed</pre>
+cd integrations/mcp && .venv/bin/python -m pytest -q     # 48 passed</pre>
 
   <h2 id="enroll">Enrollment runbook</h2>
   <p><code>deploy/enrollment/solari-enroll.sh</code> enrolls a node end-to-end, generating
@@ -558,7 +555,9 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   <code>TO_DAYS(sampledAt)</code> RANGE partition scheme from <code>db/schema.sql</code>:</p>
   <ul>
     <li><code>retention.sql</code> — <code>solari_purge_retired</code> /
-    <code>solari_purge_history</code> / <code>solari_retention_run</code>: purge
+    <code>solari_purge_pending_controls</code> / <code>solari_purge_history</code> /
+    <code>solari_retention_run</code>: expire unanswered control directives after
+    seven days, purge
     <code>state='retired'</code> nodes (with FK-cascade children plus explicit
     <code>nodeConfig</code> / <code>hostHistory</code>) past the retention window, with a
     row-level history safety net.</li>
@@ -569,7 +568,9 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
     guards; dynamic DDL via PREPARE/EXECUTE.</li>
   </ul>
   <p>Schedule them from cron / an event scheduler, e.g. <code>CALL solari_retention_run(...)</code>
-  nightly and <code>CALL solari_roll_partitions(...)</code> monthly.</p>
+  nightly and <code>CALL solari_roll_partitions(...)</code> monthly. The procedure is
+  installed in the candidate and scratch-tested; an active cron, event, or systemd schedule
+  on the current host has not been verified.</p>
 
   <h2 id="ci">CI</h2>
   <p><code>.github/workflows/ci.yml</code> defines ten job groups and the current draft PR runs

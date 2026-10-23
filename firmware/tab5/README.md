@@ -22,12 +22,12 @@ Five features, one always-on desk device:
    **types** a password or a live TOTP code into the paired host, so the secret
    never touches an OS clipboard.
 
-> **Status: scaffold.** Buildable, well-structured project skeleton. It is **not**
-> flash-ready tonight — it needs a USB-C build host with the ESP32-P4 toolchain,
-> and several `TODO(...)` markers (device-key enrollment UI, PM HTTP client, UI
-> entry sheets, NimBLE wiring) must be closed before real secrets go on it.
-> Search the tree for `TODO(` to find every open item. The **server-side broker**
-> (`deploy/authbroker/`), by contrast, is runnable and live-tested today.
+> **Status: development scaffold.** The approval candidate now authenticates
+> broker requests, binds signed responses to the request digest, and requires
+> imported CA-verified MQTT TLS. The cross-language canonicalization test runs
+> on the host, but the complete Tab5 firmware build and hardware flow remain
+> unverified. Other feature areas still contain TODOs; search for `TODO(` before
+> treating this as flash-ready or using real secrets.
 
 ---
 
@@ -88,18 +88,22 @@ codes work within seconds, pre-network. A per-code **"Type"** action can send
 the code over BLE-HID (feature 5).
 
 ### 2. Push-approval (the core mission)
-- Subscribes to `auth/request/#` on the shared MQTT bus. Each request carries
-  `{action, subject, detail, source_ip, nonce, ttl}` (see the broker README for
-  the full contract).
+- Subscribes to `auth/request/#` on the shared MQTT bus. It verifies the broker
+  signature and key ID before displaying the signed request fields (see the
+  broker README for the complete v2 contract).
 - Renders a full-screen **Approve / Deny** prompt with a TTL countdown ring.
-- On the operator's tap, publishes a **signed** response to `auth/response/<id>`:
-  ECDSA-P256/SHA-256 over the canonical string
-  `"<v>\n<id>\n<decision>\n<nonce>\n<device_id>"`, DER, base64.
+- On the operator's tap, publishes a **signed** response to `auth/response/<id>`.
+  Its canonical signature includes the SHA-256 digest of the verified request,
+  so the decision is bound to the exact prompt.
 - The **device private key** (P-256 scalar) lives in the encrypted `secrets` NVS
   (`dev/privkey`). The broker holds only the matching **public** key, so it can
   verify but never forge. Enroll the public key into the broker once (below).
 - Anti-replay: the server nonce is echoed + signed; the device de-dupes by id
   and expires stale requests after their TTL.
+- Provisioning: import the broker signing public point and MQTT CA over the
+  physically attached USB serial console. See `deploy/authbroker/README.md` for
+  the provisioning and rotation commands. Approval remains gated off until
+  firmware and hardware acceptance checks pass.
 
 ### 3. Vault (PM client)
 - A **client** to a self-hosted, Bitwarden-API-compatible password manager
@@ -177,15 +181,20 @@ the release-mode eFuse burn is effectively one-way.
 The signing key is generated **on-device** and never leaves it:
 
 1. First boot mints a P-256 keypair into `secrets` NVS (`Approvals::begin` →
-   `provisionDeviceKey`). The setup screen shows the **public key** (hex).
-2. Generate/register the matching entry on the broker. Easiest path tonight:
-   run `deploy/authbroker/enroll_device.py tab5-desk` to mint a pair, put the
-   **private scalar** on the device (NVS `dev/privkey`) and the **public** block
-   in `authbroker.conf`. Alternatively read the device-shown pubkey and convert
-   it to a `[device.<id>]` PEM. (`TODO(enroll-ui)`: a one-tap "show/QR my pubkey"
-   + on-device import to finalize this.)
+   `provisionDeviceKey`). Connect USB serial and run `SOLARI:SHOW_KEYS`; copy
+   `device_response_public_key_hex` to a local text file.
+2. Convert that public point into a broker enrollment block:
+   `python deploy/authbroker/enroll_device.py <device-id> --public-point-hex-file <file>`.
+   Add the resulting `[device.<id>]` block to the private broker config. The
+   script accepts only the device-generated public point; the private key never
+   leaves the Tab5.
 3. `device_id` in settings must match the broker's `[device.<id>]` section
    (defaults to `tab5-<efuse-mac>`).
+4. Import the broker request-verification public key and MQTT CA certificate
+   over the attached USB serial console. Use `SOLARI:SET_BROKER_KEY:<kid>:<hex>`
+   for the P-256 public point and `SOLARI:CA-BEGIN`, paste the PEM, then
+   `SOLARI:CA-END`. Verify displayed fingerprints through a separate trusted
+   channel before enabling approvals. See `deploy/authbroker/README.md`.
 
 ## Wi-Fi / secret provisioning
 
@@ -196,8 +205,8 @@ NVS namespace; secrets (TOTP seeds, PM key, **device key**) to the encrypted
 `secrets` partition. For dev you may add a gitignored `src/secrets.local.h`
 guarded with `__has_include` — **never commit it**.
 
-Assumed environment: Mosquitto on benzene `10.5.2.50:1883` (user `solari`;
-`:8883` TLS a follow-up); Keycloak realm `akoria` at `sso.akoria.org:8443`;
+Assumed environment (verify before provisioning): Mosquitto on benzene at
+`benzene.akoria.net:8883` with CA-verified TLS; Keycloak realm `akoria` at `sso.akoria.org:8443`;
 dashboard at `https://xenon:9443`; `akoria` names resolve.
 
 ---

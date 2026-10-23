@@ -119,6 +119,36 @@ nonempty and has no migration ledger; do not run it there until the production
 schema audit/adoption procedure is complete. See
 `docs/SolariNet_Migration_Runbook_2026-10-20.html`.
 
+### SoR runtime identities
+
+The worker config supports four separate SoR principals: `[sor]` is read-only
+for DNS rendering and target appliers, `[sor_emit]` can read the CDC outbox and
+advance its checkpoint, `[sor_discovery]` can read source/IP ownership and
+insert adopted discovery rows, and `[sor_unifi]` can import UniFi network facts
+with SELECT/INSERT/UPDATE on its owned inventory tables. Missing worker sections still fall back to
+`[sor]` for staged upgrades; a production cutover must configure all three
+explicitly. The migration/administration credential is separate and must never
+be placed in the runtime config.
+
+`sor-runtime-grants.sql` expresses the minimum object privileges used by these
+workers. It expects four new accounts with unique secrets and no preexisting
+privileges, using the `10.0.0.0/255.0.0.0` host scope. Verify that host scope against the database
+connection source before using it. Rehearse it with
+`tests/deploy/test_sorsync_runtime_grants.py` on the marked disposable SoR;
+`netdb/sor/test_allocator_db.sh` includes this check. The test proves the DNS
+reads, outbox checkpoint update, discovery inserts, and denial of extra DML and
+DDL.
+
+For a live cutover, first capture the current `SHOW GRANTS` output in the
+protected operator record, provision the three accounts with different
+random secrets and no grants, apply the grants to those new accounts, update
+the protected Xenon/Radium configs, and restart one worker group at a time while observing
+outbox progress, discovery reconciliation, UniFi import, and DNS convergence. Retain the old account and grants for
+rollback until all consumers are confirmed on the new identities. Only then
+remove the legacy shared account's DDL privileges after checking every deployed
+consumer; this template deliberately leaves that existing account unchanged.
+No live grants or service credentials have been changed by this candidate.
+
 ## Follow-ups
 - **DNS cutover** — stop the legacy writer, install immutable root helpers and
   protected configs on Xenon and each configured secondary, bootstrap their managed includes, and create

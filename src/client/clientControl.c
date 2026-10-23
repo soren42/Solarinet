@@ -151,7 +151,7 @@ solariStatus clientControlApplyBlob(clientConfig *cfg, const char *json, size_t 
 
 /* Build the CONTROL_RESULT payload: echoed verb, error magnitude (0 = ok),
  * and the epoch this node now reports applied (the convergence signal
- * serverControlOnResult folds into serverDbSetNodeApplied). */
+ * serverControlOnResult matches the durable pending directive before convergence). */
 static solariStatus buildResult(uint8_t verb, solariStatus outcome,
                                 uint64_t appliedEpoch,
                                 uint8_t *buf, size_t cap,

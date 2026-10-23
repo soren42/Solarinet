@@ -1,10 +1,16 @@
 # F-01 certificate revocation lifecycle contract
 
-**Status (2026-10-21):** the durable operator command and database ledger
-described below are implemented in the local candidate; they are not deployed.
-The candidate now has a CA-signed CRL generator, but production scheduling,
-bundle distribution, missing/expired CRL policy, and client activation are not
-implemented. The CRL loopback test proves that the pinned TLS stack rejects a
+**Status (updated 2026-10-23):** the durable operator command, database ledger,
+historical issuance backfill, CA-signed CRL generator, static publisher, peer
+updater, and node-level current-generation acknowledgement path are implemented
+in the local candidate; none are deployed. The
+publisher verifies each CRL and exposes it under an issuer-fingerprint URL for
+an HTTPS web server. A read-only dashboard API and Certificates-screen
+generation/peer view now exist in the local candidate, including explicit
+current, stale, pending, offline, expired, and unavailable states. No HTTPS
+vhost, public endpoint, deployment config, peer activation, or missing-CRL
+rollout policy is installed; nothing is deployed.
+The CRL loopback test proves that the pinned TLS stack rejects a
 revoked certificate while accepting its newly issued same-CN replacement when
 given a suitable CA/CRL bundle.
 
@@ -18,9 +24,10 @@ given a suitable CA/CRL bundle.
   insufficient for revoking every historical credential.
 - TLS trusts a configured PEM bundle. The loopback integration test confirms
   that a CRL in that bundle rejects a revoked peer.
-- The candidate has a ledger, historical issuance inventory/backfill, and CRL
-  generator. It has no peer distribution/activation path or fleet
-  acknowledgement/freshness policy.
+- The candidate has a ledger, historical issuance inventory/backfill, CRL
+  generator, static file publisher, and peer-side HTTPS validator/atomic
+  installer. It has no deployed HTTPS publisher, peer configuration,
+  missing-CRL rollout policy, or deployed acknowledgement status view.
 
 ## Candidate implementation status (2026-10-21)
 
@@ -42,11 +49,75 @@ given a suitable CA/CRL bundle.
 - Migration 032 adds per-issuer monotonic CRL number state. The local
   `deploy/crl/generate_crl.py` candidate reconstructs an isolated OpenSSL CA
   index from one issuer's database rows, checks that the inventory is complete,
-  verifies the CA key pair, CRL signature/issuer/number/serial set/freshness,
-  and atomically replaces its output. The temporary OpenSSL CA database is
+  verifies the CA key pair, CRL signature/issuer/Authority Key Identifier/
+  number/serial set/freshness, and atomically replaces its output with
+  world-readable mode for the static publisher. An `unspecified` revocation
+  omits the CRL reason-code extension in line with RFC 5280's SHOULD. Each
+  server DB session is initialized to
+  UTC on connect and reconnect; the generator sets UTC for ledger reads and
+  state writes. Audit historical `DATETIME` rows created before this change
+  against the server timezone in effect when written. File replacement precedes the database
+  generation-state update; if that commit fails in the narrow boundary, the
+  output can temporarily be one number ahead of acknowledgement state. After
+  DB recovery, rerun the generator and verify both agree. The temporary
+  OpenSSL CA database is
   isolated from the application database. The CA private key is read only by
   this generator process. Run once per issuer and distribute every resulting
   CRL.
+- `deploy/crl/solari-crl-generate.service` and
+  `deploy/crl/solari-crl-generate.timer` define a hardened six-hour schedule
+  under the CA-owning `solari` account, with a dedicated DB defaults file and
+  private output directory. Systemd unit verification and the nine-test CRL
+  generator suite pass locally. These definitions are not installed or enabled;
+  deployed DB grants, CA paths/key access, generated output, and actual
+  scheduling remain **UNVERIFIED**.
+- `deploy/crl/activate_crl.py` validates HTTPS transport, issuer identity, CRL
+  signature, time bounds, and monotonic numbering before atomically replacing
+  one service's CA bundle and restarting that allowlisted service. It restores
+  the prior bundle if restart/active-state verification fails. It accepts only
+  one PEM CRL, serializes activation per bundle, limits validation to 120
+  seconds, bounds CA bundles to 4 MiB, and gives recovery a 240-second systemd
+  reserve. It reports rollback-write failure as requiring manual recovery.
+  Eighteen local tests cover valid activation, verified HTTPS, refusal of all
+  redirects, signature failure, expiry, rollback, idempotence, timeout recovery,
+  pre-replacement write failure, extra-PEM rejection, rollback failure, public
+  activation-receipt mode and recovery, and same-number base-bundle
+  reconciliation. After a
+  verified restart, the updater atomically records the issuer fingerprint, CRL
+  number, and CRL fingerprint in a public `<bundle>.activated` receipt. The
+  reporter adds this receipt to its authenticated durable client/monitor report;
+  the server stores it only when it matches the latest generated, unexpired CRL
+  generation. Stale, malformed, or unwritable optional receipts are ignored
+  after ordinary report persistence, and later reports retry DB acknowledgement.
+  A well-formed stale or unpublished receipt returns `ERR_REJECTED` internally
+  and is info-logged; it does not reuse the transport-retry status.
+  The
+  migration and live DB test cover exact-generation matching,
+  idempotence, rotation, and expiry; the report parser and reporter receipt
+  suites also pass locally. A candidate dashboard view distinguishes current,
+  stale, pending, offline, and expired-generation reporting agents; offline
+  means no check-in within 15 minutes or node state `down`. Its denominator is
+  client/monitor nodes whose
+  current leaf issuer matches that CRL; nodes with no or a different leaf issuer
+  are listed as excluded with unknown and different issuers distinguished;
+  server-role peers and other services on the host are out of scope. API and UI
+  fixtures cover each state, exclusion, and missing-migration behavior. A
+  templated systemd timer polls hourly. No hosted endpoint
+  or cross-issuer bundle merger exists. Host configuration and live process
+  behavior remain **UNVERIFIED**.
+- `deploy/crl/publish_crl.py` now validates the generator output against the
+  configured issuer and publishes a fingerprint-named static PEM using an
+  atomic replacement, monotonic CRL-number check, and seven-day maximum
+  lifetime. It applies the peer updater's `thisUpdate`, one-hour minimum
+  remaining validity, and validity-interval checks. Its dedicated unprivileged
+  account can read the generated CRL and CA certificate; its systemd sandbox
+  masks the signing key and DB defaults. A
+  one-minute timer checks for a newer generation; an Apache HTTPS-vhost snippet
+  serves only public CRL files and denies dotfiles/indexes. Six publisher
+  tests pass, including recovery when the previous CRL is expired, rejection of
+  future/overlong/near-expiry CRLs, and explicit key/credential path masking.
+  The HTTPS host/certificate, installed service, remote retrieval, activation,
+  and acknowledgements remain **UNVERIFIED**.
 - `REVOKE_CERT` binds its confirmation to issuer fingerprint, serial, leaf
   fingerprint, node association when present, reason, operator, and a
   ten-minute token digest. Confirmation consumes the challenge and records the
@@ -181,15 +252,20 @@ certificate is unaccounted for.
   file access, reason mapping, output verification, and atomic publication. The
   generator must run under the existing CA-owning service boundary and must not
   expose the key to the web tier.
-- Publish only the signed CRL through a read-only endpoint on verified HTTPS;
-  the CRL is public and clients validate its signature before use. Add a client
-  updater that verifies issuer/signature, CRL number monotonicity, and freshness,
-  then atomically installs the CRL bundle and reloads/restarts the SolariNet
-  process. Acknowledgements report the activated generation, not download
-  success.
+- Publish only the signed CRL through the candidate's issuer-scoped static
+  publisher and a read-only endpoint on verified HTTPS; the CRL is public and
+  clients validate its signature before use. The peer updater verifies
+  issuer/signature, CRL number monotonicity, and freshness, then atomically
+  installs the CRL bundle and restarts the SolariNet process. **Open:** configure
+  a peer-trusted HTTPS host, add an operator-facing view that compares eligible
+  peers with the current generation and marks stale or offline peers pending,
+  and verify the full distribution path end to end.
 - Keep CA certificate and CRL parsing compatible with existing `caFile` users.
-  The bundle format and replacement must be exercised by client and monitor
-  integration tests, including startup with an expired CRL and update failure.
+  The pinned gossip integration test already covers a revoked leaf, same-CN
+  replacement leaf, expired and malformed CRLs, and a wrong-issuer CRL. Peer
+  updater tests cover expired input and atomic rollback after restart failure.
+  **Open:** prove startup with a missing CRL fails at every deployment entry
+  point and exercise the full client/monitor restart and recovery path.
 
 ## Verification gates
 
@@ -215,8 +291,103 @@ certificate is unaccounted for.
 
 Do not deploy revocation until the complete ledger-to-live-handshake path passes
 the gates above. The current CRL loopback test does not prove operational
-revocation. Cross-lab review, generation backend/API selection, pinned-stack
-freshness semantics, fleet updater/reload behavior, and production
-acknowledgement coverage remain **UNVERIFIED**. Backend selection is a
-candidate decision (OpenSSL `ca -gencrl`); production integration and review
-remain open.
+revocation. Cross-lab review, hosted HTTPS publication, missing-CRL startup
+behavior, fleet-status presentation/convergence, and deployed configuration remain
+**UNVERIFIED**. Backend selection is a candidate decision (OpenSSL `ca -gencrl`);
+production integration and fresh post-fix review remain open.
+
+## Candidate review follow-up · 2026-10-23
+
+- A fresh independent Fable review flagged legacy control-result compatibility,
+  UTC interpretation, the configured issuer's SKI, pending-control cleanup,
+  acknowledgement retention, failed-result epoch writes, and incomplete expiry
+  presentation. The supplied packet did not include the existing control CLI
+  sender or migration files 034/035; the source review below verifies those
+  artifacts separately.
+- Control results without an epoch are accepted for non-convergent verbs and
+  failures without changing `appliedEpoch`. A successful `SET_CONFIG` or
+  `PROVISION` result without an epoch is consumed as `epoch-missing`, preserves
+  the last applied epoch, and remains eligible for reconciliation. A matching
+  correlation and verb are still mandatory. The live MariaDB suite exercises
+  exact epoch matching, legacy missing-epoch behavior, and failed results.
+- The production control CLI already persists a directive before publishing it
+  (`src/server/solariCtl.c`). The active monitoring MariaDB on Xenon reported
+  `@@global.time_zone=SYSTEM`, `@@system_time_zone=UTC`, and identical
+  `NOW()`/`UTC_TIMESTAMP()` values in a read-only query through the configured
+  dashboard DB identity. Xenon's OS timezone is UTC; this confirms the current
+  database did not reinterpret older `FROM_UNIXTIME`-derived `DATETIME` rows.
+- The active Akoria root certificate on Chlorine contains the required Subject
+  Key Identifier. Its public SHA-256 fingerprint matches the previously
+  recorded root pin. The generator's configured Xenon certificate path is not
+  installed, so that exact file-to-root match remains a deployment check; no
+  private key was read.
+- Migration 036 changes CRL acknowledgement cleanup to `ON DELETE CASCADE`,
+  matching retired-node retention. Pending control rows older than seven days
+  are pruned by the scheduled `solari_retention_run`, not on operator-send.
+  Failed results and non-convergent results no longer overwrite the last
+  successfully applied configuration epoch. A missing CRL `nextUpdate` is now
+  treated as expired/unavailable by the API and shown as unsafe in the UI.
+- Disposable Xenon verification applied migrations 001–036, exercised the real
+  CRL SQL helper's multi-statement UTC read and monotonic allocation, and passed
+  the server live DB integration suite 17/17. Its sentinel scratch schema and
+  unix-socket test account were removed and independently checked absent. The
+  production-handler unit test, migration preflight tests, dashboard API/UI
+  fixtures, PHP lint, and `git diff --check` also pass.
+- A fresh cross-lab Fable review found a transaction reconnect hazard, a stale
+  header comment, a missing migration-036 checksum in the exported manifest,
+  operator-send coupling to the expiry purge, noisy duplicate-result logging,
+  and coverage gaps. Result application and CRL issue/confirm now use dedicated
+  MariaDB connections with automatic reconnect disabled; expired directive
+  cleanup is a maintenance procedure intended for nightly invocation; the
+  comment and manifest are corrected; unmatched or
+  duplicate results log at info; and a present zero epoch is tested. A late
+  result still produces an explicit unmatched response, and the process-local
+  sequence generator's restart collision risk remains documented below.
+- The fresh scratch rehearsal applied migrations 001–036, loaded the actual
+  maintenance SQL, proved an eight-day-old pending row is purged by its
+  maintenance procedure, and passed the live server database suite 17/17.
+  The result unit and ingest tests pass 2/2; migration 036 rollback/forward was
+  separately rehearsed (`RESTRICT` to `CASCADE`).
+- The live DB suite was run twice against the same scratch schema. The pending
+  directive fixture clears its node-scoped test rows before seeding; the second
+  run passed. The reconnect test now asserts that MariaDB's thread ID changed
+  after `KILL CONNECTION` and `mysql_ping`, proving a replacement session. The
+  transaction-only connector omits `CLIENT_MULTI_STATEMENTS` and closes after
+  commit without a post-commit reset.
+- `dbOpenTxnConn` applies the same five-second connect-timeout and UTC-init
+  options as `serverDbOpen`, with automatic reconnect deliberately disabled
+  (the pool enables reconnect between transactions). Only the pooled connection
+  requests `CLIENT_MULTI_STATEMENTS`, which prepared transaction statements do
+  not need.
+  Each CONTROL_RESULT opens and closes this connection, so it adds one DB
+  authentication round trip with a five-second connect timeout on this
+  low-rate control path.
+- **Pooled transaction guard follow-up (2026-10-23):** decommission, lifecycle,
+  asset purge, enrollment finalization, report ingestion, and lease-fenced scan
+  transactions share `dbTxnBegin`/`dbTxnFinish`. The guard pings before the
+  transaction, disables transparent reconnect for its duration, and restores a
+  fresh configured pool connection if rollback or session reset fails; a later
+  database operation retries opening the slot if that replacement could not be
+  established. Confirmed
+  commits remain successful if only post-commit session cleanup requires
+  replacing the connection, avoiding an unsafe caller replay. Live tests now
+  assert `@@autocommit=1` and transparent reconnect after `KILL CONNECTION`
+  following both a commit and rollback. They do not exercise the replacement
+  branch. Unknown node retirement, asset purge, and lifecycle transition return
+  `ERR_AUTH_ROLE`; an already-retired existing node remains an idempotent success.
+- **UNVERIFIED:** deterministic connection termination between statements of
+  each multi-statement transaction. The session-reset tests kill the connection
+  immediately after a completed transaction, and the ordinary live cases cover
+  commit/rollback behavior; neither proves all mid-transaction driver timing.
+- **UNVERIFIED:** rollback/reset replacement branch after a failed connection
+  recovery. It is covered by code inspection, but no integration test forces the
+  configured replacement connection open to fail and then recover lazily.
+- **UNVERIFIED:** an installed timer/cron job invokes `solari_retention_run` in
+  the current environment. The procedure is implemented and its SQL passed the
+  disposable-schema check; cleanup will not occur automatically until a job is
+  configured.
+- **UNVERIFIED:** hosted CI on this exact tree, installed generator CA path,
+  physical-client CRL activation, sequence-ID collision across process restart,
+  and deployment/release. The configured-CA path and trust activation remain
+  deployment gates; the collision risk is low-probability but can reject an
+  operator send for a node with the same still-pending ID.

@@ -20,7 +20,7 @@ import time
 import datetime
 
 
-def require_test_database() -> tuple[str, str, str, str]:
+def require_test_database() -> tuple[str, str, str, str, str]:
     if os.environ.get("SOLARI_TEST_DB") != "1":
         raise RuntimeError("set SOLARI_TEST_DB=1 to enable the disposable DB test")
     name = os.environ.get("SOLARI_DB_NAME", "")
@@ -28,17 +28,25 @@ def require_test_database() -> tuple[str, str, str, str]:
         raise RuntimeError("SOLARI_DB_NAME must use the dedicated solarinet_lease_process_* test prefix")
     return (os.environ.get("SOLARI_DB_HOST", "127.0.0.1"),
             os.environ.get("SOLARI_DB_PORT", "3306"), name,
-            os.environ.get("SOLARI_DB_USER", "solari"))
+            os.environ.get("SOLARI_DB_USER", "solari"),
+            os.environ.get("SOLARI_DB_SOCKET", ""))
 
 
-def mariadb_args(host: str, port: str, name: str, user: str) -> list[str]:
-    return ["mariadb", "--batch", "--skip-column-names", "--host", host,
-            "--port", port, "--user", user, "--database", name]
+def mariadb_args(host: str, port: str, name: str, user: str,
+                 db_socket: str) -> list[str]:
+    args = ["mariadb", "--batch", "--skip-column-names", "--user", user,
+            "--database", name]
+    if db_socket:
+        args.extend(["--protocol=SOCKET", "--socket", db_socket])
+    else:
+        args.extend(["--host", host, "--port", port])
+    return args
 
 
-def lease_state(db: tuple[str, str, str, str]) -> tuple[int, int]:
+def lease_state(db: tuple[str, str, str, str, str]) -> tuple[int, int]:
     result = subprocess.run(mariadb_args(*db) + ["--execute",
-        "SELECT COALESCE(leaseHolder,0),leaseEpoch FROM serverLease WHERE id=1"],
+        "SELECT IF(expiresAt>UTC_TIMESTAMP(3),COALESCE(leaseHolder,0),0),leaseEpoch "
+        "FROM serverLease WHERE id=1"],
         check=True, capture_output=True, text=True, timeout=5)
     fields = result.stdout.strip().split("\t")
     if len(fields) != 2:
@@ -46,7 +54,7 @@ def lease_state(db: tuple[str, str, str, str]) -> tuple[int, int]:
     return (int(fields[0]), int(fields[1]))
 
 
-def lease_expiry(db: tuple[str, str, str, str]) -> tuple[int, int, datetime.datetime]:
+def lease_expiry(db: tuple[str, str, str, str, str]) -> tuple[int, int, datetime.datetime]:
     result = subprocess.run(mariadb_args(*db) + ["--execute",
         "SELECT COALESCE(leaseHolder,0),leaseEpoch,"
         "DATE_FORMAT(expiresAt,'%Y-%m-%d %H:%i:%s.%f') FROM serverLease WHERE id=1"],
@@ -57,7 +65,7 @@ def lease_expiry(db: tuple[str, str, str, str]) -> tuple[int, int, datetime.date
     return (int(fields[0]), int(fields[1]), datetime.datetime.fromisoformat(fields[2]))
 
 
-def execute_sql(db: tuple[str, str, str, str], sql: str) -> None:
+def execute_sql(db: tuple[str, str, str, str, str], sql: str) -> None:
     subprocess.run(mariadb_args(*db) + ["--execute", sql], check=True,
                    capture_output=True, text=True, timeout=5)
 
@@ -88,12 +96,79 @@ def wait_for(description: str, predicate, processes, timeout: float = 12.0) -> N
         if predicate():
             return
         time.sleep(0.1)
-    raise RuntimeError(f"timed out waiting for {description}")
+    details = []
+    for label, _process, log_path in processes:
+        if log_path.exists():
+            details.append(f"--- {label} log ---\n"
+                           f"{log_path.read_text(errors='replace')[-5000:]}")
+    suffix = "\n" + "\n".join(details) if details else ""
+    raise RuntimeError(f"timed out waiting for {description}{suffix}")
+
+
+def run_bind_failure_case(binary: pathlib.Path,
+                          db: tuple[str, str, str, str, str], root: pathlib.Path) -> None:
+    """A listener-bind failure must release the lease for a healthy standby."""
+    failed_ports = tuple(free_port() for _ in range(3))
+    standby_ports = tuple(free_port() for _ in range(3))
+    while len(set(failed_ports + standby_ports)) != 6:
+        failed_ports = tuple(free_port() for _ in range(3))
+        standby_ports = tuple(free_port() for _ in range(3))
+    failed_config, standby_config = root / "bind-failed.conf", root / "bind-standby.conf"
+    failed_log, standby_log = root / "bind-failed.log", root / "bind-standby.log"
+    write_config(failed_config, "bind-failed", 710011, db, failed_ports)
+    write_config(standby_config, "bind-standby", 710012, db, standby_ports)
+    blocked = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocked.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    blocked.bind(("127.0.0.1", failed_ports[2]))
+    blocked.listen(1)
+    active: list[tuple[str, subprocess.Popen, pathlib.Path]] = []
+    handles = []
+    try:
+        execute_sql(db, "DELETE FROM serverLease WHERE id=1")
+        for label, config, log_path in (
+            ("bind-failed", failed_config, failed_log),
+            ("bind-standby", standby_config, standby_log),
+        ):
+            handle = log_path.open("wb")
+            handles.append(handle)
+            process = subprocess.Popen([str(binary), "--config", str(config)],
+                                       stdout=handle, stderr=subprocess.STDOUT)
+            active.append((label, process, log_path))
+            if label == "bind-failed":
+                wait_for("failed primary to report listener bind failure",
+                         lambda: b"bind pub (" in log_path.read_bytes()
+                         and b"failed:" in log_path.read_bytes(), active)
+                wait_for("failed primary to relinquish epoch 1",
+                         lambda: lease_state(db) == (0, 1), active)
+            else:
+                wait_for("healthy standby to take epoch 2 and bind listeners",
+                         lambda: lease_state(db) == (710012, 2)
+                         and listeners_ready(standby_ports), active)
+                time.sleep(6.5)  # cross the failed server's local TTL cooldown
+                if lease_state(db) != (710012, 2):
+                    raise RuntimeError("bind-failed server reclaimed the healthy primary lease")
+                if not listeners_ready(standby_ports):
+                    raise RuntimeError("healthy standby stopped serving after takeover")
+    finally:
+        for _label, process, _path in active:
+            if process.poll() is None:
+                process.send_signal(signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        blocked.close()
+        for handle in handles:
+            handle.close()
+        execute_sql(db, "DELETE FROM serverLease WHERE id=1")
 
 
 def write_config(path: pathlib.Path, label: str, node_id: int,
-                 db: tuple[str, str, str, str], ports: tuple[int, int, int]) -> None:
-    host, db_port, db_name, db_user = db
+                 db: tuple[str, str, str, str, str], ports: tuple[int, int, int]) -> None:
+    host, db_port, db_name, db_user, db_socket = db
+    if db_socket:
+        host, db_port = "", "0"
     ingest, control, publish = ports
     path.write_text(f"""[identity]
 hostFqdn = {label}.lease-test.invalid
@@ -111,6 +186,7 @@ host = {host}
 port = {db_port}
 name = {db_name}
 user = {db_user}
+socket = {db_socket}
 poolSize = 1
 
 [lease]
@@ -120,8 +196,10 @@ leaseTtlSec = 6
 
 
 def write_worker_config(path: pathlib.Path, node_id: int,
-                        db: tuple[str, str, str, str]) -> None:
-    host, db_port, db_name, db_user = db
+                        db: tuple[str, str, str, str, str]) -> None:
+    host, db_port, db_name, db_user, db_socket = db
+    if db_socket:
+        host, db_port = "", "0"
     path.write_text(f"""[identity]
 hostFqdn = scan-worker-{node_id}.lease-test.invalid
 nodeId = {node_id}
@@ -131,6 +209,7 @@ host = {host}
 port = {db_port}
 name = {db_name}
 user = {db_user}
+socket = {db_socket}
 poolSize = 1
 
 [lease]
@@ -178,6 +257,7 @@ def main() -> int:
         processes: list[tuple[str, subprocess.Popen, pathlib.Path]] = []
         log_handles = []
         try:
+            run_bind_failure_case(binary, db, root)
             execute_sql(db, "DELETE FROM serverLease WHERE id=1")
             execute_sql(db, "DELETE FROM discovered WHERE ip='127.0.0.1' AND kind='host'")
             execute_sql(db, "DELETE FROM discoveryScanJob")
@@ -316,7 +396,8 @@ def main() -> int:
                 raise RuntimeError("server-b lost its successor lease after scan recovery")
             if not listeners_ready(ports):
                 raise RuntimeError("server-b stopped listening after scan recovery")
-            print("PASS: server-a renewed epoch 1 during slow scan enrichment; server-b "
+            print("PASS: bind failure relinquished the lease for a healthy standby; "
+                  "server-a renewed epoch 1 during slow scan enrichment; server-b "
                   "took epoch 2, worker-a stopped on lease loss, worker-b recovered the "
                   "orphan and completed a scan")
         finally:

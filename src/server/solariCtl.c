@@ -496,6 +496,16 @@ static bool ctlVerbRequiresOperator(const char *verb)
            strcmp(verb, "REQUEST_GET") == 0;
 }
 
+/* A standby bridge may answer liveness and scoped status reads, but every
+ * command that mutates DB state, queues work, signs, provisions, or contacts the
+ * fleet requires the active lease. Keep this allowlist closed by default. */
+static bool ctlVerbMayRunOnStandby(const char *verb)
+{
+    return strcmp(verb, "PING") == 0 ||
+           strcmp(verb, "REQUEST_GET") == 0 ||
+           strcmp(verb, "DISCOVER_STATUS") == 0;
+}
+
 /* ===================================================================== */
 /* PHP→host security boundary: peer-credential classes + verb-class ACL   */
 /* (Task #1). Pure decision functions — no I/O, no globals — so the whole   */
@@ -710,6 +720,13 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
                     : "not authorized");
         }
     }
+
+    /* Unix bridge polling remains available on standby for read-only status,
+     * but no command may write shared state or invoke an external effect. */
+    if (ctl->ctx && ctl->ctx->role != SRV_ACTIVE &&
+        !ctlVerbMayRunOnStandby(verb))
+        return ctlReplyErr(replyOut, replyCap, ERR_LEASE_LOST,
+                           "active server required");
 
     /* RBAC gate next so a destructive verb with no operator never reaches the
      * effecting APIs. */
@@ -1473,6 +1490,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         uint8_t frame[CTL_REQ_CAP];
         size_t  frameLen = 0;
         size_t  payLen;
+        solariFrameHeader header;
+        uint32_t correlationId;
         if (ctlArgU64(args, "node", &nodeId) != SOLARI_OK || nodeId == 0)
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "bad node id");
         if (ctlArgU64(args, "verb", &verbNum) != SOLARI_OK || verbNum == 0 ||
@@ -1485,12 +1504,32 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         st = serverControlBuild(ctl->ctx, nodeId, (solariCtrlVerb)verbNum, epoch,
                                 payLen ? (const uint8_t *)payload : NULL,
                                 (uint16_t)payLen, frame, sizeof frame, &frameLen);
-        /* Directives are published on the fleet PUB channel (see SURVEY note). */
-        if (st == SOLARI_OK && ctl->ctx->pub)
-            st = solariConnSend(ctl->ctx->pub, frame, frameLen);
-        if (st == SOLARI_OK || st == ERR_CONN_RETRY)
-            return ctlReplyOk(replyOut, replyCap, "control=sent");
-        return ctlReplyErr(replyOut, replyCap, st, "control failed");
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "control build failed");
+        if (!ctl->ctx->pub)
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "control publisher unavailable");
+        st = solariFrameParse(frame, frameLen, &header, NULL, NULL, NULL);
+        if (st != SOLARI_OK || !header.correlationId)
+            return ctlReplyErr(replyOut, replyCap,
+                               st == SOLARI_OK ? ERR_INVALID_ARG : st,
+                               "control frame invalid");
+        correlationId = header.correlationId;
+        st = serverDbControlDirectiveAdd(ctl->ctx->db, nodeId, correlationId,
+                                         (uint8_t)verbNum, epoch);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "control correlation unavailable");
+        /* Persist before publication so an immediate node reply can be matched. */
+        st = solariConnSend(ctl->ctx->pub, frame, frameLen);
+        if (st != SOLARI_OK) {
+            solariStatus cancelSt = serverDbControlDirectiveCancel(
+                ctl->ctx->db, nodeId, correlationId);
+            if (cancelSt != SOLARI_OK)
+                solariLogf(SOLARI_LOG_ERROR,
+                           "ctl: failed to cancel unpublished control node=0x%llx corr=%u",
+                           (unsigned long long)nodeId, (unsigned)correlationId);
+            return ctlReplyErr(replyOut, replyCap, st, "control publish failed");
+        }
+        return ctlReplyOk(replyOut, replyCap, "control=sent");
     }
 
     /* ---- guarded decommission (RBAC already enforced; confirm-gated) ---- */

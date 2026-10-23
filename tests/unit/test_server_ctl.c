@@ -308,7 +308,7 @@ static void test_discovery_scan_rejected_on_standby(void)
 
     (void)ctlHandleLine(&ctl, line, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
     TEST_ASSERT_TRUE(strstr(reply, "ERR") != NULL);
-    TEST_ASSERT_TRUE(strstr(reply, "active lease required") != NULL);
+    TEST_ASSERT_TRUE(strstr(reply, "active server required") != NULL);
 }
 
 static void test_discovery_adopt_rejected_on_standby_before_mutation(void)
@@ -336,6 +336,26 @@ static void test_discovery_adopt_rejected_on_standby_before_mutation(void)
                         activeReply, sizeof activeReply);
     TEST_ASSERT_TRUE(strstr(activeReply, "assetId=424242") != NULL);
     TEST_ASSERT_EQUAL_UINT(1, gAssetAdoptCalls);
+}
+
+static void test_operator_bridge_standby_is_read_only(void)
+{
+    serverCtl ctl;
+    serverContext ctx;
+    char reply[256];
+    char write[] = "ASSET_SET ip=10.0.0.9 name=standby-write";
+    char ping[] = "PING";
+
+    memset(&ctl, 0, sizeof ctl);
+    memset(&ctx, 0, sizeof ctx);
+    ctx.role = SRV_STANDBY;
+    ctl.ctx = &ctx;
+
+    (void)ctlHandleLine(&ctl, write, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
+    TEST_ASSERT_TRUE(strstr(reply, "active server required") != NULL);
+
+    (void)ctlHandleLine(&ctl, ping, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
+    TEST_ASSERT_TRUE(strstr(reply, "OK pong") != NULL);
 }
 
 static void test_discovery_submits_durable_job_and_scopes_status(void)
@@ -441,6 +461,7 @@ static void test_queued_decommission_confirms_without_persisting_token(void)
     memset(&ctl, 0, sizeof ctl);
     memset(&ctx, 0, sizeof ctx);
     ctx.db = (serverDb *)1;
+    ctx.role = SRV_ACTIVE;
     ctl.ctx = &ctx;
     gQueuedDecommissionReady = true;
     gQueuedDecommissionCompleted = false;
@@ -570,6 +591,7 @@ int main(void)
     RUN_TEST(test_decommission_confirmation_reuses_issued_token);
     RUN_TEST(test_discovery_scan_rejected_on_standby);
     RUN_TEST(test_discovery_adopt_rejected_on_standby_before_mutation);
+    RUN_TEST(test_operator_bridge_standby_is_read_only);
     RUN_TEST(test_discovery_submits_durable_job_and_scopes_status);
     RUN_TEST(test_enrollment_token_hash);
     RUN_TEST(test_enrollment_token_acl);

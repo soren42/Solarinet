@@ -112,6 +112,29 @@ sudo systemctl daemon-reload && sudo systemctl enable --now solarinet-server sol
 
 ## 5. PHP-FPM boundary
 
+### Temporary PHP security override (2026-10-23)
+
+Ubuntu's fixed package for PHP2Shell is `8.5.4-0ubuntu1.5` on Ubuntu 26.04
+(`USN-8948-1`); the upstream PHP version string remains `8.5.4`. The separate
+PHP advisory dated 2026-10-23 recommends disabling session upload progress
+until its next regular bugfix release for an additional, unusual PHP 8.5
+request-lifecycle case. The FPM override in
+[`hardened/php-security-overrides.ini`](hardened/php-security-overrides.ini)
+does this for all FPM pools. Install it on each PHP 8.5 FPM host and restart
+FPM; remove it only after the vendor release containing the follow-up fix is
+verified and deployed.
+
+```sh
+sudo install -o root -g root -m 0644 \
+  deploy/dashboard/hardened/php-security-overrides.ini \
+  /etc/php/8.5/fpm/conf.d/99-solarinet-security.ini
+sudo php-fpm8.5 -t && sudo systemctl restart php8.5-fpm
+```
+
+The project does not use PHP's session upload-progress feature or change
+`session.serialize_handler` at runtime, so disabling progress does not remove a
+known dashboard feature. Confirm the effective FPM value after restart.
+
 Configure the pool with the `solari_dash` password. Keep the pool file root-owned
 and mode `0640`; the FPM master reads it and passes the secret to the `www-solari`
 workers. Seed the dashboard credential store under `/var/lib/solarinet-dashboard`

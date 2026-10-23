@@ -19,6 +19,7 @@
 # =============================================================================
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-lib.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/provisioning-guard.sh"
 
 TARGET="" DISTRO="" ARCH="" HOSTNAME_="" PROFILE="standard" ROLE="sensor" OP="dashboard" DISK=""
 while [ $# -gt 0 ]; do
@@ -43,6 +44,7 @@ done
 [ -n "${ARCH}" ]     || fdie "--hostname required"
 [ -n "${HOSTNAME_}" ] || fdie "--hostname required"
 [ -n "${DISK}" ] || DISK="${DEFAULT_DISK}"
+fleet_require_unverified_override || exit 1
 # SERVER_NAME follows the server URL host unless explicitly set
 SERVER_NAME="$(printf '%s' "${SERVER_URL}" | sed -E 's#^[a-z+]+://##; s#:[0-9]+$##')"
 

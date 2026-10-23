@@ -19,7 +19,6 @@ import sys
 import tempfile
 
 HEX_RE = re.compile(r"^[0-9A-Fa-f]{1,40}$")
-FP_RE = re.compile(r"^[0-9A-Fa-f]{64}$")
 REASONS = {"unspecified", "keyCompromise", "affiliationChanged", "superseded",
            "cessationOfOperation"}
 DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -84,7 +83,8 @@ def crl_index(revocations: list[tuple[str, str, int]], now: datetime.datetime) -
         serial = serial.upper().lstrip("0") or "0"
         if len(serial) % 2:
             serial = "0" + serial
-        lines.append("R\t99991231235959Z\t" + revoke_text + "," + reason +
+        reason_suffix = "" if reason == "unspecified" else "," + reason
+        lines.append("R\t99991231235959Z\t" + revoke_text + reason_suffix +
                      "\t" + serial + "\tunknown\t/CN=SolariNet-Revoked")
     return ("\n".join(lines) + ("\n" if lines else "")).encode("ascii")
 
@@ -127,6 +127,18 @@ def verify_candidate(crl_path: pathlib.Path, ca_path: pathlib.Path, expected_num
     if not crl_issuer.startswith("issuer=") or not ca_subject.startswith("subject=") or \
             crl_issuer.removeprefix("issuer=") != ca_subject.removeprefix("subject="):
         raise ValueError("generated CRL issuer name differs from the configured CA subject")
+    ca_ski_text = command(["openssl", "x509", "-in", str(ca_path), "-noout",
+                          "-ext", "subjectKeyIdentifier"])
+    ca_ski_match = re.search(rb"Subject Key Identifier:\s*\n\s*([0-9A-Fa-f:]+)", ca_ski_text)
+    if not ca_ski_match:
+        raise ValueError("configured CA certificate has no subject key identifier for CRL AKI")
+    ca_ski = ca_ski_match.group(1).replace(b":", b"").upper()
+    crl_text = command(["openssl", "crl", "-in", str(crl_path), "-noout", "-text"])
+    crl_aki_match = re.search(
+        rb"X509v3 Authority Key Identifier:\s*\n\s*(?:keyid:)?([0-9A-Fa-f:]+)", crl_text
+    )
+    if not crl_aki_match or crl_aki_match.group(1).replace(b":", b"").upper() != ca_ski:
+        raise ValueError("generated CRL authority key identifier does not match the configured CA")
     number, last_update, next_update, serials, der = parse_crl_metadata(crl_path)
     expected_serials = {(serial.upper().lstrip("0") or "0") for serial, _, _ in revocations}
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -157,11 +169,12 @@ def allocate_number(args: argparse.Namespace, issuer_fp: str) -> int:
 
 
 def read_ledger(args: argparse.Namespace, issuer_fp: str) -> list[tuple[str, str, int]]:
-    state = mysql(args, "SELECT complete FROM certificateInventoryState WHERE singletonId=1")
+    state = mysql(args,
+        "SET time_zone='+00:00'; SELECT complete FROM certificateInventoryState WHERE singletonId=1")
     if len(state) != 1 or state[0][0] != "1":
         raise ValueError("certificate inventory became incomplete during CRL generation")
     rows = mysql(args,
-        "SELECT serialHex,reason,CAST(UNIX_TIMESTAMP(revokedAt)*1000 AS UNSIGNED) "
+        "SET time_zone='+00:00'; SELECT serialHex,reason,CAST(UNIX_TIMESTAMP(revokedAt)*1000 AS UNSIGNED) "
         "FROM certificateRevocation WHERE issuerFp=" + sql_text(issuer_fp) +
         " ORDER BY serialHex")
     result: list[tuple[str, str, int]] = []
@@ -180,7 +193,7 @@ def publish_state(args: argparse.Namespace, issuer_fp: str, number: int,
                   crl_fp: str, next_update: datetime.datetime) -> None:
     next_ms = int(next_update.timestamp() * 1000)
     result = mysql(args,
-        "UPDATE certificateCrlState SET publishedNumber=" + str(number) +
+        "SET time_zone='+00:00'; UPDATE certificateCrlState SET publishedNumber=" + str(number) +
         ",generatedAt=UTC_TIMESTAMP(6),crlFp=" + sql_text(crl_fp) +
         ",nextUpdate=FROM_UNIXTIME(" + str(next_ms) + "/1000) WHERE issuerFp=" +
         sql_text(issuer_fp) + " AND COALESCE(publishedNumber,0)<" + str(number) +
@@ -250,10 +263,12 @@ def generate(args: argparse.Namespace) -> None:
                 "new_certs_dir = $dir/newcerts\n"
                 f"certificate = {ca_path}\nprivate_key = {key_path}\n"
                 "serial = $dir/serial\ncrlnumber = $dir/crlnumber\n"
+                "crl_extensions = crl_ext\n"
                 "default_md = sha256\n"
                 f"default_crl_hours = {args.crl_hours}\n"
                 "policy = policy\nunique_subject = no\n"
                 "[ policy ]\ncommonName = supplied\n"
+                "[ crl_ext ]\nauthorityKeyIdentifier = keyid:always\n"
             )
             config_path.write_text(config, encoding="utf-8")
             candidate = temp_dir / "candidate.crl.pem"
@@ -264,6 +279,7 @@ def generate(args: argparse.Namespace) -> None:
             if read_ledger(args, issuer_fp) != revocations:
                 raise ValueError("revocation ledger changed during CRL generation; retry")
             with candidate.open("rb") as stream:
+                candidate.chmod(0o644)
                 os.fsync(stream.fileno())
             os.replace(candidate, output_path)
             directory_fd = os.open(output_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))

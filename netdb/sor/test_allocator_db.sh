@@ -125,6 +125,12 @@ SOR_DASHBOARD_TEST_USER_HOST=% \
   "$PYBIN" "$HERE/../../tests/deploy/test_sor_dashboard_grants.py"
 dashboard_user_created=1
 
+echo "== proving separated SoR sync runtime grants =="
+SOR_RUNTIME_TEST_DB="$DB" SOR_RUNTIME_TEST_ALLOW_CREATE_USERS=1 \
+  SOR_RUNTIME_TEST_ADMIN_HOST=127.0.0.1 SOR_RUNTIME_TEST_ADMIN_SOCKET=1 \
+  SOR_RUNTIME_TEST_PORT=3306 \
+  "$PYBIN" "$HERE/../../tests/deploy/test_sorsync_runtime_grants.py"
+
 echo "== exercising provisioning CDC triggers =="
 SOLARI_TEST_SOR_DB=1 SOR_DB_NAME="$DB" MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 \
   MYSQL_USER=sor_test MYSQL_PWD=sor_test_ephemeral MYSQL_DATABASE="$DB" \
