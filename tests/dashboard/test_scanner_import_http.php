@@ -37,15 +37,21 @@ function httpRequest(string $url, string $method, ?array $body = null,
     $port = (int) parse_url($url, PHP_URL_PORT);
     $origin = "http://{$host}:{$port}";
     $headers = ['Accept: application/json', 'Origin: ' . $origin];
+    $encodedBody = $body === null ? '' : json_encode($body, JSON_THROW_ON_ERROR);
     if ($body !== null) {
         $headers[] = 'Content-Type: application/json';
+        // PHP's stream wrapper may use chunked transfer for large content.
+        // The built-in PHP test server does not consistently expose that body
+        // through php://input, so send an explicit length for deterministic
+        // multi-megabyte API contract tests.
+        $headers[] = 'Content-Length: ' . strlen($encodedBody);
     }
     if ($cookie !== null) $headers[] = 'Cookie: ' . $cookie;
     if ($csrf !== null) $headers[] = 'X-Solari-CSRF: ' . $csrf;
     $options = ['http' => [
         'method' => $method,
         'header' => implode("\r\n", $headers),
-        'content' => $body === null ? '' : json_encode($body, JSON_THROW_ON_ERROR),
+        'content' => $encodedBody,
         'ignore_errors' => true,
         'timeout' => 5,
     ]];
@@ -89,6 +95,10 @@ $locationName = 'Scanner HTTP fixture ' . $suffix;
 $operator = 'scanner-http-test';
 $sourceBefore = $db->query("SELECT id FROM sources WHERE slug='scanner-ingest'")->fetchColumn();
 $locationId = null;
+$unitId = null;
+$entityId = null;
+$conflictingEntityId = null;
+$conflictingUnitId = null;
 $work = sys_get_temp_dir() . '/solarinet-scanner-http-' . bin2hex(random_bytes(8));
 $sessions = $work . '/sessions';
 $web = $work . '/web';
@@ -113,7 +123,7 @@ $snapshot = [
 ];
 
 $cleanup = static function () use ($db, $itemId, $assetId, $tag, $make, $model, $operator, $overflowVendor,
-                                   &$locationId, $sourceBefore): void {
+                                   &$locationId, &$entityId, &$conflictingEntityId, &$conflictingUnitId, $sourceBefore): void {
     $db->prepare('DELETE FROM receipts WHERE vendor=:vendor')->execute([':vendor' => $overflowVendor]);
     $unitQuery = $db->prepare('SELECT id FROM hardware_units WHERE asset_tag=:tag');
     $unitQuery->execute([':tag' => $tag]);
@@ -131,6 +141,14 @@ $cleanup = static function () use ($db, $itemId, $assetId, $tag, $make, $model, 
             ->execute([':id' => $unitId, ':actor' => 'dashboard:' . $operator]);
         $db->prepare('DELETE FROM hardware_units WHERE id=:id')->execute([':id' => $unitId]);
     }
+    foreach ([$entityId, $conflictingEntityId] as $linkedEntityId) {
+        if ($linkedEntityId !== null) {
+            $db->prepare('DELETE FROM audit_log WHERE table_name="entities" AND row_id=:id AND actor_label=:actor')
+                ->execute([':id' => $linkedEntityId, ':actor' => 'dashboard:' . $operator]);
+            $db->prepare('DELETE FROM entities WHERE id=:id')->execute([':id' => $linkedEntityId]);
+        }
+    }
+    if ($conflictingUnitId !== null) $db->prepare('DELETE FROM hardware_units WHERE id=:id')->execute([':id' => $conflictingUnitId]);
     $modelQuery = $db->prepare('SELECT id FROM hardware_models WHERE make=:make AND model=:model');
     $modelQuery->execute([':make' => $make, ':model' => $model]);
     $modelId = $modelQuery->fetchColumn();
@@ -194,10 +212,19 @@ try {
     $log = fopen($serverLogPath, 'ab');
     if ($log === false) throw new RuntimeException('Could not create HTTP fixture log.');
     $descriptors = [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log];
+    $serverEnvironment = getenv();
+    // PHP may spool request bodies through its temporary directory. This
+    // fixture deliberately sends >1 MiB JSON; use shared memory when the
+    // default /tmp is quota-limited on a developer or CI host.
+    if (is_array($serverEnvironment)
+        && (!isset($serverEnvironment['TMPDIR']) || $serverEnvironment['TMPDIR'] === '/tmp')
+        && is_dir('/dev/shm') && is_writable('/dev/shm')) {
+        $serverEnvironment['TMPDIR'] = '/dev/shm';
+    }
     // Exercise the API's full 4 MiB application cap independently of a host
     // php.ini that may set post_max_size below the supported request limit.
     $server = proc_open([PHP_BINARY, '-d', 'memory_limit=128M', '-d', 'post_max_size=5M', '-d', 'session.save_path=' . $sessions,
-        '-S', '127.0.0.1:' . $httpPort, $work . '/router.php'], $descriptors, $pipes, dirname(__DIR__, 2));
+        '-S', '127.0.0.1:' . $httpPort, $work . '/router.php'], $descriptors, $pipes, dirname(__DIR__, 2), $serverEnvironment);
     if (!is_resource($server)) throw new RuntimeException('Could not start the local PHP HTTP fixture.');
     $ready = false;
     for ($i = 0; $i < 50; $i++) {
@@ -279,6 +306,10 @@ try {
     $applied = httpRequest($baseUrl . '/api/inventory/scanner-import/apply', 'POST', $applyPayload, $cookie, $csrf);
     check($applied['status'] === 200 && ($applied['body']['data']['mode'] ?? '') === 'applied', 'HTTP apply failed');
     check(($applied['body']['data']['counts']['insert.hardware_units'] ?? 0) === 1, 'HTTP apply did not insert one unit');
+    $unitQuery = $db->prepare('SELECT id FROM hardware_units WHERE asset_tag=:tag AND deleted_at IS NULL');
+    $unitQuery->execute([':tag' => $tag]);
+    $unitId = (int) $unitQuery->fetchColumn();
+    check($unitId > 0, 'HTTP import did not expose the created hardware unit');
     $type = $db->prepare('SELECT hm.hw_type FROM hardware_units hu JOIN hardware_models hm ON hm.id=hu.model_id WHERE hu.asset_tag=:tag');
     $type->execute([':tag' => $tag]);
     check($type->fetchColumn() === 'scanner', 'HTTP category mapping did not set the SoR hardware type');
@@ -286,6 +317,58 @@ try {
     $profileModelQuery->execute([':make' => $make, ':model' => $model]);
     $profileModelId = (int) $profileModelQuery->fetchColumn();
     check($profileModelId > 0, 'scanner import did not create the model required for RackWire profiling');
+
+    $entityName = 'scanner-network-' . $suffix;
+    $entityInsert = $db->prepare("INSERT INTO entities (name,entity_type,source_id,asserted_kind) VALUES (:name,'network_gear',:source,'human')");
+    $entityInsert->execute([':name' => $entityName, ':source' => $manualSource]);
+    $entityId = (int) $db->lastInsertId();
+    $linkPath = '/api/inventory/components/' . $unitId . '/entity-link';
+    $linkPreview = httpRequest($baseUrl . $linkPath, 'GET', null, $cookie);
+    check($linkPreview['status'] === 200 && ($linkPreview['body']['data']['entity'] ?? null) === null
+        && in_array($entityId, array_column($linkPreview['body']['data']['candidates'] ?? [], 'id'), true),
+        'entity-link endpoint lists explicit candidates for the imported unit');
+    $linkViewer = httpRequest($baseUrl . $linkPath, 'POST', ['entity_id' => $entityId], $viewerCookie, $viewerCsrf);
+    $linkNoCsrf = httpRequest($baseUrl . $linkPath, 'POST', ['entity_id' => $entityId], $cookie);
+    check($linkViewer['status'] === 403 && $linkNoCsrf['status'] === 403,
+        'entity association rejects viewer roles and missing CSRF tokens');
+    $unlinkViewer = httpRequest($baseUrl . $linkPath, 'DELETE', ['note' => 'viewer must not unlink'], $viewerCookie, $viewerCsrf);
+    $unlinkNoCsrf = httpRequest($baseUrl . $linkPath, 'DELETE', ['note' => 'CSRF must be required'], $cookie);
+    check($unlinkViewer['status'] === 403 && $unlinkNoCsrf['status'] === 403,
+        'entity unlink rejects viewer roles and missing CSRF tokens');
+    $linked = httpRequest($baseUrl . $linkPath, 'POST', ['entity_id' => $entityId], $cookie, $csrf);
+    $registry = $db->prepare('SELECT entity_id FROM entity_hardware_unit_links WHERE hardware_unit_id=:unit');
+    $registry->execute([':unit' => $unitId]);
+    check($linked['status'] === 200 && ($linked['body']['data']['entityId'] ?? null) === $entityId
+        && (int) $registry->fetchColumn() === $entityId,
+        'operator association updates entities and the uniqueness registry through the API');
+    $linkedView = httpRequest($baseUrl . $linkPath . '?q=' . rawurlencode($entityName), 'GET', null, $cookie);
+    $componentView = httpRequest($baseUrl . '/api/inventory/components?limit=1000&offset=0', 'GET', null, $cookie);
+    $componentRows = $componentView['body']['data']['items'] ?? [];
+    $linkedComponent = null;
+    foreach ($componentRows as $component) if ((int) ($component['id'] ?? 0) === $unitId) $linkedComponent = $component;
+    check($linkedView['status'] === 200 && ($linkedView['body']['data']['entity']['id'] ?? null) === $entityId
+        && count(array_filter($linkedView['body']['data']['candidates'] ?? [], static fn(array $candidate): bool => (int) $candidate['id'] === $entityId)) === 1
+        && $componentView['status'] === 200 && ($linkedComponent['entityName'] ?? null) === $entityName,
+        'entity search and component inventory read back the current explicit link');
+    $idempotentLink = httpRequest($baseUrl . $linkPath, 'POST', ['entity_id' => $entityId], $cookie, $csrf);
+    $auditCount = $db->prepare('SELECT COUNT(*) FROM audit_log WHERE table_name="entities" AND row_id=:id AND actor_label=:actor');
+    $auditCount->execute([':id' => $entityId, ':actor' => 'dashboard:' . $operator]);
+    check($idempotentLink['status'] === 200 && ($idempotentLink['body']['data']['unchanged'] ?? false) === true
+        && (int) $auditCount->fetchColumn() === 1,
+        'repeating an association is idempotent and does not duplicate its audit entry');
+
+    $conflictingName = 'scanner-conflict-' . $suffix;
+    $entityInsert->execute([':name' => $conflictingName, ':source' => $manualSource]);
+    $conflictingEntityId = (int) $db->lastInsertId();
+    $conflict = httpRequest($baseUrl . $linkPath, 'POST', ['entity_id' => $conflictingEntityId], $cookie, $csrf);
+    check($conflict['status'] === 409 && ($conflict['body']['error']['code'] ?? null) === 'unit_already_linked',
+        'one physical unit cannot be associated with two live entities');
+    $unlinked = httpRequest($baseUrl . $linkPath, 'DELETE', ['note' => 'HTTP integration test unlink'], $cookie, $csrf);
+    $registry->execute([':unit' => $unitId]);
+    check($unlinked['status'] === 200 && ($unlinked['body']['data']['entityId'] ?? null) === $entityId
+        && $registry->fetchColumn() === false,
+        'operator unlink clears both the entity pointer and association registry');
+
     $profileGroups = [['k' => 'ethernet', 'label' => 'Ethernet ×8', 'glyph' => 'rj45', 'count' => 8,
         'rows' => 1, 'role' => 'lan', 'gbps' => 1, 'domain' => 'net', 'conn' => 'rj45']];
     $profileSave = httpRequest($baseUrl . '/api/rackwire/library/' . $profileModelId . '/groups', 'POST',

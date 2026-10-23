@@ -576,5 +576,29 @@ echo "[9] commit preserves asset, port and cable fields\n";
         'label, length, standard, jacket and notes survive the commit', json_encode($params));
 }
 
+echo "[10] known physical units require an explicit entity association\n";
+{
+    $plan = [
+        'devices' => [
+            ['uid' => 'known', 'name' => 'human-readable-switch', 'assetId' => 'SI-UNLINKED',
+             'groups' => [['k' => 'lan', 'n' => 'LAN', 'domain' => 'net', 'conn' => 'rj45', 'count' => 1]]],
+        ],
+        'cables' => [[
+            'uid' => 'unresolved', 'a' => ['dev' => 'known', 'port' => 'lan-1'],
+            'b' => ['dev' => 'unknown', 'port' => 'lan-1'],
+        ]],
+    ];
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/commit',
+               'RW_BODY' => json_encode(['dryRun' => false, 'plan' => $plan]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'commit-known-unit-unlinked', 'RW_CAPTURE' => '1']);
+    $calls = $r['capture'] ?? [];
+    $nameLookups = array_values(array_filter($calls, static fn ($q) => str_contains($q['sql'] ?? '', 'LOWER(name) = LOWER(:n)')));
+    $writes = array_values(array_filter($calls, static fn ($q) => str_starts_with($q['sql'] ?? '', 'INSERT INTO interconnects')));
+    rw_test_ok($r['status'] === 200 && ($r['body']['data']['created'] ?? null) === 0
+        && str_contains(implode(' | ', $r['body']['data']['skipped'] ?? []), 'endpoint device did not resolve')
+        && $nameLookups === [] && $writes === [],
+        'asset tag of a known but unlinked unit never resolves to an unrelated entity by name', $r['raw']);
+}
+
 echo "\n" . $pass . " passed, " . $fail . " failed\n";
 exit($fail ? 1 : 0);

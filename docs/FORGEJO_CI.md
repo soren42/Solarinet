@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-23
 **Primary repository:** Forgejo (`jason/Solarinet`)
-**Candidate branches:** Forgejo `integrate/phase0-reconcile-20261022`; GitHub `integrate/stability-20261020`
+**Candidate branches:** Forgejo `integrate/phase0-reconcile-20261022`; GitHub mirror `integrate/phase0-reconcile-20261022` after publication
 
 ## Decision
 
@@ -12,6 +12,13 @@ first. The Forgejo workflow is maintained as a generated
 adaptation of `.github/workflows/ci.yml`; the renderer and parity check are
 `tools/ci/render_forgejo_workflow.py`. The GitHub workflow runs that check so changes to the
 source CI cannot silently leave Forgejo CI stale.
+
+RackWire is a separate repository. Forgejo keeps it private, so the RackWire
+browser and dashboard jobs use the repository secret `RACKWIRE_READ_TOKEN`,
+which must have read-only access to `jason/RackWire`. The current GitHub
+RackWire repository is anonymously readable, so GitHub jobs can use the
+default workflow token when that optional secret is absent. Jobs that do not
+need RackWire use a non-recursive checkout.
 
 ## Execution contract
 
@@ -177,12 +184,10 @@ the Opie MCP subprocess step because the child interpreter could not load the dy
 runtime from the Actions tool cache. The runner's constrained subprocess environment omits
 `LD_LIBRARY_PATH`; the candidate fix now passes that path alongside the MCP package path.
 The exact Opie suite passes 9 tests under Python 3.12 in a disposable container. The SoR
-RabbitMQ 3.13.7, 4.2.9, and 4.3.6 jobs passed, including the 4.3.7 upgrade intermediate and
-pre-4.4 snapshot restore. The standalone RackWire browser job passed its recursive checkout
-and browser flow. Core, full server, SCP fuzz, panel, and Linux/Windows cross jobs passed.
-Forgejo recorded the dashboard job as skipped; the available run metadata does not establish
-the reason, so it is not attributed to the Python failure. The dashboard gate remains
-unverified, so this run is not a green matrix.
+RabbitMQ 3.13.7, 4.2.9, 4.3.6, and 4.4.0 jobs passed, including the 4.3.7 upgrade intermediate
+and pre-4.4 snapshot restore. The run was superseded before the protocol-fuzz, core, server,
+RackWire browser, dashboard, panel, and cross-build jobs started; those jobs were cancelled.
+The dashboard gate remains unverified, so this was not a complete matrix.
 
 The candidate now adds `pkg-config` and OpenSSL development headers to the panel workflow
 dependencies. The panel PTY test double now waits for five consecutive empty-queue checks
@@ -192,29 +197,34 @@ daemon listener/codec suite passed. The firmware host suite passed 107 tests and
 page/firmware parity suite passed 59 checks locally. The firmware build used `TMPDIR=/var/tmp`
 because this development host's `/tmp` hit its user quota during ASAN compilation.
 
-**Follow-up runs, 2026-10-23:** Forgejo run `66` used commit
-`9dd7d9b9f0b6b15f41f63ee1f2ca1b27843e1988`. The Opie/Python job, all four SoR broker jobs,
-RackWire browser flow, server, panel, and cross-build jobs passed. Forgejo again marked the
-dashboard job skipped, even though both the Python job and its declared `server` prerequisite
-passed. The row-level run record does not contain a skip explanation, so the precise cause is
-**UNVERIFIED**. The workflow source now sets the dashboard condition explicitly to run when
-not cancelled and when `needs.server.result == 'success'`; the renderer enforces this contract.
-Runs `67` and `68`, commits `8c06b443557cd5680f95ac2d2797a649a16b51e0` and
-`420615069a3702b51b77506f3f89385104ba5d1c`, both skipped dashboard while server succeeded. Their
-stored job payloads contain the conditions that were pushed. The `!cancelled()` condition also
-skipped, so run `69` will test a literal `if: true`. Forgejo 15.0.3 documentation says `needs`
-requires listed jobs to complete successfully before the dependent job executes. Therefore the
-literal condition retains the server success gate while removing condition function evaluation
-as a variable. See the [Forgejo v15 reference](https://forgejo.org/docs/v15.0/user/actions/reference/)
-and [conditional guide](https://forgejo.org/docs/v15.0/user/actions/basic-concepts/).
+**Follow-up runs, 2026-10-23:** Forgejo's stored numeric statuses distinguish success (`1`),
+failure (`2`), cancelled (`3`), skipped (`4`), waiting (`5`), running (`6`), and blocked (`7`)
+([Forgejo 15.0.3 status enum](https://codeberg.org/forgejo/forgejo/raw/tag/v15.0.3/models/actions/status.go)).
+Run `66` used commit `9dd7d9b9f0b6b15f41f63ee1f2ca1b27843e1988`; only Python completed successfully
+before the next push cancelled the run. Runs `67` and `68` were cancelled before their jobs
+started when later commits were pushed. Their dashboard jobs were cancelled, not skipped.
+Run `69`, commit `65cbb4a244a4ae3cfdfeba444feb4148921a90bc`, terminated with failure (status `2`).
+The independent SoR, Python, protocol-fuzz, core, panel, and cross jobs passed. The `server` and
+`rackwire-browser` jobs failed during recursive checkout because the per-repository workflow
+token received HTTP 403 for private Forgejo repository `jason/RackWire`; no server or browser
+tests ran. The dashboard remained blocked behind `needs: server`. The next candidate removes the
+unneeded submodule checkout from `server` and passes the existing Forgejo secret
+`RACKWIRE_READ_TOKEN` to the RackWire and dashboard checkouts. The secret name is configured;
+its value was not read. GitHub's RackWire repository is anonymously readable, so GitHub's
+default workflow token can read the same relative submodule URL there. Forgejo's dependency
+condition remains `needs: server`; no diagnostic `if: true` override is present. A new push can
+now start a fresh run without cancelling run 69. Forgejo documents that `needs` prerequisites
+must complete successfully before a dependent job runs
+([Actions reference](https://forgejo.org/docs/v15.0/user/actions/reference/)).
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private. Forgejo run `65` confirms that Actions are enabled and dispatch jobs for
 this repository. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15
 defaults Actions to enabled).
 
-Therefore the complete Forgejo matrix is **UNVERIFIED**. Do not describe this workflow as a
-green hosted gate until the dashboard gate and the corrected condition have run successfully.
+Therefore the complete Forgejo matrix for the current candidate is **UNVERIFIED**. Run 69 does
+not validate the current checkout or the new scanner/entity/RackWire flow; rerun the full matrix
+after review and publication, then inspect every job result.
 GitHub run `39898481633`
 completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
 2026-10-23; GitHub remains a secondary mirror and verification path when available.

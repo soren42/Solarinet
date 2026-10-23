@@ -43,6 +43,7 @@ EXPECTED = {
     "dns_records": {"SELECT"},
     "dns_zones": {"SELECT"},
     "entities": {"SELECT", "INSERT", "UPDATE"},
+    "entity_hardware_unit_links": {"SELECT"},
     "hardware_models": {"SELECT", "INSERT"},
     "hardware_units": {"SELECT", "INSERT", "UPDATE"},
     "interconnects": {"SELECT", "INSERT", "UPDATE"},

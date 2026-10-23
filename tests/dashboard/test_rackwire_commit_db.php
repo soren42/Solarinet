@@ -48,6 +48,7 @@ $planName = "rw-it-$token-plan";
 $modelIds = [];
 $unitIds = [];
 $entityIds = [];
+$replacementEntityId = null;
 $linkId = null;
 $planId = null;
 $fail = 0;
@@ -150,9 +151,9 @@ try {
 
         $entity = $pdo->prepare(
             'INSERT INTO entities (name, entity_type, hardware_unit_id, source_id, asserted_kind)
-             VALUES (:name, \'network_gear\', :unit, :src, \'human\')'
+             VALUES (:name, \'network_gear\', NULL, :src, \'human\')'
         );
-        $entity->execute([':name' => $entityName, ':unit' => $unitId, ':src' => $sourceId]);
+        $entity->execute([':name' => $entityName, ':src' => $sourceId]);
         $entityId = (int) $pdo->lastInsertId();
         $entityIds[] = $entityId;
 
@@ -177,6 +178,67 @@ try {
             'standard' => 'cat6a', 'label' => $label, 'lengthM' => 4.25, 'jacket' => 'blue', 'notes' => 'integration check',
         ]],
     ];
+
+    $unlinked = $runRoute($plan);
+    $unlinkedCount = (int) $pdo->query("SELECT COUNT(*) FROM interconnects WHERE label = " . $pdo->quote($label) . " AND deleted_at IS NULL")->fetchColumn();
+    $check($unlinked['status'] === 200 && ($unlinked['body']['data']['created'] ?? null) === 0 && $unlinkedCount === 0,
+        'scanner asset tags for known but unlinked units do not guess an entity by name');
+
+    foreach ($entityIds as $index => $entityId) {
+        $link = $pdo->prepare('UPDATE entities SET hardware_unit_id=:unit WHERE id=:entity');
+        $link->execute([':unit' => $unitIds[$index], ':entity' => $entityId]);
+    }
+    $associationCount = (int) $pdo->query('SELECT COUNT(*) FROM entity_hardware_unit_links WHERE entity_id IN (' . implode(',', $entityIds) . ')')->fetchColumn();
+    $check($associationCount === 2, 'entity update triggers populate the authoritative one-to-one association registry');
+
+    $duplicateRejected = false;
+    $duplicateMessage = '';
+    try {
+        $duplicate = $pdo->prepare(
+            "INSERT INTO entities (name, entity_type, hardware_unit_id, source_id, asserted_kind)
+             VALUES (:name, 'network_gear', :unit, :src, 'human')"
+        );
+        $duplicate->execute([':name' => "rw-it-$token-duplicate", ':unit' => $unitIds[0], ':src' => $sourceId]);
+    } catch (PDOException $e) {
+        $duplicateMessage = $e->getMessage();
+        $duplicateRejected = str_contains($duplicateMessage, 'physical unit is already linked to another live entity');
+    }
+    $check($duplicateRejected, 'database rejects a second live entity association for the same hardware unit');
+
+    $restoreEntity = $pdo->prepare('UPDATE entities SET deleted_at=NULL WHERE id=:id');
+    $softDelete = $pdo->prepare('UPDATE entities SET deleted_at=NOW() WHERE id=:id');
+    $softDelete->execute([':id' => $entityIds[0]]);
+    $released = $pdo->prepare('SELECT COUNT(*) FROM entity_hardware_unit_links WHERE hardware_unit_id=:unit');
+    $released->execute([':unit' => $unitIds[0]]);
+    $releasedCount = (int) $released->fetchColumn();
+    $replacement = $pdo->prepare(
+        "INSERT INTO entities (name, entity_type, source_id, asserted_kind)
+         VALUES (:name, 'network_gear', :source, 'human')"
+    );
+    $replacement->execute([':name' => "rw-it-$token-replacement", ':source' => $sourceId]);
+    $replacementEntityId = (int) $pdo->lastInsertId();
+    $assignReplacement = $pdo->prepare('UPDATE entities SET hardware_unit_id=:unit WHERE id=:entity');
+    $assignReplacement->execute([':unit' => $unitIds[0], ':entity' => $replacementEntityId]);
+    $restoreConflictMessage = '';
+    try {
+        $restoreEntity->execute([':id' => $entityIds[0]]);
+    } catch (PDOException $e) {
+        $restoreConflictMessage = $e->getMessage();
+    }
+    $oldEntityStillDeleted = (bool) $pdo->query('SELECT deleted_at IS NOT NULL FROM entities WHERE id=' . $entityIds[0])->fetchColumn();
+    $released->execute([':unit' => $unitIds[0]]);
+    $replacementCount = (int) $released->fetchColumn();
+    $check(str_contains($restoreConflictMessage, 'physical unit is already linked to another live entity')
+        && $oldEntityStillDeleted && $replacementCount === 1,
+        'restore conflict returns a clear error and preserves the replacement association');
+    $clearReplacement = $pdo->prepare('UPDATE entities SET hardware_unit_id=NULL WHERE id=:id');
+    $clearReplacement->execute([':id' => $replacementEntityId]);
+    $restoreEntity = $pdo->prepare('UPDATE entities SET deleted_at=NULL WHERE id=:id');
+    $restoreEntity->execute([':id' => $entityIds[0]]);
+    $released->execute([':unit' => $unitIds[0]]);
+    $restoredCount = (int) $released->fetchColumn();
+    $check($releasedCount === 0 && $restoredCount === 1,
+        'soft-delete releases an entity association and restoring it rebuilds the registry');
 
     $first = $runRoute($plan);
     if ($first['status'] !== 200) {
@@ -289,6 +351,10 @@ try {
         foreach ($entityIds as $id) {
             $del = $pdo->prepare('DELETE FROM entities WHERE id = :id');
             $del->execute([':id' => $id]);
+        }
+        if ($replacementEntityId !== null) {
+            $del = $pdo->prepare('DELETE FROM entities WHERE id = :id');
+            $del->execute([':id' => $replacementEntityId]);
         }
         foreach ($unitIds as $id) {
             $del = $pdo->prepare('DELETE FROM hardware_units WHERE id = :id');

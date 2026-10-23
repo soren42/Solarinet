@@ -7,6 +7,7 @@
 
 GRANT SELECT ON `sor`.`sources` TO 'solari_dashboard'@'10.0.0.20';
 GRANT SELECT, INSERT, UPDATE ON `sor`.`entities` TO 'solari_dashboard'@'10.0.0.20';
+GRANT SELECT ON `sor`.`entity_hardware_unit_links` TO 'solari_dashboard'@'10.0.0.20';
 GRANT SELECT, INSERT, UPDATE ON `sor`.`ip_addresses` TO 'solari_dashboard'@'10.0.0.20';
 
 GRANT SELECT, INSERT ON `sor`.`hardware_models` TO 'solari_dashboard'@'10.0.0.20';

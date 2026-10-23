@@ -164,19 +164,19 @@ def render() -> str:
     if source.count("uses: actions/download-artifact@v4") != 1:
         raise ValueError("expected exactly one v4 artifact download action")
     source = source.replace("uses: actions/download-artifact@v4", "uses: actions/download-artifact@v3")
+    # Forgejo's private RackWire mirror is authenticated with its repository
+    # secret. Keep GitHub's built-in-token fallback out of the Forgejo YAML;
+    # that context is GitHub-specific and unnecessary when the secret exists.
+    source = source.replace(
+        "token: ${{ secrets.RACKWIRE_READ_TOKEN || github.token }}",
+        "token: ${{ secrets.RACKWIRE_READ_TOKEN }}",
+    )
     source = source.replace("runs-on: ubuntu-latest", "runs-on: solarinet-ci-host")
 
     spans = job_ranges(source)
     for job in ("sorsync", "server", "dashboard"):
         if job not in spans:
             raise ValueError(f"required service job missing: {job}")
-    dashboard_start, dashboard_end = spans["dashboard"]
-    dashboard = source[dashboard_start:dashboard_end]
-    dashboard_gate = "    if: true\n"
-    if dashboard.count(dashboard_gate) != 1:
-        raise ValueError(
-            "dashboard condition must be unconditional; its needs edge enforces server success"
-        )
     for job, (start, end) in sorted(spans.items(), key=lambda item: item[1][0], reverse=True):
         block = source[start:end]
         source = source[:start] + adapt_job(block, job) + source[end:]

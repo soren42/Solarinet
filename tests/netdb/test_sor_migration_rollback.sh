@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Rehearse the manual 024-027 rollback and forward recovery in an explicit
+# Rehearse the manual 024-028 rollback and forward recovery in an explicit
 # loopback scratch schema. This test must never be pointed at a live SoR.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/require_scratch_sor_db.sh"
 
-rollback_sql="$(dirname "${BASH_SOURCE[0]}")/../../netdb/sor/rollback/024-027-down.sql"
+rollback_sql="$(dirname "${BASH_SOURCE[0]}")/../../netdb/sor/rollback/024-028-down.sql"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 query() { "${MYSQL[@]}" -e "$1"; }
@@ -21,6 +21,19 @@ network_values="$(query "SELECT COUNT(*) FROM networks WHERE enabled <> 1 OR man
 cable_values="$(query "SELECT COUNT(*) FROM interconnects WHERE media_standard IS NOT NULL OR jacket_color IS NOT NULL")"
 expect_zero "network state" "$network_values"
 expect_zero "cable metadata" "$cable_values"
+link_rows="$(query "SELECT COUNT(*) FROM entity_hardware_unit_links")"
+expect_zero "entity to hardware-unit associations" "$link_rows"
+
+# Prove the rollback SQL itself refuses to erase associations, even when
+# invoked directly instead of through this test's preflight wrapper.
+${MYSQL[@]} -e "SET FOREIGN_KEY_CHECKS=0; INSERT INTO entity_hardware_unit_links (hardware_unit_id,entity_id) VALUES (4294967294,18446744073709551614); SET FOREIGN_KEY_CHECKS=1"
+if "${MYSQL[@]}" < "$rollback_sql" >/dev/null 2>&1; then
+  echo "Rollback SQL unexpectedly accepted a populated entity/unit registry." >&2
+  exit 1
+fi
+${MYSQL[@]} -e "DELETE FROM entity_hardware_unit_links WHERE hardware_unit_id=4294967294 AND entity_id=18446744073709551614"
+${MYSQL[@]} -e "DROP PROCEDURE IF EXISTS _solarinet_rollback_m028_assert_empty"
+expect_zero "entity to hardware-unit associations after refusal check" "$(query "SELECT COUNT(*) FROM entity_hardware_unit_links")"
 
 # Ensure this really is a post-migration scratch schema before dropping anything.
 candidate_columns="$(query "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='networks' AND COLUMN_NAME IN ('enabled','management','is_default','allocator_eligible','allocator_approved_by','allocator_approved_at')) OR (TABLE_NAME='interconnects' AND COLUMN_NAME IN ('media_standard','jacket_color')))")"
@@ -31,25 +44,28 @@ fi
 
 "${MYSQL[@]}" < "$rollback_sql"
 remaining_columns="$(query "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='networks' AND COLUMN_NAME IN ('enabled','management','is_default','allocator_eligible','allocator_approved_by','allocator_approved_at')) OR (TABLE_NAME='interconnects' AND COLUMN_NAME IN ('media_standard','jacket_color')))")"
-remaining_triggers="$(query "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND (TRIGGER_NAME LIKE 'trg_sources_%' OR TRIGGER_NAME LIKE 'trg_functions_%' OR TRIGGER_NAME LIKE 'trg_entity_functions_%' OR TRIGGER_NAME LIKE 'trg_function_incompatibility_%' OR TRIGGER_NAME LIKE 'trg_vlans_%' OR TRIGGER_NAME LIKE 'trg_dhcp_ranges_%' OR TRIGGER_NAME LIKE 'trg_external_refs_%')")"
+remaining_triggers="$(query "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND (TRIGGER_NAME LIKE 'trg_sources_%' OR TRIGGER_NAME LIKE 'trg_functions_%' OR TRIGGER_NAME LIKE 'trg_entity_functions_%' OR TRIGGER_NAME LIKE 'trg_function_incompatibility_%' OR TRIGGER_NAME LIKE 'trg_vlans_%' OR TRIGGER_NAME LIKE 'trg_dhcp_ranges_%' OR TRIGGER_NAME LIKE 'trg_external_refs_%' OR TRIGGER_NAME IN ('trg_entities_hu_link_ai','trg_entities_hu_link_au'))")"
+remaining_link_table="$(query "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='entity_hardware_unit_links'")"
 remaining_allocator_index="$(query "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='networks' AND INDEX_NAME='ix_networks_allocator'")"
 prior_cdc="$(query "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME IN ('trg_entities_ai','trg_entities_au','trg_entities_ad')")"
-[[ "$remaining_columns" == 0 && "$remaining_triggers" == 0 && "$remaining_allocator_index" == 0 && "$prior_cdc" == 3 ]] || {
-  echo "Rollback postcondition failed (columns=$remaining_columns triggers=$remaining_triggers index=$remaining_allocator_index prior_cdc=$prior_cdc)." >&2
+[[ "$remaining_columns" == 0 && "$remaining_triggers" == 0 && "$remaining_link_table" == 0 && "$remaining_allocator_index" == 0 && "$prior_cdc" == 3 ]] || {
+  echo "Rollback postcondition failed (columns=$remaining_columns triggers=$remaining_triggers link_table=$remaining_link_table index=$remaining_allocator_index prior_cdc=$prior_cdc)." >&2
   exit 1
 }
 
 # Restore the exact candidate by reapplying the immutable forward SQL. The
 # ledger remains unchanged because this rehearsal is confined to scratch.
 for migration in 024_provisioning_cdc.sql 025_network_allocator_gate.sql \
-                 026_unifi_network_cdc.sql 027_interconnect_cable_details.sql; do
+                 026_unifi_network_cdc.sql 027_interconnect_cable_details.sql \
+                 028_entity_unit_association.sql; do
   "${MYSQL[@]}" < "$repo_root/netdb/sor/migrations/$migration"
 done
 restored_columns="$(query "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='networks' AND COLUMN_NAME IN ('enabled','management','is_default','allocator_eligible','allocator_approved_by','allocator_approved_at')) OR (TABLE_NAME='interconnects' AND COLUMN_NAME IN ('media_standard','jacket_color')))")"
-restored_triggers="$(query "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND (TRIGGER_NAME LIKE 'trg_sources_%' OR TRIGGER_NAME LIKE 'trg_functions_%' OR TRIGGER_NAME LIKE 'trg_entity_functions_%' OR TRIGGER_NAME LIKE 'trg_function_incompatibility_%' OR TRIGGER_NAME LIKE 'trg_vlans_%' OR TRIGGER_NAME LIKE 'trg_dhcp_ranges_%' OR TRIGGER_NAME LIKE 'trg_external_refs_%')")"
+restored_triggers="$(query "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND (TRIGGER_NAME LIKE 'trg_sources_%' OR TRIGGER_NAME LIKE 'trg_functions_%' OR TRIGGER_NAME LIKE 'trg_entity_functions_%' OR TRIGGER_NAME LIKE 'trg_function_incompatibility_%' OR TRIGGER_NAME LIKE 'trg_vlans_%' OR TRIGGER_NAME LIKE 'trg_dhcp_ranges_%' OR TRIGGER_NAME LIKE 'trg_external_refs_%' OR TRIGGER_NAME IN ('trg_entities_hu_link_ai','trg_entities_hu_link_au'))")"
 allocator_index="$(query "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='networks' AND INDEX_NAME='ix_networks_allocator'")"
-[[ "$restored_columns" == 8 && "$restored_triggers" == 21 && "$allocator_index" == 1 ]] || {
-  echo "Forward recovery postcondition failed (columns=$restored_columns triggers=$restored_triggers index=$allocator_index)." >&2
+restored_link_table="$(query "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='entity_hardware_unit_links'")"
+[[ "$restored_columns" == 8 && "$restored_triggers" == 23 && "$restored_link_table" == 1 && "$allocator_index" == 1 ]] || {
+  echo "Forward recovery postcondition failed (columns=$restored_columns triggers=$restored_triggers link_table=$restored_link_table index=$allocator_index)." >&2
   exit 1
 }
 

@@ -436,10 +436,17 @@ function rw_worker_scenario(string $name): array
         case 'commit-port':
             return [
                 $sourceRow,
-                ['match' => 'hu.asset_tag = :tag', 'rows' => [['id' => 100]]],
+                ['match' => 'hu.asset_tag = :tag', 'rows' => [['unit_id' => 42, 'entity_id' => 100]]],
                 ['match' => 'FROM interfaces WHERE entity_id = :eid AND name = :name', 'rows' => [['id' => 500]]],
                 ['match' => 'FROM interconnects WHERE deleted_at IS NULL AND link_kind = :lk', 'rows' => []],
                 ['match' => 'INSERT INTO interconnects', 'rows' => [], 'affected' => 1, 'insertId' => 88],
+            ];
+        case 'commit-known-unit-unlinked':
+            return [
+                $sourceRow,
+                ['match' => 'hu.asset_tag = :tag', 'rows' => [['unit_id' => 42, 'entity_id' => null]]],
+                // This name match would succeed if resolver incorrectly fell back.
+                ['match' => 'SELECT id FROM entities WHERE LOWER(name) = LOWER(:n)', 'rows' => [['id' => 777]]],
             ];
         case 'commit-ambiguous-name':
             return [

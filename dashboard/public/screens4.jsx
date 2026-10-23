@@ -339,7 +339,7 @@
 
         {loadError && <div role="alert" className="empty" style={{ marginBottom: 16 }}>Inventory refresh failed: {loadError} Current screen contents are retained and may be stale.</div>}
 
-        {tab === "components" && <ComponentsTab inv={inv} h={helpers} act={actions} onViewReceipt={setViewer} showRackWireProfiles={showRackWireProfiles} onToggleRackWireProfiles={function () { setShowRackWireProfiles(function (value) { return !value; }); }} onNavigate={onNavigate} />}
+        {tab === "components" && <ComponentsTab inv={inv} h={helpers} act={actions} onViewReceipt={setViewer} onInventoryChanged={function () { return loadInventory(true); }} showRackWireProfiles={showRackWireProfiles} onToggleRackWireProfiles={function () { setShowRackWireProfiles(function (value) { return !value; }); }} onNavigate={onNavigate} />}
         {tab === "locations" && <LocationsTab inv={inv} h={helpers} act={actions} />}
         {tab === "receipts" && <ReceiptsTab inv={inv} h={helpers} act={actions} onView={setViewer} />}
         {tab === "projects" && <ProjectsTab inv={inv} h={helpers} act={actions} />}
@@ -436,12 +436,13 @@
   }
 
   /* ===================== COMPONENTS TAB ===================== */
-  function ComponentsTab({ inv, h, act, onViewReceipt, showRackWireProfiles, onToggleRackWireProfiles, onNavigate }) {
+  function ComponentsTab({ inv, h, act, onViewReceipt, onInventoryChanged, showRackWireProfiles, onToggleRackWireProfiles, onNavigate }) {
     const [q, setQ] = useState("");
     const [stockFilter, setStockFilter] = useState("all");
     const [sort, setSort] = useState({ key: "model", dir: 1 });
     const [page, setPage] = useState(0);
     const [edit, setEdit] = useState(null);   // { unit } editing, or { unit:null } new
+    const [entityLinkUnit, setEntityLinkUnit] = useState(null);
     const pageSize = 100;
 
     const value = inv.units.reduce(function (a, u) { return a + (u.unit_cost_cents || 0) * (u.quantity || 1); }, 0);
@@ -505,7 +506,7 @@
         {rows.length > 0 && (
           <div className="tablewrap"><table className="grid">
             <thead><tr>
-              {th("model", "Model")}{th("serial", "Serial")}{th("asset", "Asset tag")}{th("location", "Location")}{th("qty", "Qty", true)}{th("stock", "Stock")}{th("cost", "Cost", true)}<th>Receipt</th>
+              {th("model", "Model")}{th("serial", "Serial")}{th("asset", "Asset tag")}{th("location", "Location")}{th("qty", "Qty", true)}{th("stock", "Stock")}{th("cost", "Cost", true)}<th>SoR entity</th><th>Receipt</th>
             </tr></thead>
             <tbody>
               {visibleRows.map(function (u) {
@@ -520,6 +521,13 @@
                     <td className="td-mono" style={{ textAlign: "right" }}>{u.quantity || 1}</td>
                     <td><Badge tone={STOCK_TONE[u.stock_status]}>{STOCK_LABEL[u.stock_status]}</Badge></td>
                     <td className="td-mono" style={{ textAlign: "right" }}>{fmt.usd(u.unit_cost_cents)}</td>
+                    <td>
+                      {u.entity_name
+                        ? <button type="button" className="inv-entity-link__current" onClick={function (e) { e.stopPropagation(); setEntityLinkUnit(u); }}>
+                            <span aria-hidden="true">↔</span>{u.entity_name}
+                          </button>
+                        : <button type="button" className="inv-entity-link__action" onClick={function (e) { e.stopPropagation(); setEntityLinkUnit(u); }}>Link entity</button>}
+                    </td>
                     <td>{r
                       ? <button className="inv-link" onClick={function (e) { e.stopPropagation(); onViewReceipt(r); }}><Icon name="receipt" size={12} style={{ verticalAlign: "-2px", marginRight: 3 }} />{r.vendor || ("#" + r.id)}</button>
                       : <span className="muted">—</span>}</td>
@@ -530,11 +538,101 @@
           </table></div>
         )}
 
+        {entityLinkUnit && <EntityLinkEditor unit={entityLinkUnit} h={h} onChanged={onInventoryChanged}
+          onClose={function () { setEntityLinkUnit(null); }}
+          />}
+
         <InventoryPager currentPage={activePage} pageSize={pageSize} count={rows.length} label="components" onPage={setPage} />
 
         {edit && <UnitModal unit={edit.unit} inv={inv} h={h} act={act} onClose={function () { setEdit(null); }} />}
       </div>
     );
+  }
+
+  function EntityLinkEditor({ unit, h, onClose, onChanged }) {
+    const [data, setData] = useState(null);
+    const [query, setQuery] = useState("");
+    const [selected, setSelected] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const [message, setMessage] = useState("");
+    const a = api();
+
+    function load(search) {
+      if (!a || !a.inventoryEntityLink) { setError("Entity linking needs a live dashboard session."); setLoading(false); return; }
+      setLoading(true); setError("");
+      a.inventoryEntityLink(unit.id, search || "").then(function (result) {
+        setData(result); setSelected("");
+      }).catch(function (e) { setError((e && e.message) || "Could not load SoR entities."); })
+        .finally(function () { setLoading(false); });
+    }
+    useEffect(function () { load(""); }, [unit.id]);
+
+    function link(event) {
+      event.preventDefault();
+      if (!selected || !a || !a.linkInventoryEntity) return;
+      setBusy(true); setError(""); setMessage("");
+      a.linkInventoryEntity(unit.id, selected).then(function () {
+        return onChanged().then(function () { setMessage("Entity association saved."); load(query.trim()); });
+      }).catch(function (e) { setError((e && e.message) || "Could not link this entity."); })
+        .finally(function () { setBusy(false); });
+    }
+    function unlink() {
+      if (!a || !a.unlinkInventoryEntity) return;
+      setBusy(true); setError(""); setMessage("");
+      a.unlinkInventoryEntity(unit.id).then(function () {
+        return onChanged().then(function () { setMessage("Entity association removed."); load(query.trim()); });
+      }).catch(function (e) { setError((e && e.message) || "Could not remove this association."); })
+        .finally(function () { setBusy(false); });
+    }
+
+    return <section className="panel inv-entity-link" aria-labelledby="inv-entity-link-title">
+      <div className="panel__head"><Icon name="link" size={16} /><h3 id="inv-entity-link-title">Physical identity ↔ SoR entity</h3>
+        <span className="right">explicit operator link</span>
+        <button type="button" className="btn-ghost" onClick={onClose}>Close</button>
+      </div>
+      <div className="inv-entity-link__bridge" aria-label="Physical inventory unit links to a canonical SoR entity">
+        <div className="inv-entity-link__node"><span className="inv-entity-link__eyebrow">PHYSICAL UNIT</span>
+          <strong>{h.modelLabel(unit.model_id)}</strong>
+          <span className="td-mono">{unit.asset_tag || "No asset tag"}</span>
+          {unit.serial && <span className="td-mono muted">Serial {unit.serial}</span>}
+        </div>
+        <svg className="inv-entity-link__glyph" viewBox="0 0 64 24" role="img" aria-label="links to">
+          <rect x="1" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M16 12h32m-7-7 7 7-7 7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <rect x="49" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+        <div className="inv-entity-link__node"><span className="inv-entity-link__eyebrow">CANONICAL ENTITY</span>
+          {data && data.entity
+            ? <><strong>{data.entity.name}</strong><span className="muted">{data.entity.entityType} · {data.entity.lifecycle}</span></>
+            : <strong className="muted">No entity linked</strong>}
+        </div>
+      </div>
+      <p className="muted inv-entity-link__help">Choose the network or service record that represents this physical unit. RackWire uses this association when it resolves the unit’s asset tag for cable planning. Names and labels are shown as candidates; they are never matched automatically.</p>
+      {data && data.entity && <button type="button" className="btn-ghost" onClick={unlink} disabled={busy || loading}>Remove association</button>}
+      <form className="inv-entity-link__form" onSubmit={link}>
+        <label>Find a SoR entity
+          <div className="inv-entity-link__search"><input value={query} onChange={function (e) { setQuery(e.target.value); }} placeholder="Search hostname or role" />
+            <button type="button" className="btn-ghost" onClick={function () { load(query.trim()); }} disabled={loading}>Search</button></div>
+        </label>
+        <label>Entity
+          <select value={selected} onChange={function (e) { setSelected(e.target.value); }} disabled={loading || busy}>
+            <option value="">Choose an entity…</option>
+            {(data && data.candidates || []).map(function (entity) {
+              return <option key={entity.id} value={entity.id}>#{entity.id} · {entity.name} · {entity.entityType} · {entity.lifecycle}</option>;
+            })}
+          </select>
+        </label>
+        <button type="submit" className="btn-primary" disabled={!selected || busy || loading}>
+          {busy ? "Saving…" : data && data.entity ? "Change association" : "Link entity"}
+        </button>
+      </form>
+      {loading && <p className="muted" role="status" aria-live="polite">Loading eligible SoR entities…</p>}
+      {message && <p className="inv-entity-link__message" role="status">{message}</p>}
+      {error && <p className="empty" role="alert">{error}</p>}
+      {data && data.candidates.length === 0 && !loading && <p className="muted" role="status">No eligible entities match this search. Clear the search or create the canonical record first.</p>}
+    </section>;
   }
 
   // A model profile turns an imported/catalog model into placeable RackWire

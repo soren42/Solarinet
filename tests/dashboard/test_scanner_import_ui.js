@@ -8,6 +8,7 @@ const PUB = path.join(__dirname, "..", "..", "dashboard", "public");
 
 function reactShim() {
   let frame = null;
+  const effects = new Set();
   const React = { Fragment: "FRAGMENT" };
   React.createElement = function (type, props) {
     const children = Array.prototype.slice.call(arguments, 2);
@@ -21,7 +22,12 @@ function reactShim() {
     const store = frame.store;
     return [store[key], (value) => { store[key] = typeof value === "function" ? value(store[key]) : value; }];
   };
-  React.useEffect = function () {};
+  React.useEffect = function (effect) {
+    if (frame && frame.path.indexOf("EntityLinkEditor") >= 0) {
+      const key = frame.path + ":effect";
+      if (!effects.has(key)) { effects.add(key); effect(); }
+    }
+  };
   React.__enter = function (next) { const old = frame; frame = next; return old; };
   React.__exit = function (old) { frame = old; };
   return React;
@@ -67,6 +73,8 @@ async function main() {
   };
   const calls = [];
   const profileCalls = [];
+  const entityLinkCalls = [];
+  const entityLinkReads = [];
   const navigation = [];
   const report = { mode: "preview", counts: { "insert.hardware_units": 1 }, warnings: [], fingerprint: "a".repeat(64), locations: { Nook: { id: 9104, name: "Painted Fern" } } };
   const React = reactShim();
@@ -74,7 +82,16 @@ async function main() {
     console, Promise, Date, Number, Math, JSON, Object, Array, Set, String,
     SOLARI: { source: "live", fmt: { usd: (x) => String(x) }, inventory: { models: [{ id: 1, make: "Acme", model: "Test switch" }], units: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, model_id: 1, stock_status: "in_stock" })), locations: [{ id: 9103, name: "Painted Fern" }, { id: 9104, name: "Painted Fern" }], receipts: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, vendor: "Receipt " + (i + 1), subtotal_cents: 100 })), projects: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, name: "Project " + (i + 1), status: "active" })), allocations: [] },
       api: {
+        inventory: () => Promise.resolve({ models: [{ id: 1, make: "Acme", model: "Test switch", hw_type: "switch" }],
+          units: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, model_id: 1, stock_status: "in_stock" })),
+          locations: [{ id: 9103, name: "Painted Fern" }, { id: 9104, name: "Painted Fern" }], receipts: [], projects: [], allocations: [] }),
         scannerImport: (mode, body) => { calls.push({ mode, body }); return Promise.resolve(mode === "preview" ? report : { mode: "applied", counts: { "insert.hardware_units": 1 }, warnings: [] }); },
+        inventoryEntityLink: (unitId, query) => { entityLinkReads.push({ unitId, query }); return Promise.resolve({
+          unit: { id: unitId, assetTag: "SCAN-1", serial: "SER-1" }, entity: null,
+          candidates: [{ id: 501, name: "chlorine", entityType: "server", lifecycle: "active" }],
+        }); },
+        linkInventoryEntity: (unitId, entityId) => { entityLinkCalls.push({ unitId, entityId: Number(entityId) }); return Promise.resolve({ unitId, entityId }); },
+        unlinkInventoryEntity: (unitId) => Promise.resolve({ unitId }),
         rackwireLibrary: () => Promise.resolve([]),
         saveRackwireProfile: (id, body) => { profileCalls.push({ id, body }); return Promise.resolve({ id: String(id), groups: body.groups, name: body.name, model: "Test switch", kind: body.kind, drawW: body.drawW }); },
         refresh: () => Promise.resolve(),
@@ -159,6 +176,26 @@ async function main() {
   if (!openRackwire) throw new Error("saved model profile does not offer a direct RackWire handoff");
   openRackwire.props.onClick();
   if (navigation.length !== 1 || navigation[0] !== "rackwire") throw new Error("profile editor handoff did not navigate to RackWire");
-  console.log("inventory paging, scanner import review/apply, RackWire profile editing, and handoff flows passed");
+
+  all(tree, (n) => n.tag === "button" && text(n) === "Components")[0].props.onClick(); tree = draw();
+  const linkAction = all(tree, (n) => n.tag === "button" && text(n) === "Link entity")[0];
+  if (!linkAction) throw new Error("unlinked inventory units do not offer an entity association action");
+  linkAction.props.onClick({ stopPropagation() {} }); tree = draw();
+  await Promise.resolve(); await Promise.resolve(); tree = draw();
+  if (!all(tree, (n) => n.tag === "h3" && text(n) === "Physical identity ↔ SoR entity").length
+      || !all(tree, (n) => n.tag === "p" && text(n).includes("never matched automatically")).length
+      || !entityLinkReads.some((entry) => entry.unitId === 1)) throw new Error("explicit entity association panel did not explain and load the identity bridge");
+  const entitySelect = all(tree, (n) => n.tag === "select" && all(n, (option) => option.tag === "option" && text(option).includes("chlorine")).length)[0];
+  if (!entitySelect) throw new Error("entity association did not show named, typed SoR candidates");
+  entitySelect.props.onChange({ target: { value: "501" } }); tree = draw();
+  const linkForm = all(tree, (n) => n.tag === "form" && n.props.className === "inv-entity-link__form")[0];
+  linkForm.props.onSubmit({ preventDefault() {} });
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  tree = draw();
+  if (entityLinkCalls.length !== 1 || entityLinkCalls[0].unitId !== 1 || entityLinkCalls[0].entityId !== 501
+      || !all(tree, (n) => n.tag === "p" && n.props.role === "status" && text(n).includes("association saved")).length) {
+    throw new Error("entity association did not save its selected SoR entity and announce success");
+  }
+  console.log("inventory paging, scanner import review/apply, RackWire profile editing, identity association, and handoff flows passed");
 }
 main().catch((e) => { console.error(e.message); process.exitCode = 1; });

@@ -209,6 +209,156 @@ return static function (Router $router): void {
         Response::ok(inv_component_row($row));
     });
 
+    // Explicit physical inventory ↔ network/service entity association. This
+    // is always an operator decision: entity names are returned as candidates,
+    // never used to infer a relationship on the server.
+    $router->get('/api/inventory/components/{id}/entity-link', static function (array $p): void {
+        $id = Inv::idParam($p['id']);
+        $unit = Inv::row('SELECT id, asset_tag, serial FROM hardware_units WHERE id=:id AND deleted_at IS NULL', [':id' => $id]);
+        if ($unit === null) Response::error('not_found', "No component $id", 404);
+
+        $linked = Inv::row(
+            'SELECT id, name, entity_type, lifecycle FROM entities WHERE hardware_unit_id=:id AND deleted_at IS NULL',
+            [':id' => $id]
+        );
+        $query = isset($_GET['q']) ? trim((string) $_GET['q']) : '';
+        $where = '(hardware_unit_id IS NULL OR hardware_unit_id=:unit) AND deleted_at IS NULL';
+        $params = [':unit' => $id];
+        if ($query !== '') {
+            $where .= " AND (name LIKE :q_name ESCAPE '!' OR role LIKE :q_role ESCAPE '!')";
+            $escapedQuery = '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $query) . '%';
+            $params[':q_name'] = $escapedQuery;
+            $params[':q_role'] = $escapedQuery;
+        }
+        $candidates = Inv::rows(
+            "SELECT id, name, entity_type, lifecycle FROM entities WHERE $where ORDER BY name, id LIMIT 200",
+            $params
+        );
+        Response::ok([
+            'unit' => ['id' => (int) $unit['id'], 'assetTag' => $unit['asset_tag'], 'serial' => $unit['serial']],
+            'entity' => $linked === null ? null : [
+                'id' => (int) $linked['id'], 'name' => $linked['name'],
+                'entityType' => $linked['entity_type'], 'lifecycle' => $linked['lifecycle'],
+            ],
+            'candidates' => array_map(static fn(array $row): array => [
+                'id' => (int) $row['id'], 'name' => $row['name'],
+                'entityType' => $row['entity_type'], 'lifecycle' => $row['lifecycle'],
+            ], $candidates),
+        ]);
+    });
+
+    $router->post('/api/inventory/components/{id}/entity-link', static function (array $p): void {
+        $operator = Operator::requireOperator();
+        $id = Inv::idParam($p['id']);
+        $body = solari_json_body();
+        $rawEntityId = $body['entity_id'] ?? null;
+        if (!(is_int($rawEntityId) || (is_string($rawEntityId) && ctype_digit($rawEntityId)))
+            || (int) $rawEntityId < 1) {
+            Response::error('bad_request', 'entity_id must be a positive integer.', 400);
+        }
+        $entityId = (int) $rawEntityId;
+        $note = isset($body['note']) ? trim((string) $body['note']) : 'Operator associated physical inventory with SoR entity';
+        if (strlen($note) > 255) Response::error('bad_request', 'note must not exceed 255 bytes.', 400);
+
+        $db = Sor::db();
+        try {
+            $db->beginTransaction();
+            $unitStmt = $db->prepare('SELECT id FROM hardware_units WHERE id=:id AND deleted_at IS NULL FOR UPDATE');
+            $unitStmt->execute([':id' => $id]);
+            if (!$unitStmt->fetchColumn()) {
+                $db->rollBack();
+                Response::error('not_found', "No component $id", 404);
+            }
+            $entityStmt = $db->prepare('SELECT id, hardware_unit_id FROM entities WHERE id=:id AND deleted_at IS NULL FOR UPDATE');
+            $entityStmt->execute([':id' => $entityId]);
+            $entity = $entityStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$entity) {
+                $db->rollBack();
+                Response::error('not_found', "No live entity $entityId", 404);
+            }
+            if ($entity['hardware_unit_id'] !== null && (int) $entity['hardware_unit_id'] !== $id) {
+                $db->rollBack();
+                Response::error('entity_already_linked', 'That entity is already associated with another physical unit.', 409);
+            }
+            $existingStmt = $db->prepare('SELECT id FROM entities WHERE hardware_unit_id=:id AND deleted_at IS NULL FOR UPDATE');
+            $existingStmt->execute([':id' => $id]);
+            $existingEntityId = $existingStmt->fetchColumn();
+            if ($existingEntityId !== false && (int) $existingEntityId !== $entityId) {
+                $db->rollBack();
+                Response::error('unit_already_linked', 'That physical unit is already associated with another entity. Unlink it first.', 409);
+            }
+            if ((int) ($entity['hardware_unit_id'] ?? 0) === $id) {
+                $db->commit();
+                Response::ok(['unitId' => $id, 'entityId' => $entityId, 'unchanged' => true]);
+            }
+
+            $update = $db->prepare("UPDATE entities SET hardware_unit_id=:unit, asserted_kind='human', asserted_at=NOW() WHERE id=:entity");
+            $update->execute([':unit' => $id, ':entity' => $entityId]);
+            $sourceId = Sor::dashboardSourceId();
+            $audit = $db->prepare("INSERT INTO audit_log (table_name,row_id,action,actor_label,source_id,asserted_kind,old_values,new_values,note) VALUES ('entities',:id,'update',:actor,:source,'human',:old,:new,:note)");
+            $audit->execute([
+                ':id' => $entityId, ':actor' => 'dashboard:' . $operator, ':source' => $sourceId,
+                ':old' => json_encode(['hardware_unit_id' => null], JSON_THROW_ON_ERROR),
+                ':new' => json_encode(['hardware_unit_id' => $id], JSON_THROW_ON_ERROR), ':note' => $note,
+            ]);
+            $db->commit();
+        } catch (PDOException $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $driverCode = $e->errorInfo[1] ?? null;
+            if ($driverCode === 1062 || ($driverCode === 1644
+                && str_contains($e->getMessage(), 'physical unit is already linked to another live entity'))) {
+                Response::error('unit_already_linked', 'That physical unit is already associated with another live entity.', 409);
+            }
+            error_log('[inventory-entity-link] database error: ' . $e->getMessage());
+            Response::error('entity_link_failed', 'The entity association could not be saved.', 503);
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            error_log('[inventory-entity-link] ' . $e->getMessage());
+            Response::error('entity_link_failed', 'The entity association could not be saved.', 500);
+        }
+        Response::ok(['unitId' => $id, 'entityId' => $entityId, 'unchanged' => false]);
+    });
+
+    $router->add('DELETE', '/api/inventory/components/{id}/entity-link', static function (array $p): void {
+        $operator = Operator::requireOperator();
+        $id = Inv::idParam($p['id']);
+        $body = solari_json_body();
+        $note = isset($body['note']) ? trim((string) $body['note']) : 'Operator removed physical inventory to SoR entity association';
+        if (strlen($note) > 255) Response::error('bad_request', 'note must not exceed 255 bytes.', 400);
+        $db = Sor::db();
+        try {
+            $db->beginTransaction();
+            $unitStmt = $db->prepare('SELECT id FROM hardware_units WHERE id=:unit AND deleted_at IS NULL FOR UPDATE');
+            $unitStmt->execute([':unit' => $id]);
+            if (!$unitStmt->fetchColumn()) {
+                $db->rollBack();
+                Response::error('not_found', "No component $id", 404);
+            }
+            $stmt = $db->prepare('SELECT e.id FROM entities e JOIN hardware_units hu ON hu.id=e.hardware_unit_id WHERE hu.id=:unit AND hu.deleted_at IS NULL AND e.deleted_at IS NULL FOR UPDATE');
+            $stmt->execute([':unit' => $id]);
+            $entityId = $stmt->fetchColumn();
+            if ($entityId === false) {
+                $db->rollBack();
+                Response::ok(['unitId' => $id, 'entityId' => null, 'unchanged' => true]);
+            }
+            $entityId = (int) $entityId;
+            $update = $db->prepare("UPDATE entities SET hardware_unit_id=NULL, asserted_kind='human', asserted_at=NOW() WHERE id=:entity");
+            $update->execute([':entity' => $entityId]);
+            $audit = $db->prepare("INSERT INTO audit_log (table_name,row_id,action,actor_label,source_id,asserted_kind,old_values,new_values,note) VALUES ('entities',:id,'update',:actor,:source,'human',:old,:new,:note)");
+            $audit->execute([
+                ':id' => $entityId, ':actor' => 'dashboard:' . $operator, ':source' => Sor::dashboardSourceId(),
+                ':old' => json_encode(['hardware_unit_id' => $id], JSON_THROW_ON_ERROR),
+                ':new' => json_encode(['hardware_unit_id' => null], JSON_THROW_ON_ERROR), ':note' => $note,
+            ]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            error_log('[inventory-entity-unlink] ' . $e->getMessage());
+            Response::error('entity_unlink_failed', 'The entity association could not be removed.', 500);
+        }
+        Response::ok(['unitId' => $id, 'entityId' => $entityId, 'unchanged' => false]);
+    });
+
     $router->post('/api/inventory/components', static function (): void {
         Operator::requireOperator();
         $b = solari_json_body();
@@ -1224,10 +1374,13 @@ function inv_component_sql(): string
                    hu.quantity, hu.unit_cost_cents, hu.stock_status, hu.receipt_id, hu.notes,
                    hu.source_id, hu.created_at, hu.updated_at,
                    hm.make, hm.model, hm.hw_type,
-                   l.name AS location_name, l.code AS location_code, l.loc_type AS location_type
+                   l.name AS location_name, l.code AS location_code, l.loc_type AS location_type,
+                   e.id AS entity_id, e.name AS entity_name, e.entity_type AS entity_type
               FROM hardware_units hu
               JOIN hardware_models hm ON hm.id = hu.model_id
-              LEFT JOIN locations l ON l.id = hu.location_id AND l.deleted_at IS NULL";
+              LEFT JOIN locations l ON l.id = hu.location_id AND l.deleted_at IS NULL
+              LEFT JOIN entity_hardware_unit_links lnk ON lnk.hardware_unit_id = hu.id
+              LEFT JOIN entities e ON e.id = lnk.entity_id AND e.deleted_at IS NULL";
 }
 
 function inv_component_row(array $r): array
@@ -1243,6 +1396,9 @@ function inv_component_row(array $r): array
         'locationId'    => Coerce::int($r['location_id']),
         'locationName'  => $r['location_name'] ?? null,
         'locationCode'  => $r['location_code'] ?? null,
+        'entityId'      => Coerce::int($r['entity_id'] ?? null),
+        'entityName'    => $r['entity_name'] ?? null,
+        'entityType'    => $r['entity_type'] ?? null,
         'acquiredOn'    => $r['acquired_on'] ?? null,
         'quantity'      => Coerce::int($r['quantity']),
         'unitCostCents' => Coerce::int($r['unit_cost_cents']),

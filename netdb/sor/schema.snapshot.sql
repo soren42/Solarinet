@@ -3,7 +3,7 @@
 -- The migration runner, not this snapshot, is authoritative for installs.
 -- Regenerate with: python3 tools/export_schema.py --database sor
 -- Applied migration manifest:
---   schema sha256=115818a528b8d688f44823f016afd811ad23e9c82ed081648a2dd8748c660d2c
+--   schema sha256=342099f0561de203a312a2483bd84c000632e1f9ffc87e3c2d13992a62f8e6b1
 --   001-surrogate-pks sha256=ec3411c35b863b300c5117782c45f6161d9e123333be010373bc7282bd86d77d
 --   014_inventory sha256=036759e95e5550b6c7ec369a6e780bf81739c964debf19262dfd7bdecad2456f
 --   015_barcodes sha256=f65fb022e7806c835cac2deb003bb65ad30a30de634ca9a6314bc973c2d5b0a4
@@ -15,6 +15,7 @@
 --   025_network_allocator_gate sha256=34d2c5fb57984dbadc9cdaddc4979fb31f69b647c2c45f44ce04f4c3f3c9d2a0
 --   026_unifi_network_cdc sha256=1c6c092d08783729c506edb8ae41dd22f0bb21b19d299b124ce4822b174901dc
 --   027_interconnect_cable_details sha256=0ed1ed961fe13366195191a2038df5468f8ca75f5865a6b8963e0b72d07bb0e3
+--   028_entity_unit_association sha256=35f30382d3bede4cb98165b2bd61d77c96da5bea873a6a984f7faf497b4760db
 
 /*M!999999\- enable the sandbox mode */
 
@@ -492,7 +493,70 @@ DELIMITER ;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_entities_hu_link_ai`
+AFTER INSERT ON `entities` FOR EACH ROW
+BEGIN
+  IF NEW.hardware_unit_id IS NOT NULL AND NEW.deleted_at IS NULL THEN
+    IF EXISTS (
+      SELECT 1 FROM entity_hardware_unit_links
+       WHERE hardware_unit_id=NEW.hardware_unit_id AND entity_id<>NEW.id
+    ) THEN
+      SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'physical unit is already linked to another live entity';
+    END IF;
+    INSERT INTO entity_hardware_unit_links (hardware_unit_id, entity_id)
+    VALUES (NEW.hardware_unit_id, NEW.id);
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
 /*!50003 CREATE*/ /*!50003 TRIGGER trg_entities_au AFTER UPDATE ON `entities` FOR EACH ROW INSERT INTO sor_outbox (table_name,row_id,action) VALUES ('entities',NEW.id,'update') */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_entities_hu_link_au`
+AFTER UPDATE ON `entities` FOR EACH ROW
+BEGIN
+  IF NOT (OLD.hardware_unit_id <=> NEW.hardware_unit_id)
+     OR ((OLD.deleted_at IS NULL) <> (NEW.deleted_at IS NULL)) THEN
+    IF NEW.hardware_unit_id IS NOT NULL AND NEW.deleted_at IS NULL
+       AND EXISTS (
+         SELECT 1 FROM entity_hardware_unit_links
+          WHERE hardware_unit_id=NEW.hardware_unit_id AND entity_id<>NEW.id
+       ) THEN
+      SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'physical unit is already linked to another live entity';
+    END IF;
+    DELETE FROM entity_hardware_unit_links WHERE entity_id=OLD.id;
+    IF NEW.hardware_unit_id IS NOT NULL AND NEW.deleted_at IS NULL THEN
+      INSERT INTO entity_hardware_unit_links (hardware_unit_id, entity_id)
+      VALUES (NEW.hardware_unit_id, NEW.id);
+    END IF;
+  END IF;
+END */;;
 DELIMITER ;
 /*!50003 SET sql_mode              = @saved_sql_mode */ ;
 /*!50003 SET character_set_client  = @saved_cs_client */ ;
@@ -597,6 +661,19 @@ DELIMITER ;
 /*!50003 SET character_set_client  = @saved_cs_client */ ;
 /*!50003 SET character_set_results = @saved_cs_results */ ;
 /*!50003 SET collation_connection  = @saved_col_connection */ ;
+DROP TABLE IF EXISTS `entity_hardware_unit_links`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `entity_hardware_unit_links` (
+  `hardware_unit_id` int(10) unsigned NOT NULL,
+  `entity_id` bigint(20) unsigned NOT NULL,
+  `linked_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`hardware_unit_id`),
+  UNIQUE KEY `uq_entity_hardware_unit_entity` (`entity_id`),
+  CONSTRAINT `fk_entity_hardware_unit_link_entity` FOREIGN KEY (`entity_id`) REFERENCES `entities` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_entity_hardware_unit_link_unit` FOREIGN KEY (`hardware_unit_id`) REFERENCES `hardware_units` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Current one-to-one association of physical units to SoR entities';
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `external_refs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;

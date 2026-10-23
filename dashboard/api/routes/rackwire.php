@@ -1308,10 +1308,11 @@ function rw_cpu_pct($cpuLoadMilli): ?int
 
 /**
  * Resolve a plan device to a SoR entity id: prefer device.assetId matched
- * against a live hardware_units.asset_tag (then that unit's owning entity),
- * else a case-insensitive entities.name match on assetId/liveKey/name in
- * that order. Returns null (the cable's endpoint stays unresolved, and the
- * caller records a skip reason) when nothing matches.
+ * against a live hardware_units.asset_tag and that unit's explicit entity
+ * association. If a physical unit is known but has no association, leave the
+ * endpoint unresolved instead of guessing another entity by name. Name
+ * fallback is available only when no physical unit matches the asset ID.
+ * Returns null when nothing matches or a match is ambiguous.
  *
  * @param array<string,mixed> $d
  */
@@ -1321,9 +1322,10 @@ function rw_resolve_entity(array $d): ?int
         ? trim($d['assetId']) : null;
     if ($assetId !== null) {
         $rows = rw_rows(
-            'SELECT e.id FROM entities e
-               JOIN hardware_units hu ON hu.id = e.hardware_unit_id
-              WHERE hu.asset_tag = :tag AND hu.deleted_at IS NULL AND e.deleted_at IS NULL
+            'SELECT hu.id AS unit_id, e.id AS entity_id FROM hardware_units hu
+               LEFT JOIN entity_hardware_unit_links link ON link.hardware_unit_id=hu.id
+               LEFT JOIN entities e ON e.id=link.entity_id AND e.deleted_at IS NULL
+              WHERE hu.asset_tag = :tag AND hu.deleted_at IS NULL
               LIMIT 2',
             [':tag' => $assetId]
         );
@@ -1331,7 +1333,7 @@ function rw_resolve_entity(array $d): ?int
             return null;
         }
         if (count($rows) === 1) {
-            return (int) $rows[0]['id'];
+            return $rows[0]['entity_id'] === null ? null : (int) $rows[0]['entity_id'];
         }
     }
 

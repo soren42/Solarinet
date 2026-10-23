@@ -263,8 +263,6 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install full dependency set (mirrors bootstrap-xenon.sh)
         run: |
           sudo apt-get update -y
@@ -431,6 +429,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.RACKWIRE_READ_TOKEN || github.token }}
           submodules: recursive
       - uses: actions/setup-node@v4
         with:
@@ -449,7 +448,6 @@ jobs:
     name: dashboard API + ops scripts
     runs-on: ubuntu-latest
     needs: server
-    if: true
     services:
       # Disposable scratch DB for CONTRACT-RW §6: never point tests at the
       # live `sor` (cesium) — this container is thrown away with the job.
@@ -466,6 +464,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.RACKWIRE_READ_TOKEN || github.token }}
           submodules: recursive
       - uses: actions/download-artifact@v4
         name: Download portable Release server binaries
@@ -567,11 +566,13 @@ jobs:
           $MYSQL < netdb/sor/migrations/025_network_allocator_gate.sql
           $MYSQL < netdb/sor/migrations/026_unifi_network_cdc.sql
           $MYSQL < netdb/sor/migrations/027_interconnect_cable_details.sql
+          $MYSQL < netdb/sor/migrations/028_entity_unit_association.sql
           $MYSQL -e "CREATE TABLE _solarinet_test_scratch (marker VARCHAR(64) PRIMARY KEY); INSERT INTO _solarinet_test_scratch VALUES ('solarinet-ci-scratch-v1')"
           echo "-- re-applying idempotent network/RackWire migrations --"
           $MYSQL < netdb/sor/migrations/025_network_allocator_gate.sql
           $MYSQL < netdb/sor/migrations/026_unifi_network_cdc.sql
           $MYSQL < netdb/sor/migrations/027_interconnect_cable_details.sql
+          $MYSQL < netdb/sor/migrations/028_entity_unit_association.sql
       - name: Deployment boundary and hardened PHP-FPM contracts
         run: |
           python3 -m unittest discover -s tests/deploy -p 'test_boundary_verifier.py' -v
@@ -707,7 +708,7 @@ jobs:
           python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root --check
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --check
           test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" = 34
-          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 12
+          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 13
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output /tmp/monitoring-schema.sql
           python3 tools/export_schema.py --database sor --user root --host 127.0.0.1 --port 3306 --output /tmp/sor-schema.sql
           diff -u db/schema.sql /tmp/monitoring-schema.sql

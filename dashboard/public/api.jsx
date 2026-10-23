@@ -332,6 +332,7 @@
     scannerImport: function (mode) { return "/api/inventory/scanner-import/" + (mode === "apply" ? "apply" : "preview"); },
     invUnits:     "/api/inventory/units",    // GET list / POST create
     invComponents:"/api/inventory/components", // paginated hardware-unit list
+    invEntityLink: function (id) { return "/api/inventory/components/" + encodeURIComponent(id) + "/entity-link"; },
     invUnit:      function (id) { return "/api/inventory/units/" + encodeURIComponent(id); },   // POST update
     invModels:    "/api/inventory/models",   // GET list / POST create
     invLocations: "/api/inventory/locations",// GET tree / POST create
@@ -1188,6 +1189,17 @@
     // Combined read → {models,units,locations,receipts,projects,allocations}.
     inventory:        function (force) { return fetchInventorySnapshot(!!force); },
     scannerImport:    function (mode, body) { return post(EP.scannerImport(mode), body || {}); },
+    inventoryEntityLink: function (unitId, query) {
+      var path = EP.invEntityLink(unitId);
+      if (query) path += "?q=" + encodeURIComponent(query);
+      return getJSON(path);
+    },
+    linkInventoryEntity: function (unitId, entityId) {
+      return post(EP.invEntityLink(unitId), { entity_id: Number(entityId) });
+    },
+    unlinkInventoryEntity: function (unitId) {
+      return getJSON(EP.invEntityLink(unitId), { method: "DELETE" });
+    },
     rackwireLibrary:  function () { return getJSON("/api/rackwire/library"); },
     saveRackwireProfile: function (modelId, body) { return post("/api/rackwire/library/" + encodeURIComponent(modelId) + "/groups", body || {}); },
     // components (hardware_units)

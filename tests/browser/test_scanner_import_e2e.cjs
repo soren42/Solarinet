@@ -211,7 +211,12 @@ async function main() {
   assert(rackwireSource, 'scratch SoR schema must contain the RackWire provenance source');
   const rackwirePlanName = `RackWire Browser ${suffix}`;
   const rackwirePlanNote = `CSRF persistence proof ${suffix}`;
+  const linkedEntityName = `scanner-node-${suffix}`;
+  const peerEntityName = `scanner-peer-${suffix}`;
+  const committedCableLabel = `scanner-cable-${suffix}`;
   let rackwirePlanId = null;
+  let linkedEntityId = null;
+  let peerEntityId = null;
 
   let locationIds = [];
   let child = null;
@@ -236,6 +241,13 @@ async function main() {
       locationIds.push(...choices);
     }
     const selectedLocation = focusAsset.location ? locationChoices[focusAsset.location.trim()]?.[1] : null;
+
+    sql(`INSERT INTO entities (name,entity_type,source_id,asserted_kind)
+         VALUES (${quote(linkedEntityName)},'network_gear',${Number(manualSource)},'human'),
+                (${quote(peerEntityName)},'server',${Number(manualSource)},'human')`);
+    linkedEntityId = Number(sql(`SELECT id FROM entities WHERE name=${quote(linkedEntityName)} AND deleted_at IS NULL LIMIT 1`));
+    peerEntityId = Number(sql(`SELECT id FROM entities WHERE name=${quote(peerEntityName)} AND deleted_at IS NULL LIMIT 1`));
+    assert(linkedEntityId > 0 && peerEntityId > 0, 'scratch SoR must include two canonical network entities');
 
     const seedNote = `seed ${suffix}`;
     const initialRackwirePlan = JSON.stringify({ devices: [], cables: [], racks: [], notes: [{ uid: `seed-${suffix}`, text: seedNote, x: 0, y: 0 }], codeMap: {} });
@@ -335,8 +347,30 @@ async function main() {
     assert.equal(Number(imported.locationId), selectedLocation, 'mapped SoR location ID must be committed');
     const importedBatch = appliedData.units.filter((unit) => importedTags.includes(unit.assetTag));
     assert.equal(importedBatch.length, importAssets.length, 'every active scanner export asset must be imported');
-    await page.getByRole('button', { name: 'Configure RackWire profiles', exact: true }).click();
+
+    // Reconcile the imported physical unit to its canonical network entity in
+    // the operator UI before asking RackWire to resolve cable endpoints.
+    await page.getByRole('button', { name: 'Components', exact: true }).click();
+    await page.getByPlaceholder('Find component…').fill(tag);
     const importedRow = page.locator('tr').filter({ hasText: tag });
+    await importedRow.getByRole('button', { name: 'Link entity', exact: true }).click();
+    await page.getByRole('heading', { name: 'Physical identity ↔ SoR entity', exact: true }).waitFor();
+    await page.locator('.inv-entity-link__search input').fill(linkedEntityName);
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.locator('.inv-entity-link__form select').selectOption(String(linkedEntityId));
+    const linkResponseWait = page.waitForResponse((response) =>
+      response.url().includes(`/api/inventory/components/${imported.id}/entity-link`) && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Link entity', exact: true }).last().click();
+    const entityLinkResponse = await linkResponseWait;
+    assert.equal(entityLinkResponse.status(), 200, 'operator-reviewed inventory association must pass the real SoR API');
+    const entityLinkBody = entityLinkResponse.request().postDataJSON();
+    assert.equal(Number(entityLinkBody.entity_id), linkedEntityId, 'the association request must submit the chosen entity ID');
+    assert.equal(Number(sql(`SELECT entity_id FROM entity_hardware_unit_links WHERE hardware_unit_id=${Number(imported.id)}`)), linkedEntityId,
+      'the entity association registry must reflect the operator selection');
+    await page.getByRole('status').filter({ hasText: 'Entity association saved' }).waitFor();
+    await page.getByRole('button', { name: 'Close', exact: true }).last().click();
+
+    await page.getByRole('button', { name: 'RackWire device profiles', exact: true }).click();
     if (focusAsset.location) await importedRow.getByText(focusAsset.location, { exact: true }).waitFor();
     const profileModel = page.getByLabel('SoR hardware model');
     await profileModel.waitFor();
@@ -480,6 +514,31 @@ async function main() {
     assert.deepEqual(storedPlan.notes, [{ uid: 'browser-note', text: rackwirePlanNote, x: 0, y: 0 }], 'RackWire autosave must persist its edited plan to the SoR');
     assert(storedPlan.devices.some((device) => device.assetId === tag && device.serial === serial),
       'RackWire plan persistence must retain the SoR-linked scanned asset');
+
+    const scannerDevice = storedPlan.devices.find((device) => device.assetId === tag);
+    assert(scannerDevice && scannerDevice.uid, 'the scanned physical unit must remain a plan device');
+    const peerUid = `peer-${suffix}`;
+    const cablePlan = {
+      devices: [scannerDevice, { uid: peerUid, name: peerEntityName, assetId: peerEntityName, groups: [] }],
+      cables: [{ uid: `cable-${suffix}`, a: { dev: scannerDevice.uid }, b: { dev: peerUid },
+        standard: 'cat6', label: committedCableLabel, lengthM: 1.25 }],
+      racks: [], notes: [], codeMap: {},
+    };
+    const cableCommit = await context.request.post(`${base}/api/rackwire/commit`, {
+      data: { dryRun: false, plan: cablePlan },
+      headers: { Origin: base, 'X-Solari-CSRF': profileHeaders['x-solari-csrf'] },
+    });
+    assert.equal(cableCommit.status(), 200, 'RackWire must commit a cable using the operator-linked scanner unit');
+    const cableCommitData = (await cableCommit.json()).data;
+    assert.equal(cableCommitData.created, 1, 'RackWire commit must create the integration cable');
+    const storedCable = JSON.parse(sql(`SELECT JSON_ARRAY(id,a_entity_id,b_entity_id,a_interface_id,b_interface_id)
+      FROM interconnects WHERE label=${quote(committedCableLabel)} AND deleted_at IS NULL`));
+    assert.equal(Number(storedCable[1]), linkedEntityId,
+      'scanner asset tag must resolve through the operator-reviewed SoR entity association');
+    assert.equal(Number(storedCable[2]), peerEntityId,
+      'the second cable endpoint must resolve to its canonical SoR entity');
+    assert.equal(storedCable[3], null, 'unknown physical ports must remain entity-level instead of guessed');
+    assert.equal(storedCable[4], null, 'unknown physical ports must remain entity-level instead of guessed');
 
     // RackWire's embedded network-discovery action returns to the dashboard's
     // durable scan queue rather than calling the standalone RackWire backend.
@@ -656,7 +715,7 @@ async function main() {
 
     assert.deepEqual(pageErrors, [], 'browser reported no JavaScript errors');
     assert.deepEqual(externalRequests, [], 'browser made no external requests');
-    console.log('Dashboard integration browser E2E passed: scanner import, RackWire profile creation, barcode-to-SoR resolution and plan persistence, and asynchronous scan admission, progress persistence across navigation, and completion in Discovery.');
+    console.log('Dashboard integration browser E2E passed: scanner import, operator-reviewed SoR entity association, RackWire profile creation, barcode-to-SoR resolution, cable commit, plan persistence, and asynchronous scan admission and progress in Discovery.');
   } catch (error) {
     failure = error;
   } finally {
@@ -666,6 +725,8 @@ async function main() {
     try {
       const cleanup = `SET @source_id=(SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1);
         DELETE FROM audit_log WHERE actor_label=${quote(actor)};
+        DELETE FROM interconnects WHERE label=${quote(committedCableLabel)};
+        ${linkedEntityId && peerEntityId ? `DELETE FROM entities WHERE id IN (${linkedEntityId},${peerEntityId});` : ''}
         DELETE FROM barcodes WHERE subject_table='hardware_units' AND subject_id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
         DELETE FROM hardware_units WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
         DELETE FROM hardware_models WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_models' AND external_id IN (${itemIds.map(quote).join(',')}));

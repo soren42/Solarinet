@@ -10,6 +10,10 @@ generated from `schema.sql` plus every SoR migration by
 Migrations 022–023 own the transactional outbox tables and CDC triggers used by
 `deploy/sorsync`; fresh schemas must not install those objects through the old
 standalone SQL bootstrap.
+Likewise, `schema.sql` may declare the migration-028 association table, but the
+registry is not operational until `tools/migrate.py` applies migration 028 and
+installs its entity synchronization triggers. Never provision a fresh SoR by
+running `schema.sql` alone.
 
 The SoR is the authoritative store for the whole homelab: inventory,
 network, identity, configuration, and current state. It is **never populated
@@ -337,10 +341,14 @@ Applied on cesium only (`sudo mariadb sor < netdb/sor/migrations/020_rackwire.sq
 **cesium replicates to benzene**, so never apply it on benzene directly. Validate
 against a scratch schema first — never point tests at live `sor`.
 
-Migration 027 is authored but not yet applied to the live SoR. It adds the
-RackWire `media_standard` and `jacket_color` values to `interconnects`; the CI
-scratch migration check applies it twice to verify idempotence.
-The operator preflight and recovery sequence for candidate migrations 024–027
+Migration 028 is authored but not yet applied to the live SoR. It adds the
+current one-to-one association registry between physical hardware units and
+network entities. Entity triggers keep the registry consistent with existing
+writers; dashboard association actions are explicitly operator selected and
+audited. The CI scratch migration check applies it twice to verify idempotence.
+Migration 027 adds the RackWire `media_standard` and `jacket_color` values to
+`interconnects`. The operator preflight and recovery sequence for candidate
+migrations 024–028
 is documented in §14 of the [Provisioning Plan](../../docs/SolariNet_Provisioning_Plan.html)
 and its [PDF](../../docs/SolariNet_Provisioning_Plan.pdf); the manual SQL is
 kept under `rollback/`, outside the forward migration stream.
