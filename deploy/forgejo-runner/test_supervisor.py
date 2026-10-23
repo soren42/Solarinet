@@ -47,7 +47,6 @@ class ForgejoRunnerSupervisorTests(unittest.TestCase):
         self.assertEqual(files["/etc/solarinet-ci/runner-uuid"]["permissions"], "0600")
         bootstrap = files["/usr/local/sbin/solarinet-ci-guest-bootstrap"]["content"]
         self.assertIn("chown runner:runner /etc/solarinet-ci/runner-token", bootstrap)
-        self.assertIn("bootstrap-deadline.timer", bootstrap)
         self.assertIn("forgejo-runner one-job", bootstrap)
         self.assertIn("SOLARINET_CI_EXIT", bootstrap)
         self.assertIn("single task poller successfully fetched one task", bootstrap)
@@ -61,16 +60,18 @@ class ForgejoRunnerSupervisorTests(unittest.TestCase):
         self.assertIn("guest_status docker-start", bootstrap)
         self.assertIn("SOLARINET_CI_RUNNER_CONNECTING", bootstrap)
         self.assertIn("sudo -n /usr/bin/tee /dev/ttyS0", bootstrap)
-        self.assertGreater(
-            bootstrap.index("systemctl stop solarinet-ci-bootstrap-deadline.timer"),
-            bootstrap.index("systemctl start docker.service"),
-        )
         self.assertEqual(config["runcmd"], [["bash", "/usr/local/sbin/solarinet-ci-guest-bootstrap"]])
+        self.assertFalse(config["package_update"])
+        self.assertNotIn("packages", config)
         self.assertIn("SOLARINET_CI_STAGE=cloud-init-bootcmd", config["bootcmd"][0][2])
+        self.assertEqual(len(config["bootcmd"]), 1)
         self.assertIn("NOPASSWD:ALL", config["users"][0]["sudo"][0])
-        self.assertEqual(config["bootcmd"][1][2], "--on-active=45m")
-        self.assertIn("iproute2", config["packages"])
-        self.assertIn("nftables", config["packages"])
+        self.assertIn("apt-get", bootstrap)
+        self.assertIn("guest_status package-update", bootstrap)
+        self.assertIn("guest_status package-install", bootstrap)
+        self.assertIn("guest_status packages-installed", bootstrap)
+        self.assertIn("iproute2", bootstrap)
+        self.assertIn("nftables", bootstrap)
 
     def test_rejects_invalid_registration_values(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -109,6 +110,9 @@ class ForgejoRunnerSupervisorTests(unittest.TestCase):
         self.assertIn("seed_iso=\"$image_dir/seed.iso\"", source)
         self.assertIn('chown qemu:qemu "$image_dir/overlay.qcow2"', source)
         self.assertIn("timeout_seconds=86400", source)
+        self.assertIn("bootstrap_timeout_seconds=2700", source)
+        self.assertIn("timeout_kind=bootstrap", source)
+        self.assertIn('timeout_kind=job', source)
         self.assertIn('install -d -o root -g root -m 0755 "$image_dir"', source)
         self.assertIn("StrictHostKeyChecking=yes", source)
         self.assertIn("UserKnownHostsFile=/etc/solarinet-ci/known_hosts", source)

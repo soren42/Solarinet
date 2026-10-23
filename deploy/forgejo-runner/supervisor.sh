@@ -10,6 +10,7 @@ readonly ubuntu_sha256=04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f9
 readonly ubuntu_image_url=https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img
 readonly register_host=cesium.akoria.net
 readonly register_user=jason
+readonly bootstrap_timeout_seconds=2700
 readonly timeout_seconds=86400
 serial_capture_pid=''
 active_pid=''
@@ -151,12 +152,12 @@ EOF
 }
 
 run_one_cycle() {
-  local deadline state state_errors=0 job_started=0
+  local deadline state state_errors=0 job_started=0 timeout_kind=bootstrap
   cleanup || return 1
   ensure_base || return 1
   new_registration || return 1
   start_job_vm || return 1
-  deadline=$(( $(date +%s) + timeout_seconds ))
+  deadline=$(( $(date +%s) + bootstrap_timeout_seconds ))
   while (( $(date +%s) < deadline )); do
     if ! state="$(/usr/bin/virsh domstate "$domain" 2>/dev/null)"; then
       state_errors=$((state_errors + 1))
@@ -168,6 +169,7 @@ run_one_cycle() {
     fi
     if (( job_started == 0 )) && [[ -f "$work_dir/job-started" ]]; then
       job_started=1
+      timeout_kind=job
       deadline=$(( $(date +%s) + timeout_seconds ))
       echo "Forgejo job started; granting it a ${timeout_seconds}s execution window"
     fi
@@ -196,7 +198,7 @@ run_one_cycle() {
     esac
     run_cancellable sleep 5 || return 1
   done
-  echo "runner VM exceeded ${timeout_seconds}s hard lifetime; destroying it" >&2
+  echo "runner VM exceeded ${timeout_kind} timeout; destroying it" >&2
   return 1
 }
 

@@ -30,25 +30,10 @@ users:
     shell: /bin/bash
     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
     lock_passwd: true
-package_update: true
+package_update: false
 package_upgrade: false
 bootcmd:
   - [bash, -c, "printf '\\nSOLARINET_CI_STAGE=cloud-init-bootcmd\\n' >/dev/ttyS0"]
-  - [systemd-run, --unit=solarinet-ci-bootstrap-deadline, --on-active=45m, /usr/bin/systemctl, poweroff, --force]
-packages:
-  - ca-certificates
-  - curl
-  - docker.io
-  - git
-  - iproute2
-  - jq
-  - nftables
-  - openssh-client
-  - python3
-  - python3-pip
-  - python3-venv
-  - sudo
-  - xz-utils
 write_files:
   - path: /etc/solarinet-ci/runner-token
     owner: root:root

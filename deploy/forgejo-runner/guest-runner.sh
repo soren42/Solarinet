@@ -13,6 +13,16 @@ node_sha256='2642f4428869aca32443660fd71b3918e2be1277a899bdcaeb64c93b54b5af17'
 
 systemctl mask --now serial-getty@ttyS0.service
 guest_status bootstrap-start
+guest_status package-update
+export DEBIAN_FRONTEND=noninteractive
+apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+  -o Acquire::https::Timeout=30 update
+guest_status package-install
+apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+  -o Acquire::https::Timeout=30 install -y \
+  ca-certificates curl docker.io git iproute2 jq nftables openssh-client \
+  python3 python3-pip python3-venv sudo xz-utils
+guest_status packages-installed
 install -d -o runner -g runner -m 0700 /var/lib/solarinet-ci
 install -d -o runner -g runner -m 0700 /var/lib/runner/work
 install -d -o root -g root -m 0755 /usr/local/lib/solarinet-ci
@@ -91,6 +101,5 @@ systemctl daemon-reload
 guest_status docker-start
 systemctl enable docker.service
 systemctl start docker.service
-systemctl stop solarinet-ci-bootstrap-deadline.timer 2>/dev/null || true
 guest_status runner-start
 systemctl start solarinet-ci-runner.service

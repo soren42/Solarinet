@@ -154,19 +154,30 @@ blockers in network ordering, registration, firewall, or bounded serial parsing.
 `2040ee96893d2405387a79d0dcde590bb3104aa9c78c9ec69c2d2790e29ca084`, an active isolated
 `solarinet-ci` network with bridge `virbr-ci0` and autostart disabled, and an active supervisor.
 The live disposable VM is named `solarinet-ci-runner`, has the verified `ci-tap0` attachment,
-and received `192.168.123.41`. The guest has sent DHCP and DNS traffic; captured network
-counters show no TCP package downloads or Forgejo requests yet. Public NTP over UDP 123 is
-blocked by the intended egress policy. The capped serial log contains no runner-connected or
-job-start marker, so first boot is not yet a successful runner test. Secret-free bootstrap
-stage markers have been added to the next guest boot to localize where it stops.
+and receives a DHCP lease on `192.168.123.0/24`. The first boot stopped after the cloud-init
+`bootcmd` marker and before DNS or TCP traffic. The next `bootcmd` action was `systemd-run`
+creating an in-guest deadline timer; removing that call allowed cloud-init to reach the guest
+bootstrap. The supervisor now enforces a 45-minute boot deadline and resets it to 24 hours
+when the runner fetches a task. Package update and install run in the bootstrap script with
+separate serial markers and bounded apt retries/timeouts.
+
+The replacement guest reached package update/install, verified package installation, fetched
+the SHA-256-pinned Forgejo runner and Node.js runtime, started Docker, connected to Forgejo,
+and fetched a job. Host firewall counters recorded HTTPS egress and Forgejo traffic on TCP
+3000; the guest remains isolated from other private/reserved destinations. Forgejo's live
+database showed an older queued SoR integration task on the new runner. Checkout, disposable
+database/broker setup, SoR migrations, rollback/recovery, and rendered DNS-chain test steps
+completed; its RabbitMQ upgrade build was still running at the last check. This proves runner
+bootstrap and real job execution, but not completion of that task or the current branch's
+matrix. The branch run for `a1cce73` was still queued at that check.
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private; this does not establish whether the repository Actions unit is
 enabled. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15 defaults
 Actions to enabled), but repository unit state still needs authenticated verification.
 
-Therefore Forgejo CI execution is **UNVERIFIED**. Do not describe this workflow as a green
-hosted gate until a dedicated runner has run the complete matrix. GitHub run `39898481633`
+Therefore the complete Forgejo matrix is **UNVERIFIED**. Do not describe this workflow as a
+green hosted gate until the current branch has run the complete matrix. GitHub run `39898481633`
 completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
 2026-10-23; GitHub remains a secondary mirror and verification path when available.
 
