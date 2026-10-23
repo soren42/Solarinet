@@ -41,11 +41,14 @@ credentials; use one-job/ephemeral registration where supported and reset the VM
 job.
 
 The host network configuration is in `deploy/forgejo-runner/`. Its guard filters both the
-dedicated bridge and pinned VM tap (`vnet-ci0`); the runner VM definition must use that tap
-name. `install-host-network.sh` disables libvirt network autostart and enables systemd units
-that start the network only after the guard. Stopping the guard leaves its nftables rules
-installed and stops the dedicated network. The systemd units also tie host `nftables.service`
-reloads to a guard reload and stop/restart events to CI network teardown; that interaction
+dedicated bridge and pinned VM tap (`ci-tap0`). Libvirt reserves the `vnet`, `vif`, `macvtap`,
+and `macvlan` prefixes and may ignore a manually requested target using one of them, so the
+runner VM definition must use the nonreserved `ci-tap0` name. The CI regression test checks
+the guard and deployment files for reserved tap targets. `install-host-network.sh` disables
+libvirt network autostart and enables systemd units that start the network only after the
+guard. Stopping the guard leaves its nftables rules installed and stops the dedicated
+network. The systemd units also tie host `nftables.service` reloads to a guard reload and
+stop/restart events to CI network teardown; that interaction
 is configured but remains unexercised because `nftables.service` is disabled on Benzene.
 
 Native macOS coverage remains GitHub-only. The Linux Forgejo workflow does not claim that

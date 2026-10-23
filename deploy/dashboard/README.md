@@ -119,9 +119,9 @@ with owner `www-solari` and mode `0600`; never put the CA private key or server
 DB password there.
 
 ```sh
-sudo install -o root -g root -m 0640 deploy/dashboard/hardened/php-fpm-solarinet.conf /etc/php/8.4/fpm/pool.d/solarinet.conf
-sudoedit /etc/php/8.4/fpm/pool.d/solarinet.conf
-sudo php-fpm8.4 -t && sudo systemctl reload php8.4-fpm
+sudo install -o root -g root -m 0640 deploy/dashboard/hardened/php-fpm-solarinet.conf /etc/php/8.5/fpm/pool.d/solarinet.conf
+sudoedit /etc/php/8.5/fpm/pool.d/solarinet.conf
+sudo php-fpm8.5 -t && sudo systemctl reload php8.5-fpm
 sudo deploy/dashboard/hardened/verify-boundary.sh
 ```
 
@@ -172,7 +172,7 @@ sudo python3 deploy/dashboard/install-release.py --bundle deploy/dist/solarinet-
 sudo a2enmod ssl proxy proxy_fcgi headers
 sudo cp deploy/dashboard/apache-solarinet.conf /etc/apache2/sites-available/solarinet.conf
 sudo a2ensite solarinet && sudo apache2ctl configtest && sudo systemctl reload apache2
-sudo systemctl restart solarinet-server solarinet-scan-worker php8.4-fpm
+sudo systemctl restart solarinet-server solarinet-scan-worker php8.5-fpm
 ```
 
 After the service restart, browse to `https://dashboard.akoria.net/` (alias
