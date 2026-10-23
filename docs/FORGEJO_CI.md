@@ -165,11 +165,14 @@ The replacement guest reached package update/install, verified package installat
 the SHA-256-pinned Forgejo runner and Node.js runtime, started Docker, connected to Forgejo,
 and fetched a job. Host firewall counters recorded HTTPS egress and Forgejo traffic on TCP
 3000; the guest remains isolated from other private/reserved destinations. Forgejo's live
-database showed an older queued SoR integration task on the new runner. Checkout, disposable
-database/broker setup, SoR migrations, rollback/recovery, and rendered DNS-chain test steps
-completed; its RabbitMQ upgrade build was still running at the last check. This proves runner
-bootstrap and real job execution, but not completion of that task or the current branch's
-matrix. The branch run for `a1cce73` was still queued at that check.
+database showed older queued tasks from run `57` on the new runner. The RabbitMQ 3.13.7 and
+4.2.9 SoR tasks completed successfully, including checkout, disposable database/broker setup,
+migrations, rollback/recovery, DNS-chain checks, and snapshot recovery. Its 4.3.6 task was
+running at the last check. The Python-integration task failed only at the Opie MCP subprocess
+test: the parent could import the SDK, but the SDK's restricted child environment omitted its
+package path. Commit `682426f` passes the complete Opie suite with dependencies installed in
+an isolated user site and is queued as Forgejo run `63`. The current branch's matrix is not yet
+verified.
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private; this does not establish whether the repository Actions unit is
