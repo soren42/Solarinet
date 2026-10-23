@@ -44,7 +44,7 @@ jobs:
       - name: Validate systemd directive section placement
         run: python tests/test_systemd_unit_sections.py
       - name: Validate CRL publisher system identity declaration
-        run: sudo systemd-sysusers --dry-run deploy/crl/solari-crl-publisher.sysusers.conf
+        run: sudo systemd-sysusers --dry-run "$GITHUB_WORKSPACE/deploy/crl/solari-crl-publisher.sysusers.conf"
       - name: Verify CRL systemd units
         run: sudo systemd-analyze verify deploy/crl/solari-crl-generate.service deploy/crl/solari-crl-generate.timer deploy/crl/solari-crl-publish.service deploy/crl/solari-crl-publish.timer deploy/crl/solari-crl-activate@.service deploy/crl/solari-crl-activate@.timer
       - name: CRL generation, publication, and activation cryptographic tests

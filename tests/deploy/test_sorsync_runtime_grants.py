@@ -132,8 +132,10 @@ def main() -> int:
                 source_id = row[0]
                 c.execute("SELECT entity_id FROM ip_addresses WHERE deleted_at IS NULL LIMIT 1")
                 entity_name = "grant-test-" + TOKEN
-                c.execute("INSERT INTO entities(name,entity_type,source_id,asserted_kind) "
-                          "VALUES (%s,'other',%s,'machine')", (entity_name, source_id))
+                # Keep the address fixture out of the active DNS renderer view;
+                # it is deliberately IPv6 while the current zone generator emits A records.
+                c.execute("INSERT INTO entities(name,entity_type,lifecycle,source_id,asserted_kind) "
+                          "VALUES (%s,'other','retired',%s,'machine')", (entity_name, source_id))
                 entity_id = c.lastrowid
                 c.execute("INSERT INTO ip_addresses(entity_id,address,is_primary,source_id,asserted_kind) "
                           "VALUES (%s,INET6_ATON('2001:db8::dead:beef'),1,%s,'machine')",

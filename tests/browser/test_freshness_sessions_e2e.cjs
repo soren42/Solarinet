@@ -63,7 +63,7 @@ if ($path === '/__health') { echo 'ok'; exit; }
 if ($path === '/__fixture_session') {
     $user = (string)($_GET['user'] ?? '');
     if (!preg_match('/\\A[a-z0-9-]{1,64}\\z/', $user)) { http_response_code(400); exit; }
-    Auth::establishSession(['username' => $user, 'role' => 'operator', 'source' => 'oidc']);
+    Auth::establishSession(['username' => $user, 'role' => 'operator', 'source' => 'test']);
     header('Content-Type: application/json'); echo json_encode(['ready' => true]); exit;
 }
 if ($path === '/__fixture_control') {
@@ -142,7 +142,13 @@ async function main() {
       const user = `freshness-${i}-${crypto.randomBytes(4).toString('hex')}`;
       await pages[i].goto(`${base}/__fixture_session?user=${encodeURIComponent(user)}`, { waitUntil: 'domcontentloaded' });
       await pages[i].goto(`${base}/`, { waitUntil: 'load' });
-      await pages[i].locator('.nav-item').filter({ hasText: /^Fleet Overview$/ }).waitFor({ timeout: 15000 });
+      try {
+        await pages[i].locator('.nav-item').filter({ hasText: /^Fleet Overview$/ }).waitFor({ timeout: 15000 });
+      } catch (error) {
+        error.message += `\nBrowser page errors: ${JSON.stringify(pageErrors)}\n` +
+          `Rendered root: ${(await pages[i].locator('#root').innerText().catch(() => '')).slice(0, 1200)}`;
+        throw error;
+      }
       assert.equal(await pages[i].evaluate(() => window.SOLARI.source), 'live', 'authenticated browser should start with real-mode data');
       assert.equal(await pages[i].evaluate(() => window.SOLARI.operator.role), 'operator');
     }
