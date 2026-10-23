@@ -14,6 +14,9 @@ return static function (Router $router): void {
 
     // POST /api/auth/login  body: { username, password }
     $router->post('/api/auth/login', static function (): void {
+        if (!Auth::localLoginEnabled()) {
+            Response::error('local_login_disabled', 'Local password login is disabled.', 403);
+        }
         $body = solari_json_body();
         $user = (string) ($body['username'] ?? '');
         $pass = (string) ($body['password'] ?? '');
@@ -74,9 +77,9 @@ return static function (Router $router): void {
             // Directory (AD) users sign in via SSO; local username/password login
             // (Auth::directoryAuthenticate is a stub for directory accounts) is
             // hidden by default so it isn't a dead-end. Re-enable by setting the
-            // fpm-pool env SOLARI_LOCAL_LOGIN=1 (the /api/auth/login endpoint still
-            // exists as a hidden break-glass path for any real local account).
-            'localEnabled' => getenv('SOLARI_LOCAL_LOGIN') === '1',
+            // Set SOLARI_LOCAL_LOGIN=1 and SOLARI_AUTH_RATE_DIR to a private
+            // FPM-writable directory. The API follows this same gate.
+            'localEnabled' => Auth::localLoginEnabled(),
             'oidcEnabled'  => Oidc::isEnabled(),
             'oidcLabel'    => Oidc::buttonLabel(),
             'oidcLoginUrl' => '/api/auth/oidc/login',

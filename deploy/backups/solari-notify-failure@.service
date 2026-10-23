@@ -11,4 +11,6 @@ User=root
 Group=root
 UMask=0077
 TimeoutStartSec=15s
-ExecStart=/opt/solari-backups/solari-notify-failure.py --unit solari-backup@%i.service
+Environment=SOLARI_NOTIFY_PYTHON=/usr/bin/python3
+EnvironmentFile=-/etc/solari-notify-failure-%i.conf
+ExecStart=/usr/bin/env ${SOLARI_NOTIFY_PYTHON} /opt/solari-backups/solari-notify-failure.py --unit solari-backup@%i.service

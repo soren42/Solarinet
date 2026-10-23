@@ -14,6 +14,8 @@ hostFqdn = my-outpost
 [server]
 primaryUrl = tls+tcp://solari.example.intranet:7701
 # failoverUrl = tls+tcp://solari-2.example.intranet:7701
+# Optional when the control listener is not the standard primaryUrl port + 1.
+# reportAckUrl = tls+tcp://solari.example.intranet:7702
 # Dial by a NAME in the server cert SAN (older mbedTLS won't match IP SANs);
 # deploy/deploy-monitor.sh pins the name in the target's /etc/hosts.
 
@@ -35,6 +37,8 @@ target = tcp:10.0.0.1:53
 
 # Optional peer mesh: multiple outposts split target ownership by rendezvous
 # hashing and gossip liveness, so N vantages don't all probe every target.
+# Gossip requires mutual TLS. Each peer certificate CN must be monitor.<fqdn>,
+# and its gossip node ID is derived from that same FQDN and the monitor role.
 [peer]
 # gossipUrl = tls+tcp://0.0.0.0:7704
 # gossipIntervalSec = 20

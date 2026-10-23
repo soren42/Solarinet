@@ -1,0 +1,18 @@
+# Xenon local recovery copy on the root NVMe. This is a temporary on-host
+# target; it does not protect against NVMe or Xenon failure. Use the separately
+# documented NAS config before switching to /mnt/solari-backups.
+# Copy to /etc/solari-backup-xenon.conf and keep root:root mode 0600.
+
+DB_NAMES="solarinet"
+TARGET_DIR="/var/backups/solarinet-db"
+TARGET_MOUNTPOINT_REQUIRED=0
+RETENTION_DAYS=14
+
+# The systemd backup service runs as root. MariaDB root uses Unix-socket auth.
+# Omit MYSQL_HOST and MYSQL_PORT so the client does not use TCP.
+MYSQL_USER="root"
+MYSQLDUMP_BIN="/usr/bin/mysqldump"
+
+# Forgejo is hosted on Cesium, so Xenon does not create a Forgejo dump.
+FORGEJO_BIN=""
+FORGEJO_CONFIG=""

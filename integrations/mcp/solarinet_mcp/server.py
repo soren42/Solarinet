@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from mcp.server.fastmcp import FastMCP
 
 from .config import Config, load_config
-from .db import DEFAULT_MAX_ROWS, HARD_MAX_ROWS, DbClient, DbError
+from .db import HARD_MAX_ROWS, DbClient, DbError
 from .formatting import ResponseFormat, md_kv, md_table, to_json
 from .rest import RestClient, SolariApiError
 
@@ -143,12 +143,6 @@ class SurveyInput(_Base):
 class PushConfigInput(_Base):
     node_id: str = Field(..., min_length=1, description="Target node id.")
     config_blob: dict[str, Any] = Field(..., description="Config overlay to stage (JSON object).")
-
-
-class DbQueryInput(_Base):
-    sql: str = Field(..., min_length=1, description="A single read-only SELECT/WITH query.")
-    max_rows: int = Field(default=DEFAULT_MAX_ROWS, ge=1, le=HARD_MAX_ROWS, description="Row cap.")
-    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 
 
 class DbHostHistoryInput(_Base):
@@ -718,25 +712,6 @@ def _render_db(result: dict[str, Any], fmt: ResponseFormat, title: str) -> str:
     return f"# {title} - {result['row_count']} row(s){note}\n\n{table}"
 
 
-@mcp.tool(name="solarinet_db_query", annotations={"title": "Read-only SQL", **_DBRO})
-async def solarinet_db_query(params: DbQueryInput) -> str:
-    """Run a single read-only SQL query against the SolariNet MariaDB (section 10).
-
-    ONLY SELECT / WITH...SELECT is permitted; the server rejects DML/DDL, stacked
-    statements, and INTO OUTFILE/DUMPFILE, and caps rows. Key tables: node,
-    hostCurrent, hostHistory, procCurrent, probeTarget, probeCurrent,
-    probeHistory, alertRule, alertEvent, nodeConfig, serverLease.
-
-    Args: sql (one SELECT), max_rows (cap), response_format.
-    Returns: markdown table or JSON {columns, rows, row_count, truncated}.
-    """
-    try:
-        result = await _db().query(params.sql, max_rows=params.max_rows)
-        return _render_db(result, params.response_format, "Query result")
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-
 @mcp.tool(name="solarinet_db_node_summary", annotations={"title": "Node summary (DB)", **_DBRO})
 async def solarinet_db_node_summary(params: FormatOnlyInput) -> str:
     """Fleet roster straight from the DB: counts and per-node state from `node`.
@@ -812,14 +787,19 @@ def list_tools() -> list[str]:
         # destructive control (operator + confirm)
         "solarinet_approve_enrollment", "solarinet_decommission",
         # DB
-        "solarinet_db_query", "solarinet_db_node_summary",
-        "solarinet_db_active_alerts", "solarinet_db_host_history",
+        "solarinet_db_node_summary", "solarinet_db_active_alerts",
+        "solarinet_db_host_history",
     ]
 
 
 def run(cfg: Config | None = None) -> None:
     cfg = cfg or load_config()
     if cfg.transport == "streamable_http":
-        mcp.run(transport="streamable_http")
+        # FastMCP 1.x spells the transport "streamable-http" and reads its
+        # listener port from Settings. Keep the environment-facing project name
+        # stable, translate at this adapter boundary, and apply our configured
+        # port before starting the server.
+        mcp.settings.port = cfg.port
+        mcp.run(transport="streamable-http")
     else:
         mcp.run()

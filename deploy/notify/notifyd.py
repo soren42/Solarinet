@@ -21,6 +21,7 @@ import argparse
 import configparser
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -37,6 +38,7 @@ from senders import load_senders  # noqa: E402
 log = logging.getLogger("notifyd")
 
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notify.conf")
+MAX_TIMESTAMP = 253402300799  # 9999-12-31T23:59:59Z, datetime's UTC upper bound
 
 
 class Dispatcher:
@@ -149,10 +151,42 @@ def parse_message(body):
     data = json.loads(body)
     if not isinstance(data, dict):
         raise ValueError("message body is not a JSON object")
-    # Minimal contract validation — title/body are the only fields we treat
-    # as required for a message to be worth delivering at all.
     if "title" not in data and "body" not in data:
         raise ValueError("message has neither 'title' nor 'body'")
+    for name in ("title", "body"):
+        if name in data and not isinstance(data[name], str):
+            raise ValueError(f"message field {name!r} must be a string")
+
+    if "severity" in data:
+        severity = data["severity"]
+        if not isinstance(severity, str) or severity.strip().lower() not in {
+            "crit", "warn", "info",
+        }:
+            raise ValueError("message field 'severity' must be crit, warn, or info")
+    if "channel" in data:
+        channel = data["channel"]
+        if not isinstance(channel, str) or not channel.strip():
+            raise ValueError("message field 'channel' must be a non-empty string")
+    if "to" in data:
+        recipients = data["to"]
+        if not isinstance(recipients, list) or any(
+            not isinstance(recipient, str) or not recipient.strip()
+            for recipient in recipients
+        ):
+            raise ValueError("message field 'to' must be an array of non-empty strings")
+    if "source" in data and not isinstance(data["source"], str):
+        raise ValueError("message field 'source' must be a string")
+    if "ts" in data:
+        timestamp = data["ts"]
+        invalid_timestamp = (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, (int, float))
+            or timestamp < 0
+            or timestamp > MAX_TIMESTAMP
+            or (isinstance(timestamp, float) and not math.isfinite(timestamp))
+        )
+        if invalid_timestamp:
+            raise ValueError("message field 'ts' must be a finite non-negative number")
     return data
 
 

@@ -101,5 +101,14 @@ def load_config() -> Config:
     transport = os.environ.get("SOLARINET_MCP_TRANSPORT", "stdio").strip().lower()
     if transport not in ("stdio", "streamable_http"):
         transport = "stdio"
-    port = _get_int("SOLARINET_MCP_PORT", 8765)
+    raw_port = os.environ.get("SOLARINET_MCP_PORT")
+    if raw_port is None or raw_port.strip() == "":
+        port = 8765
+    else:
+        try:
+            port = int(raw_port)
+        except ValueError as exc:
+            raise ValueError("SOLARINET_MCP_PORT must be an integer from 1 to 65535") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError("SOLARINET_MCP_PORT must be an integer from 1 to 65535")
     return Config(rest=rest, db=db, transport=transport, port=port)

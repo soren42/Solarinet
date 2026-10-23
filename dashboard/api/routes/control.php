@@ -4,13 +4,14 @@ declare(strict_types=1);
 /**
  * Lifecycle control mutations (§6, §7.3, §11) — all via solariCtl:
  *   POST /api/control/provision      bring a node up (PROVISION)
- *   POST /api/control/decommission   retire + wipe (DECOMMISSION, double-confirmed)
+ *   POST /api/control/decommission   request teardown (DECOMMISSION, double-confirmed)
  *   POST /api/control/survey         fleet survey now (SURVEY)
  *
  * PHP holds no CA material and writes no monitoring tables. provision/survey are
  * building/operational; decommission is irreversible and therefore demands an
  * operator role, an explicit confirm:true, and a non-empty wipeScope[] — and is
- * driven through the bridge's two-step confirm-token handshake.
+ * driven through the bridge's two-step confirm-token handshake. The queue
+ * consumer keeps the one-time token in memory; PHP and ctlRequest never receive it.
  */
 
 return static function (Router $router): void {
@@ -36,13 +37,17 @@ return static function (Router $router): void {
                 $args['cfg'] = $cfg;   // SolariCtl URL-encodes blobs for the wire
             }
         }
+        // PROVISION is PRIVILEGED: the dashboard peer is refused it directly, so
+        // we enqueue and let the privileged server run it. The operator is bound
+        // server-side from the stored requestedBy — never pass op= in $args.
         $op = Operator::name();
-        if ($op !== '') {
-            $args['op'] = $op;
+        $reply = SolariCtl::callQueued('PROVISION', $args, $op, ctrl_idem_key());
+        $out = ['nodeId' => $nodeId, 'status' => 'provisioning'];
+        if (ctrl_is_queued($reply)) {
+            // Backlogged: still in flight, hand back the id so the UI can poll.
+            $out['request'] = $reply['request'];
         }
-
-        SolariCtl::call('PROVISION', $args);
-        Response::ok(['nodeId' => $nodeId, 'status' => 'provisioning']);
+        Response::ok($out);
     });
 
     // --- POST /api/control/decommission ----------------------------------
@@ -50,8 +55,8 @@ return static function (Router $router): void {
     //
     // Two distinct safety gates:
     //   (a) PHP: operator role + confirm:true + non-empty wipeScope[].
-    //   (b) Bridge: a one-time confirm token (first DECOMMISSION call returns it;
-    //       we immediately re-call with confirm=<token> to finalize the retire).
+    //   (b) Bridge: a one-time token is issued and consumed inside the privileged
+    //       queue consumer before it records a token-free result.
     $router->post('/api/control/decommission', static function (): void {
         $body   = solari_json_body();
         $op     = Operator::requireOperator();
@@ -63,33 +68,32 @@ return static function (Router $router): void {
         }
         $scope = ctrl_wipe_scope_to_hex($body['wipeScope'] ?? null);  // emits 400 if bad
 
-        // Step 1: issue the bridge's one-time confirm token (node not yet retired).
-        $issue = SolariCtl::call('DECOMMISSION', [
-            'node'  => $nodeId,
-            'scope' => $scope,
-            'op'    => $op,
-        ]);
-        $token = $issue['confirm'] ?? '';
-        if ($token === '') {
-            Response::error('control_error',
-                'Operator bridge did not return a confirm token.', 502);
+        // A queue row must never contain the one-time confirmation token. Require
+        // a bridge version that performs both handshake steps in memory.
+        $capabilities = SolariCtl::call('PING');
+        if (($capabilities['decommissionInline'] ?? '') !== '1') {
+            Response::error('control_unavailable',
+                'Operator bridge must be upgraded before decommission can run.', 503);
         }
+        $fin = SolariCtl::callQueued('DECOMMISSION', [
+            'node' => $nodeId,
+            'scope' => $scope,
+            'inlineConfirm' => 1,
+        ], $op, ctrl_idem_key());
 
-        // Step 2: finalize with the echoed token (double-confirmed). The bridge
-        // retires the node and emits SCP_MSG_DECOMMISSION.
-        SolariCtl::call('DECOMMISSION', [
-            'node'    => $nodeId,
-            'scope'   => $scope,
-            'op'      => $op,
-            'confirm' => $token,
-        ]);
-
-        Response::ok([
+        $out = [
             'nodeId'    => $nodeId,
-            'status'    => 'retired',
             'wipeScope' => array_values((array) $body['wipeScope']),
             'decidedBy' => $op,
-        ]);
+        ];
+        if (ctrl_is_queued($fin)) {
+            // The directive is queued, not yet acknowledged by the node.
+            $out['status']  = 'queued';
+            $out['request'] = $fin['request'];
+        } else {
+            $out['status'] = 'awaiting_node';
+        }
+        Response::ok($out);
     });
 
     // --- POST /api/nodes/{nodeId}/retire --------------------------------
@@ -105,11 +109,17 @@ return static function (Router $router): void {
             Response::error('confirm_required',
                 'Retire marks the node terminal; resend with {"confirm":true}.', 409);
         }
-        SolariCtl::call('RETIRE', [
-            'node' => $nodeId,
-            'op'   => $op,
-        ]);
-        Response::ok(['nodeId' => $nodeId, 'status' => 'retired', 'decidedBy' => $op]);
+        // RETIRE is PRIVILEGED: enqueue; op bound server-side from requestedBy.
+        $reply = SolariCtl::callQueued('RETIRE', ['node' => $nodeId], $op, ctrl_idem_key());
+        $out = ['nodeId' => $nodeId, 'decidedBy' => $op];
+        if (ctrl_is_queued($reply)) {
+            // Enqueued but not confirmed done — do not claim 'retired'.
+            $out['status']  = 'queued';
+            $out['request'] = $reply['request'];
+        } else {
+            $out['status'] = 'retired';
+        }
+        Response::ok($out);
     });
 
     $router->post('/api/nodes/{nodeId}/criticality', static function (array $p): void {
@@ -154,7 +164,7 @@ return static function (Router $router): void {
         if (preg_match('/^[A-Za-z0-9._@-]{1,120}$/', $host) !== 1) {
             Response::error('bad_request', 'host must be "[user@]hostname".', 400);
         }
-        $args = ['host' => $host, 'op' => $op];
+        $args = ['host' => $host];   // op bound server-side (PRIVILEGED, enqueued)
         if (isset($b['server']) && preg_match('#^tls\+tcp://[A-Za-z0-9._:-]+$#', $b['server']) === 1) {
             $args['server'] = $b['server'];
         }
@@ -164,8 +174,12 @@ return static function (Router $router): void {
         if (isset($b['fqdn']) && preg_match('/^[A-Za-z0-9._-]{1,160}$/', (string) $b['fqdn']) === 1) {
             $args['fqdn'] = $b['fqdn'];
         }
-        $reply = SolariCtl::call('DEPLOY', $args);
-        Response::ok(['host' => $host, 'status' => 'deploying', 'log' => $reply['log'] ?? null]);
+        $reply = SolariCtl::callQueued('DEPLOY', $args, $op, ctrl_idem_key());
+        $out = ['host' => $host, 'status' => 'deploying', 'log' => $reply['log'] ?? null];
+        if (ctrl_is_queued($reply)) {
+            $out['request'] = $reply['request'];
+        }
+        Response::ok($out);
     });
 
     // --- GET /api/control/deploy?host= -----------------------------------
@@ -252,7 +266,7 @@ return static function (Router $router): void {
         if (preg_match('/^[A-Za-z0-9._-]{1,160}$/', $hostname) !== 1) {
             Response::error('bad_request', 'hostname required (letters, digits, . _ -).', 400);
         }
-        $args = ['target' => $target, 'distro' => $distro, 'arch' => $arch, 'hostname' => $hostname, 'op' => $op];
+        $args = ['target' => $target, 'distro' => $distro, 'arch' => $arch, 'hostname' => $hostname];  // op bound server-side
         if (isset($b['profile']) && preg_match('/^[A-Za-z0-9._-]{1,48}$/', (string) $b['profile']) === 1) {
             $args['profile'] = (string) $b['profile'];
         }
@@ -265,8 +279,12 @@ return static function (Router $router): void {
         if (isset($b['ip']) && filter_var($b['ip'], FILTER_VALIDATE_IP) !== false) {
             $args['ip'] = (string) $b['ip'];
         }
-        $reply = SolariCtl::call('FLEET_PROVISION', $args);
-        Response::ok(['hostname' => $hostname, 'status' => 'provisioning', 'log' => $reply['log'] ?? null]);
+        $reply = SolariCtl::callQueued('FLEET_PROVISION', $args, $op, ctrl_idem_key());
+        $out = ['hostname' => $hostname, 'status' => 'provisioning', 'log' => $reply['log'] ?? null];
+        if (ctrl_is_queued($reply)) {
+            $out['request'] = $reply['request'];
+        }
+        Response::ok($out);
     });
 
     // --- POST /api/control/image -----------------------------------------
@@ -283,7 +301,7 @@ return static function (Router $router): void {
         if (!in_array($arch, ['arm64', 'arm32'], true)) {
             Response::error('bad_request', 'image builds are arm64/arm32 (Pi) only.', 400);
         }
-        $args = ['hostname' => $hostname, 'arch' => $arch, 'op' => $op];
+        $args = ['hostname' => $hostname, 'arch' => $arch];  // op bound server-side
         foreach (['distro' => '/^[A-Za-z0-9._-]{1,24}$/', 'profile' => '/^[A-Za-z0-9._-]{1,48}$/', 'role' => '/^[A-Za-z0-9._-]{1,32}$/'] as $k => $re) {
             if (isset($b[$k]) && preg_match($re, (string) $b[$k]) === 1) {
                 $args[$k] = (string) $b[$k];
@@ -295,8 +313,12 @@ return static function (Router $router): void {
         if (isset($b['ip']) && filter_var($b['ip'], FILTER_VALIDATE_IP) !== false) {
             $args['ip'] = (string) $b['ip'];
         }
-        $reply = SolariCtl::call('FLEET_IMAGE', $args);
-        Response::ok(['hostname' => $hostname, 'status' => 'imaging', 'log' => $reply['log'] ?? null]);
+        $reply = SolariCtl::callQueued('FLEET_IMAGE', $args, $op, ctrl_idem_key());
+        $out = ['hostname' => $hostname, 'status' => 'imaging', 'log' => $reply['log'] ?? null];
+        if (ctrl_is_queued($reply)) {
+            $out['request'] = $reply['request'];
+        }
+        Response::ok($out);
     });
 
     // --- GET /api/control/provision?hostname= (or ?image=1) --------------
@@ -328,6 +350,40 @@ return static function (Router $router): void {
 };
 
 /* ---- shared validators / mappers ------------------------------------- */
+
+/**
+ * True if callQueued() handed back its "not settled within the request budget"
+ * sentinel rather than a completed inner reply. When the privileged consumer is
+ * backlogged past the poll deadline the action is merely QUEUED — not done — so a
+ * route must NOT report it as completed (e.g. status:'retired'); it surfaces the
+ * request id for later polling instead. Matched on both keys so a verb whose own
+ * OK reply happens to carry a status= field is not mistaken for the sentinel.
+ */
+function ctrl_is_queued(array $reply): bool
+{
+    return ($reply['status'] ?? '') === 'queued' && isset($reply['request']);
+}
+
+/**
+ * Optional client idempotency key (Idempotency-Key header). A retried POST — a
+ * lost response, a double-click, a proxy replay — carries the same key, so the
+ * bridge's REQUEST_SUBMIT dedup returns the existing request instead of launching
+ * a second PROVISION/DEPLOY/DECOMMISSION. Null when absent: behaviour is then
+ * unchanged (no dedup). NOTE: full double-submit protection requires the UI to
+ * send this header; until it does, this only hardens explicitly-keyed callers.
+ */
+function ctrl_idem_key(): ?string
+{
+    $k = $_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? '';
+    if (!is_string($k) || $k === '') {
+        return null;
+    }
+    if (preg_match('/^[A-Za-z0-9._-]{8,128}$/', $k) !== 1) {
+        Response::error('bad_request',
+            'Idempotency-Key must be 8-128 chars of [A-Za-z0-9._-].', 400);
+    }
+    return $k;
+}
 
 /** True if a value is an integer-ish (int or all-digit string). */
 function ctrl_is_int($v): bool

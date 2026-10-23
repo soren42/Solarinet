@@ -30,6 +30,11 @@ final class Auth
 
     /** Session key holding the per-session CSRF synchronizer token. */
     private const CSRF_KEY = 'solari_csrf';
+    private const CREATED_KEY = 'solari_created_at';
+    private const SEEN_KEY = 'solari_seen_at';
+    private const IDLE_MAX_SEC = 1800;
+    private const ABSOLUTE_MAX_SEC = 28800;
+    private const OIDC_MAX_SEC = 3600;
 
     /** @var array<string,mixed>|null cached credential store */
     private static ?array $store = null;
@@ -90,6 +95,55 @@ final class Auth
     }
 
     // ----------------------------------------------------------- credentials
+
+    /** Local password login is an explicit break-glass capability. */
+    public static function localLoginEnabled(): bool
+    {
+        return getenv('SOLARI_LOCAL_LOGIN') === '1'
+            && self::localRateDirectory() !== null;
+    }
+
+    /** Require a private writable directory before accepting password attempts. */
+    private static function localRateDirectory(): ?string
+    {
+        $dir = getenv('SOLARI_AUTH_RATE_DIR');
+        if (!is_string($dir) || $dir === '' || $dir[0] !== '/'
+            || is_link($dir) || !is_dir($dir) || !is_writable($dir)) {
+            return null;
+        }
+        $mode = fileperms($dir);
+        return $mode !== false && ($mode & 0077) === 0 ? $dir : null;
+    }
+
+    /** Reserve one of five attempts per source/account in a rolling 15 minutes. */
+    public static function consumeLocalAttempt(string $username, string $source): bool
+    {
+        $dir = self::localRateDirectory();
+        if ($dir === null) return false;
+        $key = hash('sha256', strtolower(trim($username)) . "\n" . $source);
+        $handle = @fopen($dir . '/' . $key, 'c+');
+        if ($handle === false) return false;
+        try {
+            if (!flock($handle, LOCK_EX)) return false;
+            @chmod($dir . '/' . $key, 0600);
+            $raw = stream_get_contents($handle);
+            $old = json_decode(is_string($raw) ? $raw : '', true);
+            if ($raw !== '' && !is_array($old)) return false;
+            $now = time();
+            $recent = is_array($old) ? array_values(array_filter($old,
+                static fn ($t): bool => is_int($t) && $t > $now - 900 && $t <= $now)) : [];
+            if (count($recent) >= 5) return false;
+            $recent[] = $now;
+            rewind($handle);
+            if (!ftruncate($handle, 0)) return false;
+            $bytes = json_encode($recent, JSON_THROW_ON_ERROR);
+            if (fwrite($handle, $bytes) !== strlen($bytes) || !fflush($handle)) return false;
+            return true;
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
 
     /**
      * Verify a username/password and, on success, return the principal.
@@ -166,6 +220,12 @@ final class Auth
     /** Establish a session for a verified principal. Returns the principal. */
     public static function login(string $username, string $password): ?array
     {
+        if (!self::localLoginEnabled()) {
+            return null;
+        }
+        if (!self::consumeLocalAttempt($username, (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown'))) {
+            return null;
+        }
         self::bootSession();
         $principal = self::attempt($username, $password);
         if ($principal === null) {
@@ -174,6 +234,8 @@ final class Auth
         session_regenerate_id(true);          // prevent fixation
         $_SESSION[self::SESS_KEY]  = $principal;
         $_SESSION[self::CSRF_KEY]  = self::newCsrfToken();   // fresh token per login
+        $_SESSION[self::CREATED_KEY] = time();
+        $_SESSION[self::SEEN_KEY] = time();
         return $principal;
     }
 
@@ -200,6 +262,8 @@ final class Auth
         session_regenerate_id(true);          // prevent fixation
         $_SESSION[self::SESS_KEY]  = $principal;
         $_SESSION[self::CSRF_KEY]  = self::newCsrfToken();   // fresh token per login
+        $_SESSION[self::CREATED_KEY] = time();
+        $_SESSION[self::SEEN_KEY] = time();
         return $principal;
     }
 
@@ -221,7 +285,47 @@ final class Auth
     {
         self::bootSession();
         $p = $_SESSION[self::SESS_KEY] ?? null;
-        return is_array($p) ? $p : null;
+        if (!is_array($p)) return null;
+        $now = time();
+        $created = $_SESSION[self::CREATED_KEY] ?? null;
+        $seen = $_SESSION[self::SEEN_KEY] ?? null;
+        $absolute = ($p['source'] ?? '') === 'oidc'
+            ? self::OIDC_MAX_SEC : self::ABSOLUTE_MAX_SEC;
+        if (!is_int($created) || !is_int($seen) || $created > $now
+            || $seen > $now || $now - $created >= $absolute
+            || $now - $seen >= self::IDLE_MAX_SEC) {
+            self::logout();
+            return null;
+        }
+        if (($p['source'] ?? '') === 'local') {
+            if (!self::localLoginEnabled()) {
+                self::logout();
+                return null;
+            }
+            // Reload each request's credential store; a deleted or downgraded
+            // local account must not retain an older session role.
+            $account = null;
+            foreach (self::store()['users'] ?? [] as $candidate) {
+                if (is_array($candidate)
+                    && ($candidate['username'] ?? null) === ($p['username'] ?? null)) {
+                    $account = $candidate;
+                    break;
+                }
+            }
+            if ($account === null || !is_string($account['role'] ?? null)) {
+                self::logout();
+                return null;
+            }
+            $p['role'] = strtolower($account['role']);
+            if (!in_array($p['role'], ['viewer', 'operator', 'admin'], true)) {
+                self::logout();
+                return null;
+            }
+            $p['displayName'] = (string) ($account['displayName'] ?? $p['username']);
+            $_SESSION[self::SESS_KEY] = $p;
+        }
+        $_SESSION[self::SEEN_KEY] = $now;
+        return $p;
     }
 
     /**

@@ -7,7 +7,7 @@ from solarinet_mcp import server
 from solarinet_mcp.config import DbConfig
 from solarinet_mcp.db import DbClient
 from solarinet_mcp.formatting import ResponseFormat
-from solarinet_mcp.server import FormatOnlyInput, DbQueryInput, DbHostHistoryInput
+from solarinet_mcp.server import FormatOnlyInput, DbHostHistoryInput
 
 NODE_ROWS = [
     ("0x01", "server", "argon.akoria.net", "up", "2026-06-06", "x86_64", "Linux"),
@@ -47,21 +47,6 @@ async def test_node_summary_markdown():
     assert "argon.akoria.net" in out and "| nodeId |" in out
 
 
-async def test_db_query_select_ok():
-    server.configure(db=_db())
-    out = await server.solarinet_db_query(
-        DbQueryInput(sql="SELECT * FROM node", response_format=ResponseFormat.JSON)
-    )
-    parsed = json.loads(out)
-    assert parsed["row_count"] == 2 and parsed["columns"][0] == "nodeId"
-
-
-async def test_db_query_rejects_write():
-    server.configure(db=_db())
-    out = await server.solarinet_db_query(DbQueryInput(sql="DROP TABLE node"))
-    assert out.startswith("Error") and "SELECT" in out
-
-
 async def test_db_host_history_binds_param():
     server.configure(db=_db())
     out = await server.solarinet_db_host_history(DbHostHistoryInput(node_id="123", limit=10))
@@ -79,3 +64,12 @@ async def test_db_unconfigured_errors():
     server.configure(db=DbClient(cfg, runner=fake_runner))
     out = await server.solarinet_db_node_summary(FormatOnlyInput())
     assert "not configured" in out.lower()
+
+
+def test_registry_exposes_fixed_db_tools_without_generic_query():
+    names = server.list_tools()
+    assert "solarinet_db_query" not in names
+    assert "solarinet_db_node_summary" in names
+    assert "solarinet_db_active_alerts" in names
+    assert "solarinet_db_host_history" in names
+    assert len(names) == 26

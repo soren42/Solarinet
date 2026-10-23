@@ -1,0 +1,20 @@
+[Unit]
+Description=Host firewall boundary for the SolariNet Forgejo CI network
+DefaultDependencies=no
+Wants=network-pre.target
+Wants=nftables.service
+After=local-fs.target nftables.service
+Before=network-pre.target
+PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/solarinet-ci/solarinet-ci-guard.nft
+ExecReload=/usr/sbin/nft -f /etc/solarinet-ci/solarinet-ci-guard.nft
+# Deliberately keep the host guard installed on stop. Removing it while the
+# libvirt network or guest remains active would fail open.
+
+[Install]
+WantedBy=multi-user.target

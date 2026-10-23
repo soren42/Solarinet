@@ -91,9 +91,9 @@
   }
 
   /* ===================== reference data (models / locations / receipts) =====
-     Prefer the combined /api/inventory read; fall back to the per-list
-     endpoints. Both wire dialects (snake_case fixture-era, camelCase rows)
-     are normalised into one canonical shape so the modals never care. */
+     Use the adapter's validated, paginated snapshot. Both wire dialects
+     (snake_case fixture-era, camelCase rows) normalize into one canonical
+     shape so the modals never care. */
   function normLoc(l) {
     return {
       id: l.id,
@@ -118,28 +118,16 @@
   }
   function loadInvRefs() {
     const a = api();
-    function fromLists() {
-      return Promise.all([
-        a.get("/api/inventory/models").catch(function () { return []; }),
-        a.get("/api/inventory/locations").catch(function () { return []; }),
-        a.get("/api/inventory/receipts").catch(function () { return []; }),
-      ]).then(function (res) {
-        return {
-          models: (Array.isArray(res[0]) ? res[0] : []).map(normModel),
-          locations: flattenLocTree(Array.isArray(res[1]) ? res[1] : []),
-          receipts: (Array.isArray(res[2]) ? res[2] : []).map(normReceipt),
-        };
-      });
-    }
+    if (!a || !a.inventory) return Promise.reject(new Error("Inventory API is unavailable."));
     return a.inventory().then(function (d) {
-      if (!d || !Array.isArray(d.models)) return fromLists();
+      if (!d || !Array.isArray(d.models)) throw new Error("Inventory API returned an invalid snapshot.");
       return {
         models: d.models.map(normModel),
-        // combined read is flat; a tree (children[]) flattens the same way
+        // Paginated flat locations preserve parentId; nested trees also flatten.
         locations: flattenLocTree(d.locations),
         receipts: (d.receipts || []).map(normReceipt),
       };
-    }).catch(fromLists);
+    });
   }
   function locPathOf(locs, id) {
     const byId = {}; locs.forEach(function (l) { byId[l.id] = l; });
@@ -789,6 +777,7 @@
     const [card, setCard] = useState(null);
     const [hist, setHist] = useState([]);
     const [refs, setRefs] = useState({ models: [], locations: [], receipts: [] });
+    const [refsError, setRefsError] = useState("");
     const [receive, setReceive] = useState(null);   // { code, guessedType }
     const [printFor, setPrintFor] = useState(null); // codeRow
     const [moveFor, setMoveFor] = useState(null);   // unit componentRow(+codes)
@@ -797,9 +786,13 @@
     const modalOpen = !!(receive || printFor || moveFor);
 
     const offline = isOffline();
+    function refreshRefs() {
+      return loadInvRefs().then(function (value) { setRefs(value); setRefsError(""); return value; })
+        .catch(function (error) { setRefsError((error && error.message) || "Inventory references could not be refreshed."); });
+    }
     useEffect(function () {
       if (offline) return;
-      loadInvRefs().then(setRefs).catch(function () {});
+      refreshRefs();
       loadHistory();
     }, []);
 
@@ -904,7 +897,7 @@
       });
       setCard({ kind: "unit", unit: unit, barcode: resp.assetTag });
       loadHistory();
-      loadInvRefs().then(setRefs).catch(function () {});   // a new unit may have landed in a bin
+      refreshRefs();   // a new unit may have landed in a bin
       // one-keystroke intake→label loop: the fresh AKO tag goes straight to print
       if (resp.assetTag) setPrintFor(resp.assetTag);
     }
@@ -964,6 +957,7 @@
             Barcode tags need the live API — the SoR (codes, scan audit, label renderer) has no offline fixture.
           </div>
         )}
+        {!offline && refsError && <div role="alert" className="empty" style={{ marginBottom: 16 }}>Inventory references failed to refresh: {refsError} Existing choices are retained and may be stale.</div>}
 
         {!offline && tab === "scan" && (
           <div>

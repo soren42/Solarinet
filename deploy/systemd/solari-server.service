@@ -8,8 +8,9 @@
 # Install: /etc/systemd/system/solari-server.service
 #   systemctl daemon-reload && systemctl enable --now solari-server.service
 #
-# Requires a reachable MariaDB (db/schema.sql applied). If MariaDB is local,
-# uncomment the After=/Wants= mariadb lines below.
+# Requires a reachable MariaDB with the ledgered monitoring migrations applied
+# by tools/migrate.py. db/schema.sql is a generated reference snapshot only.
+# If MariaDB is local, uncomment the After=/Wants= mariadb lines below.
 
 [Unit]
 Description=SolariNet Server

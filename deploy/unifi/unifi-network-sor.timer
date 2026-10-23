@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh UniFi network facts in the SolariNet SoR
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=15m
+RandomizedDelaySec=90s
+Unit=unifi-network-sor.service
+
+[Install]
+WantedBy=timers.target

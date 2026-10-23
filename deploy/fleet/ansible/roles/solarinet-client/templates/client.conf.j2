@@ -13,6 +13,9 @@ primaryUrl = {{ solari_server_url }}
 {% if solari_failover_url is defined and solari_failover_url | length > 0 %}
 failoverUrl = {{ solari_failover_url }}
 {% endif %}
+{% if solari_report_ack_url is defined and solari_report_ack_url | length > 0 %}
+reportAckUrl = {{ solari_report_ack_url }}
+{% endif %}
 
 [tls]
 # Installed from enrollment material (deploy/enrollment/solari-enroll.sh).

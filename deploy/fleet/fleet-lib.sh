@@ -19,6 +19,8 @@ set -euo pipefail
 : "${HTTP_ROOT:=${PROV_ROOT}/netboot/http}"
 : "${CTL_SOCK:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/run/solariCtl.sock}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Shared by fleet-provision.sh and fleet-image.sh after this library is sourced.
+# shellcheck disable=SC2034
 FLEET_DIR="${REPO_ROOT}/deploy/fleet"
 
 # ---- provisioning defaults (overridable per call) ---------------------------
@@ -33,6 +35,7 @@ FLEET_DIR="${REPO_ROOT}/deploy/fleet"
 # THE shared core package stack — kept identical to the Ansible contract in
 # deploy/fleet/ansible/group_vars/all.yml (solari_core_packages). One logical
 # set, applied on every distro + arch.
+# shellcheck disable=SC2034
 FLEET_CORE_PACKAGES="sudo curl wget ca-certificates gnupg htop tmux git vim rsync jq unzip lsof chrony python3 net-tools openssh-server"
 
 # ---- logging (matches the PHP GET log-tail markers) -------------------------

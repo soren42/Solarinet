@@ -49,11 +49,17 @@ function solari_router(): Router
  *
  * @return array<string,mixed>
  */
-function solari_json_body(): array
+function solari_json_body(?int $maxBytes = null): array
 {
-    $raw = file_get_contents('php://input');
+    if ($maxBytes !== null && $maxBytes < 1) {
+        throw new InvalidArgumentException('JSON body limit must be positive.');
+    }
+    $raw = file_get_contents('php://input', false, null, 0, $maxBytes === null ? null : $maxBytes + 1);
     if ($raw === false || $raw === '') {
         return [];
+    }
+    if ($maxBytes !== null && strlen($raw) > $maxBytes) {
+        Response::error('payload_too_large', 'Request body exceeds the allowed size.', 413);
     }
     // Require an explicit application/json Content-Type on any request that
     // carries a body. This closes the classic CSRF "simple request" vector: a
@@ -61,7 +67,7 @@ function solari_json_body(): array
     // cannot set application/json without CORS. Defense in depth behind the
     // Origin + synchronizer-token checks in lib/Policy.php.
     $ctype = (string) ($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? '');
-    if (stripos($ctype, 'application/json') === false) {
+    if (!solari_is_json_content_type($ctype)) {
         Response::error('unsupported_media_type',
             'Request body must be sent as application/json.', 415);
     }
@@ -70,6 +76,13 @@ function solari_json_body(): array
         Response::error('bad_request', 'Request body must be a JSON object.', 400);
     }
     return $decoded;
+}
+
+/** Accept only application/json, optionally followed by MIME parameters. */
+function solari_is_json_content_type(string $contentType): bool
+{
+    $mediaType = explode(';', $contentType, 2)[0];
+    return strcasecmp(trim($mediaType), 'application/json') === 0;
 }
 
 /** Current request method (defaults to GET for CLI/testing). */

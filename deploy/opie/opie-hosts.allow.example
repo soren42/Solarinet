@@ -1,0 +1,6 @@
+# Exact SSH targets permitted to Opie. One canonical hostname or IPv4 address
+# per line; no wildcards, CIDRs, aliases, or automatic network ranges.
+# Populate only after confirming a host is a managed Linux SSH target and its
+# pinned host key and solari-probe account are provisioned.
+# xenon.akoria.net
+# chlorine.akoria.net

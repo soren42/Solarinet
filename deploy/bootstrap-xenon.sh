@@ -114,41 +114,29 @@ install_packages() {
   esac
 }
 
-# ---- vendoring helpers ----------------------------------------------------
-clone_pinned() {  # url tag dest
-  local url="$1" tag="$2" dest="$3"
-  if [ -d "${dest}/.git" ]; then
-    log "already cloned: ${dest}"
-  else
-    log "cloning ${url} @ ${tag}"
-    git clone --depth 1 --branch "${tag}" "${url}" "${dest}"
-  fi
+# A few distributions package mbedTLS 2.x. The CSR signer needs the parsed
+# subjectAltName API introduced later, so do not treat header presence alone as
+# sufficient; source-build the pinned pair when the installed API is too old.
+mbedtls_csr_san_api_available() {
+  cc -x c -fsyntax-only -Werror=implicit-function-declaration - >/dev/null 2>&1 <<'EOF'
+#include <mbedtls/x509.h>
+#include <mbedtls/x509_csr.h>
+int main(void) {
+    mbedtls_x509_csr csr;
+    mbedtls_x509_subject_alternative_name san;
+    const mbedtls_x509_sequence *entry = &csr.subject_alt_names;
+    if (entry && entry->buf.p)
+        (void) mbedtls_x509_parse_subject_alt_name(&entry->buf, &san);
+    mbedtls_x509_free_subject_alt_name(&san);
+    return 0;
+}
+EOF
 }
 
-build_mbedtls_from_source() {
-  local src="third_party/mbedtls"
-  clone_pinned "https://github.com/Mbed-TLS/mbedtls.git" "${MBEDTLS_TAG}" "${src}"
-  log "building mbedTLS -> ${PREFIX}"
-  cmake -S "${src}" -B "${src}/build" \
-    -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
-    -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-  cmake --build "${src}/build" -j
-  cmake --install "${src}/build"
-}
-
-build_nng_from_source() {
-  local src="third_party/nng"
-  clone_pinned "https://github.com/nanomsg/nng.git" "${NNG_TAG}" "${src}"
-  log "building nng (TLS via mbedTLS) -> ${PREFIX}"
-  cmake -S "${src}" -B "${src}/build" \
-    -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
-    -DCMAKE_PREFIX_PATH="${PREFIX}" \
-    -DNNG_ENABLE_TLS=ON -DNNG_TESTS=OFF -DNNG_TOOLS=OFF \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-  cmake --build "${src}/build" -j
-  cmake --install "${src}/build"
-}
+if [ "${SOURCE_DEPS}" -eq 0 ] && ! mbedtls_csr_san_api_available; then
+  warn "installed mbedTLS lacks parsed CSR SAN support; will build pinned I/O dependencies"
+  SOURCE_DEPS=1
+fi
 
 vendor_sqlite_amalgamation() {
   local dest="third_party/sqlite"
@@ -188,8 +176,8 @@ fi
 
 CMAKE_EXTRA=()
 if [ "${SOURCE_DEPS}" -eq 1 ]; then
-  build_mbedtls_from_source
-  build_nng_from_source
+  NNG_TAG="${NNG_TAG}" MBEDTLS_TAG="${MBEDTLS_TAG}" \
+    bash "${SCRIPT_DIR}/build-pinned-io-deps.sh" "${PREFIX}"
   CMAKE_EXTRA+=("-DCMAKE_PREFIX_PATH=${PREFIX}")
 fi
 
@@ -222,4 +210,4 @@ else
 fi
 
 log "bootstrap complete. Binaries/tests in ./${BUILD_DIR}"
-log "next: provision MariaDB + apply db/schema.sql for the server tier (Phase 5)."
+log "next: provision an empty MariaDB database with CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, then run tools/migrate.py --database monitoring --db-name NAME. Existing databases require a migration audit."

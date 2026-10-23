@@ -7,7 +7,8 @@
  * append history in one txn), alertEvent/audit append + rule load, nodeConfig
  * target/applied epochs, the serverLease conditional-UPDATE election, discovered
  * upsert/status/known/get, lldpEdge + networkGear writes, enrollment CRUD with
- * CSR hold/clear, and the buildArtifact x nodeConfig convergence join. All time
+ * atomic approval/certificate persistence and CSR hold/clear, and the
+ * buildArtifact x nodeConfig convergence join. All time
  * is stored UTC.
  *
  * Design notes:
@@ -27,8 +28,11 @@
 
 #include "solari/solariLog.h"
 #include "solari/solariTime.h"
+#include "solari/solariCrypto.h"
 
 #include <mariadb/mysql.h>
+#include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +82,17 @@ static const char *dbRoleStr(solariRole role)
         case ROLE_SERVER:  return "server";
         default:           return "client";
     }
+}
+
+static bool dbHexStringValid(const char *s, size_t exactLen, size_t maxLen)
+{
+    size_t i, n;
+    if (!s) return false;
+    n = strlen(s);
+    if ((exactLen && n != exactLen) || n == 0 || n > maxLen) return false;
+    for (i = 0; i < n; ++i)
+        if (!isxdigit((unsigned char)s[i])) return false;
+    return true;
 }
 
 /* Map a wire probe-outcome byte (probeOutcome 0..6, §5.7) to the probeCurrent /
@@ -468,6 +483,7 @@ solariStatus serverDbUpsertNode(serverDb *db, uint64_t nodeId, solariRole role,
         "ON DUPLICATE KEY UPDATE "
         "  role=VALUES(role), hostFqdn=VALUES(hostFqdn), certCn=VALUES(certCn), "
         "  osName=VALUES(osName), arch=VALUES(arch), "
+        "  state=IF(state='retired','unknown',state), "
         "  lastSeenAt=UTC_TIMESTAMP(), configEpoch=VALUES(configEpoch)";
     MYSQL      *conn = dbConn(db);
     MYSQL_STMT *st;
@@ -535,6 +551,659 @@ solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *sta
     dbBindU64(&b[1], &vNode);
     rc = dbStmtRunWrite(st, b, 2);
     mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbDecommissionIssue(serverDb *db, uint64_t nodeId,
+                                       uint32_t wipeScope, const char *requestedBy,
+                                       const char tokenHash[65],
+                                       uint64_t issuedAtUnixMs,
+                                       uint64_t expiresAtUnixMs,
+                                       uint64_t *generationOut)
+{
+    static const char *SQL =
+        "INSERT INTO decommissionChallenge "
+        "(nodeId,wipeScope,requestedBy,tokenHash,state,issuedAt,expiresAt,generation) "
+        "VALUES (?,?,?,?, 'pending',FROM_UNIXTIME(? / 1000),FROM_UNIXTIME(? / 1000),LAST_INSERT_ID(1)) "
+        "ON DUPLICATE KEY UPDATE wipeScope=VALUES(wipeScope), "
+        "requestedBy=VALUES(requestedBy), tokenHash=VALUES(tokenHash), "
+        "state='pending', issuedAt=VALUES(issuedAt), expiresAt=VALUES(expiresAt), "
+        "consumedAt=NULL, deliveryAttempts=0, lastDeliveryAt=NULL, nextDeliveryAt=NULL, "
+        "generation=LAST_INSERT_ID(generation+1)";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND b[6];
+    unsigned long long vNode=nodeId, vScope=wipeScope;
+    unsigned long long vIssued=issuedAtUnixMs, vExpires=expiresAtUnixMs;
+    unsigned long lOperator=0, lHash=0;
+    unsigned long long generation;
+    solariStatus rc;
+
+    if (generationOut) *generationOut = 0;
+    if (!conn || nodeId == 0 || wipeScope == 0 || !requestedBy || !requestedBy[0] ||
+        !dbHexStringValid(tokenHash, 64, 64) || expiresAtUnixMs <= issuedAtUnixMs)
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vNode);
+    dbBindU64(&b[1], &vScope);
+    dbBindStr(&b[2], requestedBy, &lOperator);
+    dbBindStr(&b[3], tokenHash, &lHash);
+    dbBindU64(&b[4], &vIssued);
+    dbBindU64(&b[5], &vExpires);
+    rc = dbStmtRunWrite(st, b, 6);
+    if (rc == SOLARI_OK) {
+        generation = mysql_stmt_insert_id(st);
+        if (generationOut) *generationOut = generation;
+    }
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbDecommissionConfirm(serverDb *db, uint64_t nodeId,
+                                         uint32_t wipeScope, const char *requestedBy,
+                                         const char tokenHash[65],
+                                         uint64_t nowUnixMs,
+                                         uint64_t *generationOut)
+{
+    static const char *CLAIM_SQL =
+        "UPDATE decommissionChallenge SET state='consumed', consumedAt=UTC_TIMESTAMP(6), "
+        "nextDeliveryAt=UTC_TIMESTAMP(6), deliveryAttempts=0, lastDeliveryAt=NULL, "
+        "generation=LAST_INSERT_ID(generation) "
+        "WHERE nodeId=? AND wipeScope=? AND BINARY requestedBy=BINARY ? "
+        "AND tokenHash=? AND state='pending' "
+        "AND expiresAt > FROM_UNIXTIME(? / 1000)";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[5];
+    unsigned long long vNode=nodeId, vScope=wipeScope, vNow=nowUnixMs;
+    unsigned long lOperator=0, lHash=0;
+    my_ulonglong changed;
+    unsigned long long generation;
+    solariStatus rc = ERR_DB;
+    bool txn = false;
+
+    if (generationOut) *generationOut = 0;
+    if (!conn || nodeId == 0 || wipeScope == 0 || !requestedBy || !requestedBy[0] ||
+        !dbHexStringValid(tokenHash, 64, 64) || nowUnixMs == 0)
+        return ERR_INVALID_ARG;
+    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    txn = true;
+    rc = dbStmtPrepare(conn, CLAIM_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindU64(&b[0], &vNode);
+    dbBindU64(&b[1], &vScope);
+    dbBindStr(&b[2], requestedBy, &lOperator);
+    dbBindStr(&b[3], tokenHash, &lHash);
+    dbBindU64(&b[4], &vNow);
+    rc = dbStmtRunWrite(st, b, 5);
+    changed = mysql_stmt_affected_rows(st);
+    generation = mysql_stmt_insert_id(st);
+    mysql_stmt_close(st);
+    st = NULL;
+    if (rc != SOLARI_OK) goto finish;
+    if (changed == 0) { rc = ERR_AUTH_ROLE; goto finish; }
+    if (mysql_commit(conn) != 0) { rc = ERR_DB; goto finish; }
+    txn = false;
+    if (generationOut) *generationOut = generation;
+    rc = SOLARI_OK;
+
+finish:
+    if (st) mysql_stmt_close(st);
+    if (txn) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) rc = ERR_DB;
+    return rc;
+}
+
+solariStatus serverDbDecommissionAck(serverDb *db, uint64_t nodeId,
+                                     uint64_t generation)
+{
+    static const char *ACK_SQL =
+        "UPDATE decommissionChallenge SET state='acknowledged' "
+        "WHERE nodeId=? AND generation=? AND state='consumed'";
+    static const char *RETIRE_SQL = "UPDATE node SET state='retired' WHERE nodeId=?";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[2], nodeBind[1];
+    unsigned long long vNode=nodeId, vGeneration=generation;
+    my_ulonglong changed;
+    solariStatus rc = ERR_DB;
+    bool txn = false;
+
+    if (!conn || nodeId == 0 || generation == 0) return ERR_INVALID_ARG;
+    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    txn = true;
+    rc = dbStmtPrepare(conn, ACK_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindU64(&b[0], &vNode);
+    dbBindU64(&b[1], &vGeneration);
+    rc = dbStmtRunWrite(st, b, 2);
+    changed = mysql_stmt_affected_rows(st);
+    mysql_stmt_close(st);
+    st = NULL;
+    if (rc != SOLARI_OK) goto finish;
+    if (changed == 0) { rc = ERR_AUTH_ROLE; goto finish; }
+
+    rc = dbStmtPrepare(conn, RETIRE_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindU64(&nodeBind[0], &vNode);
+    rc = dbStmtRunWrite(st, nodeBind, 1);
+    mysql_stmt_close(st);
+    st = NULL;
+    if (rc != SOLARI_OK) goto finish;
+    if (mysql_commit(conn) != 0) { rc = ERR_DB; goto finish; }
+    txn = false;
+    rc = SOLARI_OK;
+
+finish:
+    if (st) mysql_stmt_close(st);
+    if (txn) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) rc = ERR_DB;
+    return rc;
+}
+
+solariStatus serverDbDecommissionListDue(serverDb *db, uint64_t nowUnixMs,
+                                         serverDecommissionDelivery *out,
+                                         size_t cap, size_t *count)
+{
+    static const char *SQL =
+        "SELECT nodeId,wipeScope,generation,deliveryAttempts "
+        "FROM decommissionChallenge WHERE state='consumed' "
+        "AND (nextDeliveryAt IS NULL OR nextDeliveryAt <= FROM_UNIXTIME(? / 1000)) "
+        "ORDER BY nextDeliveryAt,nodeId LIMIT ?";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND in[2], result[4];
+    unsigned long long vNow = nowUnixMs ? nowUnixMs : solariNowUnixMs();
+    unsigned long long vCap = (unsigned long long)cap;
+    unsigned long long nodeId = 0, scope = 0, generation = 0, attempts = 0;
+    my_bool nNode = 0, nScope = 0, nGeneration = 0, nAttempts = 0;
+    size_t n = 0;
+    int fetch;
+    solariStatus rc;
+
+    if (count) *count = 0;
+    if (!conn || !count || (cap > 0 && !out) || cap > UINT_MAX) return ERR_INVALID_ARG;
+    if (cap == 0) return SOLARI_OK;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &vNow);
+    dbBindU64(&in[1], &vCap);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0 ||
+        mysql_stmt_store_result(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    memset(result, 0, sizeof result);
+    dbBindOutU64(&result[0], &nodeId, &nNode);
+    dbBindOutU64(&result[1], &scope, &nScope);
+    dbBindOutU64(&result[2], &generation, &nGeneration);
+    dbBindOutU64(&result[3], &attempts, &nAttempts);
+    if (mysql_stmt_bind_result(st, result) != 0) {
+        mysql_stmt_free_result(st);
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    while ((fetch = mysql_stmt_fetch(st)) == 0) {
+        if (nNode || nScope || nGeneration || nAttempts || n == cap) {
+            mysql_stmt_free_result(st);
+            mysql_stmt_close(st);
+            return ERR_DB;
+        }
+        out[n].nodeId = (uint64_t)nodeId;
+        out[n].wipeScope = (uint32_t)scope;
+        out[n].generation = (uint64_t)generation;
+        out[n].deliveryAttempts = (uint32_t)attempts;
+        n++;
+    }
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    if (fetch != MYSQL_NO_DATA) return ERR_DB;
+    *count = n;
+    return SOLARI_OK;
+}
+
+solariStatus serverDbDecommissionNoteAttempt(serverDb *db, uint64_t nodeId,
+                                             uint64_t generation,
+                                             uint64_t nowUnixMs,
+                                             uint64_t nextRetryUnixMs)
+{
+    static const char *SQL =
+        "UPDATE decommissionChallenge SET deliveryAttempts=deliveryAttempts+1, "
+        "lastDeliveryAt=FROM_UNIXTIME(? / 1000), "
+        "nextDeliveryAt=FROM_UNIXTIME(? / 1000) "
+        "WHERE nodeId=? AND generation=? AND state='consumed' "
+        "AND (nextDeliveryAt IS NULL OR nextDeliveryAt <= FROM_UNIXTIME(? / 1000))";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[5];
+    unsigned long long vNow = nowUnixMs;
+    unsigned long long vNext = nextRetryUnixMs;
+    unsigned long long vNode = nodeId;
+    unsigned long long vGeneration = generation;
+    solariStatus rc;
+
+    if (!conn || nodeId == 0 || generation == 0 || nowUnixMs == 0 ||
+        nextRetryUnixMs <= nowUnixMs) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vNow);
+    dbBindU64(&b[1], &vNext);
+    dbBindU64(&b[2], &vNode);
+    dbBindU64(&b[3], &vGeneration);
+    dbBindU64(&b[4], &vNow);
+    rc = dbStmtRunWrite(st, b, 5);
+    if (rc == SOLARI_OK && mysql_stmt_affected_rows(st) != 1) rc = ERR_AUTH_ROLE;
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbRetireNode(serverDb *db, uint64_t nodeId)
+{
+    static const char *CANCEL_SQL =
+        "UPDATE decommissionChallenge SET state='cancelled' "
+        "WHERE nodeId=? AND state IN ('pending','consumed')";
+    static const char *RETIRE_SQL =
+        "UPDATE node SET state='retired' WHERE nodeId=?";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[1];
+    unsigned long long vNode=nodeId;
+    solariStatus rc = ERR_DB;
+    bool txn = false;
+
+    if (!conn || nodeId == 0) return ERR_INVALID_ARG;
+    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    txn = true;
+    rc = dbStmtPrepare(conn, CANCEL_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindU64(&b[0], &vNode);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    st = NULL;
+    if (rc != SOLARI_OK) goto finish;
+
+    rc = dbStmtPrepare(conn, RETIRE_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindU64(&b[0], &vNode);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    st = NULL;
+    if (rc != SOLARI_OK) goto finish;
+    if (mysql_commit(conn) != 0) { rc = ERR_DB; goto finish; }
+    txn = false;
+    rc = SOLARI_OK;
+
+finish:
+    if (st) mysql_stmt_close(st);
+    if (txn) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) rc = ERR_DB;
+    return rc;
+}
+
+solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t nodeId,
+                                     const char *certCn, bool *matches)
+{
+    static const char *SQL =
+        "SELECT 1 FROM node WHERE nodeId = ? AND BINARY certCn = BINARY ? "
+        "AND state <> 'retired' LIMIT 1";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND b[2];
+    unsigned long long vNode = nodeId;
+    unsigned long cnLen;
+    solariStatus rc;
+
+    if (matches) *matches = false;
+    if (!conn || !nodeId || !certCn || !certCn[0] || !matches)
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vNode);
+    dbBindStr(&b[1], certCn, &cnLen);
+    if (mysql_stmt_bind_param(st, b) != 0 || mysql_stmt_execute(st) != 0 ||
+        mysql_stmt_store_result(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    *matches = mysql_stmt_num_rows(st) != 0;
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+static bool dbCertificateRevocationReasonValid(const char *reason)
+{
+    return reason &&
+        (strcmp(reason, "unspecified") == 0 ||
+         strcmp(reason, "keyCompromise") == 0 ||
+         strcmp(reason, "affiliationChanged") == 0 ||
+         strcmp(reason, "superseded") == 0 ||
+         strcmp(reason, "cessationOfOperation") == 0);
+}
+
+solariStatus serverDbGetLeafCertificateIssuer(serverDb *db, uint64_t nodeId,
+                                               const char *serialHex,
+                                               const char *leafCertFp,
+                                               char issuerFp[65],
+                                               uint64_t *resolvedNodeId)
+{
+    static const char *SQL =
+        "SELECT i.issuerFp,COALESCE(i.nodeId,0) FROM certificateIssuance i "
+        "JOIN certificateInventoryState s ON s.singletonId=1 AND s.complete=1 "
+        "WHERE BINARY i.serialHex=BINARY ? AND BINARY i.leafCertFp=BINARY ? "
+        "AND (?=0 OR i.nodeId=?)";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND in[4], out[2];
+    unsigned long lSerial = 0, lLeaf = 0, lIssuer = 0;
+    unsigned long long vNode = nodeId, vResolvedNode = 0;
+    my_bool isNull = 0;
+    int fetch;
+    solariStatus rc;
+
+    if (issuerFp) issuerFp[0] = '\0';
+    if (resolvedNodeId) *resolvedNodeId = 0;
+    if (!conn || !dbHexStringValid(serialHex, 0, 40) ||
+        !dbHexStringValid(leafCertFp, 64, 64) || !issuerFp || !resolvedNodeId)
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&in[0], serialHex, &lSerial);
+    dbBindStr(&in[1], leafCertFp, &lLeaf);
+    dbBindU64(&in[2], &vNode);
+    dbBindU64(&in[3], &vNode);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0 ||
+        mysql_stmt_store_result(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    dbBindOutStr(&out[0], issuerFp, 65, &lIssuer, &isNull);
+    dbBindOutU64(&out[1], &vResolvedNode, NULL);
+    if (mysql_stmt_bind_result(st, out) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    fetch = mysql_stmt_fetch(st);
+    if (fetch == MYSQL_NO_DATA || isNull || fetch != 0 || lIssuer != 64) {
+        issuerFp[0] = '\0';
+        rc = fetch == MYSQL_NO_DATA ? ERR_AUTH_ROLE :
+             (fetch == 0 && (isNull || lIssuer != 64) ? ERR_AUTH_ROLE : ERR_DB);
+    } else {
+        issuerFp[64] = '\0';
+        *resolvedNodeId = (uint64_t)vResolvedNode;
+        rc = SOLARI_OK;
+    }
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbRecordIssuedCertificate(serverDb *db,
+                                              const char *issuerFp,
+                                              const char *serialHex,
+                                              const char *leafCertFp,
+                                              const char *issuedBy,
+                                              uint64_t issuedAtUnixMs)
+{
+    static const char *SQL =
+        "INSERT INTO certificateIssuance "
+        "(issuerFp,serialHex,leafCertFp,nodeId,enrollmentId,origin,issuedBy,issuedAt) "
+        "VALUES (?,?,?,NULL,NULL,'operator',?,FROM_UNIXTIME(? / 1000))";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[5];
+    unsigned long lIssuer=0, lSerial=0, lLeaf=0, lBy=0;
+    unsigned long long vWhen = issuedAtUnixMs;
+    solariStatus rc;
+
+    if (!conn || !dbHexStringValid(issuerFp, 64, 64) ||
+        !dbHexStringValid(serialHex, 0, 40) ||
+        !dbHexStringValid(leafCertFp, 64, 64) || !issuedBy ||
+        !issuedBy[0] || strlen(issuedBy) > 128 || !issuedAtUnixMs)
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], issuerFp, &lIssuer);
+    dbBindStr(&b[1], serialHex, &lSerial);
+    dbBindStr(&b[2], leafCertFp, &lLeaf);
+    dbBindStr(&b[3], issuedBy, &lBy);
+    dbBindU64(&b[4], &vWhen);
+    rc = dbStmtRunWrite(st, b, 5);
+    if (rc == SOLARI_OK && mysql_stmt_affected_rows(st) != 1)
+        rc = ERR_AUTH_ROLE;
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbCertificateRevocationIssue(
+    serverDb *db, uint64_t nodeId, const char *issuerFp, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *requestedBy,
+    const char tokenHash[65], uint64_t issuedAtUnixMs, uint64_t expiresAtUnixMs)
+{
+    static const char *DELETE_EXPIRED =
+        "DELETE FROM certificateRevocationChallenge WHERE issuerFp=? AND serialHex=? "
+        "AND state IN ('pending','cancelled') AND expiresAt<=FROM_UNIXTIME(? / 1000)";
+    static const char *INSERT_SQL =
+        "INSERT INTO certificateRevocationChallenge "
+        "(issuerFp,serialHex,leafCertFp,nodeId,enrollmentId,reason,requestedBy,tokenHash,state,issuedAt,expiresAt) "
+        "SELECT i.issuerFp,i.serialHex,i.leafCertFp,i.nodeId,i.enrollmentId,?,?,?,"
+        "'pending',FROM_UNIXTIME(? / 1000),FROM_UNIXTIME(? / 1000) "
+        "FROM certificateIssuance i JOIN certificateInventoryState s "
+        "ON s.singletonId=1 AND s.complete=1 "
+        "WHERE i.issuerFp=? AND BINARY i.serialHex=BINARY ? "
+        "AND BINARY i.leafCertFp=BINARY ? "
+        "AND ((?=0 AND i.nodeId IS NULL) OR i.nodeId=?) "
+        "AND NOT EXISTS (SELECT 1 FROM certificateRevocation r "
+        " WHERE r.issuerFp=i.issuerFp AND r.serialHex=i.serialHex)";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND d[3], b[10];
+    unsigned long long vNode = nodeId, vIssued = issuedAtUnixMs,
+                       vExpires = expiresAtUnixMs;
+    unsigned long lIssuer=0, lSerial=0, lFp=0, lReason=0, lOperator=0, lHash=0;
+    bool txn = false;
+    solariStatus rc;
+
+    if (!conn || !dbHexStringValid(issuerFp, 64, 64) ||
+        !dbHexStringValid(serialHex, 0, 40) ||
+        !dbHexStringValid(leafCertFp, 64, 64) ||
+        !dbCertificateRevocationReasonValid(reason) || !requestedBy ||
+        !requestedBy[0] || strlen(requestedBy) > 128 ||
+        !dbHexStringValid(tokenHash, 64, 64) || issuedAtUnixMs == 0 ||
+        expiresAtUnixMs <= issuedAtUnixMs)
+        return ERR_INVALID_ARG;
+    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    txn = true;
+    rc = dbStmtPrepare(conn, DELETE_EXPIRED, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&d[0], issuerFp, &lIssuer);
+    dbBindStr(&d[1], serialHex, &lSerial);
+    dbBindU64(&d[2], &vIssued);
+    rc = dbStmtRunWrite(st, d, 3);
+    mysql_stmt_close(st);
+    st = NULL;
+    if (rc != SOLARI_OK) goto finish;
+
+    rc = dbStmtPrepare(conn, INSERT_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&b[0], reason, &lReason);
+    dbBindStr(&b[1], requestedBy, &lOperator);
+    dbBindStr(&b[2], tokenHash, &lHash);
+    dbBindU64(&b[3], &vIssued);
+    dbBindU64(&b[4], &vExpires);
+    dbBindStr(&b[5], issuerFp, &lIssuer);
+    dbBindStr(&b[6], serialHex, &lSerial);
+    dbBindStr(&b[7], leafCertFp, &lFp);
+    dbBindU64(&b[8], &vNode);
+    dbBindU64(&b[9], &vNode);
+    rc = dbStmtRunWrite(st, b, 10);
+    if (rc != SOLARI_OK && mysql_stmt_errno(st) == 1062) rc = ERR_AUTH_ROLE;
+    if (rc != SOLARI_OK) goto finish;
+    if (mysql_stmt_affected_rows(st) != 1) { rc = ERR_AUTH_ROLE; goto finish; }
+    mysql_stmt_close(st);
+    st = NULL;
+    if (mysql_commit(conn) != 0) { rc = ERR_DB; goto finish; }
+    txn = false;
+    rc = SOLARI_OK;
+
+finish:
+    if (st) mysql_stmt_close(st);
+    if (txn) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) rc = ERR_DB;
+    return rc;
+}
+
+solariStatus serverDbCertificateRevocationConfirm(
+    serverDb *db, uint64_t nodeId, const char *issuerFp, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *requestedBy,
+    const char tokenHash[65], uint64_t nowUnixMs)
+{
+    static const char *VERIFY_SQL =
+        "SELECT COALESCE(i.nodeId,0) FROM certificateIssuance i "
+        "JOIN certificateInventoryState s ON s.singletonId=1 AND s.complete=1 "
+        "WHERE i.issuerFp=? AND BINARY i.serialHex=BINARY ? "
+        "AND BINARY i.leafCertFp=BINARY ? "
+        "AND ((?=0 AND i.nodeId IS NULL) OR i.nodeId=?) FOR UPDATE";
+    static const char *CONSUME_SQL =
+        "UPDATE certificateRevocationChallenge SET state='consumed', consumedAt=UTC_TIMESTAMP(6) "
+        "WHERE issuerFp=? AND serialHex=? AND leafCertFp=? AND reason=? "
+        "AND BINARY requestedBy=BINARY ? AND tokenHash=? AND state='pending' "
+        "AND nodeId <=> NULLIF(?,0) AND expiresAt>FROM_UNIXTIME(? / 1000)";
+    static const char *ALREADY_SQL =
+        "SELECT 1 FROM certificateRevocation r "
+        "JOIN certificateRevocationChallenge c USING (issuerFp,serialHex) "
+        "WHERE r.issuerFp=? AND r.serialHex=? AND r.leafCertFp=? "
+        "AND r.nodeId <=> NULLIF(?,0) "
+        "AND r.reason=? AND BINARY r.revokedBy=BINARY ? "
+        "AND c.state='consumed' AND c.tokenHash=? LIMIT 1";
+    static const char *INSERT_SQL =
+        "INSERT INTO certificateRevocation "
+        "(issuerFp,serialHex,leafCertFp,nodeId,enrollmentId,reason,revokedBy,revokedAt) "
+        "SELECT i.issuerFp,i.serialHex,i.leafCertFp,i.nodeId,i.enrollmentId,?,?,"
+        "FROM_UNIXTIME(? / 1000) FROM certificateIssuance i "
+        "JOIN certificateInventoryState s ON s.singletonId=1 AND s.complete=1 "
+        "WHERE i.issuerFp=? AND BINARY i.serialHex=BINARY ? "
+        "AND BINARY i.leafCertFp=BINARY ? "
+        "AND ((?=0 AND i.nodeId IS NULL) OR i.nodeId=?)";
+    static const char *RETIRE_SQL =
+        "UPDATE node SET state='retired' WHERE nodeId=? "
+        "AND BINARY leafCertSerial=BINARY ? AND BINARY leafCertFp=BINARY ?";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND verify[5], consume[8], already[7], insert[8], retire[3], result;
+    unsigned long long vNode=nodeId, vNow=nowUnixMs, foundNode=0;
+    unsigned long lIssuer=0, lSerial=0, lFp=0, lReason=0, lOperator=0, lHash=0;
+    my_bool isNull = 0;
+    int fetch;
+    bool txn = false;
+    solariStatus rc;
+
+    if (!conn || !dbHexStringValid(issuerFp, 64, 64) ||
+        !dbHexStringValid(serialHex, 0, 40) ||
+        !dbHexStringValid(leafCertFp, 64, 64) ||
+        !dbCertificateRevocationReasonValid(reason) || !requestedBy ||
+        !requestedBy[0] || strlen(requestedBy) > 128 ||
+        !dbHexStringValid(tokenHash, 64, 64) || nowUnixMs == 0)
+        return ERR_INVALID_ARG;
+    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    txn = true;
+
+    rc = dbStmtPrepare(conn, VERIFY_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&verify[0], issuerFp, &lIssuer);
+    dbBindStr(&verify[1], serialHex, &lSerial);
+    dbBindStr(&verify[2], leafCertFp, &lFp);
+    dbBindU64(&verify[3], &vNode);
+    dbBindU64(&verify[4], &vNode);
+    if (mysql_stmt_bind_param(st, verify) != 0 || mysql_stmt_execute(st) != 0 ||
+        mysql_stmt_store_result(st) != 0) { rc = ERR_DB; goto finish; }
+    memset(&result, 0, sizeof result);
+    dbBindOutU64(&result, &foundNode, &isNull);
+    if (mysql_stmt_bind_result(st, &result) != 0) { rc = ERR_DB; goto finish; }
+    fetch = mysql_stmt_fetch(st);
+    if (fetch == MYSQL_NO_DATA) { rc = ERR_AUTH_ROLE; goto finish; }
+    if (fetch != 0) { rc = ERR_DB; goto finish; }
+    if (isNull || foundNode != nodeId) { rc = ERR_AUTH_ROLE; goto finish; }
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    st = NULL;
+
+    rc = dbStmtPrepare(conn, CONSUME_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&consume[0], issuerFp, &lIssuer);
+    dbBindStr(&consume[1], serialHex, &lSerial);
+    dbBindStr(&consume[2], leafCertFp, &lFp);
+    dbBindStr(&consume[3], reason, &lReason);
+    dbBindStr(&consume[4], requestedBy, &lOperator);
+    dbBindStr(&consume[5], tokenHash, &lHash);
+    dbBindU64(&consume[6], &vNode);
+    dbBindU64(&consume[7], &vNow);
+    rc = dbStmtRunWrite(st, consume, 8);
+    if (rc != SOLARI_OK) goto finish;
+    if (mysql_stmt_affected_rows(st) != 1) {
+        mysql_stmt_close(st);
+        st = NULL;
+        rc = dbStmtPrepare(conn, ALREADY_SQL, &st);
+        if (rc != SOLARI_OK) goto finish;
+        dbBindStr(&already[0], issuerFp, &lIssuer);
+        dbBindStr(&already[1], serialHex, &lSerial);
+        dbBindStr(&already[2], leafCertFp, &lFp);
+        dbBindU64(&already[3], &vNode);
+        dbBindStr(&already[4], reason, &lReason);
+        dbBindStr(&already[5], requestedBy, &lOperator);
+        dbBindStr(&already[6], tokenHash, &lHash);
+        if (mysql_stmt_bind_param(st, already) != 0 || mysql_stmt_execute(st) != 0 ||
+            mysql_stmt_store_result(st) != 0) { rc = ERR_DB; goto finish; }
+        if (mysql_stmt_num_rows(st) != 1) { rc = ERR_AUTH_ROLE; goto finish; }
+        mysql_stmt_free_result(st);
+        mysql_stmt_close(st);
+        st = NULL;
+        if (mysql_commit(conn) != 0) { rc = ERR_DB; goto finish; }
+        txn = false;
+        rc = SOLARI_OK; /* same consumed token and certificate: safe retry */
+        goto finish;
+    }
+    mysql_stmt_close(st);
+    st = NULL;
+
+    rc = dbStmtPrepare(conn, INSERT_SQL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&insert[0], reason, &lReason);
+    dbBindStr(&insert[1], requestedBy, &lOperator);
+    dbBindU64(&insert[2], &vNow);
+    dbBindStr(&insert[3], issuerFp, &lIssuer);
+    dbBindStr(&insert[4], serialHex, &lSerial);
+    dbBindStr(&insert[5], leafCertFp, &lFp);
+    dbBindU64(&insert[6], &vNode);
+    dbBindU64(&insert[7], &vNode);
+    rc = dbStmtRunWrite(st, insert, 8);
+    if (rc == SOLARI_OK && mysql_stmt_affected_rows(st) != 1)
+        rc = ERR_AUTH_ROLE;
+    if (rc != SOLARI_OK) goto finish;
+    mysql_stmt_close(st);
+    st = NULL;
+
+    if (nodeId != 0) {
+        rc = dbStmtPrepare(conn, RETIRE_SQL, &st);
+        if (rc != SOLARI_OK) goto finish;
+        dbBindU64(&retire[0], &vNode);
+        dbBindStr(&retire[1], serialHex, &lSerial);
+        dbBindStr(&retire[2], leafCertFp, &lFp);
+        rc = dbStmtRunWrite(st, retire, 3);
+        if (rc != SOLARI_OK) goto finish;
+        mysql_stmt_close(st);
+        st = NULL;
+    }
+
+    if (mysql_commit(conn) != 0) { rc = ERR_DB; goto finish; }
+    txn = false;
+    rc = SOLARI_OK;
+
+finish:
+    if (st) mysql_stmt_close(st);
+    if (txn) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) rc = ERR_DB;
     return rc;
 }
 
@@ -1382,8 +2051,82 @@ static solariStatus dbWriteProcs(MYSQL *conn, unsigned long long *vNode,
     return SOLARI_OK;
 }
 
+/* Reserve a receipt inside the report transaction. A duplicate never reaches
+ * history writes; identity reuse with different content fails closed. */
+static solariStatus dbReportBegin(MYSQL *conn)
+{
+    my_bool reconnect = 0;
+    if (mysql_ping(conn) != 0) return ERR_DB;   /* reconnect only before BEGIN */
+    if (mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect) != 0) return ERR_DB;
+    if (mysql_autocommit(conn, 0) == 0) return SOLARI_OK;
+    reconnect = 1;
+    mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect);
+    return ERR_DB;
+}
+
+static solariStatus dbReportFinish(MYSQL *conn, bool commit, solariStatus outcome)
+{
+    my_bool reconnect = 1;
+    int failed = commit ? mysql_commit(conn) : mysql_rollback(conn);
+    if (failed && commit) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) failed = 1;
+    if (mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect) != 0) failed = 1;
+    return failed ? ERR_DB : outcome;
+}
+
+static solariStatus dbReportReceipt(MYSQL *conn, uint64_t nodeId,
+                                     const serverReportReceipt *receipt)
+{
+    static const char *insertSql =
+        "INSERT INTO reportReceipt (nodeId,sessionId,seqNo,msgType,payloadHash) "
+        "VALUES (?,UNHEX(?),?,?,UNHEX(?))";
+    static const char *matchSql =
+        "SELECT payloadHash=UNHEX(?) FROM reportReceipt "
+        "WHERE nodeId=? AND sessionId=UNHEX(?) AND seqNo=? AND msgType=?";
+    MYSQL_STMT *stmt;
+    MYSQL_BIND binds[5], result;
+    unsigned long long node = nodeId, seq = receipt->seqNo;
+    unsigned long sessionLen, hashLen;
+    int type = receipt->msgType, matches = 0;
+    my_bool isNull = 0;
+    char sessionHex[33], hashHex[65];
+    unsigned error;
+    solariStatus rc;
+    solariHexEncode(receipt->session, sizeof receipt->session, sessionHex, sizeof sessionHex);
+    solariHexEncode(receipt->payloadHash, sizeof receipt->payloadHash, hashHex, sizeof hashHex);
+    rc = dbStmtPrepare(conn, insertSql, &stmt);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&binds[0], &node);
+    dbBindStr(&binds[1], sessionHex, &sessionLen);
+    dbBindU64(&binds[2], &seq);
+    dbBindI32(&binds[3], &type);
+    dbBindStr(&binds[4], hashHex, &hashLen);
+    if (mysql_stmt_bind_param(stmt, binds) != 0) { mysql_stmt_close(stmt); return ERR_DB; }
+    if (mysql_stmt_execute(stmt) == 0) { mysql_stmt_close(stmt); return SOLARI_OK; }
+    error = mysql_stmt_errno(stmt);
+    mysql_stmt_close(stmt);
+    if (error != 1062) return ERR_DB;
+    rc = dbStmtPrepare(conn, matchSql, &stmt);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&binds[0], hashHex, &hashLen);
+    dbBindU64(&binds[1], &node);
+    dbBindStr(&binds[2], sessionHex, &sessionLen);
+    dbBindU64(&binds[3], &seq);
+    dbBindI32(&binds[4], &type);
+    if (mysql_stmt_bind_param(stmt, binds) != 0 || mysql_stmt_execute(stmt) != 0) {
+        mysql_stmt_close(stmt); return ERR_DB;
+    }
+    dbBindOutI32(&result, &matches, &isNull);
+    if (mysql_stmt_bind_result(stmt, &result) != 0 || mysql_stmt_fetch(stmt) != 0 || isNull) {
+        mysql_stmt_close(stmt); return ERR_DB;
+    }
+    mysql_stmt_close(stmt);
+    return matches ? ERR_CONN_RETRY : ERR_INVALID_ARG;
+}
+
 solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
-                                       const solariClientReport *rep)
+                                       const solariClientReport *rep,
+                                       const serverReportReceipt *receipt)
 {
     static const char *SQL_CUR =
         "INSERT INTO hostCurrent "
@@ -1424,7 +2167,8 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     static const char *usbJson = "[]";
     solariStatus rc;
 
-    if (!ctx || !ctx->db || !rep) return ERR_INVALID_ARG;
+    if (!ctx || !ctx->db || !rep || !receipt ||
+        receipt->msgType != SCP_MSG_CLIENT_REPORT) return ERR_INVALID_ARG;
     conn = dbConn(ctx->db);
     if (!conn) return ERR_DB;
 
@@ -1444,10 +2188,13 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbJsonIfaces(rep, ifacesJson, sizeof ifacesJson);
 
     /* One transaction: upsert current (+ JSON detail) + procs + history (§9.1). */
-    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    if (dbReportBegin(conn) != SOLARI_OK) return ERR_DB;
+
+    rc = dbReportReceipt(conn, nodeId, receipt);
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
     rc = dbStmtPrepare(conn, SQL_CUR, &st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
     dbBindU64(&b[0], &vNode);
     dbBindStr(&b[1], cpuJson,   &lCpu);
     dbBindU64(&b[2], &vRamU);
@@ -1468,13 +2215,13 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbBindStr(&b[17], rep->health.dmesgCritSample, &lDmesgCritSample);
     rc = dbStmtRunWrite(st, b, 18);
     mysql_stmt_close(st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
     rc = dbWriteProcs(conn, &vNode, rep);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
     rc = dbStmtPrepare(conn, SQL_HIST, &st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
     dbBindU64(&b[0], &vNode);
     dbBindI32(&b[1], &cpuAvg);
     dbBindU64(&b[2], &vRamU);
@@ -1488,21 +2235,20 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     dbBindU64(&b[10], &vDmesgCrit);
     rc = dbStmtRunWrite(st, b, 11);
     mysql_stmt_close(st);
-    if (rc != SOLARI_OK) { mysql_rollback(conn); mysql_autocommit(conn, 1); return rc; }
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
 
-    if (mysql_commit(conn) != 0) {
+    rc = dbReportFinish(conn, true, SOLARI_OK);
+    if (rc != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR, "serverDb: client commit failed: %s",
                    mysql_error(conn));
-        mysql_rollback(conn);
-        mysql_autocommit(conn, 1);
         return ERR_DB;
     }
-    mysql_autocommit(conn, 1);
     return SOLARI_OK;
 }
 
 solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
-                                        const solariMonitorReport *rep)
+                                        const solariMonitorReport *rep,
+                                        const serverReportReceipt *receipt)
 {
     static const char *SQL_CUR =
         "INSERT INTO probeCurrent "
@@ -1523,11 +2269,16 @@ solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
     uint16_t    i;
     solariStatus rc = SOLARI_OK;
 
-    if (!ctx || !ctx->db || !rep) return ERR_INVALID_ARG;
+    if (!ctx || !ctx->db || !rep || !receipt ||
+        (receipt->msgType != SCP_MSG_MONITOR_REPORT &&
+         receipt->msgType != SCP_MSG_SURVEY_RESP)) return ERR_INVALID_ARG;
     conn = dbConn(ctx->db);
     if (!conn) return ERR_DB;
 
-    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    if (dbReportBegin(conn) != SOLARI_OK) return ERR_DB;
+
+    rc = dbReportReceipt(conn, nodeId, receipt);
+    if (rc != SOLARI_OK) goto fail_nostmt;
 
     rc = dbStmtPrepare(conn, SQL_CUR, &stCur);
     if (rc != SOLARI_OK) goto fail_nostmt;
@@ -1567,25 +2318,17 @@ solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
     mysql_stmt_close(stCur);
     mysql_stmt_close(stHist);
 
+    if (rc != SOLARI_OK) return dbReportFinish(conn, false, rc);
+    rc = dbReportFinish(conn, true, SOLARI_OK);
     if (rc != SOLARI_OK) {
-        mysql_rollback(conn);
-        mysql_autocommit(conn, 1);
-        return rc;
-    }
-    if (mysql_commit(conn) != 0) {
         solariLogf(SOLARI_LOG_ERROR, "serverDb: monitor commit failed: %s",
                    mysql_error(conn));
-        mysql_rollback(conn);
-        mysql_autocommit(conn, 1);
         return ERR_DB;
     }
-    mysql_autocommit(conn, 1);
     return SOLARI_OK;
 
 fail_nostmt:
-    mysql_rollback(conn);
-    mysql_autocommit(conn, 1);
-    return rc;
+    return dbReportFinish(conn, false, rc);
 }
 
 /* ===================================================================== */
@@ -1665,6 +2408,330 @@ solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eventId)
     rc = dbStmtRunWrite(st, b, 1);
     mysql_stmt_close(st);
     return rc;
+}
+
+/* ===================================================================== */
+/* Privileged control-verb request queue (Task #1 — PHP→host boundary)    */
+/* ===================================================================== */
+/*
+ * The ctlRequest table (db/migrations/020_ctl_request_queue.sql) is the
+ * hand-off queue between the unprivileged dashboard peer and the privileged
+ * server process. The dashboard is REFUSED every PRIVILEGED verb at the socket
+ * (SO_PEERCRED + the verb-class ACL in solariCtl.c); instead it Submits a row
+ * here, and the in-process consumer (serverCtlQueuePoll) Claims + executes it
+ * with operator authority, then records the result. These four functions are
+ * that queue's entire data-access surface; all state lives in the server's own
+ * monitoring DB, co-located with its single consumer.
+ */
+
+/* serverDbCtlRequestSubmit — enqueue one privileged request from the dashboard.
+ *
+ * Input:  verb        inner privileged verb name (already validated by caller)
+ *         argsWire    inner verb args in ctl line-protocol form (may be "")
+ *         requestedBy authenticated operator string from the PHP session
+ *         peerUid     SO_PEERCRED uid of the submitter (audit)
+ *         idemKey     optional client idempotency key (NULL = unkeyed)
+ *         reqIdOut    receives the row id (new, or the existing one on replay)
+ * Output: SOLARI_OK with *reqIdOut set. A repeated idemKey collides on the
+ *         UNIQUE index (errno 1062); we treat that as success and return the
+ *         id of the row already queued, so a resubmit is idempotent rather than
+ *         an error. ERR_DB on any other failure.
+ */
+solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *verb,
+        const char *argsWire, const char *requestedBy,
+        uint32_t peerUid, const char *idemKey, unsigned long long *reqIdOut)
+{
+    static const char *SQL =
+        "INSERT INTO ctlRequest (verb, argsWire, requestedBy, peerUid, "
+        "  idempotencyKey, state, createdAt) "
+        "VALUES (?, ?, ?, ?, ?, 'pending', UTC_TIMESTAMP(6))";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[5];
+    unsigned long long vPeer = peerUid;
+    unsigned long lV, lA, lR, lK;
+    solariStatus rc;
+
+    if (reqIdOut) *reqIdOut = 0;
+    if (!conn || !verb || !verb[0] || !requestedBy || !requestedBy[0])
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], verb, &lV);
+    dbBindStr(&b[1], argsWire ? argsWire : "", &lA);
+    dbBindStr(&b[2], requestedBy, &lR);
+    dbBindU64(&b[3], &vPeer);
+    dbBindStr(&b[4], (idemKey && idemKey[0]) ? idemKey : NULL, &lK);
+    if (mysql_stmt_bind_param(st, b) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    if (mysql_stmt_execute(st) != 0) {
+        unsigned int e = mysql_stmt_errno(st);
+        mysql_stmt_close(st);
+        /* Duplicate idempotency key: replay only an identical request. A key
+         * reused with different arguments must fail closed; otherwise the API
+         * could pair the original request id with the caller's new payload. */
+        if (e == 1062 && idemKey && idemKey[0]) {
+            /* Scope the lookup to (requestedBy, idemKey) to match the composite
+             * UNIQUE key (review F10): a global key let one requester pre-seed a
+             * predictable key so another's submit silently returned the first
+             * one's request id. Keys now only collide within the same requester. */
+            static const char *SEL =
+                "SELECT id, verb, argsWire FROM ctlRequest "
+                "WHERE requestedBy = ? AND idempotencyKey = ?";
+            MYSQL_STMT *sel;
+            MYSQL_BIND  in[2], out[3];
+            unsigned long long vId = 0;
+            char existingVerb[32], existingArgs[16384];
+            unsigned long lReqSel, lKey, lVerb = 0, lArgs = 0;
+            my_bool isNullId = 0, isNullVerb = 0, isNullArgs = 0;
+            if (dbStmtPrepare(conn, SEL, &sel) != SOLARI_OK) return ERR_DB;
+            dbBindStr(&in[0], requestedBy, &lReqSel);
+            dbBindStr(&in[1], idemKey, &lKey);
+            if (mysql_stmt_bind_param(sel, in) != 0 ||
+                mysql_stmt_execute(sel) != 0) {
+                mysql_stmt_close(sel); return ERR_DB;
+            }
+            dbBindOutU64(&out[0], &vId, &isNullId);
+            dbBindOutStr(&out[1], existingVerb, sizeof existingVerb - 1,
+                         &lVerb, &isNullVerb);
+            dbBindOutStr(&out[2], existingArgs, sizeof existingArgs - 1,
+                         &lArgs, &isNullArgs);
+            if (mysql_stmt_bind_result(sel, out) != 0) {
+                mysql_stmt_close(sel); return ERR_DB;
+            }
+            int fetchRc = mysql_stmt_fetch(sel);
+            if (fetchRc == 0 && !isNullId && !isNullVerb && !isNullArgs) {
+                existingVerb[lVerb < sizeof existingVerb ? lVerb : sizeof existingVerb - 1] = '\0';
+                existingArgs[lArgs < sizeof existingArgs ? lArgs : sizeof existingArgs - 1] = '\0';
+                if (strcmp(existingVerb, verb) != 0 || strcmp(existingArgs, argsWire ? argsWire : "") != 0) {
+                    mysql_stmt_close(sel);
+                    return ERR_INVALID_ARG;
+                }
+                if (reqIdOut) *reqIdOut = vId;
+            }
+            mysql_stmt_close(sel);
+            if (fetchRc == MYSQL_DATA_TRUNCATED) return ERR_INVALID_ARG;
+            return (reqIdOut && *reqIdOut) ? SOLARI_OK : ERR_DB;
+        }
+        solariLogf(SOLARI_LOG_ERROR, "serverDb: ctlRequest submit failed (errno %u)", e);
+        return ERR_DB;
+    }
+    if (reqIdOut) *reqIdOut = (unsigned long long)mysql_stmt_insert_id(st);
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+/* serverDbCtlRequestClaim — atomically claim the oldest pending request.
+ *
+ * The claim is a compare-and-set: UPDATE the oldest pending row to 'claimed'
+ * only while it is still 'pending'. mysql_stmt_affected_rows() == 1 means this
+ * caller won it; 0 means another claimer took it (or the queue is empty). On a
+ * win we SELECT the claimed row's verb + args for replay.
+ *
+ * Input:  claimedBy  consumer label (audit)
+ * Output: *reqIdOut, verbOut, argsWireOut for the won row.
+ *         SOLARI_OK   a row was claimed.
+ *         ERR_TLV_END the queue is empty / nothing was claimed (not an error).
+ *         ERR_DB      on failure.
+ */
+solariStatus serverDbCtlRequestClaim(serverDb *db, const char *claimedBy,
+        unsigned long long *reqIdOut, char *verbOut, size_t verbCap,
+        char *argsWireOut, size_t argsCap,
+        char *requestedByOut, size_t requestedByCap)
+{
+    /* Target the single oldest pending row by id; the WHERE state='pending'
+     * predicate is the CAS — two claimers racing the same row, only one UPDATE
+     * changes it. ORDER BY id LIMIT 1 keeps it FIFO and touches one row.
+     *
+     * id=LAST_INSERT_ID(id) stamps THIS row's id into the connection-local
+     * LAST_INSERT_ID() as a side effect of the winning UPDATE, so we can fetch
+     * exactly the row we just claimed by its id (cross-lab review F5). The prior
+     * "SELECT ... WHERE claimedBy=? ORDER BY claimedAt DESC" correlated the row
+     * only by the (nonunique) consumer label + recency: two same-label claimers
+     * racing could both read the newer row and double-execute it while the older
+     * stayed orphaned in 'claimed'. LAST_INSERT_ID is per-connection, so it is
+     * immune to that race regardless of how many consumers share a label. */
+    static const char *UPD =
+        "UPDATE ctlRequest SET state='claimed', claimedBy=?, attempts=attempts+1, "
+        "  claimedAt=UTC_TIMESTAMP(6), id=LAST_INSERT_ID(id) "
+        "WHERE state='pending' ORDER BY id LIMIT 1";
+    static const char *SEL =
+        "SELECT id, verb, argsWire, requestedBy FROM ctlRequest WHERE id=?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long lBy;
+    unsigned long long claimedId;
+    solariStatus rc;
+
+    if (reqIdOut) *reqIdOut = 0;
+    if (verbOut && verbCap) verbOut[0] = '\0';
+    if (argsWireOut && argsCap) argsWireOut[0] = '\0';
+    if (requestedByOut && requestedByCap) requestedByOut[0] = '\0';
+    if (!conn || !claimedBy || !claimedBy[0] || !verbOut || !verbCap ||
+        !argsWireOut || !argsCap)
+        return ERR_INVALID_ARG;
+
+    /* --- CAS claim --- */
+    rc = dbStmtPrepare(conn, UPD, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], claimedBy, &lBy);
+    rc = dbStmtRunWrite(st, b, 1);
+    if (rc != SOLARI_OK) { mysql_stmt_close(st); return rc; }
+    if (mysql_stmt_affected_rows(st) == 0) { mysql_stmt_close(st); return ERR_TLV_END; }
+    /* The winning UPDATE set LAST_INSERT_ID(id) to the claimed row's id. */
+    claimedId = (unsigned long long)mysql_stmt_insert_id(st);
+    mysql_stmt_close(st);
+
+    /* --- fetch exactly the row we just claimed, by its id --- */
+    {
+        MYSQL_BIND in[1], out[4];
+        unsigned long long vId = 0, vIdIn = claimedId;
+        unsigned long lVerb = 0, lArgs = 0, lReq = 0;
+        my_bool nId = 0, nVerb = 0, nArgs = 0, nReq = 0;
+        int fetch;
+
+        rc = dbStmtPrepare(conn, SEL, &st);
+        if (rc != SOLARI_OK) return rc;
+        dbBindU64(&in[0], &vIdIn);
+        if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+            mysql_stmt_close(st); return ERR_DB;
+        }
+        dbBindOutU64(&out[0], &vId, &nId);
+        dbBindOutStr(&out[1], verbOut, (unsigned long)verbCap, &lVerb, &nVerb);
+        dbBindOutStr(&out[2], argsWireOut, (unsigned long)argsCap, &lArgs, &nArgs);
+        dbBindOutStr(&out[3], requestedByOut ? requestedByOut : verbOut,
+                     (unsigned long)(requestedByOut ? requestedByCap : 0),
+                     &lReq, &nReq);
+        if (mysql_stmt_bind_result(st, out) != 0) { mysql_stmt_close(st); return ERR_DB; }
+        fetch = mysql_stmt_fetch(st);
+        if (fetch != 0 && fetch != MYSQL_DATA_TRUNCATED) {
+            /* Claimed a row but cannot read it back — leave it 'claimed' (its
+             * attempts counter records the miss) and report empty so the caller
+             * retries rather than replaying a half-read command. */
+            mysql_stmt_close(st);
+            return ERR_DB;
+        }
+        /* A truncated verb/args must NOT be replayed: the forced NUL below would
+         * hand the operator-authority consumer a valid-looking PREFIX of an
+         * attacker-oversized command (cross-lab review F7). Fail the row closed
+         * so it can never execute, then report empty. verbOut/argsWire are sized
+         * to the protocol cap, so any truncation here is anomalous input. */
+        if ((!nVerb && lVerb >= verbCap) || (!nArgs && lArgs >= argsCap)) {
+            mysql_stmt_close(st);
+            (void)serverDbCtlRequestComplete(db, claimedId, false,
+                                             "stored request exceeds replay buffer");
+            if (reqIdOut) *reqIdOut = 0;
+            return ERR_BUFFER_FULL;
+        }
+        if (reqIdOut && !nId) *reqIdOut = vId;
+        verbOut[(!nVerb && lVerb < verbCap) ? lVerb : verbCap - 1] = '\0';
+        argsWireOut[(!nArgs && lArgs < argsCap) ? lArgs : argsCap - 1] = '\0';
+        if (requestedByOut && requestedByCap)
+            requestedByOut[(!nReq && lReq < requestedByCap) ? lReq
+                                                            : requestedByCap - 1] = '\0';
+        mysql_stmt_close(st);
+    }
+    return SOLARI_OK;
+}
+
+/* serverDbCtlRequestComplete — record the terminal result of a claimed request.
+ *
+ * Input:  reqId       the claimed row
+ *         ok          true → state='done' and resultText → result column;
+ *                     false → state='failed' and resultText → error column.
+ *         resultText  the inner verb reply (or failure reason); may be NULL.
+ * Output: SOLARI_OK on write, ERR_DB on failure.
+ */
+solariStatus serverDbCtlRequestComplete(serverDb *db, unsigned long long reqId,
+        bool ok, const char *resultText)
+{
+    /* One UPDATE for both outcomes: the ok flag routes the text into result vs
+     * error and picks the state, and only ever advances a 'claimed' row so a
+     * late/duplicate completion cannot resurrect or overwrite a settled one. */
+    static const char *SQL =
+        "UPDATE ctlRequest SET "
+        "  state = IF(?, 'done', 'failed'), "
+        "  result = IF(?, ?, result), "
+        "  error  = IF(?, error, ?), "
+        "  completedAt = UTC_TIMESTAMP(6) "
+        "WHERE id = ? AND state = 'claimed'";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[6];
+    int okFlag = ok ? 1 : 0;
+    unsigned long long vId = reqId;
+    unsigned long lRes, lErr;
+    solariStatus rc;
+
+    if (!conn || reqId == 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindI32(&b[0], &okFlag);                                   /* state IF */
+    dbBindI32(&b[1], &okFlag);                                   /* result IF */
+    dbBindStr(&b[2], (ok && resultText) ? resultText : NULL, &lRes);
+    dbBindI32(&b[3], &okFlag);                                   /* error IF */
+    dbBindStr(&b[4], (!ok && resultText) ? resultText : NULL, &lErr);
+    dbBindU64(&b[5], &vId);
+    rc = dbStmtRunWrite(st, b, 6);
+    if (rc != SOLARI_OK) { mysql_stmt_close(st); return rc; }
+    /* Exactly one 'claimed' row must have matched. Zero means the id was wrong or
+     * the row was already settled/reclaimed — report it instead of the previous
+     * unconditional SOLARI_OK, which hid lost or raced completions (review F8). */
+    if (mysql_stmt_affected_rows(st) == 0) { mysql_stmt_close(st); return ERR_TLV_END; }
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+/* serverDbCtlRequestGet — read one request's state + terminal detail.
+ *
+ * Input:  reqId       the row to read
+ * Output: stateOut    'pending'|'claimed'|'done'|'failed'
+ *         detailOut   result (done) or error (failed) text; "" while in flight
+ *         SOLARI_OK   row found. ERR_TLV_END if no such request. ERR_DB on fail.
+ */
+solariStatus serverDbCtlRequestGet(serverDb *db, unsigned long long reqId,
+        const char *requestedBy,
+        char *stateOut, size_t stateCap, char *detailOut, size_t detailCap)
+{
+    /* COALESCE picks whichever terminal column is populated; NULL→'' so the
+     * caller always gets a clean string. */
+    static const char *SQL =
+        "SELECT state, COALESCE(result, error, '') FROM ctlRequest WHERE id = ?";
+    static const char *SQL_SCOPED =
+        "SELECT state, COALESCE(result, error, '') FROM ctlRequest "
+        "WHERE id = ? AND requestedBy = ?";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  in[2], out[2];
+    unsigned long long vId = reqId;
+    unsigned long lState = 0, lDetail = 0, lUser = 0;
+    my_bool nState = 0, nDetail = 0;
+    int fetch;
+    solariStatus rc;
+
+    if (stateOut && stateCap) stateOut[0] = '\0';
+    if (detailOut && detailCap) detailOut[0] = '\0';
+    if (!conn || reqId == 0 || !stateOut || !stateCap || !detailOut || !detailCap)
+        return ERR_INVALID_ARG;
+    if (requestedBy && (!requestedBy[0] || strlen(requestedBy) > 128))
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, requestedBy ? SQL_SCOPED : SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &vId);
+    if (requestedBy) dbBindStr(&in[1], requestedBy, &lUser);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    dbBindOutStr(&out[0], stateOut, (unsigned long)stateCap, &lState, &nState);
+    dbBindOutStr(&out[1], detailOut, (unsigned long)detailCap, &lDetail, &nDetail);
+    if (mysql_stmt_bind_result(st, out) != 0) { mysql_stmt_close(st); return ERR_DB; }
+    fetch = mysql_stmt_fetch(st);
+    if (fetch == MYSQL_NO_DATA) { mysql_stmt_close(st); return ERR_TLV_END; }
+    if (fetch != 0 && fetch != MYSQL_DATA_TRUNCATED) { mysql_stmt_close(st); return ERR_DB; }
+    stateOut[(!nState && lState < stateCap) ? lState : stateCap - 1] = '\0';
+    detailOut[(!nDetail && lDetail < detailCap) ? lDetail : detailCap - 1] = '\0';
+    mysql_stmt_close(st);
+    return SOLARI_OK;
 }
 
 solariStatus serverDbLoadAlertRules(serverDb *db, const char *scope,
@@ -1796,16 +2863,17 @@ solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t nodeId,
 solariStatus serverDbLeaseClaim(serverDb *db, uint64_t selfNodeId,
                                 uint32_t ttlSec, bool *won, uint64_t *epoch)
 {
-    /* Single-row election (id=1). Two paths in one txn:
-     *  (a) renew/claim when we already hold it OR it has expired OR is unheld:
-     *      bump expiry, advance epoch only on a *fresh* takeover.
-     *  (b) lose when another live holder owns it.
-     * The atomic UPDATE's affected-rows tells us whether we won. */
+    /* Single-row election (id=1). A live current holder renews without changing
+     * its fencing epoch. A claim against an expired lease transfers the holder
+     * and advances the epoch exactly once, even when the same node identity
+     * reacquires after expiry. A losing claim against a live lease must leave
+     * the row unchanged; in particular, standby polling must not invalidate the
+     * active holder's fencing token. */
     static const char *SQL_UPSERT =
         "INSERT INTO serverLease (id, leaseHolder, leaseEpoch, expiresAt) "
         "VALUES (1, ?, 1, UTC_TIMESTAMP(3) + INTERVAL ? SECOND) "
         "ON DUPLICATE KEY UPDATE "
-        "  leaseEpoch = leaseEpoch + IF(leaseHolder = VALUES(leaseHolder), 0, 1), "
+        "  leaseEpoch = leaseEpoch + IF(expiresAt < UTC_TIMESTAMP(3), 1, 0), "
         "  leaseHolder = IF(leaseHolder = VALUES(leaseHolder) "
         "                   OR expiresAt < UTC_TIMESTAMP(3), "
         "                   VALUES(leaseHolder), leaseHolder), "
@@ -1880,6 +2948,410 @@ solariStatus serverDbLeaseRead(serverDb *db, uint64_t *holder, uint64_t *epoch)
     mysql_stmt_free_result(st);
     mysql_stmt_close(st);
     return SOLARI_OK;
+}
+
+/* Start a transaction fenced by the current InnoDB lease row. Holding this row
+ * lock through the caller's writes orders them before any successor claim. */
+static solariStatus dbScanFenceBegin(MYSQL *conn, uint64_t ownerNodeId,
+                                     uint64_t leaseEpoch)
+{
+    static const char *SQL =
+        "SELECT leaseHolder,leaseEpoch,(expiresAt>UTC_TIMESTAMP(3)) "
+        "FROM serverLease WHERE id=1 FOR UPDATE";
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND out[3];
+    unsigned long long holder = 0, epoch = 0;
+    int live = 0, fetch;
+    my_bool nHolder = 0, nEpoch = 0;
+    my_bool reconnect = 0;
+    solariStatus rc = ERR_DB;
+
+    if (!conn || mysql_ping(conn) != 0) return ERR_DB;
+    if (mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect) != 0)
+        return ERR_DB;
+    if (mysql_autocommit(conn, 0) != 0) {
+        reconnect = 1;
+        (void)mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect);
+        return ERR_DB;
+    }
+    if (dbStmtPrepare(conn, SQL, &st) != SOLARI_OK) goto done;
+    if (mysql_stmt_execute(st) != 0) goto done;
+    memset(out, 0, sizeof out);
+    dbBindOutU64(&out[0], &holder, &nHolder);
+    dbBindOutU64(&out[1], &epoch, &nEpoch);
+    dbBindOutI32(&out[2], &live, NULL);
+    if (mysql_stmt_bind_result(st, out) != 0 || mysql_stmt_store_result(st) != 0)
+        goto done;
+    fetch = mysql_stmt_fetch(st);
+    if (fetch == 0 && !nHolder && !nEpoch && holder == ownerNodeId
+        && epoch == leaseEpoch && live) {
+        rc = SOLARI_OK;
+    } else if (fetch == MYSQL_NO_DATA || fetch == 0) {
+        rc = ERR_LEASE_LOST;
+    }
+
+done:
+    if (st) mysql_stmt_close(st);
+    if (rc != SOLARI_OK) {
+        my_bool restoreReconnect = 1;
+        mysql_rollback(conn);
+        if (mysql_autocommit(conn, 1) != 0) rc = ERR_DB;
+        if (mysql_options(conn, MYSQL_OPT_RECONNECT, &restoreReconnect) != 0) rc = ERR_DB;
+    }
+    return rc;
+}
+
+static solariStatus dbScanFenceFinish(MYSQL *conn, bool commit,
+                                      solariStatus outcome)
+{
+    my_bool reconnect = 1;
+    int failed = commit ? mysql_commit(conn) : mysql_rollback(conn);
+    if (failed && commit) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) failed = 1;
+    if (mysql_options(conn, MYSQL_OPT_RECONNECT, &reconnect) != 0) failed = 1;
+    return failed ? ERR_DB : outcome;
+}
+
+solariStatus serverDbDiscoveryScanSubmit(serverDb *db, uint64_t ownerNodeId,
+                                         uint64_t leaseEpoch, const char *requestedBy,
+                                         const char *cidr, const char *ports,
+                                         uint32_t hostsTotal, uint64_t *scanIdOut)
+{
+    static const char *SQL_STALE =
+        "UPDATE discoveryScanJob SET status='failed',errorCode=?,"
+        "errorText='lease owner changed before scan completed',"
+        "updatedAt=UTC_TIMESTAMP(3),completedAt=UTC_TIMESTAMP(3) "
+        "WHERE status IN ('queued','running') AND (ownerNodeId<>? OR leaseEpoch<>?)";
+    static const char *SQL_ACTIVE =
+        "SELECT scanId FROM discoveryScanJob WHERE status IN ('queued','running') "
+        "ORDER BY scanId LIMIT 1 FOR UPDATE";
+    static const char *SQL_PRUNE =
+        "DELETE FROM discoveryScanJob WHERE status IN ('completed','failed','cancelled') "
+        "AND (createdAt<UTC_TIMESTAMP(3)-INTERVAL 30 DAY OR scanId<=("
+        "SELECT cutoff FROM (SELECT scanId AS cutoff FROM discoveryScanJob "
+        "WHERE status IN ('completed','failed','cancelled') ORDER BY scanId DESC "
+        "LIMIT 1 OFFSET 1000) retained))";
+    static const char *SQL_INSERT =
+        "INSERT INTO discoveryScanJob "
+        "(requestedBy,ownerNodeId,leaseEpoch,cidr,ports,status,hostsTotal,createdAt,updatedAt) "
+        "VALUES (?,?,?,?,?,'queued',?,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[6], out;
+    unsigned long lUser = 0, lCidr = 0, lPorts = 0;
+    unsigned long long owner = ownerNodeId, epoch = leaseEpoch, id = 0;
+    unsigned long long maxId = 0;
+    uint64_t outId = 0;
+    unsigned long long total = hostsTotal;
+    int errCode = ERR_LEASE_LOST;
+    my_bool nMax = 0;
+    int fetch;
+    solariStatus rc;
+
+    if (scanIdOut) *scanIdOut = 0;
+    if (!conn || !scanIdOut || !requestedBy || !requestedBy[0] || !cidr
+        || !cidr[0] || !ports || hostsTotal == 0
+        || strlen(requestedBy) > 128 || strlen(cidr) > 32 || strlen(ports) > 255)
+        return ERR_INVALID_ARG;
+    rc = dbScanFenceBegin(conn, ownerNodeId, leaseEpoch);
+    if (rc != SOLARI_OK) return rc;
+
+    rc = dbStmtPrepare(conn, SQL_STALE, &st);
+    if (rc != SOLARI_OK) goto fail;
+    dbBindI32(&b[0], &errCode);
+    dbBindU64(&b[1], &owner);
+    dbBindU64(&b[2], &epoch);
+    rc = dbStmtRunWrite(st, b, 3);
+    mysql_stmt_close(st); st = NULL;
+    if (rc != SOLARI_OK) goto fail;
+
+    rc = dbStmtPrepare(conn, SQL_ACTIVE, &st);
+    if (rc != SOLARI_OK) goto fail;
+    if (mysql_stmt_execute(st) != 0) { rc = ERR_DB; goto fail; }
+    memset(&out, 0, sizeof out);
+    dbBindOutU64(&out, &maxId, &nMax);
+    if (mysql_stmt_bind_result(st, &out) != 0 || mysql_stmt_store_result(st) != 0) {
+        rc = ERR_DB; goto fail;
+    }
+    fetch = mysql_stmt_fetch(st);
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st); st = NULL;
+    if (fetch == 0) {
+        return dbScanFenceFinish(conn, true, ERR_CONN_RETRY);
+    }
+    if (fetch != MYSQL_NO_DATA) { rc = ERR_DB; goto fail; }
+
+    rc = dbStmtPrepare(conn, SQL_PRUNE, &st);
+    if (rc != SOLARI_OK) goto fail;
+    rc = dbStmtRunWrite(st, NULL, 0);
+    mysql_stmt_close(st); st = NULL;
+    if (rc != SOLARI_OK) goto fail;
+
+    rc = dbStmtPrepare(conn, SQL_INSERT, &st);
+    if (rc != SOLARI_OK) goto fail;
+    dbBindStr(&b[0], requestedBy, &lUser);
+    dbBindU64(&b[1], &owner);
+    dbBindU64(&b[2], &epoch);
+    dbBindStr(&b[3], cidr, &lCidr);
+    dbBindStr(&b[4], ports, &lPorts);
+    dbBindU64(&b[5], &total);
+    rc = dbStmtRunWrite(st, b, 6);
+    if (rc == SOLARI_OK) id = mysql_stmt_insert_id(st);
+    mysql_stmt_close(st); st = NULL;
+    if (rc != SOLARI_OK || id == 0) { if (rc == SOLARI_OK) rc = ERR_DB; goto fail; }
+    outId = (uint64_t)id;
+    rc = dbScanFenceFinish(conn, true, SOLARI_OK);
+    if (rc == SOLARI_OK) *scanIdOut = outId;
+    return rc;
+
+fail:
+    if (st) mysql_stmt_close(st);
+    (void)nMax;
+    return dbScanFenceFinish(conn, false, rc);
+}
+
+solariStatus serverDbDiscoveryScanClaim(serverDb *db, uint64_t ownerNodeId,
+                                        uint64_t leaseEpoch,
+                                        serverDiscoveryScanJob *out)
+{
+    static const char *SQL_STALE =
+        "UPDATE discoveryScanJob SET status='failed',errorCode=?,"
+        "errorText='scan worker restarted or lease owner changed',"
+        "updatedAt=UTC_TIMESTAMP(3),completedAt=UTC_TIMESTAMP(3) "
+        "WHERE status IN ('queued','running') AND (ownerNodeId<>? OR leaseEpoch<>? "
+        "OR (ownerNodeId=? AND leaseEpoch=? AND status='running'))";
+    static const char *SQL_FIND =
+        "SELECT scanId,requestedBy,ownerNodeId,leaseEpoch,cidr,ports,hostsTotal "
+        "FROM discoveryScanJob WHERE ownerNodeId=? AND leaseEpoch=? AND status='queued' "
+        "ORDER BY scanId LIMIT 1 FOR UPDATE";
+    static const char *SQL_START =
+        "UPDATE discoveryScanJob SET status='running',startedAt=UTC_TIMESTAMP(3),"
+        "updatedAt=UTC_TIMESTAMP(3) WHERE scanId=? AND ownerNodeId=? AND leaseEpoch=? "
+        "AND status='queued'";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND in[5], result[7];
+    unsigned long long owner = ownerNodeId, epoch = leaseEpoch, errId = 0;
+    unsigned long long scanId = 0, resultOwner = 0, resultEpoch = 0, hostsTotal = 0;
+    unsigned long userLen = 0, cidrLen = 0, portsLen = 0;
+    char user[129] = {0}, cidr[33] = {0}, ports[256] = {0};
+    my_bool nScan = 0, nOwner = 0, nEpoch = 0, nTotal = 0;
+    int errCode = ERR_LEASE_LOST, fetch;
+    my_ulonglong changed;
+    solariStatus rc;
+
+    if (!conn || !out) return ERR_INVALID_ARG;
+    memset(out, 0, sizeof *out);
+    rc = dbScanFenceBegin(conn, ownerNodeId, leaseEpoch);
+    if (rc != SOLARI_OK) return rc;
+    rc = dbStmtPrepare(conn, SQL_STALE, &st);
+    if (rc != SOLARI_OK) goto fail;
+    dbBindI32(&in[0], &errCode);
+    dbBindU64(&in[1], &owner);
+    dbBindU64(&in[2], &epoch);
+    dbBindU64(&in[3], &owner);
+    dbBindU64(&in[4], &epoch);
+    rc = dbStmtRunWrite(st, in, 5);
+    mysql_stmt_close(st); st = NULL;
+    if (rc != SOLARI_OK) goto fail;
+
+    rc = dbStmtPrepare(conn, SQL_FIND, &st);
+    if (rc != SOLARI_OK) goto fail;
+    dbBindU64(&in[0], &owner);
+    dbBindU64(&in[1], &epoch);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+        rc = ERR_DB; goto fail;
+    }
+    memset(result, 0, sizeof result);
+    dbBindOutU64(&result[0], &scanId, &nScan);
+    dbBindOutStr(&result[1], user, sizeof user, &userLen, NULL);
+    dbBindOutU64(&result[2], &resultOwner, &nOwner);
+    dbBindOutU64(&result[3], &resultEpoch, &nEpoch);
+    dbBindOutStr(&result[4], cidr, sizeof cidr, &cidrLen, NULL);
+    dbBindOutStr(&result[5], ports, sizeof ports, &portsLen, NULL);
+    dbBindOutU64(&result[6], &hostsTotal, &nTotal);
+    if (mysql_stmt_bind_result(st, result) != 0 || mysql_stmt_store_result(st) != 0) {
+        rc = ERR_DB; goto fail;
+    }
+    fetch = mysql_stmt_fetch(st);
+    if (fetch == MYSQL_NO_DATA) {
+        mysql_stmt_free_result(st);
+        mysql_stmt_close(st); st = NULL;
+        return dbScanFenceFinish(conn, true, ERR_CONN_RETRY);
+    }
+    if (fetch != 0 || nScan || nOwner || nEpoch || nTotal
+        || userLen >= sizeof user || cidrLen >= sizeof cidr || portsLen >= sizeof ports) {
+        rc = ERR_DB; goto fail;
+    }
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st); st = NULL;
+
+    rc = dbStmtPrepare(conn, SQL_START, &st);
+    if (rc != SOLARI_OK) goto fail;
+    errId = scanId;
+    dbBindU64(&in[0], &errId);
+    dbBindU64(&in[1], &owner);
+    dbBindU64(&in[2], &epoch);
+    rc = dbStmtRunWrite(st, in, 3);
+    changed = (rc == SOLARI_OK) ? mysql_stmt_affected_rows(st) : 0;
+    mysql_stmt_close(st); st = NULL;
+    if (rc != SOLARI_OK || changed == 0) {
+        if (rc == SOLARI_OK) rc = ERR_TLV_END;
+        goto fail;
+    }
+    out->scanId = scanId;
+    out->ownerNodeId = resultOwner;
+    out->leaseEpoch = resultEpoch;
+    out->hostsTotal = (uint32_t)hostsTotal;
+    memcpy(out->requestedBy, user, userLen); out->requestedBy[userLen] = '\0';
+    memcpy(out->cidr, cidr, cidrLen); out->cidr[cidrLen] = '\0';
+    memcpy(out->ports, ports, portsLen); out->ports[portsLen] = '\0';
+    snprintf(out->status, sizeof out->status, "running");
+    return dbScanFenceFinish(conn, true, SOLARI_OK);
+
+fail:
+    if (st) mysql_stmt_close(st);
+    return dbScanFenceFinish(conn, false, rc);
+}
+
+solariStatus serverDbDiscoveryScanUpdate(serverDb *db, uint64_t scanId,
+                                         uint64_t ownerNodeId, uint64_t leaseEpoch,
+                                         const char *status, uint32_t hostsDone,
+                                         uint32_t hostsFound, int32_t errorCode,
+                                         const char *errorText)
+{
+    static const char *SQL_CHECK =
+        "SELECT hostsTotal FROM discoveryScanJob WHERE scanId=? AND ownerNodeId=? "
+        "AND leaseEpoch=? AND status='running' FOR UPDATE";
+    static const char *SQL_UPDATE =
+        "UPDATE discoveryScanJob SET status=?,hostsDone=?,hostsFound=?,"
+        "errorCode=NULLIF(?,0),errorText=?,updatedAt=UTC_TIMESTAMP(3),"
+        "completedAt=IF(? IN ('completed','failed','cancelled'),UTC_TIMESTAMP(3),completedAt) "
+        "WHERE scanId=? AND ownerNodeId=? AND leaseEpoch=? AND status='running'";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND in[9], result;
+    unsigned long long id = scanId, owner = ownerNodeId, epoch = leaseEpoch;
+    unsigned long long total = 0, done = hostsDone, found = hostsFound;
+    unsigned long statusLen = 0, errorLen = 0;
+    int error = errorCode, fetch;
+    my_bool nTotal = 0;
+    const bool terminal = status && (!strcmp(status, "completed")
+        || !strcmp(status, "failed") || !strcmp(status, "cancelled"));
+    solariStatus rc;
+
+    if (!conn || scanId == 0 || !status
+        || (strcmp(status, "running") && !terminal)
+        || (errorText && strlen(errorText) > 255)) return ERR_INVALID_ARG;
+    rc = dbScanFenceBegin(conn, ownerNodeId, leaseEpoch);
+    if (rc != SOLARI_OK) return rc;
+    rc = dbStmtPrepare(conn, SQL_CHECK, &st);
+    if (rc != SOLARI_OK) goto fail;
+    dbBindU64(&in[0], &id); dbBindU64(&in[1], &owner); dbBindU64(&in[2], &epoch);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) { rc = ERR_DB; goto fail; }
+    memset(&result, 0, sizeof result);
+    dbBindOutU64(&result, &total, &nTotal);
+    if (mysql_stmt_bind_result(st, &result) != 0 || mysql_stmt_store_result(st) != 0) { rc = ERR_DB; goto fail; }
+    fetch = mysql_stmt_fetch(st);
+    mysql_stmt_free_result(st); mysql_stmt_close(st); st = NULL;
+    if (fetch == MYSQL_NO_DATA) { rc = ERR_TLV_END; goto fail; }
+    if (fetch != 0 || nTotal || hostsDone > total || hostsFound > hostsDone) { rc = ERR_INVALID_ARG; goto fail; }
+
+    rc = dbStmtPrepare(conn, SQL_UPDATE, &st);
+    if (rc != SOLARI_OK) goto fail;
+    dbBindStr(&in[0], status, &statusLen);
+    dbBindU64(&in[1], &done); dbBindU64(&in[2], &found); dbBindI32(&in[3], &error);
+    dbBindStr(&in[4], (errorText && errorText[0]) ? errorText : NULL, &errorLen);
+    dbBindStr(&in[5], status, &statusLen);
+    dbBindU64(&in[6], &id); dbBindU64(&in[7], &owner); dbBindU64(&in[8], &epoch);
+    rc = dbStmtRunWrite(st, in, 9);
+    mysql_stmt_close(st); st = NULL;
+    if (rc != SOLARI_OK) goto fail;
+    return dbScanFenceFinish(conn, true, SOLARI_OK);
+
+fail:
+    if (st) mysql_stmt_close(st);
+    return dbScanFenceFinish(conn, false, rc);
+}
+
+solariStatus serverDbDiscoveryScanGet(serverDb *db, uint64_t scanId,
+                                      const char *requestedBy,
+                                      serverDiscoveryScanJob *out)
+{
+    static const char *SQL =
+        "SELECT scanId,requestedBy,ownerNodeId,leaseEpoch,cidr,ports,status,"
+        "hostsTotal,hostsDone,hostsFound,errorCode,errorText FROM discoveryScanJob "
+        "WHERE scanId=? AND requestedBy=?";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND in[2], result[12];
+    unsigned long long id = scanId, owner = 0, epoch = 0, total = 0, done = 0, found = 0;
+    unsigned long userLen = 0, cidrLen = 0, portsLen = 0, statusLen = 0, errorLen = 0;
+    char user[129] = {0}, cidr[33] = {0}, ports[256] = {0}, status[16] = {0}, errorText[256] = {0};
+    int errorCode = 0;
+    my_bool nId = 0, nOwner = 0, nEpoch = 0, nTotal = 0, nDone = 0, nFound = 0;
+    my_bool nError = 0;
+    int fetch;
+    solariStatus rc;
+
+    if (!conn || !out || !requestedBy || !requestedBy[0] || strlen(requestedBy) > 128)
+        return ERR_INVALID_ARG;
+    memset(out, 0, sizeof *out);
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &id);
+    dbBindStr(&in[1], requestedBy, &userLen);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    memset(result, 0, sizeof result);
+    dbBindOutU64(&result[0], &id, &nId);
+    dbBindOutStr(&result[1], user, sizeof user, &userLen, NULL);
+    dbBindOutU64(&result[2], &owner, &nOwner);
+    dbBindOutU64(&result[3], &epoch, &nEpoch);
+    dbBindOutStr(&result[4], cidr, sizeof cidr, &cidrLen, NULL);
+    dbBindOutStr(&result[5], ports, sizeof ports, &portsLen, NULL);
+    dbBindOutStr(&result[6], status, sizeof status, &statusLen, NULL);
+    dbBindOutU64(&result[7], &total, &nTotal);
+    dbBindOutU64(&result[8], &done, &nDone);
+    dbBindOutU64(&result[9], &found, &nFound);
+    dbBindOutI32(&result[10], &errorCode, &nError);
+    dbBindOutStr(&result[11], errorText, sizeof errorText, &errorLen, NULL);
+    if (mysql_stmt_bind_result(st, result) != 0 || mysql_stmt_store_result(st) != 0) {
+        mysql_stmt_close(st); return ERR_DB;
+    }
+    fetch = mysql_stmt_fetch(st);
+    mysql_stmt_free_result(st); mysql_stmt_close(st);
+    if (fetch == MYSQL_NO_DATA) return ERR_TLV_END;
+    if (fetch != 0 || nId || nOwner || nEpoch || nTotal || nDone || nFound
+        || userLen >= sizeof user || cidrLen >= sizeof cidr || portsLen >= sizeof ports
+        || statusLen >= sizeof status || errorLen >= sizeof errorText)
+        return ERR_DB;
+    out->scanId = id; out->ownerNodeId = owner; out->leaseEpoch = epoch;
+    out->hostsTotal = (uint32_t)total; out->hostsDone = (uint32_t)done;
+    out->hostsFound = (uint32_t)found; out->errorCode = nError ? 0 : errorCode;
+    memcpy(out->requestedBy, user, userLen); out->requestedBy[userLen] = '\0';
+    memcpy(out->cidr, cidr, cidrLen); out->cidr[cidrLen] = '\0';
+    memcpy(out->ports, ports, portsLen); out->ports[portsLen] = '\0';
+    memcpy(out->status, status, statusLen); out->status[statusLen] = '\0';
+    memcpy(out->errorText, errorText, errorLen); out->errorText[errorLen] = '\0';
+    return SOLARI_OK;
+}
+
+solariStatus serverDbUpsertDiscoveredFenced(serverDb *db,
+                                            const serverDiscEntity *entity,
+                                            uint64_t whenUnixMs,
+                                            uint64_t ownerNodeId,
+                                            uint64_t leaseEpoch,
+                                            uint64_t *discId)
+{
+    MYSQL *conn = dbConn(db);
+    solariStatus rc;
+    if (!conn || !entity) return ERR_INVALID_ARG;
+    rc = dbScanFenceBegin(conn, ownerNodeId, leaseEpoch);
+    if (rc != SOLARI_OK) return rc;
+    rc = serverDbUpsertDiscovered(db, entity, whenUnixMs, discId);
+    return dbScanFenceFinish(conn, rc == SOLARI_OK, rc);
 }
 
 /* ===================================================================== */
@@ -2196,6 +3668,54 @@ solariStatus serverDbEnrollCreate(serverDb *db, const serverEnrollment *e,
     return rc;
 }
 
+static int dbIsTokenHash(const char *s)
+{
+    size_t i;
+    if (!s || strlen(s) != 64) return 0;
+    for (i = 0; i < 64; ++i) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) return 0;
+    }
+    return 1;
+}
+
+solariStatus serverDbEnrollCreateToken(serverDb *db, const serverEnrollment *e,
+                                       const char *tokenHashHex,
+                                       uint64_t expiresUnixMs,
+                                       uint64_t whenUnixMs, uint64_t *enrId)
+{
+    static const char *SQL =
+        "INSERT INTO enrollment (host, ip, role, certFp, status, requestedAt, "
+        "  enrollTokenHash, tokenExpiresAt) "
+        "VALUES (?, ?, ?, NULL, 'token', FROM_UNIXTIME(? / 1000), ?, "
+        "  FROM_UNIXTIME(? / 1000))";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND b[6];
+    unsigned long long vWhen = whenUnixMs ? whenUnixMs : solariNowUnixMs();
+    unsigned long long vExpires = expiresUnixMs;
+    unsigned long lHost, lIp, lRole, lHash;
+    solariStatus rc;
+
+    if (enrId) *enrId = 0;
+    if (!conn || !e || !dbIsTokenHash(tokenHashHex) ||
+        expiresUnixMs <= (whenUnixMs ? whenUnixMs : solariNowUnixMs()) ||
+        e->status != ENROLL_TOKEN || e->host[0] == '\0') return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], e->host, &lHost);
+    dbBindStr(&b[1], e->ip[0] ? e->ip : NULL, &lIp);
+    dbBindStr(&b[2], dbRoleStr(e->role), &lRole);
+    dbBindU64(&b[3], &vWhen);
+    dbBindStr(&b[4], tokenHashHex, &lHash);
+    dbBindU64(&b[5], &vExpires);
+    rc = dbStmtRunWrite(st, b, 6);
+    if (rc == SOLARI_OK && enrId) *enrId = mysql_stmt_insert_id(st);
+    mysql_stmt_close(st);
+    return rc;
+}
+
 solariStatus serverDbEnrollSetCsr(serverDb *db, uint64_t enrId,
                                   const char *csrPem, const char *certFp)
 {
@@ -2220,30 +3740,322 @@ solariStatus serverDbEnrollSetCsr(serverDb *db, uint64_t enrId,
     return rc;
 }
 
+solariStatus serverDbEnrollSubmitToken(serverDb *db, const char *tokenHashHex,
+                                       const char *hostFqdn, solariRole role,
+                                       const char *csrPem, const char *certFp,
+                                       uint64_t nowUnixMs)
+{
+    static const char *UPDATE =
+        "UPDATE enrollment SET csrPem=IF(status='token', ?, csrPem), "
+        "  certFp=IF(status='token', ?, certFp), "
+        "  status=IF(status='token','pending',status) "
+        "WHERE enrollTokenHash=? AND host=? AND role=? AND "
+        " ((status='token' AND tokenExpiresAt > FROM_UNIXTIME(? / 1000)) OR "
+        "  (status='pending' AND certFp=?))";
+    static const char *VERIFY =
+        "SELECT enrId FROM enrollment WHERE enrollTokenHash=? AND host=? "
+        " AND role=? AND status IN ('pending','approved') AND certFp=? LIMIT 1";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[7], pin[4], rout[1];
+    unsigned long long vNow = nowUnixMs ? nowUnixMs : solariNowUnixMs();
+    unsigned long long vEnrId = 0;
+    unsigned long lCsr, lFp, lHash, lHost, lRole, lVerifyFp;
+    my_bool nEnr = 0;
+    solariStatus rc;
+    int fetch;
+
+    if (!conn || !dbIsTokenHash(tokenHashHex) || !hostFqdn || !hostFqdn[0] ||
+        !csrPem || !csrPem[0] || !certFp || !certFp[0]) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, UPDATE, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], csrPem, &lCsr);
+    dbBindStr(&b[1], certFp, &lFp);
+    dbBindStr(&b[2], tokenHashHex, &lHash);
+    dbBindStr(&b[3], hostFqdn, &lHost);
+    dbBindStr(&b[4], dbRoleStr(role), &lRole);
+    dbBindU64(&b[5], &vNow);
+    dbBindStr(&b[6], certFp, &lVerifyFp);
+    rc = dbStmtRunWrite(st, b, 7);
+    mysql_stmt_close(st);
+    if (rc != SOLARI_OK) return rc;
+
+    /* Confirm the row is pending with the same CSR fingerprint. This makes a
+     * retried POST safe after a lost HTTP response while rejecting token reuse
+     * for a different host, role, or key. */
+    rc = dbStmtPrepare(conn, VERIFY, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&pin[0], tokenHashHex, &lHash);
+    dbBindStr(&pin[1], hostFqdn, &lHost);
+    dbBindStr(&pin[2], dbRoleStr(role), &lRole);
+    dbBindStr(&pin[3], certFp, &lVerifyFp);
+    if (mysql_stmt_bind_param(st, pin) != 0 || mysql_stmt_execute(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    memset(rout, 0, sizeof rout);
+    dbBindOutU64(&rout[0], &vEnrId, &nEnr);
+    if (mysql_stmt_bind_result(st, rout) != 0 || mysql_stmt_store_result(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    fetch = mysql_stmt_fetch(st);
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    return fetch == 0 && !nEnr ? SOLARI_OK : ERR_AUTH_ROLE;
+}
+
+solariStatus serverDbEnrollGetByToken(serverDb *db, const char *tokenHashHex,
+                                      serverEnrollment *out, char *certBuf,
+                                      size_t certCap)
+{
+    static const char *SQL =
+        "SELECT enrId, host, ip, role, certFp, status, nodeId, issuedCertPem "
+        "FROM enrollment WHERE enrollTokenHash=? AND certAckAt IS NULL";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND pin[1], rout[8];
+    unsigned long long vId = 0, vNode = 0;
+    unsigned long lHost, lIp, lRole, lFp, lStatus, lCert;
+    char rRole[12], rStatus[12];
+    my_bool nId = 0, nHost = 0, nIp = 0, nRole = 0, nFp = 0;
+    my_bool nStatus = 0, nNode = 0, nCert = 0;
+    int fetch;
+    solariStatus rc;
+
+    if (out) memset(out, 0, sizeof *out);
+    if (certBuf && certCap) certBuf[0] = '\0';
+    if (!conn || !out || !certBuf || certCap < 2 || !dbIsTokenHash(tokenHashHex))
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&pin[0], tokenHashHex, &lFp);
+    if (mysql_stmt_bind_param(st, pin) != 0 || mysql_stmt_execute(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    memset(rout, 0, sizeof rout);
+    dbBindOutU64(&rout[0], &vId, &nId);
+    dbBindOutStr(&rout[1], out->host, sizeof out->host - 1, &lHost, &nHost);
+    dbBindOutStr(&rout[2], out->ip, sizeof out->ip - 1, &lIp, &nIp);
+    dbBindOutStr(&rout[3], rRole, sizeof rRole - 1, &lRole, &nRole);
+    dbBindOutStr(&rout[4], out->certFp, sizeof out->certFp - 1, &lFp, &nFp);
+    dbBindOutStr(&rout[5], rStatus, sizeof rStatus - 1, &lStatus, &nStatus);
+    dbBindOutU64(&rout[6], &vNode, &nNode);
+    dbBindOutStr(&rout[7], certBuf, (unsigned long)(certCap - 1), &lCert, &nCert);
+    if (mysql_stmt_bind_result(st, rout) != 0 || mysql_stmt_store_result(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    fetch = mysql_stmt_fetch(st);
+    if (fetch == MYSQL_DATA_TRUNCATED) {
+        mysql_stmt_free_result(st);
+        mysql_stmt_close(st);
+        return ERR_BUFFER_FULL;
+    }
+    if (fetch == 0 && !nId && !nStatus) {
+        out->enrId = vId;
+        out->nodeId = nNode ? 0 : vNode;
+        rRole[sizeof rRole - 1] = '\0';
+        rStatus[sizeof rStatus - 1] = '\0';
+        out->role = dbRoleParse(rRole);
+        out->status = dbEnrollStatusParse(rStatus);
+        if (!nHost) out->host[lHost < sizeof out->host ? lHost : sizeof out->host - 1] = '\0';
+        if (!nIp) out->ip[lIp < sizeof out->ip ? lIp : sizeof out->ip - 1] = '\0';
+        if (!nFp) out->certFp[lFp < sizeof out->certFp ? lFp : sizeof out->certFp - 1] = '\0';
+        if (nCert) certBuf[0] = '\0';
+        else certBuf[lCert < certCap ? lCert : certCap - 1] = '\0';
+    }
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    if (fetch == MYSQL_NO_DATA) return ERR_AUTH_ROLE;
+    return fetch == 0 ? SOLARI_OK : ERR_DB;
+}
+
+solariStatus serverDbEnrollAckToken(serverDb *db, const char *tokenHashHex,
+                                    uint64_t whenUnixMs)
+{
+    static const char *SQL =
+        "UPDATE enrollment SET certAckAt=FROM_UNIXTIME(? / 1000), "
+        "  enrollTokenHash=NULL WHERE enrollTokenHash=? AND status='approved' "
+        "  AND issuedCertPem IS NOT NULL AND certAckAt IS NULL";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND b[2];
+    unsigned long long vWhen = whenUnixMs ? whenUnixMs : solariNowUnixMs();
+    unsigned long lHash;
+    solariStatus rc;
+    if (!conn || !dbIsTokenHash(tokenHashHex)) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vWhen);
+    dbBindStr(&b[1], tokenHashHex, &lHash);
+    rc = dbStmtRunWrite(st, b, 2);
+    if (rc == SOLARI_OK && mysql_stmt_affected_rows(st) != 1) rc = ERR_AUTH_ROLE;
+    mysql_stmt_close(st);
+    return rc;
+}
+
 solariStatus serverDbEnrollDecide(serverDb *db, uint64_t enrId,
                                   serverEnrollStatus status, const char *decidedBy,
                                   uint64_t whenUnixMs)
 {
     static const char *SQL =
         "UPDATE enrollment SET status = ?, decidedBy = ?, "
-        "  decidedAt = FROM_UNIXTIME(? / 1000) WHERE enrId = ?";
+        "  enrollTokenHash=IF(?='rejected', NULL, enrollTokenHash), "
+        "  csrPem=IF(?='rejected', NULL, csrPem), "
+        "  decidedAt = FROM_UNIXTIME(? / 1000) "
+        "WHERE enrId = ? AND status IN ('token','pending')";
     MYSQL      *conn = dbConn(db);
     MYSQL_STMT *st;
-    MYSQL_BIND  b[4];
+    MYSQL_BIND  b[6];
     unsigned long long vWhen = whenUnixMs ? whenUnixMs : solariNowUnixMs();
     unsigned long long vId = enrId;
-    unsigned long lStat, lBy;
+    unsigned long lStat, lBy, lStatusAgain, lStatusForCsr;
+    const char *statusText = dbEnrollStatusStr(status);
     solariStatus rc;
 
-    if (!conn) return ERR_INVALID_ARG;
+    if (!conn || (status != ENROLL_APPROVED && status != ENROLL_REJECTED))
+        return ERR_INVALID_ARG;
     rc = dbStmtPrepare(conn, SQL, &st);
     if (rc != SOLARI_OK) return rc;
-    dbBindStr(&b[0], dbEnrollStatusStr(status), &lStat);
+    dbBindStr(&b[0], statusText, &lStat);
     dbBindStr(&b[1], (decidedBy && decidedBy[0]) ? decidedBy : NULL, &lBy);
-    dbBindU64(&b[2], &vWhen);
-    dbBindU64(&b[3], &vId);
-    rc = dbStmtRunWrite(st, b, 4);
+    dbBindStr(&b[2], statusText, &lStatusAgain);
+    dbBindStr(&b[3], statusText, &lStatusForCsr);
+    dbBindU64(&b[4], &vWhen);
+    dbBindU64(&b[5], &vId);
+    rc = dbStmtRunWrite(st, b, 6);
+    if (rc == SOLARI_OK && mysql_stmt_affected_rows(st) != 1) rc = ERR_AUTH_ROLE;
     mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbEnrollFinalize(serverDb *db, uint64_t enrId,
+                                    uint64_t nodeId, solariRole role,
+                                    const char *hostFqdn, const char *certCn,
+                                    const char *issuedCertPem,
+                                    const char *leafCertFp,
+                                    const char *leafCertSerial,
+                                    const char *leafIssuerFp,
+                                    const char *decidedBy, uint64_t whenUnixMs)
+{
+    static const char *UPDATE_ENROLL =
+        "UPDATE enrollment SET status='approved', decidedBy=?, "
+        "  decidedAt=FROM_UNIXTIME(? / 1000), csrPem=NULL, nodeId=?, "
+        "  issuedCertPem=? "
+        "WHERE enrId=? AND status='pending' AND csrPem IS NOT NULL "
+        "  AND issuedCertPem IS NULL";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND b[5];
+    MYSQL_BIND certB[4];
+    MYSQL_BIND issuanceB[7];
+    unsigned long lenFp, lenSerial, lenIssuer, lenIssuedBy;
+    unsigned long lenBy, lenCert;
+    unsigned long long vWhen = whenUnixMs ? whenUnixMs : solariNowUnixMs();
+    unsigned long long vNode = nodeId, vId = enrId;
+    solariStatus rc = ERR_DB;
+    int txn = 0;
+
+    if (!conn || enrId == 0 || nodeId == 0 || !hostFqdn || !hostFqdn[0] ||
+        !certCn || !certCn[0] || !issuedCertPem || !issuedCertPem[0] ||
+        !dbHexStringValid(leafCertFp, 64, 64) ||
+        !dbHexStringValid(leafCertSerial, 0, 40) ||
+        !dbHexStringValid(leafIssuerFp, 64, 64))
+        return ERR_INVALID_ARG;
+    if (mysql_autocommit(conn, 0) != 0) return ERR_DB;
+    txn = 1;
+
+    /* Claim the pending row first. Its row lock serializes concurrent approval
+     * attempts; the loser observes zero affected rows and cannot upsert a node. */
+    rc = dbStmtPrepare(conn, UPDATE_ENROLL, &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&b[0], (decidedBy && decidedBy[0]) ? decidedBy : NULL, &lenBy);
+    dbBindU64(&b[1], &vWhen);
+    dbBindU64(&b[2], &vNode);
+    dbBindStr(&b[3], issuedCertPem, &lenCert);
+    dbBindU64(&b[4], &vId);
+    rc = dbStmtRunWrite(st, b, 5);
+    if (rc != SOLARI_OK) goto finish;
+    if (mysql_stmt_affected_rows(st) != 1) {
+        rc = ERR_AUTH_ROLE;
+        goto finish;
+    }
+    mysql_stmt_close(st);
+    st = NULL;
+
+    rc = serverDbUpsertNode(db, nodeId, role, hostFqdn, certCn, "", "", 0);
+    if (rc != SOLARI_OK) goto finish;
+
+    /* Until TLS CRLs are activated fleet-wide, a node with a recorded
+     * revocation must not be re-enrolled: NNG 1.x cannot distinguish its old
+     * leaf from a replacement by fingerprint after the node row is reactivated.
+     * The upsert above holds the node row lock, serializing this check with
+     * REVOKE_CERT's exact-identity transaction. Roll back the approval if any
+     * certificate for this node has been revoked. */
+    rc = dbStmtPrepare(conn,
+        "SELECT 1 FROM certificateRevocation WHERE nodeId=? LIMIT 1", &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindU64(&certB[0], &vNode);
+    if (mysql_stmt_bind_param(st, certB) != 0 || mysql_stmt_execute(st) != 0 ||
+        mysql_stmt_store_result(st) != 0) { rc = ERR_DB; goto finish; }
+    rc = mysql_stmt_num_rows(st) ? ERR_AUTH_ROLE : SOLARI_OK;
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    st = NULL;
+    if (rc != SOLARI_OK) goto finish;
+
+    rc = dbStmtPrepare(conn,
+        "INSERT INTO certificateIssuance "
+        "(issuerFp,serialHex,leafCertFp,nodeId,enrollmentId,origin,issuedBy,issuedAt) "
+        "VALUES (?,?,?,?,?,'enrollment',?,FROM_UNIXTIME(? / 1000))", &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&issuanceB[0], leafIssuerFp, &lenIssuer);
+    dbBindStr(&issuanceB[1], leafCertSerial, &lenSerial);
+    dbBindStr(&issuanceB[2], leafCertFp, &lenFp);
+    dbBindU64(&issuanceB[3], &vNode);
+    dbBindU64(&issuanceB[4], &vId);
+    dbBindStr(&issuanceB[5], (decidedBy && decidedBy[0]) ? decidedBy : "unknown",
+              &lenIssuedBy);
+    dbBindU64(&issuanceB[6], &vWhen);
+    rc = dbStmtRunWrite(st, issuanceB, 7);
+    if (rc != SOLARI_OK) goto finish;
+    if (mysql_stmt_affected_rows(st) != 1) { rc = ERR_AUTH_ROLE; goto finish; }
+    mysql_stmt_close(st);
+    st = NULL;
+
+    rc = dbStmtPrepare(conn,
+        "UPDATE node SET leafCertFp=?, leafCertSerial=?, leafIssuerFp=? WHERE nodeId=?", &st);
+    if (rc != SOLARI_OK) goto finish;
+    dbBindStr(&certB[0], leafCertFp, &lenFp);
+    dbBindStr(&certB[1], leafCertSerial, &lenSerial);
+    dbBindStr(&certB[2], leafIssuerFp, &lenIssuer);
+    dbBindU64(&certB[3], &vNode);
+    rc = dbStmtRunWrite(st, certB, 4);
+    if (rc != SOLARI_OK) goto finish;
+    if (mysql_stmt_affected_rows(st) != 1) { rc = ERR_DB; goto finish; }
+    mysql_stmt_close(st);
+    st = NULL;
+
+    if (mysql_commit(conn) != 0) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "serverDb: enrollment finalize commit failed: %s",
+                   mysql_error(conn));
+        rc = ERR_DB;
+        goto finish;
+    }
+    txn = 0;
+    rc = SOLARI_OK;
+
+finish:
+    if (st) mysql_stmt_close(st);
+    if (txn) mysql_rollback(conn);
+    if (mysql_autocommit(conn, 1) != 0) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "serverDb: failed to restore autocommit after enrollment finalize");
+        rc = ERR_DB;
+    }
     return rc;
 }
 

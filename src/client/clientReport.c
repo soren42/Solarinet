@@ -22,8 +22,6 @@
 uint64_t clientNodeId(const clientConfig *cfg)
 {
     char fqdn[SOLARI_FQDN_MAX];
-    char buf[SOLARI_FQDN_MAX + 8];
-    int n;
     if (cfg->nodeId) return cfg->nodeId;          /* enrolled id wins */
     if (cfg->hostFqdn[0]) {
         strncpy(fqdn, cfg->hostFqdn, sizeof fqdn - 1);
@@ -32,8 +30,7 @@ uint64_t clientNodeId(const clientConfig *cfg)
         strncpy(fqdn, "unknown", sizeof fqdn - 1);
         fqdn[sizeof fqdn - 1] = '\0';
     }
-    n = snprintf(buf, sizeof buf, "%s|%d", fqdn, (int)ROLE_CLIENT);
-    return solariFnv1a64(buf, (size_t)(n > 0 ? n : 0));
+    return solariNodeIdFromFqdnRole(fqdn, ROLE_CLIENT);
 }
 
 solariStatus clientContextInit(clientContext *ctx, const clientConfig *cfg)
@@ -47,6 +44,7 @@ solariStatus clientContextInit(clientContext *ctx, const clientConfig *cfg)
     memset(&o, 0, sizeof o);
     o.primaryUrl  = cfg->primaryUrl;
     o.failoverUrl = cfg->failoverUrl[0] ? cfg->failoverUrl : NULL;
+    o.ackUrl      = cfg->reportAckUrl[0] ? cfg->reportAckUrl : NULL;
     o.useTls      = cfg->useTls;
     o.caFile      = cfg->caFile[0]   ? cfg->caFile   : NULL;
     o.certFile    = cfg->certFile[0] ? cfg->certFile : NULL;
@@ -108,10 +106,10 @@ solariStatus clientReportSend(clientContext *ctx, const solariClientReport *rep)
         solariLogf(SOLARI_LOG_ERROR, "report build failed: %s", solariStrError(rc));
         return rc;
     }
-    rc = solariReporterFrame(ctx->rep, SCP_MSG_CLIENT_REPORT, SCP_FLAG_NONE,
+    rc = solariReporterFrame(ctx->rep, SCP_MSG_CLIENT_REPORT, SCP_FLAG_ACK_REQ,
                              payload, plen, tc, frame, sizeof frame, &flen);
     if (rc != SOLARI_OK) return rc;
-    return solariReporterSend(ctx->rep, frame, flen);   /* push or durably spool */
+    return solariReporterSend(ctx->rep, frame, flen);   /* server-ack or durable spool */
 }
 
 solariStatus clientDrainSpool(clientContext *ctx)

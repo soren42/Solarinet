@@ -36,7 +36,9 @@
  * no popen, no DB) feed the tested topoNormalizeMibRecord pipeline, and a thin
  * popen shell-out to the net-snmp CLI drives them exactly like serverSnmp.c.
  */
+#ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE   /* popen/pclose under -std=c99/c11 */
+#endif
 #include "server.h"
 
 #include "solari/solariTlv.h"
@@ -47,6 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <sys/wait.h>
 
 #include <mariadb/mysql.h>
 
@@ -560,6 +563,9 @@ typedef struct {
 /* A resolved local-port name (lldpLocPortId keyed by lldpLocPortNum). */
 typedef struct { long portNum; char name[48]; } topoLldpLocPort;
 
+/* Keep the pure parsing seam available to its unit target while leaving the
+ * default server build free of unused static functions. */
+#if defined(SOLARI_WITH_SNMP) || defined(SOLARI_TEST_TOPO_LLDP)
 /* Copy the value that follows the first space of a -Onq line into out, trimming
  * whitespace/CRLF and a single layer of surrounding double-quotes. */
 static void topoLldpCopyVal(const char *sp, char *val, size_t valCap)
@@ -833,16 +839,15 @@ static size_t topoLldpFinalize(const topoLldpRawNeigh *raw, size_t rawN,
     }
     return n;
 }
+#endif
 
 /* ===================================================================== */
-/* SNMP fetch seam - the ONLY place a real net-snmp dependency would live. */
+/* Optional SNMP fetch backend.                                         */
 /*                                                                        */
-/* OFF by default: with SOLARI_WITH_SNMP undefined the build adds ZERO    */
-/* dependencies and this returns ERR_PLATFORM ("no SNMP backend"). The    */
-/* normalization logic above is fully exercised by the unit tests without */
-/* ever calling this. A real implementation (guarded by the macro) would  */
-/* walk lldpRemTable / lldpLocPortTable / sysName / sysDescr and fill the  */
-/* records[] array, then the caller runs topoNormalizeMibRecord() on each. */
+/* OFF by default: the default build adds no SNMP dependency and this     */
+/* returns ERR_PLATFORM. With SOLARI_WITH_SNMP enabled, the implementation */
+/* below uses the net-snmp CLI at runtime to walk LLDP-MIB columns. The   */
+/* pure parsing/normalization helpers remain independently unit-testable. */
 /* ===================================================================== */
 #ifdef SOLARI_WITH_SNMP
 /* Only [A-Za-z0-9._:-] survive into the shell command (community + host come
@@ -882,7 +887,10 @@ static int topoSnmpWalkRemCol(const char *ip, const char *comm, const char *oid,
             got++;
         }
     }
-    pclose(f);
+    {
+        int status = pclose(f);
+        if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return -1;
+    }
     return got;
 }
 
@@ -905,7 +913,10 @@ static int topoSnmpWalkLocPorts(const char *ip, const char *comm,
             got++;
         }
     }
-    pclose(f);
+    {
+        int status = pclose(f);
+        if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return -1;
+    }
     return got;
 }
 
@@ -938,15 +949,14 @@ static solariStatus topoSnmpFetchLldpImpl(const char *mgmtIp, const char *commun
                             TOPO_LLDP_COL_CHASSIS_ID, raw, &rawN, TOPO_MAX_MIB_NEIGH);
     if (rc < 0) return ERR_PLATFORM;    /* popen failed -> no SNMP CLI available */
 
-    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_CHASSIS_SUB, TOPO_LLDP_COL_CHASSIS_SUB, raw, &rawN, TOPO_MAX_MIB_NEIGH);
-    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_ID,     TOPO_LLDP_COL_PORT_ID,     raw, &rawN, TOPO_MAX_MIB_NEIGH);
-    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_SUB,    TOPO_LLDP_COL_PORT_SUB,    raw, &rawN, TOPO_MAX_MIB_NEIGH);
-    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_DESC,   TOPO_LLDP_COL_PORT_DESC,   raw, &rawN, TOPO_MAX_MIB_NEIGH);
-    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_NAME,    TOPO_LLDP_COL_SYS_NAME,    raw, &rawN, TOPO_MAX_MIB_NEIGH);
-    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_DESC,    TOPO_LLDP_COL_SYS_DESC,    raw, &rawN, TOPO_MAX_MIB_NEIGH);
-    topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_CAP,     TOPO_LLDP_COL_CAP_ENABLED, raw, &rawN, TOPO_MAX_MIB_NEIGH);
-
-    topoSnmpWalkLocPorts(ip, comm, ports, &portN, TOPO_MAX_LOC_PORTS);
+    if (topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_CHASSIS_SUB, TOPO_LLDP_COL_CHASSIS_SUB, raw, &rawN, TOPO_MAX_MIB_NEIGH) < 0) return ERR_CONN_RETRY;
+    if (topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_ID,     TOPO_LLDP_COL_PORT_ID,     raw, &rawN, TOPO_MAX_MIB_NEIGH) < 0) return ERR_CONN_RETRY;
+    if (topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_SUB,    TOPO_LLDP_COL_PORT_SUB,    raw, &rawN, TOPO_MAX_MIB_NEIGH) < 0) return ERR_CONN_RETRY;
+    if (topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_PORT_DESC,   TOPO_LLDP_COL_PORT_DESC,   raw, &rawN, TOPO_MAX_MIB_NEIGH) < 0) return ERR_CONN_RETRY;
+    if (topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_NAME,    TOPO_LLDP_COL_SYS_NAME,    raw, &rawN, TOPO_MAX_MIB_NEIGH) < 0) return ERR_CONN_RETRY;
+    if (topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_DESC,    TOPO_LLDP_COL_SYS_DESC,   raw, &rawN, TOPO_MAX_MIB_NEIGH) < 0) return ERR_CONN_RETRY;
+    if (topoSnmpWalkRemCol(ip, comm, OID_LLDP_REM_SYS_CAP,     TOPO_LLDP_COL_CAP_ENABLED, raw, &rawN, TOPO_MAX_MIB_NEIGH) < 0) return ERR_CONN_RETRY;
+    if (topoSnmpWalkLocPorts(ip, comm, ports, &portN, TOPO_MAX_LOC_PORTS) < 0) return ERR_CONN_RETRY;
 
     *count = topoLldpFinalize(raw, rawN, ports, portN, records, cap);
     return SOLARI_OK;
@@ -957,9 +967,7 @@ static solariStatus topoSnmpFetchLldp(const char *mgmtIp, const char *community,
                                       topoLldpMibRecord *records, size_t *count)
 {
 #ifdef SOLARI_WITH_SNMP
-    /* Real net-snmp walk goes here (compiled in only when explicitly enabled).
-     * It must bound the result at TOPO_MAX_MIB_NEIGH and decode each column into
-     * the topoLldpMibRecord fields exactly as the normalizer expects. */
+    /* Use the optional net-snmp CLI backend compiled in by explicit request. */
     return topoSnmpFetchLldpImpl(mgmtIp, community, records, count);
 #else
     (void)mgmtIp;

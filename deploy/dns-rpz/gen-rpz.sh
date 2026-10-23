@@ -1,6 +1,7 @@
 #!/bin/sh
 # gen-rpz.sh — build a BIND RPZ ad-block zone from StevenBlack's hosts list.
-# Replaces the Pi-holes' filtering. Runs on xenon (RPZ primary); steel AXFRs it.
+# Replaces Pi-hole filtering. Runs on xenon; chlorine and the planned Steel
+# tertiary AXFR the zone under the ACL in named.conf.rpz.
 # Usage: gen-rpz.sh /etc/bind/zones/db.rpz.akoria
 set -eu
 OUT="${1:-/etc/bind/zones/db.rpz.akoria}"

@@ -1,8 +1,15 @@
+import json
 import os
+import shutil
+import ssl
+import subprocess
 import sys
+import threading
 import tempfile
 import types
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import URLError
 
 if 'pymysql' not in sys.modules:
     pymysql = types.ModuleType('pymysql')
@@ -36,6 +43,59 @@ class UniFiPollTests(unittest.TestCase):
     def test_fail_soft_poll_error(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertFalse(unifipolld.poll_cycle(FakeClient(True), 'unused', os.path.join(directory, 'state.json'), True))
+
+    @unittest.skipUnless(shutil.which('openssl'), 'openssl is required for the local TLS fixture')
+    def test_connect_ip_preserves_tls_hostname_and_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cert = os.path.join(directory, 'controller.crt')
+            key = os.path.join(directory, 'controller.key')
+            subprocess.run([
+                'openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                '-keyout', key, '-out', cert, '-subj', '/CN=controller.test',
+                '-addext', 'subjectAltName=DNS:controller.test',
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            class Handler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    body = json.dumps({
+                        'host': self.headers.get('Host'),
+                        'key_present': self.headers.get('X-API-KEY') == 'fixture-key',
+                    }).encode()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_args):
+                    pass
+
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(cert, key)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f'https://controller.test:{server.server_port}'
+                client = unifipolld.UniFiClient(url, 'fixture-key', cert, connect_ip='127.0.0.1')
+                result = client.get('/health')
+                self.assertEqual(f'controller.test:{server.server_port}', result['host'])
+                self.assertTrue(result['key_present'])
+
+                wrong_name = unifipolld.UniFiClient(
+                    f'https://wrong.test:{server.server_port}', 'fixture-key', cert,
+                    connect_ip='127.0.0.1')
+                with self.assertRaises(URLError):
+                    wrong_name.get('/health')
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_connect_ip_rejects_hostnames(self):
+        with self.assertRaisesRegex(ValueError, 'UNIFI_CONNECT_IP'):
+            unifipolld.UniFiClient('https://controller.test', 'fixture-key', connect_ip='controller.test')
 
 
 if __name__ == '__main__': unittest.main()

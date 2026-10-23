@@ -79,10 +79,13 @@ these).
 | `source`   | string            | no | free-form provenance tag (`monitoring`, `dashboard`, ...), included in the log record |
 | `ts`       | number (unix epoch, seconds) | no | defaults to receipt time if omitted |
 
-Only `title` or `body` is strictly required for notifyd to accept the
-message — everything else has a sane default. Unparsable JSON or a message
-missing both `title` and `body` is logged and dropped (ack'd, not requeued)
-rather than crash-looping the consumer.
+Only `title` or `body` is required. Optional fields default when omitted, but
+provided values are validated: `severity` is `crit`, `warn`, or `info`; `title`,
+`body`, and `source` are strings; `channel` is a non-empty string; `to` is an
+array of non-empty strings; and `ts` is a finite number from zero through
+`253402300799` (the supported UTC datetime range). Invalid
+JSON, non-object payloads, missing summary text, and malformed fields are
+logged and dropped (ack'd, not requeued) rather than crashing the consumer.
 
 ## Routing
 

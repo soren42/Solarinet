@@ -41,6 +41,7 @@ typedef struct {
 
     /* server + transport (used by the reporting increment) */
     char     primaryUrl[256], failoverUrl[256];
+    char     reportAckUrl[256];           /* optional authenticated ACK REQ/REP */
     char     subUrl[256];                 /* server PUB channel; empty = derive
                                            * from primaryUrl at pub port 7703 */
     bool     useTls;
@@ -133,6 +134,9 @@ bool monitorOwnsTarget(uint64_t self, const uint64_t *fleet, size_t fleetLen,
 
 /* Stable node id: configured id, or FNV-1a-64(fqdn|role) (sec 5.5). */
 uint64_t monitorNodeId(const monitorConfig *cfg);
+/* Check that a gossip peer's canonical monitor.<fqdn> CN derives the claimed
+ * monitor node ID. Requires a non-empty CN and exact FQDN spelling. */
+bool monitorPeerIdentityMatchesCn(uint64_t nodeId, const char *peerCertCn);
 
 /* Fully-qualified hostname (Linux; gethostname + canonical lookup). */
 solariStatus monitorHostFqdn(char *out, size_t cap);

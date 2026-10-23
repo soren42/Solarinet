@@ -46,6 +46,18 @@
     return <span className="inv-badge" title={title} style={{ color: tone, borderColor: tone }}>{children}</span>;
   }
 
+  function InventoryPager({ currentPage, pageSize, count, label, onPage }) {
+    const pageCount = Math.max(1, Math.ceil(count / pageSize));
+    const page = Math.min(currentPage, pageCount - 1);
+    if (count <= pageSize) return null;
+    return <div className="filters" aria-label={label + " pages"} style={{ justifyContent: "flex-end", alignItems: "center" }}>
+      <span className="muted" aria-live="polite">Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, count)} of {count} {label}</span>
+      <button className="btn-ghost" disabled={page === 0} onClick={function () { onPage(page - 1); }}>Previous</button>
+      <span aria-label={"Page " + (page + 1) + " of " + pageCount}>Page {page + 1} of {pageCount}</span>
+      <button className="btn-ghost" disabled={page + 1 >= pageCount} onClick={function () { onPage(page + 1); }}>Next</button>
+    </div>;
+  }
+
   // shared form styles (mirror AdoptModal)
   const FLD = { width: "100%", boxSizing: "border-box", padding: "8px 10px", marginTop: 4, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit", fontFamily: "inherit", fontSize: 13 };
   const LBL = { fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", opacity: 0.6, marginTop: 14, display: "block" };
@@ -72,15 +84,24 @@
     })(list);
     return out;
   }
+  function normRows(list) {
+    return (list || []).map(function (row) {
+      const out = {};
+      Object.keys(row || {}).forEach(function (key) {
+        out[key.replace(/[A-Z]/g, function (letter) { return "_" + letter.toLowerCase(); })] = row[key];
+      });
+      return out;
+    });
+  }
   function cloneInv(src) {
     src = src || {};
     return {
-      models: (src.models || []).slice(),
-      units: (src.units || []).slice(),
+      models: normRows(src.models),
+      units: normRows(src.units),
       locations: normLocations(src.locations),
-      receipts: (src.receipts || []).slice(),
-      projects: (src.projects || []).slice(),
-      allocations: (src.allocations || []).slice(),
+      receipts: normRows(src.receipts),
+      projects: normRows(src.projects),
+      allocations: normRows(src.allocations),
       seq: Object.assign({}, src.seq),
     };
   }
@@ -109,23 +130,39 @@
   }
 
   /* ===================== root screen ===================== */
-  function Inventory() {
+  function Inventory({ onNavigate }) {
     const [tab, setTab] = useState("components");
+    const [showRackWireProfiles, setShowRackWireProfiles] = useState(false);
     const [inv, setInv] = useState(function () { return cloneInv(S.inventory); });
     const [viewer, setViewer] = useState(null);   // receipt being viewed (shared across tabs)
+    const [loadError, setLoadError] = useState("");
+
+    function loadInventory(force) {
+      const a = api();
+      if (!a || !a.inventory || isOffline()) return Promise.resolve(null);
+      setLoadError("");
+      return a.inventory(!!force).then(function (d) {
+        setInv({
+          models: normRows(d.models), units: normRows(d.units), locations: normLocations(d.locations),
+          receipts: normRows(d.receipts), projects: normRows(d.projects), allocations: normRows(d.allocations),
+          seq: (S.inventory && S.inventory.seq) || {},
+        });
+        setLoadError("");
+        return d;
+      }).catch(function (error) {
+        setLoadError((error && error.message) || "The inventory data could not be refreshed.");
+        throw error;
+      });
+    }
+
+    function openRackWireProfiles() {
+      setTab("components");
+      setShowRackWireProfiles(true);
+    }
 
     // Live re-read on mount (offline keeps the fixture working copy).
     useEffect(function () {
-      const a = api();
-      if (a && a.inventory && !isOffline()) {
-        a.inventory().then(function (d) {
-          setInv({
-            models: d.models || [], units: d.units || [], locations: normLocations(d.locations),
-            receipts: d.receipts || [], projects: d.projects || [], allocations: d.allocations || [],
-            seq: (S.inventory && S.inventory.seq) || {},
-          });
-        }).catch(function () {});
-      }
+      loadInventory().catch(function () {});
     }, []);
 
     // ----- lookups (recomputed each render; datasets are small) -----
@@ -281,6 +318,7 @@
       ["locations", "Locations", "location"],
       ["receipts", "Receipts", "receipt"],
       ["projects", "Projects", "project"],
+      ["scanner", "Scanner import", "tag2"],
     ];
 
     return (
@@ -290,31 +328,121 @@
             <h1 className="page-title">Inventory</h1>
             <div className="page-sub">{inv.units.length} components · {inv.locations.length} locations · {inv.receipts.length} receipts · {inv.projects.length} projects</div>
           </div>
-          <div className="page-head__right">
-            <div className="seg">
+          <div className="page-head__right inv-head-right">
+            <div className="seg inv-tabs" role="group" aria-label="Inventory sections">
               {TABS.map(function (t) {
-                return <button key={t[0]} className={tab === t[0] ? "on" : ""} onClick={function () { setTab(t[0]); }}><Icon name={t[2]} size={14} />{t[1]}</button>;
+                return <button key={t[0]} className={tab === t[0] ? "on" : ""} aria-pressed={tab === t[0]} onClick={function () { setTab(t[0]); }}><Icon name={t[2]} size={14} />{t[1]}</button>;
               })}
             </div>
           </div>
         </div>
 
-        {tab === "components" && <ComponentsTab inv={inv} h={helpers} act={actions} onViewReceipt={setViewer} />}
+        {loadError && <div role="alert" className="empty" style={{ marginBottom: 16 }}>Inventory refresh failed: {loadError} Current screen contents are retained and may be stale.</div>}
+
+        {tab === "components" && <ComponentsTab inv={inv} h={helpers} act={actions} onViewReceipt={setViewer} showRackWireProfiles={showRackWireProfiles} onToggleRackWireProfiles={function () { setShowRackWireProfiles(function (value) { return !value; }); }} onNavigate={onNavigate} />}
         {tab === "locations" && <LocationsTab inv={inv} h={helpers} act={actions} />}
         {tab === "receipts" && <ReceiptsTab inv={inv} h={helpers} act={actions} onView={setViewer} />}
         {tab === "projects" && <ProjectsTab inv={inv} h={helpers} act={actions} />}
+        {tab === "scanner" && <ScannerImportTab inv={inv} onImported={loadInventory} onNavigate={onNavigate} onConfigureRackWireProfiles={openRackWireProfiles} />}
 
         {viewer && <ReceiptViewer receipt={viewer} inv={inv} h={helpers} onClose={function () { setViewer(null); }} />}
       </div>
     );
   }
 
+  function ScannerImportTab({ inv, onImported, onNavigate, onConfigureRackWireProfiles }) {
+    const [snapshot, setSnapshot] = useState(null);
+    const [filename, setFilename] = useState("");
+    const [locations, setLocations] = useState({});
+    const [models, setModels] = useState({});
+    const [categories, setCategories] = useState({});
+    const [repairStatus, setRepairStatus] = useState("");
+    const [unmappedLocation, setUnmappedLocation] = useState("error");
+    const [report, setReport] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const [done, setDone] = useState(false);
+    const sourceLocations = snapshot ? Array.from(new Set(snapshot.assets.filter(function (a) { return a.archived !== 1 && a.location; }).map(function (a) { return a.location; }))).sort() : [];
+    const seenSoRLocationNames = new Set();
+    const duplicateSoRLocationNames = new Set();
+    inv.locations.forEach(function (location) {
+      if (seenSoRLocationNames.has(location.name)) duplicateSoRLocationNames.add(location.name);
+      seenSoRLocationNames.add(location.name);
+    });
+    const hasDuplicateLocationNames = duplicateSoRLocationNames.size > 0;
+    const sourceItems = snapshot ? snapshot.items.filter(function (i) { return i.archived !== 1; }) : [];
+    const sourceCategories = snapshot ? Array.from(new Set(sourceItems.map(function (item) { return item.category; }).filter(function (category) { return typeof category === "string" && category !== ""; }))).sort() : [];
+    function clearReview() { setReport(null); setError(""); setDone(false); }
+    function readFile(event) {
+      const file = event.target.files && event.target.files[0];
+      clearReview(); setSnapshot(null); setFilename(""); setLocations({}); setModels({}); setCategories({}); setRepairStatus("");
+      if (!file) return;
+      if (file.size > 4 * 1024 * 1024) { setError("Choose a scanner export no larger than 4 MiB."); return; }
+      const reader = new FileReader();
+      reader.onload = function () {
+        try {
+          const data = JSON.parse(String(reader.result));
+          if (!data || data.schema_version !== 1 || !Array.isArray(data.items) || !Array.isArray(data.assets)) throw new Error("This is not a scanner-ingest schema version 1 export.");
+          setSnapshot(data); setFilename(file.name);
+        } catch (e) { setError(e.message || "Could not read this JSON export."); }
+      };
+      reader.onerror = function () { setError("The selected file could not be read."); };
+      reader.readAsText(file);
+    }
+    function request(mode) {
+      const a = api();
+      if (isOffline() || !a || !a.scannerImport) { setError("Scanner import requires a live, authenticated dashboard session."); return; }
+      setBusy(true); setError("");
+      const mapping = { locations: {}, models: {}, categories: {} };
+      Object.keys(locations).forEach(function (key) { if (locations[key]) mapping.locations[key] = Number(locations[key]); });
+      Object.keys(models).forEach(function (key) { if (models[key]) mapping.models[key] = Number(models[key]); });
+      Object.keys(categories).forEach(function (key) { if (categories[key]) mapping.categories[key] = categories[key]; });
+      a.scannerImport(mode, { snapshot: snapshot, mapping: mapping, repairStatus: repairStatus, unmappedLocation: unmappedLocation,
+        expectedFingerprint: mode === "apply" && report ? report.fingerprint : undefined })
+        .then(function (result) { setReport(result); if (mode === "apply") { setDone(true); toast("Scanner snapshot imported into the SoR", "check"); refresh(); if (onImported) onImported(true).catch(function () { setError("Import completed, but the inventory view could not refresh. Reload the dashboard to see the imported records."); }); } })
+        .catch(function (e) { setError((e && e.message) || "Scanner import failed."); setReport(null); })
+        .finally(function () { setBusy(false); });
+    }
+    function selectStyle() { return Object.assign({}, FLD, { maxWidth: 440 }); }
+    return (
+      <section className="panel" aria-labelledby="scanner-import-title">
+        <div className="panel__head"><Icon name="tag2" size={16} /><h3 id="scanner-import-title">Import a scanner-ingest export</h3><span className="right">authenticated SoR intake</span></div>
+        <div className="panel__body">
+          <p className="muted">Export JSON from the standalone scanner app, then review the proposed additions here. Imports add inventory with provenance and never overwrite existing SoR records. The scanner keeps its local capture database. RackWire shares this SoR inventory and barcode registry; configure a model’s RackWire device profile from Components before planning its ports.</p>
+          <label style={LBL}>Scanner JSON export<input type="file" accept="application/json,.json" onChange={readFile} style={{ display: "block", marginTop: 7 }} /></label>
+          {filename && snapshot && <p role="status" style={{ marginTop: 8 }}>{filename}: {snapshot.items.length} catalog items, {snapshot.assets.length} assets.</p>}
+          {snapshot && <>
+            {sourceLocations.length > 0 && <div style={{ marginTop: 18 }}><strong>Location matching</strong><p className="muted">Exact unique SoR names match automatically. Choose a destination for duplicate or differently named locations, or explicitly preserve an unmatched source label in asset notes.</p>
+              {hasDuplicateLocationNames && <p role="note" className="muted">Some SoR locations share a name. Options include the row ID; verify the physical destination before selecting one.</p>}
+              {sourceLocations.map(function (name) { return <label key={name} style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>{name}<select aria-label={"SoR destination for source location " + name} value={locations[name] || ""} onChange={function (e) { setLocations(Object.assign({}, locations, { [name]: e.target.value })); clearReview(); }} style={selectStyle()}><option value="">Match exact unique name</option>{inv.locations.map(function (l) { return <option key={l.id} value={l.id}>#{l.id} · {l.name}{l.code ? " (" + l.code + ")" : ""}</option>; })}</select></label>; })}
+              <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>If a source location has no matching SoR location<select aria-label="How to handle an unmatched scanner location" value={unmappedLocation} onChange={function (e) { setUnmappedLocation(e.target.value); clearReview(); }} style={selectStyle()}><option value="error">Stop and require a mapping</option><option value="notes">Keep source location in notes; leave destination empty</option></select></label>
+            </div>}
+            {sourceItems.length > 0 && <details style={{ marginTop: 18 }}><summary>Match catalog items to existing SoR models (optional)</summary><p className="muted">Unmatched items are added as new models. Use this only when the existing model represents the same item.</p>
+              {sourceItems.map(function (item) { return <label key={item.id} style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>{item.name || item.model || item.id}<select value={models[item.id] || ""} onChange={function (e) { setModels(Object.assign({}, models, { [item.id]: e.target.value })); clearReview(); }} style={selectStyle()}><option value="">Add or reuse exact make/model</option>{inv.models.map(function (m) { return <option key={m.id} value={m.id}>#{m.id} · {m.make} {m.model}</option>; })}</select></label>; })}
+            </details>}
+            {sourceCategories.length > 0 && <details style={{ marginTop: 18 }}><summary>Map source categories to SoR hardware types (optional)</summary><p className="muted">Automatic matching uses a category that exactly matches a SoR type, ignoring case; unknown categories become “other”. Overrides apply only when a new model is created. Models you match above keep their existing type.</p>
+              {sourceCategories.map(function (category) { const automatic = HW_TYPES.indexOf(category.toLowerCase()) >= 0 ? category.toLowerCase() : "other"; return <label key={category} style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>{category}<select value={categories[category] || ""} onChange={function (e) { setCategories(Object.assign({}, categories, { [category]: e.target.value })); clearReview(); }} style={selectStyle()}><option value="">Automatic · {automatic}</option>{HW_TYPES.map(function (type) { return <option key={type} value={type}>{type}</option>; })}</select></label>; })}
+            </details>}
+            {snapshot.assets.some(function (asset) { return asset.archived !== 1 && asset.status === "repair"; }) && <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>Assets marked for repair<select value={repairStatus} onChange={function (e) { setRepairStatus(e.target.value); clearReview(); }} style={selectStyle()}><option value="">Stop until resolved</option><option value="in_stock">Import as in stock</option><option value="retired">Import as retired</option></select></label>}
+            <div style={{ display: "flex", gap: 10, marginTop: 20, flexWrap: "wrap" }}><button className="btn-primary" disabled={busy || done} onClick={function () { request("preview"); }}>{busy ? "Working…" : "Preview import"}</button>{report && !done && <button className="btn-primary" disabled={busy} onClick={function () { request("apply"); }}>Apply import</button>}</div>
+          </>}
+          {error && <div role="alert" style={{ color: "var(--crit)", marginTop: 14 }}>{error}</div>}
+          {report && <div role="status" style={{ marginTop: 18 }}><strong>{done ? "Import complete" : "Preview ready"}</strong><dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: "8px 18px" }}>{Object.keys(report.counts || {}).sort().map(function (key) { return <div key={key}><dt className="muted">{key.replace(/[._]/g, " ")}</dt><dd style={{ margin: 0, fontVariantNumeric: "tabular-nums" }}>{report.counts[key]}</dd></div>})}</dl>{report.locations && Object.keys(report.locations).length > 0 && <div style={{ marginTop: 12 }}><strong>Resolved locations</strong><ul>{Object.keys(report.locations).sort().map(function (source) { const target = report.locations[source]; return <li key={source}>{source} → {target.id === null ? "notes only; no SoR location" : "#" + target.id + " · " + target.name}</li>})}</ul></div>}{report.warnings && report.warnings.map(function (warning) { return <p key={warning} className="muted">{warning}</p>})}</div>}
+          {done && typeof onConfigureRackWireProfiles === "function" && <button type="button" className="btn-ghost" style={{ marginTop: 14 }} onClick={onConfigureRackWireProfiles}>Configure RackWire profiles</button>}
+          {done && typeof onNavigate === "function" && <button type="button" className="btn-ghost" style={{ marginTop: 14 }} onClick={function () { onNavigate("rackwire"); }}>Open RackWire to plan this inventory</button>}
+        </div>
+      </section>
+    );
+  }
+
   /* ===================== COMPONENTS TAB ===================== */
-  function ComponentsTab({ inv, h, act, onViewReceipt }) {
+  function ComponentsTab({ inv, h, act, onViewReceipt, showRackWireProfiles, onToggleRackWireProfiles, onNavigate }) {
     const [q, setQ] = useState("");
     const [stockFilter, setStockFilter] = useState("all");
     const [sort, setSort] = useState({ key: "model", dir: 1 });
+    const [page, setPage] = useState(0);
     const [edit, setEdit] = useState(null);   // { unit } editing, or { unit:null } new
+    const pageSize = 100;
 
     const value = inv.units.reduce(function (a, u) { return a + (u.unit_cost_cents || 0) * (u.quantity || 1); }, 0);
     const inStock = inv.units.filter(function (u) { return u.stock_status === "in_stock"; }).length;
@@ -339,10 +467,13 @@
         default: return 0;
       }
     }
-    rows = rows.slice().sort(function (a, b) { const ka = keyOf(a), kb = keyOf(b); if (ka < kb) return -sort.dir; if (ka > kb) return sort.dir; return 0; });
+    rows = rows.slice().sort(function (a, b) { const ka = keyOf(a), kb = keyOf(b); if (ka < kb) return -sort.dir; if (ka > kb) return sort.dir; return Number(a.id) - Number(b.id); });
+    const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+    const activePage = Math.min(page, pageCount - 1);
+    const visibleRows = rows.slice(activePage * pageSize, (activePage + 1) * pageSize);
     function th(key, label, right) {
       const on = sort.key === key;
-      return <th style={{ cursor: "pointer", textAlign: right ? "right" : undefined }} onClick={function () { setSort(function (s) { return { key: key, dir: s.key === key ? -s.dir : 1 }; }); }}>
+      return <th style={{ cursor: "pointer", textAlign: right ? "right" : undefined }} onClick={function () { setSort(function (s) { return { key: key, dir: s.key === key ? -s.dir : 1 }; }); setPage(0); }}>
         {label}{on ? <span style={{ color: "var(--teal)", marginLeft: 4 }}>{sort.dir > 0 ? "▲" : "▼"}</span> : null}
       </th>;
     }
@@ -359,13 +490,16 @@
         <div className="filters">
           {["all"].concat(STOCK_STATES).map(function (s) {
             const n = s === "all" ? inv.units.length : inv.units.filter(function (u) { return u.stock_status === s; }).length;
-            return <button key={s} className={"chip" + (stockFilter === s ? " on" : "")} onClick={function () { setStockFilter(s); }}>
+            return <button key={s} className={"chip" + (stockFilter === s ? " on" : "")} onClick={function () { setStockFilter(s); setPage(0); }}>
               {s !== "all" && <span className="dot" style={{ background: STOCK_TONE[s] }} />}{s === "all" ? "All" : STOCK_LABEL[s]}<span className="chip__n">{n}</span>
             </button>;
           })}
-          <div className="search" style={{ marginLeft: "auto", maxWidth: 240, height: 36 }}><Icon name="search" size={15} /><input value={q} onChange={function (e) { setQ(e.target.value); }} placeholder="Find component…" /></div>
+          <div className="search" style={{ marginLeft: "auto", maxWidth: 240, height: 36 }}><Icon name="search" size={15} /><input value={q} onChange={function (e) { setQ(e.target.value); setPage(0); }} placeholder="Find component…" /></div>
           <button className="btn-primary" onClick={function () { setEdit({ unit: null }); }}><Icon name="plus" size={14} />New component</button>
+          <button className="btn-ghost" aria-expanded={!!showRackWireProfiles} onClick={onToggleRackWireProfiles}>RackWire device profiles</button>
         </div>
+
+        {showRackWireProfiles && <RackWireProfileEditor models={inv.models} onNavigate={onNavigate} />}
 
         {rows.length === 0 && <div className="empty">No components match.</div>}
         {rows.length > 0 && (
@@ -374,7 +508,7 @@
               {th("model", "Model")}{th("serial", "Serial")}{th("asset", "Asset tag")}{th("location", "Location")}{th("qty", "Qty", true)}{th("stock", "Stock")}{th("cost", "Cost", true)}<th>Receipt</th>
             </tr></thead>
             <tbody>
-              {rows.map(function (u) {
+              {visibleRows.map(function (u) {
                 const m = h.modelById[u.model_id];
                 const r = u.receipt_id ? h.receiptById[u.receipt_id] : null;
                 return (
@@ -396,9 +530,141 @@
           </table></div>
         )}
 
+        <InventoryPager currentPage={activePage} pageSize={pageSize} count={rows.length} label="components" onPage={setPage} />
+
         {edit && <UnitModal unit={edit.unit} inv={inv} h={h} act={act} onClose={function () { setEdit(null); }} />}
       </div>
     );
+  }
+
+  // A model profile turns an imported/catalog model into placeable RackWire
+  // gear. Keep the editor beside inventory so the person reviewing physical
+  // stock can define the connector geometry before moving to a plan.
+  function RackWireProfileEditor({ models, onNavigate }) {
+    const [library, setLibrary] = useState([]);
+    const [modelId, setModelId] = useState("");
+    const [name, setName] = useState("");
+    const [kind, setKind] = useState("device");
+    const [drawW, setDrawW] = useState("");
+    const [poeBudgetW, setPoeBudgetW] = useState("");
+    const [groups, setGroups] = useState([]);
+    const [busy, setBusy] = useState(false);
+    const [loadingProfiles, setLoadingProfiles] = useState(false);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [message, setMessage] = useState("");
+    const [error, setError] = useState("");
+    const selected = models.find(function (model) { return String(model.id) === String(modelId); }) || null;
+    const a = api();
+    const connectors = {
+      rj45: { glyph: "rj45", domain: "net", conn: "rj45", role: "lan" },
+      sfp: { glyph: "sfp", domain: "net", conn: "sfp", role: "uplink" },
+      usba: { glyph: "usba", domain: "usb", conn: "usba", role: "data" },
+      usbc: { glyph: "usbc", domain: "usb", conn: "usbc", role: "data" },
+      iec_in: { glyph: "iec_in", domain: "power", conn: "iec", role: "power-in" },
+      iec_out: { glyph: "iec_out", domain: "power", conn: "iec", role: "power-out" },
+      nema: { glyph: "nema", domain: "power", conn: "iec", role: "power-out" },
+      barrel: { glyph: "barrel", domain: "power", conn: "barrel", role: "power-in" },
+      hdmi: { glyph: "hdmi", domain: "other", conn: "hdmi", role: "video" },
+    };
+    function blankGroup() { return { label: "Ethernet", connector: "rj45", count: 1, gbps: "1", watts: "", poe: "", poeW: "" }; }
+    function chooseModel(value, profileRows) {
+      setModelId(value); setError(""); setMessage("");
+      const model = models.find(function (row) { return String(row.id) === String(value); });
+      const available = profileRows || library;
+      const profile = available.find(function (row) { return String(row.id) === String(value); });
+      setName(profile ? (profile.name || profile.model) : (model ? (model.make + " " + model.model).trim() : ""));
+      setKind(profile ? (profile.kind || model.hw_type || "device") : (model ? (model.hw_type || "device") : "device"));
+      setDrawW(profile && profile.drawW != null ? String(profile.drawW) : "");
+      setPoeBudgetW(profile && profile.poeBudgetW != null ? String(profile.poeBudgetW) : "");
+      setGroups(profile && profile.groups && profile.groups.length ? profile.groups.map(function (group) {
+        const connector = Object.keys(connectors).find(function (key) { return connectors[key].glyph === group.glyph; }) || "rj45";
+        return { label: String(group.label || group.k || "Ports").replace(/\s+×\s*\d+$/, ""), connector: connector, count: group.count || 1, gbps: group.gbps == null ? "" : String(group.gbps), watts: group.watts == null ? "" : String(group.watts), poe: group.poe || "", poeW: group.poeW == null ? "" : String(group.poeW) };
+      }) : [blankGroup()]);
+    }
+    function loadProfiles() {
+      if (!a || !a.rackwireLibrary) return;
+      setLoadingProfiles(true); setLoadFailed(false); setError("");
+      a.rackwireLibrary().then(function (rows) {
+        setLibrary(Array.isArray(rows) ? rows : []);
+        const first = models.find(function (model) { return Array.isArray(rows) && rows.some(function (row) { return String(row.id) === String(model.id); }); }) || models[0];
+        if (first) chooseModel(String(first.id), Array.isArray(rows) ? rows : []);
+      }).catch(function (e) { setLoadFailed(true); setError((e && e.message) || "RackWire model profiles could not be loaded."); })
+        .finally(function () { setLoadingProfiles(false); });
+    }
+    useEffect(function () {
+      if (models.length) loadProfiles();
+    }, []);
+    function updateGroup(index, field, value) {
+      setGroups(function (old) { return old.map(function (group, i) { return i === index ? Object.assign({}, group, { [field]: value }) : group; }); });
+    }
+    function save() {
+      if (!selected || !a || !a.saveRackwireProfile) { setError("RackWire profiles require a live, authenticated dashboard session."); return; }
+      const usedKeys = Object.create(null);
+      const output = groups.map(function (group, index) {
+        const spec = connectors[group.connector];
+        const label = String(group.label || "").trim();
+        const count = Number(group.count);
+        const gbps = group.gbps === "" ? null : Number(group.gbps);
+        const watts = group.watts === "" ? null : Number(group.watts);
+        const poeW = group.poeW === "" ? null : Number(group.poeW);
+        if (!label || !Number.isInteger(count) || count < 1 || count > 48 || (gbps != null && (!Number.isFinite(gbps) || gbps < 0 || gbps > 1000)) || (watts != null && (!Number.isFinite(watts) || watts < 0 || watts > 100000)) || (poeW != null && (!Number.isFinite(poeW) || poeW < 0 || poeW > 1000)) || (group.poe && !poeW) || (!group.poe && poeW)) throw new Error("Each port group needs a label, 1–48 ports, and valid speed or power values. Set both a PoE standard and a positive per-port watt value.");
+        const baseKey = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "ports";
+        const keyCount = (usedKeys[baseKey] || 0) + 1;
+        usedKeys[baseKey] = keyCount;
+        const profileGroup = { k: keyCount === 1 ? baseKey : baseKey + "-" + keyCount, label: label + " ×" + count, glyph: spec.glyph, count: count, rows: Math.max(1, Math.ceil(count / 8)), role: spec.role, domain: spec.domain, conn: spec.conn };
+        if (gbps != null && gbps > 0) profileGroup.gbps = gbps;
+        if (watts != null && watts > 0) profileGroup.watts = watts;
+        if (group.poe) { profileGroup.poe = group.poe; profileGroup.poeW = poeW; }
+        return profileGroup;
+      });
+      if (!output.length) { setError("Add at least one port group before saving."); return; }
+      const watts = drawW === "" ? null : Number(drawW);
+      if (watts != null && (!Number.isFinite(watts) || watts < 0 || watts > 100000)) { setError("Device draw must be a number from 0 to 100,000 watts."); return; }
+      const poeBudget = poeBudgetW === "" ? null : Number(poeBudgetW);
+      if (poeBudget != null && (!Number.isFinite(poeBudget) || poeBudget < 0 || poeBudget > 100000)) { setError("PoE budget must be a number from 0 to 100,000 watts."); return; }
+      setBusy(true); setError(""); setMessage("");
+      a.saveRackwireProfile(selected.id, { name: name.trim() || (selected.make + " " + selected.model).trim(), kind: kind.trim() || selected.hw_type || "device", drawW: watts, poeBudgetW: poeBudget, groups: output })
+        .then(function (saved) {
+          setLibrary(function (old) { return old.map(function (row) { return String(row.id) === String(saved.id) ? saved : row; }); });
+          setMessage("Profile saved. This model is now available in the RackWire gear library.");
+          toast("RackWire device profile saved", "check");
+        }).catch(function (e) { setError((e && e.message) || "Profile could not be saved."); })
+        .finally(function () { setBusy(false); });
+    }
+    if (!models.length) return <div className="empty">Add or import a hardware model before configuring a RackWire profile.</div>;
+    return <section className="panel" aria-labelledby="rackwire-profile-title" style={{ marginBottom: 18 }}>
+      <div className="panel__head"><Icon name="rackwire" size={16} /><h3 id="rackwire-profile-title">RackWire device profile</h3><span className="right">connector and power planning</span>{typeof onNavigate === "function" && <button type="button" className="btn-ghost" onClick={function () { onNavigate("rackwire"); }}>Open RackWire planner</button>}</div>
+      <p className="muted">Choose a SoR hardware model and describe its physical connections. Saved profiles appear in RackWire’s gear library and let scanned inventory be placed with usable port geometry.</p>
+      {!a && <div role="alert" className="empty">The dashboard API is unavailable. Profile editing needs a live session.</div>}
+      {loadingProfiles && <div role="status" aria-live="polite" className="muted">Loading SoR hardware models and RackWire profiles…</div>}
+      <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>SoR hardware model<select aria-label="SoR hardware model" value={modelId} onChange={function (e) { chooseModel(e.target.value); }} style={Object.assign({}, FLD, { maxWidth: 640 })}>
+        <option value="">Choose a model…</option>{models.map(function (model) { const profile = library.find(function (row) { return String(row.id) === String(model.id); }); return <option key={model.id} value={String(model.id)}>{profile && profile.groups.length ? "✓ " : "○ "}#{model.id} · {model.make} {model.model}</option>; })}
+      </select></label>
+      {selected && <>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 12, marginTop: 12 }}>
+          <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0, marginTop: 0 })}>Planner label<input aria-label="Planner label" value={name} onChange={function (e) { setName(e.target.value); }} style={FLD} /></label>
+          <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0, marginTop: 0 })}>Device kind<input aria-label="Device kind" value={kind} onChange={function (e) { setKind(e.target.value); }} style={FLD} /></label>
+          <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0, marginTop: 0 })}>Typical draw (W)<input aria-label="Typical draw watts" type="number" min="0" max="100000" value={drawW} onChange={function (e) { setDrawW(e.target.value); }} placeholder="Optional" style={FLD} /></label>
+          <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0, marginTop: 0 })}>PoE output budget (W)<input aria-label="PoE output budget watts" type="number" min="0" max="100000" value={poeBudgetW} onChange={function (e) { setPoeBudgetW(e.target.value); }} placeholder="Optional" style={FLD} /></label>
+        </div>
+        <div style={{ marginTop: 18, fontWeight: 600 }}>Connection groups</div>
+        {groups.map(function (group, index) { return <div key={index} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(105px,1fr))", gap: 8, alignItems: "end", marginTop: 8 }}>
+          <label style={{ fontSize: 12 }}>Label<input aria-label={"Port group " + (index + 1) + " label"} value={group.label} onChange={function (e) { updateGroup(index, "label", e.target.value); }} style={FLD} /></label>
+          <label style={{ fontSize: 12 }}>Connector<select aria-label={"Port group " + (index + 1) + " connector"} value={group.connector} onChange={function (e) { updateGroup(index, "connector", e.target.value); }} style={FLD}>{Object.keys(connectors).map(function (key) { return <option key={key} value={key}>{key.toUpperCase().replace("_", " ")}</option>; })}</select></label>
+          <label style={{ fontSize: 12 }}>Count<input aria-label={"Port group " + (index + 1) + " count"} type="number" min="1" max="48" value={group.count} onChange={function (e) { updateGroup(index, "count", e.target.value); }} style={FLD} /></label>
+          <label style={{ fontSize: 12 }}>Gbps<input aria-label={"Port group " + (index + 1) + " speed"} type="number" min="0" max="1000" step="0.1" value={group.gbps} onChange={function (e) { updateGroup(index, "gbps", e.target.value); }} placeholder="—" style={FLD} /></label>
+          <label style={{ fontSize: 12 }}>Watts<input aria-label={"Port group " + (index + 1) + " watts"} type="number" min="0" max="100000" value={group.watts || ""} onChange={function (e) { updateGroup(index, "watts", e.target.value); }} placeholder="—" style={FLD} /></label>
+          <label style={{ fontSize: 12 }}>PoE standard<select aria-label={"Port group " + (index + 1) + " PoE standard"} value={group.poe || ""} onChange={function (e) { updateGroup(index, "poe", e.target.value); }} style={FLD}><option value="">None</option>{["poe", "poe+", "poe++", "poe+++"].map(function (mode) { return <option key={mode} value={mode}>{mode}</option>; })}</select></label>
+          <label style={{ fontSize: 12 }}>PoE W / port<input aria-label={"Port group " + (index + 1) + " PoE watts"} type="number" min="0" max="1000" value={group.poeW || ""} onChange={function (e) { updateGroup(index, "poeW", e.target.value); }} placeholder="—" style={FLD} /></label>
+          <button type="button" className="btn-ghost" aria-label={"Remove port group " + (index + 1)} onClick={function () { setGroups(function (old) { return old.filter(function (_, i) { return i !== index; }); }); }}>×</button>
+        </div>; })}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}><button type="button" className="btn-ghost" onClick={function () { setGroups(function (old) { return old.concat([blankGroup()]); }); }}>Add connection group</button><button type="button" className="btn-primary" disabled={busy || !modelId} onClick={save}>{busy ? "Saving…" : "Save RackWire profile"}</button></div>
+        <p className="muted" style={{ marginBottom: 0 }}>Connector details are used for compatibility checks. Verify port counts, speeds, and power values against the device specifications before relying on a plan.</p>
+      </>}
+      {message && <div role="status" style={{ marginTop: 12, color: "var(--ok)" }}>{message}</div>}
+      {error && <div role="alert" style={{ marginTop: 12, color: "var(--crit)" }}>{error}</div>}
+      {loadFailed && !loadingProfiles && <button type="button" className="btn-ghost" onClick={loadProfiles}>Retry profile load</button>}
+    </section>;
   }
 
   function UnitModal({ unit, inv, h, act, onClose }) {
@@ -518,6 +784,7 @@
   /* ===================== LOCATIONS TAB ===================== */
   function LocationsTab({ inv, h, act }) {
     const [add, setAdd] = useState(false);
+    const [expanded, setExpanded] = useState({});
     const childrenOf = {};
     inv.locations.forEach(function (l) { const k = l.parent_id || 0; (childrenOf[k] = childrenOf[k] || []).push(l); });
     function unitCount(id) { return inv.units.filter(function (u) { return u.location_id === id; }).length; }
@@ -525,9 +792,13 @@
     function Node({ loc, depth }) {
       const kids = childrenOf[loc.id] || [];
       const n = unitCount(loc.id);
+      const open = expanded[loc.id] === undefined ? depth === 0 : expanded[loc.id];
       return (
         <>
           <div className="inv-tree-row" style={{ paddingLeft: 10 + depth * 22 }}>
+            {kids.length > 0
+              ? <button className="rowx" aria-label={(open ? "Collapse " : "Expand ") + loc.name} aria-expanded={open} onClick={function () { setExpanded(function (prev) { return Object.assign({}, prev, { [loc.id]: !open }); }); }}>{open ? "▾" : "▸"}</button>
+              : <span style={{ width: 24, flex: "0 0 auto" }} />}
             <Icon name={LOC_ICON[loc.loc_type] || "box"} size={16} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
             <span style={{ fontWeight: 600 }}>{loc.name}</span>
             {loc.code != null && <span className="inv-code">{loc.code}</span>}
@@ -535,7 +806,7 @@
             <span style={{ flex: 1 }} />
             {n > 0 && <span className="td-mono muted" style={{ fontSize: 11 }}>{n} unit{n === 1 ? "" : "s"}</span>}
           </div>
-          {kids.map(function (c) { return <Node key={c.id} loc={c} depth={depth + 1} />; })}
+          {open && kids.map(function (c) { return <Node key={c.id} loc={c} depth={depth + 1} />; })}
         </>
       );
     }
@@ -587,9 +858,14 @@
   /* ===================== RECEIPTS TAB ===================== */
   function ReceiptsTab({ inv, h, act, onView }) {
     const [add, setAdd] = useState(false);
+    const [page, setPage] = useState(0);
+    const pageSize = 100;
     const total = inv.receipts.reduce(function (a, r) { return a + (r.subtotal_cents || 0); }, 0);
     function itemCount(id) { return inv.units.filter(function (u) { return u.receipt_id === id; }).length; }
-    const sorted = inv.receipts.slice().sort(function (a, b) { return String(b.purchased_on || "").localeCompare(String(a.purchased_on || "")); });
+    const sorted = inv.receipts.slice().sort(function (a, b) { return String(b.purchased_on || "").localeCompare(String(a.purchased_on || "")) || Number(b.id) - Number(a.id); });
+    const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
+    const activePage = Math.min(page, pageCount - 1);
+    const visibleReceipts = sorted.slice(activePage * pageSize, (activePage + 1) * pageSize);
 
     return (
       <div>
@@ -603,7 +879,7 @@
         </div>
         {sorted.length === 0 && <div className="empty">No receipts yet.</div>}
         <div className="cards">
-          {sorted.map(function (r) {
+          {visibleReceipts.map(function (r) {
             const isImg = r.file_mime && r.file_mime.indexOf("image/") === 0 && r.scan;
             const items = itemCount(r.id);
             return (
@@ -625,6 +901,7 @@
             );
           })}
         </div>
+        <InventoryPager currentPage={activePage} pageSize={pageSize} count={sorted.length} label="receipts" onPage={setPage} />
         {add && <ReceiptModal act={act} onClose={function () { setAdd(false); }} />}
       </div>
     );
@@ -711,6 +988,12 @@
     const [addProj, setAddProj] = useState(false);
     const [commitFor, setCommitFor] = useState(null);   // project to commit an owned unit to
     const [needFor, setNeedFor] = useState(null);       // project to add a needed model to
+    const [page, setPage] = useState(0);
+    const pageSize = 100;
+    const sortedProjects = inv.projects.slice().sort(function (a, b) { return Number(b.id) - Number(a.id); });
+    const pageCount = Math.max(1, Math.ceil(sortedProjects.length / pageSize));
+    const activePage = Math.min(page, pageCount - 1);
+    const visibleProjects = sortedProjects.slice(activePage * pageSize, (activePage + 1) * pageSize);
 
     if (inv.projects.length === 0) {
       return (
@@ -730,11 +1013,12 @@
           <button className="btn-primary" style={{ marginLeft: "auto" }} onClick={function () { setAddProj(true); }}><Icon name="plus" size={14} />New project</button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          {inv.projects.map(function (p) {
+          {visibleProjects.map(function (p) {
             return <ProjectBoard key={p.id} project={p} inv={inv} h={h} act={act}
               onCommit={function () { setCommitFor(p); }} onNeed={function () { setNeedFor(p); }} />;
           })}
         </div>
+        <InventoryPager currentPage={activePage} pageSize={pageSize} count={sortedProjects.length} label="projects" onPage={setPage} />
         {addProj && <ProjectModal inv={inv} h={h} act={act} onClose={function () { setAddProj(false); }} />}
         {commitFor && <CommitModal project={commitFor} inv={inv} h={h} act={act} onClose={function () { setCommitFor(null); }} />}
         {needFor && <NeededModal project={needFor} inv={inv} act={act} onClose={function () { setNeedFor(null); }} />}

@@ -1,0 +1,24 @@
+{
+  "releaseRoot": "/mnt/data/bind/config/solarinet-releases",
+  "runtimeRoot": "/etc/bind/solarinet-releases",
+  "currentLink": "/mnt/data/bind/config/solarinet-current",
+  "incomingRoot": "/var/lib/solarinet-dns/incoming",
+  "candidateUser": "jason",
+  "runtimeCurrentLink": "/etc/bind/solarinet-current",
+  "includeParent": "/mnt/data/bind/config/named.conf.local",
+  "legacyZoneRoot": "/mnt/data/bind/config/zones",
+  "runtimeLegacyZoneRoot": "/etc/bind/zones",
+  "legacyIncludes": [
+    {"hostPath": "/mnt/data/bind/config/named.conf.bare", "runtimePath": "/etc/bind/named.conf.bare"}
+  ],
+  "transfer": [],
+  "checkZoneCommand": ["docker", "exec", "--user", "0", "bind9", "named-checkzone"],
+  "expandCommand": ["docker", "exec", "--user", "0", "bind9", "named-checkconf", "-p", "/etc/bind/named.conf"],
+  "checkConfigCommand": ["docker", "exec", "--user", "0", "bind9", "named-checkconf", "-z"],
+  "reloadCommand": ["docker", "kill", "-s", "HUP", "bind9"],
+  "digCommand": ["dig"],
+  "queryAddress": "10.0.0.11",
+  "queryPort": 53,
+  "healthTimeout": 60,
+  "commandTimeout": 60
+}

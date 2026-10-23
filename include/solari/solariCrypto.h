@@ -20,6 +20,11 @@ uint64_t solariFnv1a64(const void *data, size_t len);
 /* Convenience: FNV-1a-64 of a NUL-terminated string (excludes the NUL). */
 uint64_t solariFnv1a64Str(const char *s);
 
+/* Existing stable node ID contract: FNV-1a-64("fqdn|role-number"). Returns
+ * zero for an empty/oversized FQDN, NULL, or an unsupported role. This keeps
+ * client, monitor, server, and provisioning identity derivation identical. */
+uint64_t solariNodeIdFromFqdnRole(const char *fqdn, solariRole role);
+
 /* CRC-32 (IEEE 802.3, reflected, poly 0xEDB88820) over len bytes. Matches the
  * frame trailer in §5.1. Call with seed 0 for a one-shot; the returned value
  * may be fed back as seed to checksum a stream incrementally. */

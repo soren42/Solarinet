@@ -40,6 +40,8 @@ declare(strict_types=1);
  *                       created_at/updated_at/deleted_at.
  *   sources             a 'rackwire' row, resolved by `slug` (rw_source_id()),
  *                       mirroring Sor::sourceId()'s 'dashboard' lookup.
+ *   interconnects       port- or entity-level endpoints + label/length/notes;
+ *                       media_standard/jacket_color are added by migration 025.
  *
  * power_circuits, interfaces.circuit_id/watts_rated/poe_class, and
  * interfaces.if_kind += power_inlet/power_outlet also landed in 020 but are
@@ -115,7 +117,7 @@ return static function (Router $router): void {
         $router->get('/api/rackwire/plans/{id}', static function (array $p): void {
             $id  = rw_id_param($p['id']);
             $row = rw_row(
-                'SELECT id, name, slug, plan_json, thumbnail, updated_at, created_at
+                'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
                    FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
                 [':id' => $id]
             );
@@ -268,9 +270,11 @@ return static function (Router $router): void {
         $router->get('/api/rackwire/sor/interconnects', static function (): void {
             $rows = rw_rows(
                 'SELECT ic.id, ic.link_kind, ic.label, ic.length_m, ic.notes,
+                        ic.media_standard, ic.jacket_color,
                         ic.asserted_kind, ic.asserted_at, s.slug AS sourceSlug,
                         COALESCE(ea.name, eaif.name) AS aName,
                         COALESCE(eb.name, ebif.name) AS bName,
+                        hua.asset_tag AS aAssetTag, hub.asset_tag AS bAssetTag,
                         ifa.name AS aIfName, ifb.name AS bIfName
                    FROM interconnects ic
                    JOIN sources s ON s.id = ic.source_id AND s.deleted_at IS NULL
@@ -280,6 +284,10 @@ return static function (Router $router): void {
                    LEFT JOIN interfaces ifb ON ifb.id  = ic.b_interface_id AND ifb.deleted_at  IS NULL
                    LEFT JOIN entities  eaif ON eaif.id = ifa.entity_id     AND eaif.deleted_at IS NULL
                    LEFT JOIN entities  ebif ON ebif.id = ifb.entity_id     AND ebif.deleted_at IS NULL
+                   LEFT JOIN hardware_units hua ON hua.id = COALESCE(ea.hardware_unit_id, eaif.hardware_unit_id)
+                                                AND hua.deleted_at IS NULL
+                   LEFT JOIN hardware_units hub ON hub.id = COALESCE(eb.hardware_unit_id, ebif.hardware_unit_id)
+                                                AND hub.deleted_at IS NULL
                   WHERE ic.deleted_at IS NULL
                   ORDER BY ic.id DESC
                   LIMIT 5000'
@@ -298,8 +306,10 @@ return static function (Router $router): void {
 
             $name      = rw_str_required($b, 'name', 128);
             $planJson  = rw_plan_json_required($b);
+            $hasThumbnail = array_key_exists('thumbnail', $b);
             $thumbnail = isset($b['thumbnail']) && is_string($b['thumbnail']) && $b['thumbnail'] !== ''
                 ? $b['thumbnail'] : null;
+            $hasNotes = array_key_exists('notes', $b);
             $notes = isset($b['notes']) && is_string($b['notes']) && $b['notes'] !== '' ? $b['notes'] : null;
             [$deviceCount, $cableCount] = rw_plan_counts($b['plan']);
             $srcId = rw_source_id();
@@ -307,35 +317,116 @@ return static function (Router $router): void {
             $id = isset($b['id']) && $b['id'] !== null && $b['id'] !== ''
                 ? rw_id_param((string) $b['id']) : null;
 
+            $row = null;
             if ($id !== null) {
-                rw_plan_for_write($id);
-                rw_write(
-                    'UPDATE rw_plans
-                        SET name = :name, slug = :slug, plan_json = :pj, thumbnail = :th,
-                            device_count = :dc, cable_count = :cc, updated_by = :ub, notes = :notes,
-                            asserted_kind = \'human\', asserted_at = NOW()
-                      WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
-                    [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
-                     ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
-                     ':ub' => $operator, ':notes' => $notes, ':src' => $srcId, ':id' => $id]
-                );
+                $expectedHash = $b['expectedHash'] ?? null;
+                if (!is_string($expectedHash) || preg_match('/^[a-f0-9]{64}$/i', $expectedHash) !== 1) {
+                    Response::error('plan_hash_required', 'Reload the shared plan before updating it; its current version is required.', 409);
+                }
+                $db = Sor::db();
+                rw_plan_lock_timeout();
+                $db->beginTransaction();
+                try {
+                    $current = rw_row(
+                        'SELECT id, source_id, name, slug, plan_json, thumbnail, notes FROM rw_plans
+                          WHERE id = :id AND deleted_at IS NULL FOR UPDATE',
+                        [':id' => $id]
+                    );
+                    if ($current === null) {
+                        $db->rollBack();
+                        Response::error('not_found', "No plan $id", 404);
+                    }
+                    if ((int) $current['source_id'] !== $srcId) {
+                        $db->rollBack();
+                        Response::error('conflict', "Plan $id is owned by another source; RackWire will not overwrite it.", 409);
+                    }
+                    if (!$hasThumbnail) $thumbnail = $current['thumbnail'] ?? null;
+                    if (!$hasNotes) $notes = $current['notes'] ?? null;
+                    $actualHash = rw_plan_hash($current);
+                    $alreadyApplied = false;
+                    if (!hash_equals($actualHash, strtolower($expectedHash))) {
+                        $alreadyApplied = (string) $current['name'] === $name
+                            && (string) ($current['slug'] ?? '') === rw_slug($name)
+                            && (string) ($current['plan_json'] ?? '') === $planJson
+                            && ($current['thumbnail'] ?? null) === $thumbnail
+                            && ($current['notes'] ?? null) === $notes;
+                        if (!$alreadyApplied) {
+                            $db->rollBack();
+                            Response::error('plan_conflict', 'The shared plan changed after this copy was loaded. Reload or save a separate copy before syncing.', 409);
+                        }
+                    }
+                    if (!$alreadyApplied) {
+                        rw_exec(
+                            'UPDATE rw_plans
+                                SET name = :name, slug = :slug, plan_json = :pj, thumbnail = :th,
+                                    device_count = :dc, cable_count = :cc, updated_by = :ub, notes = :notes,
+                                    asserted_kind = \'human\', asserted_at = NOW()
+                              WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
+                            [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
+                             ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
+                             ':ub' => $operator, ':notes' => $notes, ':src' => $srcId, ':id' => $id]
+                        );
+                    }
+                    // Capture the response while this transaction still owns
+                    // the row lock. A post-commit read could observe another
+                    // writer and return their hash beside this request's plan.
+                    $row = rw_row(
+                        'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
+                           FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
+                        [':id' => $id]
+                    );
+                    if ($row === null) {
+                        $db->rollBack();
+                        Response::error('not_found', "No plan $id", 404);
+                    }
+                    $db->commit();
+                } catch (\PDOException $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    rw_plan_lock_failure($e);
+                    if ((string) $e->getCode() === '23000') {
+                        Response::error('conflict', 'Duplicate or constraint violation.', 409);
+                    }
+                    throw $e;
+                } catch (\Throwable $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    throw $e;
+                }
             } else {
-                rw_write(
-                    'INSERT INTO rw_plans (name, slug, plan_json, thumbnail, device_count, cable_count,
-                                            updated_by, notes, source_id, asserted_kind, asserted_at)
-                     VALUES (:name, :slug, :pj, :th, :dc, :cc, :ub, :notes, :src, \'human\', NOW())',
-                    [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
-                     ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
-                     ':ub' => $operator, ':notes' => $notes, ':src' => $srcId]
-                );
-                $id = (int) Sor::db()->lastInsertId();
+                $db = Sor::db();
+                rw_plan_lock_timeout();
+                $db->beginTransaction();
+                try {
+                    rw_exec(
+                        'INSERT INTO rw_plans (name, slug, plan_json, thumbnail, device_count, cable_count,
+                                                updated_by, notes, source_id, asserted_kind, asserted_at)
+                         VALUES (:name, :slug, :pj, :th, :dc, :cc, :ub, :notes, :src, \'human\', NOW())',
+                        [':name' => $name, ':slug' => rw_slug($name), ':pj' => $planJson,
+                         ':th' => $thumbnail, ':dc' => $deviceCount, ':cc' => $cableCount,
+                         ':ub' => $operator, ':notes' => $notes, ':src' => $srcId]
+                    );
+                    $id = (int) $db->lastInsertId();
+                    $row = rw_row(
+                        'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
+                           FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
+                        [':id' => $id]
+                    );
+                    if ($row === null) {
+                        $db->rollBack();
+                        Response::error('not_found', "No plan $id", 404);
+                    }
+                    $db->commit();
+                } catch (\PDOException $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    rw_plan_lock_failure($e);
+                    if ((string) $e->getCode() === '23000') {
+                        Response::error('conflict', 'Duplicate or constraint violation.', 409);
+                    }
+                    throw $e;
+                } catch (\Throwable $e) {
+                    if ($db->inTransaction()) $db->rollBack();
+                    throw $e;
+                }
             }
-
-            $row = rw_row(
-                'SELECT id, name, slug, plan_json, thumbnail, updated_at, created_at
-                   FROM rw_plans WHERE id = :id',
-                [':id' => $id]
-            );
             Response::ok(rw_plan_full_row($row), 201);
         });
 
@@ -343,12 +434,18 @@ return static function (Router $router): void {
         $router->post('/api/rackwire/plans/{id}/delete', static function (array $p): void {
             Operator::requireOperator();
             $id = rw_id_param($p['id']);
-            rw_plan_for_write($id);
-            $n = rw_write(
-                'UPDATE rw_plans SET deleted_at = NOW()
-                  WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
-                [':id' => $id, ':src' => rw_source_id()]
-            );
+            rw_plan_lock_timeout();
+            try {
+                rw_plan_for_write($id);
+                $n = rw_write(
+                    'UPDATE rw_plans SET deleted_at = NOW()
+                      WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
+                    [':id' => $id, ':src' => rw_source_id()]
+                );
+            } catch (\PDOException $e) {
+                rw_plan_lock_failure($e);
+                throw $e;
+            }
             if ($n === 0) {
                 Response::error('not_found', "No plan $id", 404);
             }
@@ -376,8 +473,8 @@ return static function (Router $router): void {
             // a snapshot of the same plan at once would otherwise both read a
             // pre-insert count of 25, both conclude no prune was due, and leave
             // 27 rows behind the cap. Serialising on the plan row also means
-            // the snapshot always pairs with the plan_json the lock holder saw.
             $db = Sor::db();
+            rw_plan_lock_timeout();
             $db->beginTransaction();
             try {
                 $plan = rw_row(
@@ -420,6 +517,7 @@ return static function (Router $router): void {
                 if ($db->inTransaction()) {
                     $db->rollBack();
                 }
+                rw_plan_lock_failure($e);
                 if ((string) $e->getCode() === '23000') {
                     Response::error('conflict', 'Duplicate or constraint violation.', 409);
                 }
@@ -448,32 +546,76 @@ return static function (Router $router): void {
                 Response::error('bad_request', 'versionId is required.', 400);
             }
             $versionId = rw_id_param((string) $b['versionId'], 'versionId');
+            $expectedHash = $b['expectedHash'] ?? null;
+            if (!is_string($expectedHash) || preg_match('/^[a-f0-9]{64}$/i', $expectedHash) !== 1) {
+                Response::error('plan_hash_required', 'Reload the shared plan before restoring a snapshot; its current version is required.', 409);
+            }
             $srcId = rw_source_id();
-            rw_plan_for_write($id);
+            $db = Sor::db();
+            rw_plan_lock_timeout();
+            $db->beginTransaction();
+            try {
+                $current = rw_row(
+                    'SELECT id, source_id, name, plan_json, thumbnail, notes FROM rw_plans
+                      WHERE id = :id AND deleted_at IS NULL FOR UPDATE',
+                    [':id' => $id]
+                );
+                if ($current === null) {
+                    $db->rollBack();
+                    Response::error('not_found', "No plan $id", 404);
+                }
+                if ((int) $current['source_id'] !== $srcId) {
+                    $db->rollBack();
+                    Response::error('conflict', "Plan $id is owned by another source; RackWire will not overwrite it.", 409);
+                }
+                $ver = rw_row(
+                    'SELECT id, plan_json FROM rw_plan_versions WHERE id = :vid AND plan_id = :pid',
+                    [':vid' => $versionId, ':pid' => $id]
+                );
+                if ($ver === null) {
+                    $db->rollBack();
+                    Response::error('not_found', "No version $versionId for plan $id", 404);
+                }
 
-            $ver = rw_row(
-                'SELECT id, plan_json FROM rw_plan_versions WHERE id = :vid AND plan_id = :pid',
-                [':vid' => $versionId, ':pid' => $id]
-            );
-            if ($ver === null) {
-                Response::error('not_found', "No version $versionId for plan $id", 404);
+                $alreadyApplied = !hash_equals(rw_plan_hash($current), strtolower($expectedHash))
+                    && (string) ($current['plan_json'] ?? '') === (string) $ver['plan_json'];
+                if (!hash_equals(rw_plan_hash($current), strtolower($expectedHash)) && !$alreadyApplied) {
+                    $db->rollBack();
+                    Response::error('plan_conflict', 'The shared plan changed after this copy was loaded. Reload or save a separate copy before restoring.', 409);
+                }
+
+                if (!$alreadyApplied) {
+                    rw_exec(
+                        'UPDATE rw_plans
+                            SET plan_json = :pj, asserted_kind = \'human\', asserted_at = NOW()
+                          WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
+                        [':pj' => $ver['plan_json'], ':src' => $srcId, ':id' => $id]
+                    );
+                }
+                // Return the version/hash observed under the lock, not a
+                // possible later writer's row fetched after commit.
+                $row = rw_row(
+                    'SELECT id, name, slug, plan_json, thumbnail, notes, updated_at, created_at
+                       FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
+                    [':id' => $id]
+                );
+                if ($row === null) {
+                    $db->rollBack();
+                    Response::error('not_found', "No plan $id", 404);
+                }
+                $db->commit();
+            } catch (\PDOException $e) {
+                if ($db->inTransaction()) $db->rollBack();
+                rw_plan_lock_failure($e);
+                if ((string) $e->getCode() === '23000') {
+                    Response::error('conflict', 'Duplicate or constraint violation.', 409);
+                }
+                throw $e;
+            } catch (\Throwable $e) {
+                if ($db->inTransaction()) $db->rollBack();
+                throw $e;
             }
 
-            rw_write(
-                'UPDATE rw_plans
-                    SET plan_json = :pj, asserted_kind = \'human\', asserted_at = NOW()
-                  WHERE id = :id AND deleted_at IS NULL AND source_id = :src',
-                [':pj' => $ver['plan_json'], ':src' => $srcId, ':id' => $id]
-            );
-
-            $row = rw_row(
-                'SELECT id, name, slug, plan_json, thumbnail, updated_at, created_at
-                   FROM rw_plans WHERE id = :id AND deleted_at IS NULL',
-                [':id' => $id]
-            );
-            if ($row === null) {
-                Response::error('not_found', "No plan $id", 404);
-            }
             Response::ok(rw_plan_full_row($row));
         });
 
@@ -674,16 +816,50 @@ return static function (Router $router): void {
                         $skipped[] = "cable $cid: $kindDetail";
                         continue;
                     }
-                    $label = isset($c['label']) && is_string($c['label']) && $c['label'] !== '' ? $c['label'] : null;
+                    $aIf = rw_resolve_interface($aEnt, $aEnd, $deviceByUid[(string) $aDev] ?? []);
+                    $bIf = rw_resolve_interface($bEnt, $bEnd, $deviceByUid[(string) $bDev] ?? []);
+                    $label = isset($c['label']) && is_string($c['label']) && trim($c['label']) !== '' ? trim($c['label']) : null;
+                    $notes = isset($c['notes']) && is_string($c['notes']) && trim($c['notes']) !== '' ? trim($c['notes']) : null;
+                    $standard = isset($c['standard']) && is_string($c['standard']) && trim($c['standard']) !== '' ? trim($c['standard']) : null;
+                    $jacket = isset($c['jacket']) && is_string($c['jacket']) && trim($c['jacket']) !== '' ? trim($c['jacket']) : null;
+                    $length = null;
+                    if (isset($c['lengthM']) && $c['lengthM'] !== '' && $c['lengthM'] !== null) {
+                        if (!is_numeric($c['lengthM']) || !is_finite((float) $c['lengthM'])
+                            || (float) $c['lengthM'] < 0 || (float) $c['lengthM'] > 9999.99) {
+                            $skipped[] = "cable $cid: invalid lengthM (expected 0..9999.99 metres)";
+                            continue;
+                        }
+                        $length = round((float) $c['lengthM'], 2);
+                    }
+                    if (($label !== null && rw_text_length($label) > 128) || ($notes !== null && rw_text_length($notes) > 255)
+                        || ($standard !== null && rw_text_length($standard) > 32) || ($jacket !== null && rw_text_length($jacket) > 64)) {
+                        $skipped[] = "cable $cid: cable details exceed a SoR field limit";
+                        continue;
+                    }
 
-                    $existing = rw_row(
-                        'SELECT id, source_id FROM interconnects
+                    // Prefer port identity when it is known so separate
+                    // connections between the same two devices remain distinct.
+                    // Devices without a matching interface still commit at the
+                    // entity level, matching the schema's documented fallback.
+                    $aColumn = $aIf !== null ? 'a_interface_id' : 'a_entity_id';
+                    $bColumn = $bIf !== null ? 'b_interface_id' : 'b_entity_id';
+                    $reverseAColumn = $bIf !== null ? 'a_interface_id' : 'a_entity_id';
+                    $reverseBColumn = $aIf !== null ? 'b_interface_id' : 'b_entity_id';
+                    $aValue = $aIf ?? $aEnt;
+                    $bValue = $bIf ?? $bEnt;
+                    $existingRows = rw_rows(
+                        "SELECT id, source_id FROM interconnects
                           WHERE deleted_at IS NULL AND link_kind = :lk
-                            AND ((a_entity_id = :a1 AND b_entity_id = :b1)
-                              OR (a_entity_id = :b2 AND b_entity_id = :a2))
-                          LIMIT 1',
-                        [':lk' => $linkKind, ':a1' => $aEnt, ':b1' => $bEnt, ':b2' => $aEnt, ':a2' => $bEnt]
+                            AND (($aColumn = :a1 AND $bColumn = :b1)
+                              OR ($reverseAColumn = :b2 AND $reverseBColumn = :a2))
+                          LIMIT 2",
+                        [':lk' => $linkKind, ':a1' => $aValue, ':b1' => $bValue, ':b2' => $aValue, ':a2' => $bValue]
                     );
+                    if (count($existingRows) > 1) {
+                        $skipped[] = "cable $cid: multiple matching SoR links; resolve duplicate links before committing";
+                        continue;
+                    }
+                    $existing = $existingRows[0] ?? null;
                     if ($existing !== null) {
                         if ((int) $existing['source_id'] !== $srcId) {
                             $skipped[] = "cable $cid: existing link owned by another source, not touched";
@@ -692,23 +868,39 @@ return static function (Router $router): void {
                         if (!$dryRun) {
                             rw_exec(
                                 'UPDATE interconnects
-                                    SET label = :lbl, source_id = :src, asserted_kind = \'human\', asserted_at = NOW()
+                                    SET a_interface_id = :aif, b_interface_id = :bif,
+                                        a_entity_id = :ae, b_entity_id = :be,
+                                        label = :lbl, length_m = :len, notes = :notes,
+                                        media_standard = :standard, jacket_color = :jacket,
+                                        source_id = :src, asserted_kind = \'human\', asserted_at = NOW()
                                   WHERE id = :id',
-                                [':lbl' => $label, ':src' => $srcId, ':id' => $existing['id']]
+                                [':aif' => $aIf, ':bif' => $bIf,
+                                 ':ae' => $aIf === null ? $aEnt : null, ':be' => $bIf === null ? $bEnt : null,
+                                 ':lbl' => $label, ':len' => $length, ':notes' => $notes,
+                                 ':standard' => $standard, ':jacket' => $jacket,
+                                 ':src' => $srcId, ':id' => $existing['id']]
                             );
                         }
                         $updated++;
                     } else {
                         if (!$dryRun) {
                             rw_exec(
-                                'INSERT INTO interconnects (a_entity_id, b_entity_id, link_kind, label, source_id, asserted_kind, asserted_at)
-                                 VALUES (:a, :b, :lk, :lbl, :src, \'human\', NOW())',
-                                [':a' => $aEnt, ':b' => $bEnt, ':lk' => $linkKind, ':lbl' => $label, ':src' => $srcId]
+                                'INSERT INTO interconnects
+                                    (a_interface_id, b_interface_id, a_entity_id, b_entity_id,
+                                     link_kind, label, length_m, notes, media_standard, jacket_color,
+                                     source_id, asserted_kind, asserted_at)
+                                 VALUES (:aif, :bif, :ae, :be, :lk, :lbl, :len, :notes, :standard, :jacket, :src, \'human\', NOW())',
+                                [':aif' => $aIf, ':bif' => $bIf,
+                                 ':ae' => $aIf === null ? $aEnt : null, ':be' => $bIf === null ? $bEnt : null,
+                                 ':lk' => $linkKind, ':lbl' => $label, ':len' => $length,
+                                 ':notes' => $notes, ':standard' => $standard, ':jacket' => $jacket,
+                                 ':src' => $srcId]
                             );
                         }
                         $created++;
                     }
-                    $committed[] = "cable $cid: $linkKind — $kindDetail";
+                    $endpointDetail = ($aIf !== null || $bIf !== null) ? 'port-level identity' : 'entity-level fallback';
+                    $committed[] = "cable $cid: $linkKind — $kindDetail; $endpointDetail";
                 }
 
                 // dryRun: roll back every write above, keep the tallies.
@@ -770,6 +962,21 @@ function rw_exec(string $sql, array $params = []): int
     $st = Sor::db()->prepare($sql);
     $st->execute($params);
     return $st->rowCount();
+}
+
+/** Bound row-lock waits below rwFetch's 15-second client abort window. */
+function rw_plan_lock_timeout(): void
+{
+    rw_exec('SET SESSION innodb_lock_wait_timeout = 5');
+}
+
+/** Surface row-lock contention as a retryable service response. */
+function rw_plan_lock_failure(\PDOException $e): void
+{
+    $driverCode = isset($e->errorInfo[1]) ? (int) $e->errorInfo[1] : 0;
+    if ($driverCode === 1205 || $driverCode === 1213) {
+        Response::error('busy', 'The shared plan is being updated. Retry the save shortly.', 503);
+    }
 }
 
 /**
@@ -919,15 +1126,30 @@ function rw_plan_summary_row(array $r): array
 /** @param array<string,mixed> $r */
 function rw_plan_full_row(array $r): array
 {
+    $planJson = (string) ($r['plan_json'] ?? '');
     return [
         'id'        => (int) $r['id'],
         'name'      => $r['name'],
         'slug'      => $r['slug'],
-        'plan'      => Coerce::json($r['plan_json'] ?? null),
+        'plan'      => Coerce::json($planJson),
+        'planHash'  => rw_plan_hash($r),
         'thumbnail' => $r['thumbnail'] ?? null,
+        'notes'     => $r['notes'] ?? null,
         'updatedAt' => Coerce::iso($r['updated_at'] ?? null),
         'createdAt' => Coerce::iso($r['created_at'] ?? null),
     ];
+}
+
+/** Hash every field that a plan update can replace, using JSON to delimit values. */
+function rw_plan_hash(array $r): string
+{
+    $material = json_encode([
+        (string) ($r['name'] ?? ''),
+        $r['thumbnail'] ?? null,
+        $r['notes'] ?? null,
+        (string) ($r['plan_json'] ?? ''),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    return hash('sha256', $material);
 }
 
 /** @param array<string,mixed> $r */
@@ -1001,12 +1223,14 @@ function rw_interconnect_row(array $r): array
         'linkKind'     => $r['link_kind'],
         'label'        => $r['label'],
         'lengthM'      => Coerce::float($r['length_m'] ?? null),
+        'standard'     => $r['media_standard'] ?? null,
+        'jacket'       => $r['jacket_color'] ?? null,
         'notes'        => $r['notes'],
         'assertedKind' => $r['asserted_kind'],
         'assertedAt'   => Coerce::iso($r['asserted_at'] ?? null),
         'source'       => $r['sourceSlug'],
-        'a'            => ['entity' => $r['aName'] ?? null, 'ifName' => $r['aIfName'] ?? null],
-        'b'            => ['entity' => $r['bName'] ?? null, 'ifName' => $r['bIfName'] ?? null],
+        'a'            => ['entity' => $r['aName'] ?? null, 'assetTag' => $r['aAssetTag'] ?? null, 'ifName' => $r['aIfName'] ?? null],
+        'b'            => ['entity' => $r['bName'] ?? null, 'assetTag' => $r['bAssetTag'] ?? null, 'ifName' => $r['bIfName'] ?? null],
     ];
 }
 
@@ -1096,15 +1320,18 @@ function rw_resolve_entity(array $d): ?int
     $assetId = isset($d['assetId']) && is_string($d['assetId']) && trim($d['assetId']) !== ''
         ? trim($d['assetId']) : null;
     if ($assetId !== null) {
-        $row = rw_row(
+        $rows = rw_rows(
             'SELECT e.id FROM entities e
                JOIN hardware_units hu ON hu.id = e.hardware_unit_id
               WHERE hu.asset_tag = :tag AND hu.deleted_at IS NULL AND e.deleted_at IS NULL
-              LIMIT 1',
+              LIMIT 2',
             [':tag' => $assetId]
         );
-        if ($row !== null) {
-            return (int) $row['id'];
+        if (count($rows) > 1) {
+            return null;
+        }
+        if (count($rows) === 1) {
+            return (int) $rows[0]['id'];
         }
     }
 
@@ -1113,12 +1340,65 @@ function rw_resolve_entity(array $d): ?int
         if ($v === '') {
             continue;
         }
-        $row = rw_row('SELECT id FROM entities WHERE LOWER(name) = LOWER(:n) AND deleted_at IS NULL LIMIT 1', [':n' => $v]);
-        if ($row !== null) {
-            return (int) $row['id'];
+        $rows = rw_rows(
+            'SELECT id FROM entities WHERE LOWER(name) = LOWER(:n) AND deleted_at IS NULL LIMIT 2',
+            [':n' => $v]
+        );
+        if (count($rows) > 1) {
+            return null;
+        }
+        if (count($rows) === 1) {
+            return (int) $rows[0]['id'];
         }
     }
     return null;
+}
+
+/**
+ * Resolve a RackWire internal port id to a live SoR interface. `ifMap` maps
+ * monitoring interface names to RackWire port ids, so invert it for commits.
+ * A missing or ambiguous mapping returns null and lets the caller preserve the
+ * cable at entity granularity rather than guessing a physical port.
+ *
+ * @param array<string,mixed> $end
+ * @param array<string,mixed> $device
+ */
+function rw_resolve_interface(int $entityId, array $end, array $device): ?int
+{
+    $portId = isset($end['port']) && is_string($end['port']) ? trim($end['port']) : '';
+    if ($portId === '') {
+        return null;
+    }
+
+    $ifMap = is_array($device['ifMap'] ?? null) ? $device['ifMap'] : [];
+    $mappedNames = [];
+    foreach ($ifMap as $ifName => $mappedPort) {
+        if (is_string($ifName) && is_string($mappedPort) && trim($mappedPort) === $portId) {
+            $mappedNames[] = trim($ifName);
+        }
+    }
+    if (count($mappedNames) > 1) {
+        return null;
+    }
+    $ifName = $mappedNames[0] ?? $portId;
+    if ($ifName === '') {
+        return null;
+    }
+
+    $rows = rw_rows(
+        'SELECT id FROM interfaces
+          WHERE entity_id = :eid AND name = :name AND deleted_at IS NULL
+          LIMIT 2',
+        [':eid' => $entityId, ':name' => $ifName]
+    );
+    return count($rows) === 1 ? (int) $rows[0]['id'] : null;
+}
+
+/** Count Unicode code points so limits match MariaDB VARCHAR character widths. */
+function rw_text_length(string $value): int
+{
+    $count = preg_match_all('/./us', $value);
+    return $count === false ? PHP_INT_MAX : $count;
 }
 
 /**

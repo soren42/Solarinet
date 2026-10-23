@@ -1,0 +1,16 @@
+# Xenon monitoring database backup to the authenticated NAS-X home share.
+# Copy to /etc/solari-backup-xenon.conf and keep root:root mode 0600.
+
+DB_NAMES="solarinet"
+TARGET_DIR="/mnt/solari-backups"
+TARGET_MOUNTPOINT_REQUIRED=1
+RETENTION_DAYS=14
+
+# The systemd backup service runs as root. Use MariaDB's root Unix-socket
+# authentication; do not set MYSQL_HOST or MYSQL_PORT (which selects TCP here).
+MYSQL_USER="root"
+MYSQLDUMP_BIN="/usr/bin/mysqldump"
+
+# Forgejo is hosted on Cesium, so Xenon does not create a Forgejo dump.
+FORGEJO_BIN=""
+FORGEJO_CONFIG=""

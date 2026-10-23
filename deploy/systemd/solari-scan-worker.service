@@ -1,0 +1,43 @@
+# Durable active-discovery worker. Run on both server hosts; the shared lease
+# elects the one allowed to claim work. It has its own DB connection and lock.
+[Unit]
+Description=SolariNet durable discovery scan worker
+Documentation=https://github.com/soren42/Solarinet
+After=network-online.target solari-server.service
+Wants=network-online.target solari-server.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/solariScanWorker --config /etc/solari/server.conf
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+User=solari
+Group=solari
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+NoNewPrivileges=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/run/solari
+
+[Install]
+WantedBy=multi-user.target

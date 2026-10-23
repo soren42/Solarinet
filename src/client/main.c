@@ -135,7 +135,11 @@ static int runReporting(clientConfig *cfg, int loop)
     /* Restore any previously pushed config (persisted applied state), then
      * subscribe to the directive channel. Both are best-effort: without them
      * the client still samples and reports. */
-    (void)clientControlStateLoad(&cst, cfg);
+    rc = clientControlStateLoad(&cst, cfg);
+    if (rc != SOLARI_OK)
+        solariLogf(SOLARI_LOG_ERROR, "control: saved config rejected (%s); "
+                   "reporting base epoch %llu until resynchronized",
+                   solariStrError(rc), (unsigned long long)cst.appliedEpoch);
     (void)clientControlOpen(cfg, &cio);
 
     clientConnect(&ctx);                       /* best-effort */

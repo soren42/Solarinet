@@ -52,7 +52,9 @@ $registerMut($router);
 // unauthenticated.
 $reqPath = parse_url(solari_uri(), PHP_URL_PATH);
 $reqPath = is_string($reqPath) ? $reqPath : '/';
-if (strpos($reqPath, '/api/auth/') === false) {
+$bootstrapEnrollment = solari_method() === 'POST' &&
+    in_array($reqPath, ['/api/enrollments', '/api/enrollments/ack'], true);
+if (strpos($reqPath, '/api/auth/') === false && !$bootstrapEnrollment) {
     Auth::requireSession();   // emits 401 + exits when no valid session
 }
 

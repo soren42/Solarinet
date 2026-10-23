@@ -21,7 +21,7 @@ NVS, can sign a valid response.
 |------|------|
 | `authbrokerd.py` | the daemon: MQTT client + tiny HTTP API + signature verify |
 | `enroll_device.py` | mint an ECDSA-P256 keypair for a Tab5 (private → device, public → config) |
-| `loopback_test.py` | live round-trip test against the real Mosquitto (no device needed) |
+| `loopback_test.py` | MQTT round-trip test against an explicitly selected broker (no device needed) |
 | `authbroker.conf.example` | config template (copy → `authbroker.conf`, gitignored) |
 | `authbroker.service` | systemd unit |
 | `dashboard/AuthBroker.php` + `INTEGRATION.md` | additive, config-gated dashboard wiring |
@@ -63,10 +63,12 @@ All payloads are compact JSON. `<id>` is a random hex request id.
 
 Bind to localhost/dashboard host only — never expose it. Auth via
 `Authorization: Bearer <token>` (the `[http] token` in the config).
+The daemon refuses to start when the token is empty or still set to the example
+value. Missing and incorrect bearer credentials are always rejected.
 
 - `POST /auth/request` `{action,subject,detail,source_ip,device?,ttl?}` →
   blocks up to `ttl` → `{ "decision":"approve"|"deny"|"timeout", "id","device_id" }`.
-  `200` for approve/deny, `202` for timeout, `401` for bad token.
+  `200` for approve/deny, `202` for timeout, `401` for missing or bad token.
 - `GET /healthz` → `{ "ok":true, "connected":<mqtt up?> }`.
 
 ## Setup
@@ -77,7 +79,7 @@ $EDITOR deploy/authbroker/authbroker.conf     # MQTT pw, HTTP token
 chmod 600 deploy/authbroker/authbroker.conf
 
 python3 -m venv deploy/authbroker/.venv
-deploy/authbroker/.venv/bin/pip install paho-mqtt cryptography
+deploy/authbroker/.venv/bin/pip install -r deploy/authbroker/requirements.txt
 
 # enroll a device: private scalar goes into the Tab5 (NVS dev/privkey),
 # the printed [device.<id>] block goes into authbroker.conf
@@ -91,22 +93,23 @@ systemd: see the header of `authbroker.service`.
 
 Then wire the dashboard: `dashboard/INTEGRATION.md`.
 
-## Live loopback test
+## Isolated MQTT loopback test
 
-Proves the whole MQTT + signature path against the **real Mosquitto**
-(`10.5.2.50:1883`, user `solari`) with a simulated Tab5 — no dashboard, no HTTP,
-no hardware:
+Proves the MQTT + signature path with a simulated Tab5. By default the test
+uses anonymous MQTT on `127.0.0.1`; it does not contain credentials or default
+to a live broker. Run it against a disposable local Mosquitto instance:
 
 ```bash
-deploy/authbroker/.venv/bin/python deploy/authbroker/loopback_test.py            # approve
-deploy/authbroker/.venv/bin/python deploy/authbroker/loopback_test.py --decision deny
+deploy/authbroker/.venv/bin/python deploy/authbroker/loopback_test.py --host 127.0.0.1 --port 18883
+deploy/authbroker/.venv/bin/python deploy/authbroker/loopback_test.py --host 127.0.0.1 --port 18883 --decision deny
 ```
 
 It mints an ephemeral device keypair, starts a broker that trusts it, spawns a
 fake device that signs+publishes a response, then calls `broker.request()` and
-asserts the returned decision. **Verified 2026-07-06** against benzene's
-Mosquitto: approve → `approve`, deny → `deny`, and a response signed with the
-WRONG key is rejected (`SIGNATURE INVALID`, login times out).
+asserts the returned decision. CI starts a throwaway broker bound only to
+loopback and exercises both approve and deny. The test accepts explicit host
+and credential arguments for controlled fixtures; point it only at a
+disposable broker.
 
 ## Security notes
 

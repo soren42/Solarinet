@@ -6,9 +6,12 @@
 # xenon:  DB_NAMES="solarinet"
 DB_NAMES="sor"
 
-# Backup target directory. Must already exist and be writable by the service user.
+# Backup target directory. It must already exist, be root-owned, and mode 0700.
 # cesium: /data/backups on sdb1, separate from the live datadir on sda2.
 TARGET_DIR="/data/backups"
+# Set to 1 for mounted targets so a missing network mount fails closed instead
+# of writing sensitive archives into the empty local mountpoint directory.
+TARGET_MOUNTPOINT_REQUIRED=0
 
 # Keep this many daily dumps. Older matching backup files are pruned.
 RETENTION_DAYS=14
@@ -21,6 +24,8 @@ MYSQL_PASSWORD_FILE="/root/.mysql-backup-pw"
 # MYSQL_ENV_FILE="/opt/solari/run/db.env"       # may define MYSQL_USER/MYSQL_PWD
 # MYSQL_DEFAULTS_EXTRA_FILE="/root/.my.cnf"     # passed as mysqldump's first option
 # MYSQLDUMP_BIN="/usr/bin/mysqldump"
+# Optional: run mysqldump as a local Unix account (for MariaDB socket auth).
+# MYSQLDUMP_RUN_AS="mysql"
 
 # Optional Forgejo dump. Leave FORGEJO_CONFIG empty until Forgejo is present here.
 # The dump runs only when FORGEJO_BIN resolves and FORGEJO_CONFIG exists.

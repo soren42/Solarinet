@@ -10,9 +10,6 @@ Install the binary as `/usr/local/bin/solariPanel`, configuration as
 CA as `/etc/solari-panel/ca.pem`, and the service unit in systemd. The default
 serial pattern is `/dev/serial/by-id/*`, avoiding unstable ttyACM numbering.
 
-The intended vendored dependency is upstream cJSON **v1.7.19** (`cJSON.c` and
-`cJSON.h`). This sandbox could not resolve `raw.githubusercontent.com`; its
-`vendor/cJSON.h` is therefore a deliberately documented shim to Debian's
-`libcjson-dev`, and the Makefile links `-lcjson`. Before deployment replace the
-shim with those two upstream v1.7.19 files and change the Makefile to compile
-`vendor/cJSON.c` instead of linking the system library.
+The daemon vendors upstream cJSON **v1.7.19** (`vendor/cJSON.c` and
+`vendor/cJSON.h`); the Makefile compiles those files directly. This keeps the
+daemon build independent of a distribution-provided cJSON development package.

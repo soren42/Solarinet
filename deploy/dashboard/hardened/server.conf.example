@@ -1,0 +1,45 @@
+; SolariNet production server configuration. Install at /etc/solarinet/server.conf
+; and set SOLARI_DB_PASS in /etc/solarinet/server.env (0600 solari:solari).
+; Paths and certificate names must match the local PKI installation.
+
+[identity]
+hostFqdn = xenon.akoria.net
+
+[bind]
+ingestUrl = tls+tcp://0.0.0.0:7701
+surveyUrl = tls+tcp://0.0.0.0:7702
+controlUrl = tls+tcp://0.0.0.0:7702
+pubUrl = tls+tcp://0.0.0.0:7703
+ctlSocket = /run/solari/solariCtl.sock
+useTls = true
+
+[tls]
+caFile = /var/lib/solarinet/pki/ca.pem
+certFile = /var/lib/solarinet/pki/server.pem
+keyFile = /var/lib/solarinet/pki/server.key
+
+[ca]
+mode = local
+certFile = /var/lib/solarinet/pki/ca.pem
+keyFile = /var/lib/solarinet/pki/ca.key
+
+[db]
+host = 127.0.0.1
+port = 3306
+name = solarinet
+user = solari
+poolSize = 4
+
+[lease]
+leaseRenewSec = 5
+leaseTtlSec = 15
+
+[discovery]
+autoDiscover = true
+autoEnroll = false
+
+[ctl]
+enforcePeer = true
+operatorUid = solari
+dashboardUid = www-solari
+socketGid = solari-ctl

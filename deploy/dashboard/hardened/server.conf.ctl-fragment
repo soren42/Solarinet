@@ -1,0 +1,34 @@
+# SolariNet server.conf — [ctl] hardening fragment (Task #1 PHP→host boundary).
+#
+# Merge this [ctl] section into the deployed /etc/solarinet/server.conf. It is
+# what turns the boundary ON. Without it the server keeps its backward-compatible
+# behaviour: no enforcement, every peer treated as OPERATOR (so an un-migrated
+# host is never broken by shipping this code — the boundary is strictly opt-in).
+#
+# Once enforced, the server:
+#   - creates the ctl socket 0660 and chowns it to group `socketGid`,
+#   - reads SO_PEERCRED on every accept(),
+#   - classifies the peer uid: operatorUid/root → OPERATOR; dashboardUid →
+#     DASHBOARD; anything else → UNKNOWN (refused outright),
+#   - refuses every PRIVILEGED verb to DASHBOARD and UNKNOWN. PHP must enqueue.
+#
+# uids/gid accept a numeric id OR a system name (resolved via getpwnam/getgrnam).
+# Prefer names so the config survives a uid reassignment.
+
+[ctl]
+# Master switch. false (default) = legacy compat, no enforcement.
+enforcePeer  = true
+
+# The privileged operator identity. Omit to fall back to the server's own euid
+# (correct here, since the server runs as `solari`). Set explicitly if a separate
+# admin uid should also be treated as operator.
+# operatorUid = solari
+
+# The dashboard/PHP uid. This peer gets ordinary + enqueue verbs but is REFUSED
+# every privileged verb even with op=. An unset/zero value matches no peer, so
+# this MUST be set for the dashboard to function at all under enforcement.
+dashboardUid = www-solari
+
+# The group given ownership of the ctl socket (0660). Membership is what lets
+# www-solari connect(); non-members cannot even open the socket.
+socketGid    = solari-ctl

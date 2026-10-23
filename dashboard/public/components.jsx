@@ -306,7 +306,9 @@
           <span className="kbd">⌘K</span>
         </div>
         <div className="topbar__spacer" />
-        <div className="statuschip" title={"Active control server holding the failover lease" + (server.primaryId != null ? " · node " + server.primaryId : "")}>
+        <div className="statuschip" role="status"
+          aria-label={"Active control server: " + server.primary + (server.failover ? "; failover " + server.failover : "")}
+          title={"Active control server holding the failover lease" + (server.primaryId != null ? " · node " + server.primaryId : "")}>
           <span className="dot up glow" style={{ width: 8, height: 8 }} />
           <span style={{ fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--ink-faint)" }}>Active</span>
           <b>{server.primary}</b>

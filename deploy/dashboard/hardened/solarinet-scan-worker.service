@@ -1,0 +1,44 @@
+; Durable discovery worker paired with solarinet-server.service. Install and
+; enable on each server host; only the live lease holder may claim a job.
+[Unit]
+Description=SolariNet durable discovery scan worker [hardened]
+After=network-online.target solarinet-server.service
+Wants=network-online.target solarinet-server.service
+
+[Service]
+Type=simple
+User=solari
+Group=solari
+WorkingDirectory=/opt/solarinet/current
+EnvironmentFile=/etc/solarinet/server.env
+ExecStart=/opt/solarinet/current/bin/solariScanWorker --config /etc/solarinet/server.conf
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+NoNewPrivileges=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/run/solari
+
+[Install]
+WantedBy=multi-user.target

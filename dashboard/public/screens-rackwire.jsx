@@ -1,5 +1,5 @@
 /*
- * screens-rackwire.jsx — RackWire connection planner page (window.RackWireScreen).
+ * screens-rackwire.jsx — RackWire network, power, and interconnect planning page (window.RackWireScreen).
  *
  * CONTRACT-RW.md §5.7 (SPA embedding). RackWire is NOT a React screen: it is a
  * self-contained, build-step-free app under public/rackwire/ that also runs from
@@ -51,18 +51,33 @@
   // Release tag, in step with the ?v= on the script tags in public/index.html.
   // The frame is a separate document, so the SPA's own cache-bust does not reach
   // it — without this an operator keeps a stale planner after a deploy.
-  const RW_V = "20260807a";
+  const RW_V = "20261023a";
 
   function currentTheme() {
     return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
   }
 
-  function RackWireScreen() {
+  function namesFromDevices(devices) {
+    if (!Array.isArray(devices)) return null;
+    return devices.reduce((names, device) => {
+      if (!device || typeof device.uid !== "string") return names;
+      const label = typeof device.name === "string" && device.name.trim()
+        ? device.name.trim()
+        : typeof device.model === "string" && device.model.trim()
+          ? device.model.trim()
+          : device.uid;
+      names[device.uid] = label;
+      return names;
+    }, {});
+  }
+
+  function RackWireScreen({ onNavigate }) {
     const frame = useRef(null);
     const ready = useRef(false);
     const [live, setLive] = useState(false);
     const [sel, setSel] = useState([]);
     const [counts, setCounts] = useState(null);
+    const [devNames, setDevNames] = useState({});
     const [view, setView] = useState("map");
 
     // host → frame
@@ -88,21 +103,34 @@
         if (!el || !el.contentWindow || e.source !== el.contentWindow) return;
         const m = e.data;
         if (!m || m.source !== "rackwire" || !m.event) return;
+        if (m.event === "navigate") {
+          const route = m.payload && m.payload.route;
+          if ((route === "discovery" || route === "inventory") && typeof onNavigate === "function") onNavigate(route);
+          return;
+        }
         if (m.event === "ready") {
           ready.current = true;
           setLive(true);
           pushTheme();
+          send("getPlan");
           return;
         }
         if (m.event === "select") { setSel([].concat(m.payload || [])); return; }
+        if (m.event === "reply" && m.payload && m.payload.cmd === "getPlan") {
+          const names = namesFromDevices(m.payload.value && m.payload.value.devices);
+          if (names) setDevNames(names);
+          return;
+        }
         if (m.event === "change") {
           const p = m.payload || {};
           setCounts({ devices: (p.devices || []).length, cables: (p.cables || []).length });
+          const names = namesFromDevices(p.devices);
+          if (names) setDevNames(names);
         }
       }
       window.addEventListener("message", onMsg);
       return () => window.removeEventListener("message", onMsg);
-    }, [pushTheme]);
+    }, [pushTheme, onNavigate]);
 
     // re-push on theme flip (TopBar / command palette stamp data-theme on <html>)
     useEffect(() => {
@@ -117,7 +145,7 @@
       send("setView", [v]);
     }
 
-    const devName = (uid) => uid;
+    const devName = (uid) => devNames[uid] || uid;
 
     return (
       <div className="page">
@@ -125,14 +153,17 @@
           <div>
             <h1 className="page-title">RackWire</h1>
             <div className="page-sub">
-              Connection planner · ports, power, PoE and live telemetry
+              Network, power & interconnect planning · ports, circuits, PoE and live telemetry
               {counts ? ` · ${counts.devices} devices · ${counts.cables} cables` : ""}
             </div>
           </div>
           <div className="page-head__right">
-            <div className="seg">
-              <button className={view === "map" ? "on" : ""} onClick={() => setFrameView("map")}>Map</button>
-              <button className={view === "table" ? "on" : ""} onClick={() => setFrameView("table")}>Table</button>
+            <button type="button" className="btn-ghost" onClick={() => onNavigate && onNavigate("discovery")}>Network discovery</button>
+            <button type="button" className="btn-ghost" onClick={() => onNavigate && onNavigate("inventory")}>Inventory</button>
+            <button type="button" className="btn-ghost" onClick={() => send("openScan")}>Scan inventory barcode</button>
+            <div className="seg" role="group" aria-label="Planner view">
+              <button type="button" className={view === "map" ? "on" : ""} aria-pressed={view === "map"} onClick={() => setFrameView("map")}>Map</button>
+              <button type="button" className={view === "table" ? "on" : ""} aria-pressed={view === "table"} onClick={() => setFrameView("table")}>Table</button>
             </div>
             <a className="btn-ghost" href={`rackwire/index.html?v=${RW_V}`} target="_blank" rel="noopener"
                style={{ display: "inline-flex", alignItems: "center", gap: 7, lineHeight: "38px", textDecoration: "none" }}>
@@ -146,7 +177,7 @@
             <div className="panel__body" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span className="page-sub" style={{ marginTop: 0 }}>Selected</span>
               {sel.slice(0, 12).map((uid) => (
-                <button key={uid} className="chip" onClick={() => send("focus", [uid])} title="Centre the map on this device">
+                <button key={uid} className="chip" onClick={() => send("focus", [uid])} title={`Device ID: ${uid}`} aria-label={`Centre the map on ${devName(uid)}`}>
                   {devName(uid)}
                 </button>
               ))}
@@ -158,8 +189,8 @@
         <div className="panel" style={{ overflow: "hidden" }}>
           <iframe
             ref={frame}
-            title="RackWire connection planner"
-            src={`rackwire/index.html?embed=1&v=${RW_V}`}
+            title="RackWire network, power, and interconnect planner"
+            src={`rackwire/index.html?embed=1&solarinet=1&v=${RW_V}`}
             onLoad={() => { if (ready.current) pushTheme(); }}
             style={{
               display: "block",
@@ -172,11 +203,9 @@
           />
         </div>
 
-        {!live && (
-          <div className="page-sub" style={{ marginTop: 10 }}>
-            Waiting for the planner to hand back its ready frame…
-          </div>
-        )}
+        <div className="page-sub" role="status" aria-live="polite" aria-atomic="true" style={{ marginTop: 10 }}>
+          {live ? "Planner ready." : "Waiting for the planner to hand back its ready frame…"}
+        </div>
       </div>
     );
   }

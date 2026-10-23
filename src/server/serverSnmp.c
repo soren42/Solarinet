@@ -12,9 +12,12 @@
 #include "solari/solariLog.h"
 
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 
 #include <mariadb/mysql.h>
 
@@ -31,21 +34,32 @@ MYSQL *serverDbConn(serverDb *db);
 
 int serverSnmpParseWalkLine(const char *line, int *ifIndex, char *val, size_t valCap)
 {
-    const char *sp, *dot, *v, *end;
+    const char *sp, *dot, *v, *end, *p;
+    char *idxEnd;
     long idx;
 
     if (!line || !ifIndex || !val || valCap == 0) return 0;
+    *ifIndex = 0;
     if (val && valCap) val[0] = '\0';
 
-    sp = strchr(line, ' ');           /* "<oid> <value>" */
+    if (line[0] != '.') return 0;
+    sp = strpbrk(line, " \t");       /* "<numeric oid> <value>" */
     if (!sp || sp == line) return 0;
+    for (p = line; p < sp; p++) {
+        if (*p == '.') {
+            if (p + 1 == sp || (p > line && p[-1] == '.')) return 0;
+        } else if (!isdigit((unsigned char)*p)) {
+            return 0;
+        }
+    }
 
     /* ifIndex = the last dotted label of the OID (before the space). */
     dot = sp;
     while (dot > line && *(dot - 1) != '.') dot--;
     if (dot == line || dot == sp) return 0;
-    idx = strtol(dot, NULL, 10);
-    if (idx <= 0) return 0;
+    errno = 0;
+    idx = strtol(dot, &idxEnd, 10);
+    if (errno == ERANGE || idxEnd != sp || idx <= 0 || idx > INT_MAX) return 0;
     *ifIndex = (int)idx;
 
     /* value: skip the space(s), strip a leading type tag we didn't ask for, and
@@ -54,20 +68,39 @@ int serverSnmpParseWalkLine(const char *line, int *ifIndex, char *val, size_t va
     v = sp;
     while (*v == ' ' || *v == '\t') v++;
     end = v + strlen(v);
-    while (end > v && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) end--;
-    if (end > v && *v == '"' && end[-1] == '"') { v++; end--; }   /* dequote */
+    while (end > v && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t')) end--;
+    if (end > v && (*v == '"' || end[-1] == '"')) {
+        if (end - v < 2 || *v != '"' || end[-1] != '"') return 0;
+        v++; end--;                                                   /* dequote */
+    }
     {
         size_t n = (size_t)(end - v);
-        if (n >= valCap) n = valCap - 1;
+        if (n >= valCap) return 0;                                    /* never truncate */
         memcpy(val, v, n);
         val[n] = '\0';
     }
     return 1;
 }
 
+static int snmpParseU64(const char *text, unsigned long long *value)
+{
+    const unsigned char *p;
+    char *end;
+    unsigned long long parsed;
+    if (!text || !text[0] || !value) return 0;
+    for (p = (const unsigned char *)text; *p; p++)
+        if (!isdigit(*p)) return 0;
+    errno = 0;
+    parsed = strtoull(text, &end, 10);
+    if (errno == ERANGE || *end != '\0') return 0;
+    *value = parsed;
+    return 1;
+}
+
 static serverSnmpIface *snmpFindIface(serverSnmpIface *ifaces, size_t *count, size_t cap, int ifIndex)
 {
     size_t i;
+    if (!ifaces || !count || ifIndex <= 0 || *count > cap) return NULL;
     for (i = 0; i < *count; i++)
         if (ifaces[i].ifIndex == ifIndex) return &ifaces[i];
     if (*count >= cap) return NULL;
@@ -80,14 +113,33 @@ int serverSnmpMergeIface(serverSnmpIface *ifaces, size_t *count, size_t cap,
                          serverSnmpOidKind kind, int ifIndex, const char *val)
 {
     serverSnmpIface *f;
-    if (!ifaces || !count || !val) return 0;
+    unsigned long long counter = 0;
+    long status = 0;
+    char *end;
+    if (!ifaces || !count || !val || ifIndex <= 0) return 0;
+    if (kind == SNMP_OID_IN || kind == SNMP_OID_OUT) {
+        if (!snmpParseU64(val, &counter)) return 0;
+    } else if (kind == SNMP_OID_STATUS) {
+        const unsigned char *p;
+        if (!val[0]) return 0;
+        for (p = (const unsigned char *)val; *p; p++)
+            if (!isdigit(*p)) return 0;
+        errno = 0;
+        status = strtol(val, &end, 10);
+        if (errno == ERANGE || *end != '\0' || status < 1 || status > 7) return 0;
+    } else if (kind == SNMP_OID_NAME) {
+        if (strlen(val) >= sizeof ifaces[0].name) return 0;
+    } else {
+        return 0;
+    }
     f = snmpFindIface(ifaces, count, cap, ifIndex);
     if (!f) return 0;
     switch (kind) {
-    case SNMP_OID_NAME:   snprintf(f->name, sizeof f->name, "%s", val); f->haveName = 1; break;
-    case SNMP_OID_IN:     f->inOctets  = strtoull(val, NULL, 10); f->haveIn = 1; break;
-    case SNMP_OID_OUT:    f->outOctets = strtoull(val, NULL, 10); f->haveOut = 1; break;
-    case SNMP_OID_STATUS: f->operStatus = (int)strtol(val, NULL, 10); f->haveStatus = 1; break;
+    case SNMP_OID_NAME:   memcpy(f->name, val, strlen(val) + 1); f->haveName = 1; break;
+    case SNMP_OID_IN:     f->inOctets  = counter; f->haveIn = 1; break;
+    case SNMP_OID_OUT:    f->outOctets = counter; f->haveOut = 1; break;
+    case SNMP_OID_STATUS: f->operStatus = (int)status; f->haveStatus = 1; break;
+    default: return 0;
     }
     return 1;
 }
@@ -96,6 +148,7 @@ int serverSnmpMergeIface(serverSnmpIface *ifaces, size_t *count, size_t cap,
 
 /* Only [A-Za-z0-9._:-] survive into the shell command (community + host come
  * from operator config/DB but we never trust them into popen unescaped). */
+#ifdef SOLARI_WITH_SNMP
 static void snmpSanitize(const char *in, char *out, size_t cap)
 {
     size_t o = 0;
@@ -107,6 +160,7 @@ static void snmpSanitize(const char *in, char *out, size_t cap)
     }
     out[o] = '\0';
 }
+#endif
 
 #ifdef SOLARI_WITH_SNMP
 static solariStatus snmpWalk(const char *mgmtIp, const char *community, const char *oid,
@@ -133,7 +187,11 @@ static solariStatus snmpWalk(const char *mgmtIp, const char *community, const ch
             got++;
         }
     }
-    pclose(f);
+    {
+        int status = pclose(f);
+        if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            return ERR_CONN_RETRY;
+    }
     return got > 0 ? SOLARI_OK : ERR_CONN_RETRY;   /* no rows -> unreachable/no SNMP */
 }
 #endif
@@ -142,6 +200,7 @@ static solariStatus snmpWalk(const char *mgmtIp, const char *community, const ch
 
 /* Read the previous sample for rate computation. Returns 1 if a prior row
  * exists (fills *inPrev,*outPrev,*ageSec), else 0. */
+#ifdef SOLARI_WITH_SNMP
 static int snmpPrevSample(MYSQL *conn, const char *gearIdEsc, int ifIndex,
                           unsigned long long *inPrev, unsigned long long *outPrev,
                           long *ageSec)
@@ -166,6 +225,7 @@ static int snmpPrevSample(MYSQL *conn, const char *gearIdEsc, int ifIndex,
     mysql_free_result(res);
     return have;
 }
+#endif
 
 solariStatus serverSnmpPollGear(serverContext *ctx, const char *gearId,
                                 const char *mgmtIp, const char *community)

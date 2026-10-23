@@ -14,24 +14,37 @@ url = amqp://solari:CHANGEME-rabbitmq-pw@10.5.2.50:5672/solari
 exchange = sor.events
 poll_interval_sec = 2
 reconnect_delay_sec = 5
+# Optional isolated/test queue override; production defaults to sor.apply.dns.
+# dns_queue = sor.apply.dns
 
 [dns]
-# sor_apply_dnsd: re-render zones from the SoR and reload BIND on change.
+# Requires reviewed root-owned release helpers and completed primary/secondary
+# bootstrap before starting this applier. Credentials come from [sor].
 gen_zones = /home/jason/Code/Solarinet/netdb/gen-zones.py
-render_python = /home/jason/Code/Solarinet/netdb/sor/.venv/bin/python3
-zone_src_dir = /home/jason/Code/Solarinet/netdb/zones
-zone_dst_dir = /etc/bind/zones
-named_conf_akoria = /etc/bind/named.conf.akoria
-reload_cmd = sudo rndc reload
+render_python = /home/jason/Code/Solarinet/deploy/sorsync/.venv/bin/python3
+domain = akoria.net
+incoming_root = /var/lib/solarinet-dns/incoming
+target_state_file = /var/lib/solarinet-dns/state/targets.json
+applied_zone_dir = /etc/bind/solarinet-current/zones
+runtime_zone_dir = /etc/bind/solarinet-current/zones
+release_helper = /usr/local/libexec/solarinet-dns-release
+release_config = /etc/solarinet/dns-release.json
 gen_bare = /home/jason/Code/Solarinet/deploy/dns-bare/gen-bare.py
-named_conf_bare = /etc/bind/named.conf.bare
-# bare-name single-label zones are master copies on steel too — push + SIGHUP:
-steel_host = jason@10.0.0.11
-steel_config_dir = /mnt/data/bind/config
-steel_reload_cmd = sudo docker kill -s HUP bind9
+secondary_refresh_helper = /usr/local/libexec/solari-dns-secondary-refresh
+primary_address = 10.0.0.20
+primary_config = /etc/bind/named.conf.akoria
+primary_additional_configs = /etc/bind/named.conf.bare,/etc/bind/named.conf.local,/etc/bind/named.conf.rpz
+secondary_refresh_timeout_sec = 150
 debounce_sec = 4
-# SoR password for the render step (source_sor.py reads SOR_DB_PASSWORD)
-sor_db_password = CHANGME-sor-app-pw
+reconcile_interval_sec = 3600
+
+[dns.secondary.chlorine]
+address = 10.7.0.10
+ssh_host = jason@chlorine
+update_helper = /usr/local/sbin/solari-bind9-update-zones
+
+# Add a named secondary section only after that host is provisioned, reachable,
+# serving zones, and configured for AXFR/NOTIFY from xenon. Steel is not active.
 
 [discovery]
 # sor_reconcile_discovery: fold detected hosts/services into the SoR.
@@ -48,6 +61,7 @@ source_label = monitoring
 targets = helium, mercury
 domain = akoria.net
 debounce_sec = 4
+reconcile_interval_sec = 3600
 
 [pihole.helium]
 ssh = jason@10.0.0.254

@@ -3,7 +3,7 @@
 Description=SolariNet backup (%i)
 After=network-online.target mariadb.service mysql.service
 Wants=network-online.target
-; Stub for Unit D's alert bridge to fill in; the script itself does not notify.
+; The separate helper publishes a fail-soft warning through notify.events.
 OnFailure=solari-notify-failure@%i.service
 
 [Service]

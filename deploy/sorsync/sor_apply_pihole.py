@@ -8,13 +8,15 @@ file actually changes. Gives the Pi-holes authoritative local A records straight
 from the SoR (belt-and-suspenders with the BIND conditional-forward; local records
 win, so a host still resolves at the Pi-hole even if BIND is unreachable).
 
-Idempotent (renders the whole file from current SoR state) + fail-soft per target
-(one unreachable Pi-hole never blocks the other or the daemon). Runs on xenon,
+Idempotent (renders the whole file from current SoR state). Each target is tried
+even if another fails; the broker event remains unacked until all configured
+targets succeed. Runs on xenon,
 which has key-based ssh + passwordless sudo on the Pi-holes.
 
 Config: sorsync.conf [amqp] + [sor] + [pihole] and per-target [pihole.<name>].
 """
 import configparser
+import hashlib
 import os
 import shlex
 import signal
@@ -24,6 +26,7 @@ import time
 
 import pika
 import pymysql
+from delivery import consume_after_apply
 
 CONF = os.environ.get("SORSYNC_CONF",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "sorsync.conf"))
@@ -67,55 +70,73 @@ def ssh_args(target_ssh):
 
 
 def apply_target(c, name, content):
-    """Diff + write custom.list on one Pi-hole; reload only on change. Fail-soft."""
+    """Diff + write custom.list; return changed, unchanged, or failed."""
     sec = f"pihole.{name}"
     ssh_host = c.get(sec, "ssh")
     path = c.get(sec, "custom_list")
     reload_cmd = c.get(sec, "reload")
     try:
-        cur = subprocess.run(ssh_args(ssh_host) + [f"sudo cat {shlex.quote(path)} 2>/dev/null || true"],
+        cur = subprocess.run(ssh_args(ssh_host) + [f"sudo cat {shlex.quote(path)} 2>/dev/null"],
                              capture_output=True, text=True, timeout=20)
-        if cur.stdout == content:
-            return False  # unchanged
-        # write atomically via a temp file, then reload
-        write = f"sudo tee {shlex.quote(path)} >/dev/null && {reload_cmd}"
+        if cur.returncode == 0 and cur.stdout == content:
+            # A previous write may have succeeded while reload failed. Re-run
+            # reload before acknowledging this event; it is idempotent.
+            reload_result = subprocess.run(ssh_args(ssh_host) + [reload_cmd],
+                                           capture_output=True, text=True, timeout=30)
+            if reload_result.returncode != 0:
+                log(f"{name}: reload failed: {reload_result.stderr.strip()[:200]}")
+                return "failed"
+            return "unchanged"
+        # Verify bytes before an atomic rename. A failed upload leaves the old
+        # custom.list intact; a failed reload is retried on the next delivery.
+        temp_path = path + ".sor-new"
+        digest = hashlib.sha256(content.encode()).hexdigest()
+        write = (f"sudo tee {shlex.quote(temp_path)} >/dev/null && "
+                 f"printf '%s  %s\\n' {shlex.quote(digest)} {shlex.quote(temp_path)} "
+                 f"| sudo sha256sum -c --status - && "
+                 f"sudo mv -f {shlex.quote(temp_path)} {shlex.quote(path)} && "
+                 f"{reload_cmd}")
         r = subprocess.run(ssh_args(ssh_host) + [write], input=content,
                            capture_output=True, text=True, timeout=45)
         if r.returncode != 0:
             log(f"{name}: apply failed: {r.stderr.strip()[:200]}")
-            return False
+            return "failed"
         log(f"{name}: pushed {content.count(chr(10))} records + reloaded")
-        return True
+        return "changed"
     except Exception as e:  # noqa: BLE001
         log(f"{name}: soft-fail: {e!r}")
-        return False
+        return "failed"
 
 
 def apply_all(c):
     targets = [t.strip() for t in c.get("pihole", "targets").split(",") if t.strip()]
+    if not targets:
+        raise ValueError("no Pi-hole targets configured")
     content = render(c)
-    changed = 0
+    changed = failed = 0
     for name in targets:
-        if apply_target(c, name, content):
+        outcome = apply_target(c, name, content)
+        if outcome == "changed":
             changed += 1
-    if changed == 0:
+        elif outcome == "failed":
+            failed += 1
+    if changed == 0 and failed == 0:
         log("rendered; no Pi-hole change")
+    if failed:
+        log(f"{failed} Pi-hole target(s) failed; delivery remains unacknowledged")
+    return failed == 0
 
 
 def run():
     c = load_cfg()
     exchange = c.get("amqp", "exchange", fallback="sor.events")
     debounce = c.getfloat("pihole", "debounce_sec", fallback=4.0)
+    reconcile = c.getfloat("pihole", "reconcile_interval_sec", fallback=3600.0)
     reconnect = c.getfloat("amqp", "reconnect_delay_sec", fallback=5.0)
     queue = "sor.apply.pihole"
 
-    log("initial render on startup")
-    try:
-        apply_all(c)
-    except Exception as e:  # noqa: BLE001
-        log(f"initial render error: {e!r}")
-
     while _run:
+        conn = None
         try:
             conn = pika.BlockingConnection(pika.URLParameters(c.get("amqp", "url")))
             ch = conn.channel()
@@ -123,22 +144,20 @@ def run():
             ch.queue_declare(queue=queue, durable=True)
             for k in HOST_KEYS:
                 ch.queue_bind(exchange=exchange, queue=queue, routing_key=k)
-            log(f"consuming {queue} (debounce={debounce}s)")
-            dirty = False
-            for method, _props, _body in ch.consume(queue, inactivity_timeout=debounce):
-                if not _run:
-                    break
-                if method is None:
-                    if dirty:
-                        apply_all(c)
-                        dirty = False
-                    continue
-                dirty = True
-                ch.basic_ack(method.delivery_tag)
-            ch.cancel(); conn.close()
+            log(f"consuming {queue} (debounce={debounce}s, reconcile={reconcile}s)")
+            consume_after_apply(ch, queue, debounce, reconcile,
+                                lambda: apply_all(c), lambda: _run,
+                                maintain_connection=lambda: conn.process_data_events(time_limit=0.25))
         except Exception as e:  # noqa: BLE001
             log(f"error: {e!r}; reconnecting in {reconnect}s")
-            time.sleep(reconnect)
+            if _run:
+                time.sleep(reconnect)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()  # requeues unacked deliveries
+                except Exception:
+                    pass
 
 
 def _stop(*_):

@@ -48,14 +48,35 @@
   .note.warnb{background:#241f13;border-color:#4a3d1c;color:#e6d3a3}
   .kv{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0}
   .foot{margin-top:40px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+  @page{size:letter;margin:.45in}
+  @media print{
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    body{background:#fff;color:#17212b;font-size:9.5pt;line-height:1.38}
+    .card{background:#fff!important;color:#17212b;border-color:#cbd6dc}
+    .big{background:#f3f7f8!important;border-color:#aebec8}
+    .note{background:#f2f6f8!important;color:#344454;border-color:#b1bec8}
+    .note.warnb{background:#fff8e5!important;color:#503b12;border-color:#d8c68f}
+    p,li,td,.dim{color:#344454!important}
+    th{color:#425664!important}
+    h2{color:#075a70!important}
+    h3{color:#075a70!important}
+    .tag{background:#eef5f8;color:#075a70;border-color:#b6cbd3}
+    code{background:#eef3f7;color:#1f4661;border-color:#cbd6dc}
+    .wrap{width:auto;max-width:none;margin:0;padding:0}
+    header{break-after:avoid}
+    .card,.note{break-inside:avoid;box-shadow:none}
+    a{color:#075a70;text-decoration:underline}
+    .foot{font-size:9pt}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
   <h1><span class="n">SolariNet</span> — Operator Quick Reference</h1>
-  <div class="sub">How you actually touch the akoria network — dashboard-first. &nbsp;·&nbsp; Snapshot 2026-07-07, post-patch (xenon on kernel 7.0.0-27).</div>
+  <div class="sub">Dashboard-first field reference. &nbsp;·&nbsp; Historical snapshot 2026-07-07; current state note added 2026-10-21.</div>
 </header>
+<div class="note warnb" role="note" style="margin-top:14px"><b>Historical operational details — verify before acting.</b> This guide records a 7 July snapshot; its host versions, service locations, and recovery procedures were not revalidated for this edition. Steel is the inventory-labeled ZimaBlade on laboratory switch port 12; it is unreachable and is not currently advertised as a DNS server. Chlorine is the Khadas VIM4 at 10.7.0.10 and now runs an authoritative-only BIND secondary for 109 zones (forward, reverse, bare-name, and RPZ); canonical zone hashes match Xenon. It refuses recursion. See the <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">current stabilization baseline</a> for checked state and release gates.</div>
 
 <!-- ============ THE DASHBOARD ============ -->
 <div class="card big">

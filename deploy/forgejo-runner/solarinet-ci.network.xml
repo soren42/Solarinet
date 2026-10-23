@@ -1,0 +1,10 @@
+<network>
+  <name>solarinet-ci</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-ci0' stp='on' delay='0'/>
+  <ip address='192.168.123.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.123.10' end='192.168.123.50'/>
+    </dhcp>
+  </ip>
+</network>
