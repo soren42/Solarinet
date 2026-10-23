@@ -63,7 +63,7 @@ if ($path === '/__health') { echo 'ok'; exit; }
 if ($path === '/__fixture_session') {
     $user = (string)($_GET['user'] ?? '');
     if (!preg_match('/\\A[a-z0-9-]{1,64}\\z/', $user)) { http_response_code(400); exit; }
-    Auth::establishSession(['username' => $user, 'role' => 'operator', 'source' => 'oidc']);
+    Auth::establishSession(['username' => $user, 'role' => 'operator', 'source' => 'test']);
     header('Content-Type: application/json'); echo json_encode(['ready' => true]); exit;
 }
 if (is_string($path) && str_starts_with($path, '/api/')) {
@@ -101,7 +101,7 @@ if (is_string($path) && str_starts_with($path, '/api/')) {
     $data = match ($path) {
         '/api/summary' => ['counts'=>[], 'lease'=>[]],
         '/api/config' => [],
-        '/api/auth/whoami' => ['operator'=>$principal['username'],'role'=>$principal['role'],'displayName'=>$principal['username'],'source'=>'oidc','csrfToken'=>Auth::csrfToken()],
+        '/api/auth/whoami' => ['operator'=>$principal['username'],'role'=>$principal['role'],'displayName'=>$principal['username'],'source'=>$principal['source'],'csrfToken'=>Auth::csrfToken()],
         default => [],
     };
     header('Content-Type: application/json'); header('Cache-Control: no-store');

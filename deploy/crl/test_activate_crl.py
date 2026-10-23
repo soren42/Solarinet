@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.error
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -87,6 +88,18 @@ class ActivateCrlTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_zero_exit_without_openssl_signature_success_marker_is_rejected(self) -> None:
+        result = SimpleNamespace(returncode=0, stdout=b"", stderr=b"verify failure\n")
+        with patch.object(activator.subprocess, "run", return_value=result), \
+                self.assertRaisesRegex(ValueError, "openssl failed"):
+            activator.verify_crl_signature(self.root / "fixture.crl", self.ca_cert)
+
+    def test_signature_success_marker_cannot_be_joined_across_output_streams(self) -> None:
+        result = SimpleNamespace(returncode=0, stdout=b"verify ", stderr=b"OK\n")
+        with patch.object(activator.subprocess, "run", return_value=result), \
+                self.assertRaisesRegex(ValueError, "openssl failed"):
+            activator.verify_crl_signature(self.root / "fixture.crl", self.ca_cert)
 
     def make_crl(self, number: int, *, expired: bool = False,
                  last_update: dt.datetime | None = None,
@@ -227,9 +240,22 @@ class ActivateCrlTests(unittest.TestCase):
         rejects_with_configured = subprocess.run(
             ["openssl", "crl", "-in", str(wrong_path), "-noout", "-verify",
              "-CAfile", str(self.ca_cert)], capture_output=True)
-        self.assertEqual(verifies_with_other.returncode, 0, "fixture CRL must verify with its signer")
-        self.assertNotEqual(rejects_with_configured.returncode, 0,
-                            "fixture CRL must not verify with the configured issuer")
+        self.assertEqual(verifies_with_other.returncode, 0,
+                         "valid fixture CRL command must exit successfully")
+        self.assertIn(b"verify OK", verifies_with_other.stdout + verifies_with_other.stderr,
+                      "fixture CRL must verify with its signer")
+        self.assertNotIn(b"verify OK", rejects_with_configured.stdout + rejects_with_configured.stderr,
+                         "fixture CRL must not verify with the configured issuer")
+        self.active.write_bytes(self.base_bundle.read_bytes().rstrip() + b"\n" + wrong_signed)
+        before_bad_active = self.active.read_bytes()
+        with patch.object(activator, "fetch_crl", return_value=self.make_crl(10)), \
+                patch.object(activator, "restart_service") as restart, \
+                self.assertRaisesRegex(ValueError, "active bundle CRL signature verification failed"):
+            activator.activate("https://crl.example.test/current.pem", self.base_bundle,
+                               self.ca_cert, self.active, "solari-client.service")
+        restart.assert_not_called()
+        self.assertEqual(before_bad_active, self.active.read_bytes())
+        self.active.write_bytes(before)
         with patch.object(activator, "fetch_crl", return_value=wrong_signed), \
                 patch.object(activator, "restart_service") as restart, \
                 self.assertRaisesRegex(ValueError, "openssl failed"):

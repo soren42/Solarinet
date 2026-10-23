@@ -42,7 +42,7 @@ class AtomicWriteError(OSError):
         self.replaced = replaced
 
 
-def command(argv: list[str], timeout: int = 10) -> bytes:
+def command(argv: list[str], timeout: int = 10, *, expected_output: bytes | None = None) -> bytes:
     command_timeout = float(timeout)
     if OPERATION_DEADLINE is not None:
         remaining = OPERATION_DEADLINE - time.monotonic()
@@ -56,8 +56,13 @@ def command(argv: list[str], timeout: int = 10) -> bytes:
         if OPERATION_DEADLINE is not None and time.monotonic() >= OPERATION_DEADLINE:
             raise TimeoutError("CRL validation exceeded its 120-second operation budget") from error
         raise
-    if result.returncode:
-        detail = result.stderr.decode("utf-8", "replace").strip()[:400]
+    marker_missing = (expected_output is not None
+                      and expected_output not in result.stdout
+                      and expected_output not in result.stderr)
+    if result.returncode or marker_missing:
+        detail = (result.stderr or result.stdout).decode("utf-8", "replace").strip()[:400]
+        if not detail and expected_output is not None:
+            detail = f"expected success marker {expected_output.decode('ascii', 'replace')!r} was absent"
         raise ValueError(f"{pathlib.Path(argv[0]).name} failed: {detail}")
     return result.stdout
 
@@ -125,6 +130,14 @@ def crl_metadata(crl: pathlib.Path) -> tuple[int, dt.datetime, dt.datetime, byte
             parse_date("-nextupdate"), command(["openssl", "crl", "-in", str(crl), "-outform", "DER"]))
 
 
+def verify_crl_signature(crl: pathlib.Path, issuer_ca: pathlib.Path) -> None:
+    # OpenSSL releases before 3.3 may print "verify failure" but exit zero.
+    # Require the explicit success marker as well as a zero exit code. Keep
+    # -noout so CRL fields cannot inject the marker into OpenSSL's output.
+    command(["openssl", "crl", "-in", str(crl), "-noout", "-verify",
+             "-CAfile", str(issuer_ca)], expected_output=b"verify OK")
+
+
 def validate_crl(crl: pathlib.Path, issuer_ca: pathlib.Path, base_bundle: pathlib.Path,
                  *, min_valid_seconds: int, max_lifetime_seconds: int) -> tuple[int, str, bytes]:
     if base_bundle.stat().st_size > MAX_BUNDLE_BYTES:
@@ -149,7 +162,7 @@ def validate_crl(crl: pathlib.Path, issuer_ca: pathlib.Path, base_bundle: pathli
         raise ValueError("issuer CA certificate is not present in the immutable base bundle")
     if crl_issuer(crl) != subject_name(issuer_ca):
         raise ValueError("CRL issuer does not match the configured issuer CA")
-    command(["openssl", "crl", "-in", str(crl), "-noout", "-verify", "-CAfile", str(issuer_ca)])
+    verify_crl_signature(crl, issuer_ca)
     number, last_update, next_update, der = crl_metadata(crl)
     now = dt.datetime.now(dt.timezone.utc)
     if last_update > now + dt.timedelta(minutes=2):
@@ -273,8 +286,12 @@ def _activate_locked(url: str, base_bundle: pathlib.Path, issuer_ca: pathlib.Pat
                 old_crl_path.write_bytes(old_crls[0])
                 if crl_issuer(old_crl_path) != subject_name(issuer_ca):
                     raise ValueError("active bundle contains a CRL for a different issuer")
-                command(["openssl", "crl", "-in", str(old_crl_path), "-noout", "-verify",
-                         "-CAfile", str(issuer_ca)])
+                try:
+                    verify_crl_signature(old_crl_path, issuer_ca)
+                except ValueError as error:
+                    raise ValueError(
+                        f"active bundle CRL signature verification failed: {error}"
+                    ) from error
                 old_number, _old_last, _old_next, old_der = crl_metadata(old_crl_path)
                 if number < old_number or (number == old_number and der != old_der):
                     raise ValueError("CRL number rollback or conflicting same-number CRL refused")

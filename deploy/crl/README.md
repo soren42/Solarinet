@@ -37,6 +37,28 @@ the systemd unit allows 240 additional seconds for activation and recovery. The
 activation unit runs as root to update the trust bundle and invoke systemd, but
 it has no CA private-key path or access.
 
+If an active CRL fails the stricter signature check (for example, one installed
+by an older updater that trusted OpenSSL's exit status alone), the updater
+intentionally refuses to replace it. Keep the client stopped until a valid CRL
+is fetched and verified; restoring the base roots temporarily removes CRL
+revocation data. For the `client` instance, replace the example paths and unit
+name only if your instance uses different values:
+
+```sh
+sudo systemctl stop solari-crl-activate@client.timer
+sudo systemctl stop solari-client.service
+sudo install -o root -g root -m 0644 /etc/solarinet/trust-roots.pem \
+  /var/lib/solari-crl-active/client.pem
+sudo systemctl start solari-crl-activate@client.service
+sudo systemctl is-active --quiet solari-client.service &&
+  sudo systemctl start solari-crl-activate@client.timer
+```
+
+The activation service starts the client only after verifying and installing a
+fresh CRL. If activation fails, leave the client stopped, inspect the journal,
+and correct the endpoint or issuer configuration before retrying. Do not start
+the client with the base-only bundle when CRL revocation checking is required.
+
 The fetcher refuses every HTTP redirect. By default it uses the operating
 system CA store for the HTTPS endpoint. If `--https-ca-file` is supplied during
 a direct updater invocation, that file is the exclusive trust store; it is not

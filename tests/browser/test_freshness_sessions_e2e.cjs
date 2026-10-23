@@ -96,7 +96,7 @@ if (is_string($path) && str_starts_with($path, '/api/')) {
     $data = match ($path) {
         '/api/summary' => ['counts'=>[], 'lease'=>[]],
         '/api/config' => [],
-        '/api/auth/whoami' => ['operator'=>$principal['username'],'role'=>$principal['role'],'displayName'=>$principal['username'],'source'=>'oidc','csrfToken'=>Auth::csrfToken()],
+        '/api/auth/whoami' => ['operator'=>$principal['username'],'role'=>$principal['role'],'displayName'=>$principal['displayName'],'source'=>$principal['source'],'csrfToken'=>Auth::csrfToken()],
         default => [],
     };
     if ($path !== '/api/summary' && $path !== '/api/config' && $path !== '/api/auth/whoami') $data = [];
