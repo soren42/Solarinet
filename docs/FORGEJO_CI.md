@@ -48,6 +48,15 @@ anything exposed inside the VM, so runner jobs must not receive production or re
 credentials; use one-job/ephemeral registration where supported and reset the VM after the
 job.
 
+The dedicated libvirt network forwards `akoria.net` queries to Xenon's authoritative BIND
+at `10.0.0.20` and all other guest DNS queries to the home router at `10.0.0.1`. Benzene's
+host resolver points at Xenon's BIND, which does not recurse for public zones; inheriting
+that resolver caused Forgejo run 70 to fail before browser tests because `cdn.playwright.dev`
+returned NXDOMAIN. The server-job preflight now checks both the Playwright CDN and
+`cesium.akoria.net` before browser installation, covering public recursion and internal
+Forgejo resolution. Do not change Xenon's production DNS behavior to accommodate CI; the
+split resolver remains inside the isolated runner network.
+
 The host network configuration is in `deploy/forgejo-runner/`. Inet input and forwarding
 rules enforce the boundary on the dedicated bridge; the fixed VM tap `ci-tap0` is checked
 against the live domain XML and included in nftables rules as an additional match. Libvirt
@@ -217,14 +226,31 @@ now start a fresh run without cancelling run 69. Forgejo documents that `needs` 
 must complete successfully before a dependent job runs
 ([Actions reference](https://forgejo.org/docs/v15.0/user/actions/reference/)).
 
+Run `70` exercised commit `69997a2af27b` after the checkout fix. Seven jobs passed,
+including the SoR delivery and RabbitMQ upgrade matrix. The server job reached the
+Playwright browser download but failed because the guest resolver returned NXDOMAIN for
+`cdn.playwright.dev`; the dashboard dependent was skipped and the remaining queued jobs did
+not run. Read-only DNS checks on Benzene confirmed that its configured resolver
+`10.0.0.20` (Xenon's authoritative BIND) returns authoritative NXDOMAIN for this public
+name, while router resolver `10.0.0.1` returns valid CDN records. The fix adds split DNS only
+to the isolated `solarinet-ci` libvirt network: `akoria.net` goes to Xenon and all other
+queries go to the router. It retains the network UUID so `virsh net-define` updates the
+existing persistent network, and checks both public CDN and internal Forgejo resolution
+before browser installation. The XML validates against Benzene's libvirt schema and 13
+local runner-supervisor tests pass. After confirming no Forgejo task was active, the network
+was restarted; live queries through `192.168.123.1` resolved both `cdn.playwright.dev` and
+`cesium.akoria.net`. The isolated runner network is active again. **The fix is not yet
+published, and no new Forgejo run has exercised it.**
+
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private. Forgejo run `65` confirms that Actions are enabled and dispatch jobs for
 this repository. The server has no explicit `[actions]` override in `app.ini` (Forgejo v15
 defaults Actions to enabled).
 
-Therefore the complete Forgejo matrix for the current candidate is **UNVERIFIED**. Run 69 does
-not validate the current checkout or the new scanner/entity/RackWire flow; rerun the full matrix
-after review and publication, then inspect every job result.
+Therefore the complete Forgejo matrix for the current candidate is **UNVERIFIED**. Run 70
+confirms checkout, the SoR migration/delivery tests, and RabbitMQ compatibility, but did not
+reach the full server, RackWire browser, dashboard, firmware, or cross-platform jobs. Publish
+the reviewed candidate, rerun the full matrix, and inspect every job result before promotion.
 GitHub run `39898481633`
 completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
 2026-10-23; GitHub remains a secondary mirror and verification path when available.

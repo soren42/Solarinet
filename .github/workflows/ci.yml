@@ -272,6 +272,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Verify Playwright CDN DNS before browser download
+        run: |
+          getent ahostsv4 cdn.playwright.dev
+          getent ahostsv4 cesium.akoria.net
       - name: Install pinned browser acceptance runtime
         run: npm install --prefix /tmp/scan-playwright --no-save playwright@1.64.1
       - name: Install Chromium and system libraries

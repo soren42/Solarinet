@@ -37,9 +37,7 @@ chmod 0644 /etc/solarinet-ci/registration_key.pub
 install -o root -g root -m 0600 "$source_dir/cesium.known_hosts" /etc/solarinet-ci/known_hosts
 
 systemctl daemon-reload
-if ! virsh net-info solarinet-ci >/dev/null 2>&1; then
-  virsh net-define /etc/solarinet-ci/solarinet-ci.network.xml
-fi
+virsh net-define /etc/solarinet-ci/solarinet-ci.network.xml
 virsh net-autostart --disable solarinet-ci
 if systemctl is-active --quiet solarinet-ci-guard.service; then
   systemctl reload solarinet-ci-guard.service

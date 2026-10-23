@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -182,6 +183,24 @@ class ForgejoRunnerSupervisorTests(unittest.TestCase):
         source = (HERE / "solarinet-ci-network.service").read_text()
         self.assertIn("ExecStartPre=", source)
         self.assertIn("^Bridge:.*virbr-ci0$", source)
+        self.assertIn("virsh net-destroy solarinet-ci", source)
+        self.assertIn("virsh net-start solarinet-ci", source)
+
+    def test_ci_network_splits_internal_and_public_dns_forwarding(self):
+        network = ET.parse(HERE / "solarinet-ci.network.xml").getroot()
+        self.assertEqual(
+            network.findtext("uuid"), "f1efdf16-d89d-4d1c-96f4-6dfeb01a0c0f"
+        )
+        forwarders = {
+            (node.get("domain"), node.get("addr"))
+            for node in network.findall("./dns/forwarder")
+        }
+        self.assertEqual(
+            forwarders,
+            {("akoria.net", "10.0.0.20"), (None, "10.0.0.1")},
+        )
+        installer = (HERE / "install-supervisor.sh").read_text()
+        self.assertIn("virsh net-define /etc/solarinet-ci/solarinet-ci.network.xml", installer)
 
     def test_serial_capture_caps_logs_and_extracts_crlf_markers_under_flood(self):
         with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:

@@ -22,6 +22,22 @@ Sources: [PHP security release](https://www.php.net/?=PHPE9568F35-D428-11d2-A769
 | Radium | No PHP runtime or PHP-FPM service found; only `php-crypt-gpg` is installed. TCP 9000 belongs to a Java process. | No PHP serving runtime found. |
 | Chlorine | No PHP runtime or PHP-FPM service found; only `php-crypt-gpg` is installed. | No PHP serving runtime found. |
 
+## Runtime recheck — 2026-10-23 08:55 UTC
+
+Read-only checks reconfirmed Xenon's PHP 8.5 packages at Ubuntu's fixed
+`8.5.4-0ubuntu1.5` backport, with PHP-FPM and Apache active. On Cesium, the
+installed PHP packages remain `8.5.12-4.1`; two development servers are active
+on loopback: the scanner listener at `127.0.0.1:8080` and the staged dashboard
+at `127.0.0.1:17702`. Both processes resolve to the installed `/usr/bin/php`.
+PHP-FPM, Apache, and Nginx services are inactive there. This clarifies that the
+Cesium development processes are separate from a system PHP-FPM deployment.
+
+The upstream security notice still identifies both CVEs as critical
+unauthenticated RCE issues and recommends updating to the fixed release; the
+Ubuntu 26.04 package versions above match USN-8948-1. No package installation or
+service restart was needed. Inaccessible/offline devices listed below remain
+`UNVERIFIED`.
+
 ## Network check and limits
 
 A TCP scan of 22 inventoried infrastructure addresses checked ports 80, 443, 8080, 9000, 9001, and 9003. The open ports found were consistent with the hosts above; no PHP-FPM port was identified. Xenon's public 8080 listener belongs to Nginx; the development PHP listener itself binds only to loopback. The scan does not detect loopback-only or Unix-socket PHP-FPM services, so host package/service inspection was also used wherever SSH was available.
