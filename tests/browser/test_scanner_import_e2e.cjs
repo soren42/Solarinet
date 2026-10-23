@@ -213,10 +213,16 @@ async function main() {
   const rackwirePlanNote = `CSRF persistence proof ${suffix}`;
   const linkedEntityName = `scanner-node-${suffix}`;
   const peerEntityName = `scanner-peer-${suffix}`;
+  const unknownPeerEntityName = `scanner-unknown-peer-${suffix}`;
   const committedCableLabel = `scanner-cable-${suffix}`;
+  const mappedCableLabel = `scanner-cable-port-${suffix}`;
+  const unknownPortCableLabel = `scanner-cable-unknown-port-${suffix}`;
+  const scannerInterfaceName = `scanner-uplink-${suffix}`;
   let rackwirePlanId = null;
   let linkedEntityId = null;
   let peerEntityId = null;
+  let unknownPeerEntityId = null;
+  let scannerInterfaceId = null;
 
   let locationIds = [];
   let child = null;
@@ -244,10 +250,18 @@ async function main() {
 
     sql(`INSERT INTO entities (name,entity_type,source_id,asserted_kind)
          VALUES (${quote(linkedEntityName)},'network_gear',${Number(manualSource)},'human'),
-                (${quote(peerEntityName)},'server',${Number(manualSource)},'human')`);
+                (${quote(peerEntityName)},'server',${Number(manualSource)},'human'),
+                (${quote(unknownPeerEntityName)},'server',${Number(manualSource)},'human')`);
     linkedEntityId = Number(sql(`SELECT id FROM entities WHERE name=${quote(linkedEntityName)} AND deleted_at IS NULL LIMIT 1`));
     peerEntityId = Number(sql(`SELECT id FROM entities WHERE name=${quote(peerEntityName)} AND deleted_at IS NULL LIMIT 1`));
-    assert(linkedEntityId > 0 && peerEntityId > 0, 'scratch SoR must include two canonical network entities');
+    unknownPeerEntityId = Number(sql(`SELECT id FROM entities WHERE name=${quote(unknownPeerEntityName)} AND deleted_at IS NULL LIMIT 1`));
+    assert(linkedEntityId > 0 && peerEntityId > 0 && unknownPeerEntityId > 0,
+      'scratch SoR must include canonical entities for mapped, entity-level, and unknown-port cable cases');
+    sql(`INSERT INTO interfaces (entity_id,name,if_kind,source_id,asserted_kind,asserted_at)
+         VALUES (${linkedEntityId},${quote(scannerInterfaceName)},'physical',${Number(manualSource)},'human',NOW())`);
+    scannerInterfaceId = Number(sql(`SELECT id FROM interfaces WHERE entity_id=${linkedEntityId}
+      AND name=${quote(scannerInterfaceName)} AND deleted_at IS NULL LIMIT 1`));
+    assert(scannerInterfaceId > 0, 'scratch SoR must include the scanner device interface');
 
     const seedNote = `seed ${suffix}`;
     const initialRackwirePlan = JSON.stringify({ devices: [], cables: [], racks: [], notes: [{ uid: `seed-${suffix}`, text: seedNote, x: 0, y: 0 }], codeMap: {} });
@@ -517,6 +531,49 @@ async function main() {
 
     const scannerDevice = storedPlan.devices.find((device) => device.assetId === tag);
     assert(scannerDevice && scannerDevice.uid, 'the scanned physical unit must remain a plan device');
+    // Scanner lookup may leave the newly placed device selected. Clear that
+    // state so the following pointer click always exercises the UI path.
+    await page.locator(frameSelector).evaluate((element) => {
+      element.contentWindow.RackWire.select([]);
+    });
+    await rackwireFrame.locator(`[data-kind="device"][data-uid="${scannerDevice.uid}"]`).click();
+    const portMap = rackwireFrame.locator('input[placeholder="GigabitEthernet0/3=ge-3, Te1/0/1=sfp-1"]');
+    await portMap.waitFor({ state: 'visible' });
+    const scannerPortId = await page.locator(frameSelector).evaluate((element, uid) => {
+      const frame = element.contentWindow;
+      const device = frame.RackWire.getPlan().devices.find((item) => item.uid === uid);
+      if (!device) return '';
+      const geometry = frame.RW.layout({ groups: device.groups, name: device.name, model: device.model });
+      const networkPort = geometry.ports.find((port) => port.domain === 'net');
+      return networkPort ? networkPort.id : '';
+    }, scannerDevice.uid);
+    assert(scannerPortId, 'the reviewed RackWire profile must expose a physical port ID');
+    const mappedSaveWait = page.waitForResponse((response) =>
+      response.url().includes('/api/rackwire/plans') && response.request().method() === 'POST'
+        && (response.request().postData() || '').includes(scannerInterfaceName)
+        && (response.request().postData() || '').includes(scannerPortId));
+    await portMap.fill(`${scannerInterfaceName}=${scannerPortId}`);
+    const mappedSave = await mappedSaveWait;
+    assert([200, 201].includes(mappedSave.status()), 'the operator port map must save through the RackWire SoR API');
+    let mappedPlan = null;
+    let scannerMapPersisted = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      mappedPlan = JSON.parse(sql(`SELECT plan_json FROM rw_plans WHERE id=${rackwirePlanId}`));
+      const mappedDevice = mappedPlan.devices.find((device) => device.uid === scannerDevice.uid);
+      if (mappedDevice && mappedDevice.ifMap && mappedDevice.ifMap[scannerInterfaceName] === scannerPortId) {
+        scannerMapPersisted = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert(scannerMapPersisted,
+      `RackWire autosave must persist the operator-selected SoR interface-to-port mapping; last saved plan: ${JSON.stringify(mappedPlan)}`);
+    assert(mappedPlan && Array.isArray(mappedPlan.devices), 'RackWire plan should remain persisted after port mapping');
+    const persistedMappedDevice = mappedPlan.devices.find((device) => device.uid === scannerDevice.uid);
+    assert(persistedMappedDevice && persistedMappedDevice.ifMap, 'the scanned device should retain its persisted port map');
+    scannerDevice.ifMap = persistedMappedDevice.ifMap;
+    assert.equal(scannerDevice.ifMap[scannerInterfaceName], scannerPortId,
+      'the SoR interface name must persist against the reviewed RackWire port ID');
     const peerUid = `peer-${suffix}`;
     const cablePlan = {
       devices: [scannerDevice, { uid: peerUid, name: peerEntityName, assetId: peerEntityName, groups: [] }],
@@ -537,8 +594,71 @@ async function main() {
       'scanner asset tag must resolve through the operator-reviewed SoR entity association');
     assert.equal(Number(storedCable[2]), peerEntityId,
       'the second cable endpoint must resolve to its canonical SoR entity');
-    assert.equal(storedCable[3], null, 'unknown physical ports must remain entity-level instead of guessed');
-    assert.equal(storedCable[4], null, 'unknown physical ports must remain entity-level instead of guessed');
+    assert.equal(storedCable[3], null, 'a cable with no port specified must remain entity-level');
+    assert.equal(storedCable[4], null, 'a cable with no port specified must retain its peer entity');
+
+    const mappedCablePlan = {
+      ...cablePlan,
+      cables: [{ uid: `mapped-cable-${suffix}`, a: { dev: scannerDevice.uid, port: scannerPortId },
+        b: { dev: peerUid }, standard: 'cat6', label: mappedCableLabel, lengthM: 1.25 }],
+    };
+    const mappedCableCommit = await context.request.post(`${base}/api/rackwire/commit`, {
+      data: { dryRun: false, plan: mappedCablePlan },
+      headers: { Origin: base, 'X-Solari-CSRF': profileHeaders['x-solari-csrf'] },
+    });
+    assert.equal(mappedCableCommit.status(), 200, 'RackWire must commit the explicitly mapped scanner interface');
+    assert.equal((await mappedCableCommit.json()).data.created, 1, 'mapped-port cable commit must create one link');
+    const mappedStoredCable = JSON.parse(sql(`SELECT JSON_ARRAY(id,a_interface_id,a_entity_id,b_interface_id,b_entity_id)
+      FROM interconnects WHERE label=${quote(mappedCableLabel)} AND deleted_at IS NULL`));
+    assert.equal(Number(mappedStoredCable[1]), scannerInterfaceId,
+      'the scanner endpoint must resolve to the exact SoR interface selected by ifMap');
+    assert.equal(mappedStoredCable[2], null, 'an interface endpoint must not duplicate its entity-level reference');
+    assert.equal(mappedStoredCable[3], null, 'an unmapped peer endpoint must remain entity-level');
+    assert.equal(Number(mappedStoredCable[4]), peerEntityId, 'the peer endpoint must retain its canonical SoR entity');
+
+    const repeatedMappedCommit = await context.request.post(`${base}/api/rackwire/commit`, {
+      data: { dryRun: false, plan: mappedCablePlan },
+      headers: { Origin: base, 'X-Solari-CSRF': profileHeaders['x-solari-csrf'] },
+    });
+    assert.equal(repeatedMappedCommit.status(), 200, 'replaying an interface-level cable plan must remain safe');
+    const replayResult = (await repeatedMappedCommit.json()).data;
+    assert.equal(replayResult.created, 0, 'replaying the mapped cable must not create a duplicate');
+    assert.equal(replayResult.updated, 1, 'replaying the mapped cable must update the existing interface-level link');
+
+    const unknownPeerUid = `unknown-peer-${suffix}`;
+    const unknownPortPlan = {
+      ...cablePlan,
+      devices: [...cablePlan.devices, { uid: unknownPeerUid, name: unknownPeerEntityName,
+        assetId: unknownPeerEntityName, groups: [] }],
+      cables: [{ uid: `unknown-port-${suffix}`, a: { dev: scannerDevice.uid, port: `missing-${suffix}` },
+        b: { dev: unknownPeerUid }, standard: 'cat6', label: unknownPortCableLabel, lengthM: 1.25 }],
+    };
+    const unknownPortCommit = await context.request.post(`${base}/api/rackwire/commit`, {
+      data: { dryRun: false, plan: unknownPortPlan },
+      headers: { Origin: base, 'X-Solari-CSRF': profileHeaders['x-solari-csrf'] },
+    });
+    assert.equal(unknownPortCommit.status(), 200, 'an explicitly unmapped port must commit conservatively');
+    assert.equal((await unknownPortCommit.json()).data.created, 1, 'unknown-port fallback must create one entity-level link');
+    const unknownStoredCable = JSON.parse(sql(`SELECT JSON_ARRAY(id,a_interface_id,a_entity_id,b_interface_id,b_entity_id)
+      FROM interconnects WHERE label=${quote(unknownPortCableLabel)} AND deleted_at IS NULL`));
+    assert.equal(unknownStoredCable[1], null, 'an unknown port must not bind to a SoR interface');
+    assert.equal(Number(unknownStoredCable[2]), linkedEntityId, 'an unknown port must retain the reviewed entity association');
+    assert.equal(unknownStoredCable[3], null, 'the unmapped peer remains at entity level');
+    assert.equal(Number(unknownStoredCable[4]), unknownPeerEntityId, 'the peer entity remains canonical');
+    const repeatedUnknownCommit = await context.request.post(`${base}/api/rackwire/commit`, {
+      data: { dryRun: false, plan: unknownPortPlan },
+      headers: { Origin: base, 'X-Solari-CSRF': profileHeaders['x-solari-csrf'] },
+    });
+    assert.equal(repeatedUnknownCommit.status(), 200, 'replaying an unknown-port cable must remain safe');
+    const unknownReplayResult = (await repeatedUnknownCommit.json()).data;
+    assert.equal(unknownReplayResult.created, 0, 'replaying an unknown-port link must not create a duplicate');
+    assert.equal(unknownReplayResult.updated, 1, 'replaying an unknown-port link must update its entity-level record');
+    const finalEntityCable = JSON.parse(sql(`SELECT JSON_ARRAY(id,a_entity_id,b_entity_id,a_interface_id,b_interface_id)
+      FROM interconnects WHERE label=${quote(committedCableLabel)} AND deleted_at IS NULL`));
+    assert.deepEqual(finalEntityCable, storedCable, 'the later interface-level commits must not alter the original entity-level cable');
+    assert.equal(Number(sql(`SELECT COUNT(*) FROM interconnects
+      WHERE label IN (${quote(committedCableLabel)},${quote(mappedCableLabel)},${quote(unknownPortCableLabel)})
+        AND deleted_at IS NULL`)), 3, 'missing-port, mapped-port, and unknown-port cases must remain three distinct links');
 
     // RackWire's embedded network-discovery action returns to the dashboard's
     // durable scan queue rather than calling the standalone RackWire backend.
@@ -715,7 +835,7 @@ async function main() {
 
     assert.deepEqual(pageErrors, [], 'browser reported no JavaScript errors');
     assert.deepEqual(externalRequests, [], 'browser made no external requests');
-    console.log('Dashboard integration browser E2E passed: scanner import, operator-reviewed SoR entity association, RackWire profile creation, barcode-to-SoR resolution, cable commit, plan persistence, and asynchronous scan admission and progress in Discovery.');
+    console.log('Dashboard integration browser E2E passed: scanner import, operator-reviewed SoR entity association, RackWire profile creation, barcode resolution, UI port mapping and interface-level cable commit with replay, missing/unknown-port entity fallback, plan persistence, and Discovery scan lifecycle.');
   } catch (error) {
     failure = error;
   } finally {
@@ -723,10 +843,15 @@ async function main() {
     if (child && child.exitCode === null) child.kill('SIGTERM');
     if (child) await new Promise((resolve) => child.once('exit', resolve));
     try {
+      const fixtureEntityIds = [linkedEntityId, peerEntityId, unknownPeerEntityId]
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+      const entityCleanup = fixtureEntityIds.length
+        ? `DELETE FROM entities WHERE id IN (${fixtureEntityIds.join(',')});`
+        : '';
       const cleanup = `SET @source_id=(SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1);
         DELETE FROM audit_log WHERE actor_label=${quote(actor)};
-        DELETE FROM interconnects WHERE label=${quote(committedCableLabel)};
-        ${linkedEntityId && peerEntityId ? `DELETE FROM entities WHERE id IN (${linkedEntityId},${peerEntityId});` : ''}
+        DELETE FROM interconnects WHERE label IN (${quote(committedCableLabel)},${quote(mappedCableLabel)},${quote(unknownPortCableLabel)});
+        ${entityCleanup}
         DELETE FROM barcodes WHERE subject_table='hardware_units' AND subject_id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
         DELETE FROM hardware_units WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
         DELETE FROM hardware_models WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_models' AND external_id IN (${itemIds.map(quote).join(',')}));
