@@ -240,10 +240,12 @@ before browser installation. The XML validates against Benzene's libvirt schema 
 local runner-supervisor tests pass. After confirming no Forgejo task was active, the network
 was restarted; live queries through `192.168.123.1` resolved both `cdn.playwright.dev` and
 `cesium.akoria.net`. The isolated runner network is active again. Fix commit `11cf15d69c9a`
-is published on the integration branch. Forgejo run `71` was active for that commit at
-2026-10-23 09:34 UTC: its first five jobs had passed and the SCP fuzz job was running; the
-server job containing the new DNS preflight had not started. **Current completion status of
-run 71 has not been verified.**
+is published on the integration branch. Follow-on commit `b4c0fa71faed` adds the expanded
+scanner/RackWire port-map browser test and its updated HTML/PDF evidence. The current branch
+head is confirmed on Forgejo. Run `71` was active for `11cf15d69c9a` at 2026-10-23 09:34 UTC:
+its first five jobs had passed and the SCP fuzz job was running; the server job containing
+the new DNS preflight had not started. **Hosted CI status for `b4c0fa7` and the later
+completion status of run 71 have not been verified.**
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private. Forgejo run `65` confirms that Actions are enabled and dispatch jobs for
@@ -253,8 +255,8 @@ defaults Actions to enabled).
 Therefore the complete Forgejo matrix for the current candidate is **UNVERIFIED**. Run 70
 confirms checkout, the SoR migration/delivery tests, and RabbitMQ compatibility, but did not
 reach the full server, RackWire browser, dashboard, firmware, or cross-platform jobs. Run 71
-is expected to exercise the DNS preflight and then continue through the full matrix; inspect
-every job result before promotion.
+was expected to exercise the DNS preflight and then continue through the full matrix; its
+result and the workflow started by `b4c0fa7` must be inspected before promotion.
 GitHub run `39898481633`
 completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
 2026-10-23; GitHub remains a secondary mirror and verification path when available.
