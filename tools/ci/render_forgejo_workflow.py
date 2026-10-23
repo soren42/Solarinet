@@ -172,10 +172,10 @@ def render() -> str:
             raise ValueError(f"required service job missing: {job}")
     dashboard_start, dashboard_end = spans["dashboard"]
     dashboard = source[dashboard_start:dashboard_end]
-    dashboard_gate = "    if: ${{ !cancelled() }}\n"
+    dashboard_gate = "    if: true\n"
     if dashboard.count(dashboard_gate) != 1:
         raise ValueError(
-            "dashboard must run unless cancelled; its needs edge enforces server success"
+            "dashboard condition must be unconditional; its needs edge enforces server success"
         )
     for job, (start, end) in sorted(spans.items(), key=lambda item: item[1][0], reverse=True):
         block = source[start:end]

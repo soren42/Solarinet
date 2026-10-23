@@ -199,12 +199,13 @@ dashboard job skipped, even though both the Python job and its declared `server`
 passed. The row-level run record does not contain a skip explanation, so the precise cause is
 **UNVERIFIED**. The workflow source now sets the dashboard condition explicitly to run when
 not cancelled and when `needs.server.result == 'success'`; the renderer enforces this contract.
-Run `67`, commit `8c06b443557cd5680f95ac2d2797a649a16b51e0`, also skipped dashboard even though
-the server job succeeded. Its stored workflow payload contains the explicit condition. Forgejo
-15.0.3 documentation says the `needs` edge requires its listed jobs to succeed and recommends
-`!cancelled()` for jobs that should proceed despite unrelated failures. The explicit `needs.server.result`
-comparison is not documented for job conditions and has been removed; run `68` will verify the
-documented pattern. See the [Forgejo v15 reference](https://forgejo.org/docs/v15.0/user/actions/reference/)
+Runs `67` and `68`, commits `8c06b443557cd5680f95ac2d2797a649a16b51e0` and
+`420615069a3702b51b77506f3f89385104ba5d1c`, both skipped dashboard while server succeeded. Their
+stored job payloads contain the conditions that were pushed. The `!cancelled()` condition also
+skipped, so run `69` will test a literal `if: true`. Forgejo 15.0.3 documentation says `needs`
+requires listed jobs to complete successfully before the dependent job executes. Therefore the
+literal condition retains the server success gate while removing condition function evaluation
+as a variable. See the [Forgejo v15 reference](https://forgejo.org/docs/v15.0/user/actions/reference/)
 and [conditional guide](https://forgejo.org/docs/v15.0/user/actions/basic-concepts/).
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
