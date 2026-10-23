@@ -273,6 +273,22 @@ try {
     $check($second['status'] === 200 && ($second['body']['data']['updated'] ?? null) === 1 && $count === 1,
         'repeating the plan updates the existing cable without duplicating it');
 
+    $rawInterfacePlan = $plan;
+    $rawInterfacePlan['devices'][0]['ifMap'] = [];
+    $rawInterfacePlan['devices'][1]['ifMap'] = [];
+    $rawInterfacePlan['cables'][0]['a']['port'] = 'Ethernet-a';
+    $rawInterfacePlan['cables'][0]['b']['port'] = 'Ethernet-b';
+    $rawInterfaceCommit = $runRoute($rawInterfacePlan);
+    $rawInterfaceRow = $pdo->prepare(
+        'SELECT a_interface_id, b_interface_id FROM interconnects WHERE label = :label AND deleted_at IS NULL'
+    );
+    $rawInterfaceRow->execute([':label' => $label]);
+    $rawInterfaceStored = $rawInterfaceRow->fetch();
+    $check($rawInterfaceCommit['status'] === 200 && ($rawInterfaceCommit['body']['data']['updated'] ?? null) === 1
+        && $rawInterfaceStored && (int) $rawInterfaceStored['a_interface_id'] === $expectedAIf
+        && (int) $rawInterfaceStored['b_interface_id'] === $expectedBIf,
+        'port IDs that directly match SoR interface names resolve without an ifMap entry');
+
     $plan = ['devices' => [['uid' => 'base']], 'cables' => [], 'racks' => [], 'notes' => [], 'codeMap' => new stdClass()];
     $createdPlan = $runPlanRoute(['name' => $planName, 'thumbnail' => 'fixture-thumbnail', 'notes' => 'fixture plan notes', 'plan' => $plan]);
     $planId = (int) ($createdPlan['body']['data']['id'] ?? 0) ?: null;

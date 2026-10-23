@@ -4,7 +4,7 @@
 # concurrency guarantee, then tear it down. NEVER touches live `sor`.
 #
 # Builds an ephemeral `sor_test` database from the real DDL (schema.sql), the
-# CDC outbox tables and core triggers, migrations 020–027, and provisioning /
+# CDC outbox tables and core triggers, migrations 020–028, and provisioning /
 # UniFi integration fixtures, then runs the allocator proof and drops the
 # schema.
 #
@@ -102,6 +102,9 @@ sudo mariadb "$DB" < "$HERE/migrations/026_unifi_network_cdc.sql"
 echo "== applying migration 027 (RackWire cable details) =="
 sudo mariadb "$DB" < "$HERE/migrations/027_interconnect_cable_details.sql"
 sudo mariadb "$DB" < "$HERE/migrations/027_interconnect_cable_details.sql"
+echo "== applying migration 028 (entity-to-unit association) =="
+sudo mariadb "$DB" < "$HERE/migrations/028_entity_unit_association.sql"
+sudo mariadb "$DB" < "$HERE/migrations/028_entity_unit_association.sql"
 
 echo "== marking the schema as disposable scratch state =="
 sudo mariadb "$DB" -e \
