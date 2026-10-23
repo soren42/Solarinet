@@ -467,6 +467,7 @@ jobs:
     name: dashboard API + ops scripts
     runs-on: solarinet-ci-host
     needs: server
+    if: ${{ !cancelled() && needs.server.result == 'success' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -851,6 +852,6 @@ jobs:
             echo "::warning::no cross-built test_* binaries found to smoke-test"
           fi
 
-# Requires runner label solarinet-ci-host:host with capacity=1.
+# Requires runner label solarinet-ci-host in host mode with capacity=1.
 # Jobs execute on that disposable VM, keep DB/broker fixtures on loopback,
 # and use Docker for short-lived service containers. Never use a shared host.

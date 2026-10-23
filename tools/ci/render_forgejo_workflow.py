@@ -170,6 +170,13 @@ def render() -> str:
     for job in ("sorsync", "server", "dashboard"):
         if job not in spans:
             raise ValueError(f"required service job missing: {job}")
+    dashboard_start, dashboard_end = spans["dashboard"]
+    dashboard = source[dashboard_start:dashboard_end]
+    dashboard_gate = "    if: ${{ !cancelled() && needs.server.result == 'success' }}\n"
+    if dashboard.count(dashboard_gate) != 1:
+        raise ValueError(
+            "dashboard must run after server success even when an unrelated job fails"
+        )
     for job, (start, end) in sorted(spans.items(), key=lambda item: item[1][0], reverse=True):
         block = source[start:end]
         source = source[:start] + adapt_job(block, job) + source[end:]
@@ -185,7 +192,7 @@ def render() -> str:
         1,
     )
     source += (
-        "\n# Requires runner label solarinet-ci-host:host with capacity=1.\n"
+        "\n# Requires runner label solarinet-ci-host in host mode with capacity=1.\n"
         "# Jobs execute on that disposable VM, keep DB/broker fixtures on loopback,\n"
         "# and use Docker for short-lived service containers. Never use a shared host.\n"
     )

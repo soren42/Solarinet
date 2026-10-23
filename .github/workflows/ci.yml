@@ -449,6 +449,7 @@ jobs:
     name: dashboard API + ops scripts
     runs-on: ubuntu-latest
     needs: server
+    if: ${{ !cancelled() && needs.server.result == 'success' }}
     services:
       # Disposable scratch DB for CONTRACT-RW §6: never point tests at the
       # live `sor` (cesium) — this container is thrown away with the job.
