@@ -43,8 +43,15 @@ jobs:
         run: python tools/ci/render_forgejo_workflow.py --check
       - name: Validate systemd directive section placement
         run: python tests/test_systemd_unit_sections.py
+      - name: Install isolated runner firewall test dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y iproute2 nftables mosquitto
+          python -m pip install pyyaml
       - name: Validate isolated Forgejo runner firewall contract
         run: python -m unittest discover -s deploy/forgejo-runner -p 'test_*.py' -v
+      - name: Exercise isolated runner firewall packet flow
+        run: sudo bash deploy/forgejo-runner/test_guard_namespace.sh
       - name: Install MCP package and test dependencies
         run: python -m pip install -e 'integrations/mcp[test]'
       - name: MCP tools and SQL guard suite
@@ -59,8 +66,6 @@ jobs:
           python -m unittest discover -s deploy/authbroker -p 'test_*.py' -v
       - name: Authbroker MQTT approval round-trip on isolated loopback broker
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y mosquitto
           cat > /tmp/solarinet-authbroker-mosquitto.conf <<'EOF'
           listener 18883 127.0.0.1
           allow_anonymous true

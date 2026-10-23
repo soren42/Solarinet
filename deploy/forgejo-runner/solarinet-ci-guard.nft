@@ -1,7 +1,7 @@
 # Host-enforced egress policy for the isolated Forgejo CI libvirt network.
 # Workflow jobs run host-mode with sudo inside the guest, so guest firewall
-# rules are not a security boundary. The runner domain must pin its tap name
-# to ci-tap0; match both names to keep the runner traffic in the guarded path.
+# rules are not a security boundary. The bridge is the primary inet-forward
+# enforcement point; the fixed tap name is checked against domain XML at boot.
 destroy table inet solarinet_ci_guard
 
 table inet solarinet_ci_guard {
@@ -17,7 +17,11 @@ table inet solarinet_ci_guard {
     chain forward {
         type filter hook forward priority -50; policy accept;
 
-        iifname { "virbr-ci0", "ci-tap0" } oifname "virbr-ci0" counter drop
+        # Permit only return traffic into the isolated guest network. The
+        # bridge/tap output check blocks new inbound network connections.
+        oifname { "virbr-ci0", "ci-tap0" } ct state established,related counter accept
+        oifname { "virbr-ci0", "ci-tap0" } counter drop
+
         iifname { "virbr-ci0", "ci-tap0" } ip saddr != 192.168.123.0/24 counter drop
         iifname { "virbr-ci0", "ci-tap0" } meta nfproto ipv6 counter drop
 

@@ -2,7 +2,6 @@
 Description=Host firewall boundary for the SolariNet Forgejo CI network
 DefaultDependencies=no
 Wants=network-pre.target
-Wants=nftables.service
 After=local-fs.target nftables.service
 Before=network-pre.target
 PartOf=nftables.service

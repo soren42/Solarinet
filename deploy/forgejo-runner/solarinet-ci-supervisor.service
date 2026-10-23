@@ -1,0 +1,19 @@
+[Unit]
+Description=Disposable one-job Forgejo runner supervisor
+Requires=solarinet-ci-network.service
+BindsTo=solarinet-ci-network.service
+After=solarinet-ci-network.service libvirtd.service virtqemud.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/solarinet-ci/supervisor.sh
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=45s
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target solarinet-ci-network.service

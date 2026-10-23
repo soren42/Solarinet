@@ -1,8 +1,8 @@
 # Forgejo CI
 
-**Updated:** 2026-10-22  
-**Primary repository:** Forgejo (`jason/Solarinet`)  
-**Candidate branch:** `integrate/stability-20261020`
+**Updated:** 2026-10-23
+**Primary repository:** Forgejo (`jason/Solarinet`)
+**Candidate branches:** Forgejo `integrate/phase0-reconcile-20261022`; GitHub `integrate/stability-20261020`
 
 ## Decision
 
@@ -33,23 +33,32 @@ cleanup does not replace a VM reset.
 The host firewall must enforce the runner network boundary independently of the guest:
 allow DHCP/DNS to the libvirt gateway, Forgejo on Cesium (`10.1.0.200:3000`), and required
 public package/action downloads on TCP 80/443. Deny all other guest-to-host and
-guest-to-private/reserved-network traffic, including IPv6 and link-local paths. Permit only
-reply traffic for guest-initiated connections. Do not rely on guest firewall rules because
+guest-to-private/reserved-network traffic, including IPv6 and link-local paths. For
+forwarded traffic entering the guest network, permit only established or related replies;
+drop other forwarded traffic toward the runner. Do not rely on guest firewall rules because
 host-mode jobs have root privileges. Public HTTPS egress remains an exfiltration path for
 anything exposed inside the VM, so runner jobs must not receive production or reusable
 credentials; use one-job/ephemeral registration where supported and reset the VM after the
 job.
 
-The host network configuration is in `deploy/forgejo-runner/`. Its guard filters both the
-dedicated bridge and pinned VM tap (`ci-tap0`). Libvirt reserves the `vnet`, `vif`, `macvtap`,
-and `macvlan` prefixes and may ignore a manually requested target using one of them, so the
-runner VM definition must use the nonreserved `ci-tap0` name. The CI regression test checks
-the guard and deployment files for reserved tap targets. `install-host-network.sh` disables
+The host network configuration is in `deploy/forgejo-runner/`. Inet input and forwarding
+rules enforce the boundary on the dedicated bridge; the fixed VM tap `ci-tap0` is checked
+against the live domain XML and included in nftables rules as an additional match. Libvirt
+reserves the `vnet`, `vif`, `macvtap`, and `macvlan` prefixes and may ignore a manually
+requested target using one of them, so the runner VM definition uses the nonreserved
+`ci-tap0` name. The CI regression test checks the guard and deployment files for reserved tap
+targets. `install-host-network.sh` disables
 libvirt network autostart and enables systemd units that start the network only after the
 guard. Stopping the guard leaves its nftables rules installed and stops the dedicated
-network. The systemd units also tie host `nftables.service` reloads to a guard reload and
-stop/restart events to CI network teardown; that interaction
-is configured but remains unexercised because `nftables.service` is disabled on Benzene.
+network. The guard unit does not pull in or start the host `nftables.service`. An installed
+drop-in reapplies the CI guard after the host ruleset starts and requests the CI network;
+that network dependency starts the guard after nftables and before the network. The network
+in turn starts the supervisor. The guard also reloads with nftables reloads and
+stops/restarts with the service. Stopping the guard by itself leaves the rules installed;
+stopping host `nftables.service` tears down the runner VM and CI network first. The drop-in
+checks that the host's configured rules file exists before the service can run its
+`flush ruleset` command. These interactions are not fully exercised because
+`nftables.service` is disabled on Benzene and `/etc/nftables/rules/main.nft` is absent.
 
 Native macOS coverage remains GitHub-only. The Linux Forgejo workflow does not claim that
 gate has run.
@@ -63,31 +72,80 @@ downloaded binary matched Forgejo's published SHA-256 file. Forgejo documents th
 as available from Runner v9 onward in its [Actions troubleshooting guide](https://forgejo.org/docs/v15.0/user/actions/troubleshooting/).
 These checks validate schema and source shape; they do not prove that a compatible runner is
 registered, that host mode executes successfully, or that the full CI matrix passes there.
+Both workflow files run `test_guard_namespace.sh` in the Python integrations job using
+disposable network namespaces. It checks HTTPS egress and its reply path, rejects unsolicited
+forwarding into the runner network, and confirms that disallowed private HTTPS and SSH egress
+hit the guest drop rules. The test passed locally and on Benzene; it will run in that job on
+the next push.
 
 **Host audit, 2026-10-22:** Forgejo 15.0.3 is active on Cesium. The installed Forgejo CLI
 supports repository-scoped runner registration. No runner process/service was found on
 Cesium, Benzene, Xenon, or Chlorine. Benzene has sufficient capacity for a separate VM; its
 existing `argon` VM is a Rocky Linux workload and is left untouched. No runner VM or runner
 has been provisioned. A dedicated disposable VM on Benzene remains the selected path. The
-default libvirt NAT network remains untouched. A separate `solarinet-ci` NAT network is
-active with libvirt autostart disabled; its nftables guard is loaded and enabled at boot.
+default libvirt NAT network remains untouched. A recheck on 2026-10-23 found no defined
+`solarinet-ci` network (`virsh net-list --all` was empty), despite a stale active oneshot
+systemd state. The installer now defines the dedicated network when absent, restarts its
+unit, and checks that the bridge is `virbr-ci0` before starting it. Until deployed, the
+network and current tap attachment remain unverified.
 Before applying the guard, the host had no active `firewalld`/`nftables` service and the
 default libvirt NAT network allowed broad guest egress. A temporary network-namespace probe
 verified the new policy: Forgejo TCP 3000, gateway DNS, and public TCP 443 connected; Cesium
 MariaDB TCP 3306 and Benzene SSH TCP 22 did not. Stopping the guard service took down the
 CI network while leaving the nftables rules installed; restarting the guard and network
-restored both. The CI network currently has no attached guest. The runner VM must use this
-network and a tested per-job reset mechanism before registration.
+restored both. That earlier check had no guest attached. The later 2026-10-23 recheck found
+the network definition missing, as recorded above.
 
 **Tap-name correction, 2026-10-23:** libvirt reserves interface-name prefixes `vnet`, `vif`,
 `macvtap`, and `macvlan` and may ignore a requested target using one of them. The runner tap
 contract is now `ci-tap0`; the deployment regression test checks the firewall and guest
 configuration files for reserved targets. The candidate nft file passed `nft -c` locally and
-on Benzene. With no CI guest attached, it was installed on Benzene and the active guard
-service reloaded. The installed file hash matches the candidate (`fa201207…cb70208`), and
-the active table contains `ci-tap0` matches in both input and forward chains. Cross-lab
-review approved the change. **UNVERIFIED:** a running libvirt guest has not yet proven that
-the requested tap name is honored or exercised the updated rules.
+on Benzene. The `inet` forwarding boundary is enforced on `virbr-ci0`; `ci-tap0` is an
+additional match and a checked domain-definition invariant. The forward chain now permits
+established/related return packets into the guest and drops other forwarded packets aimed at
+the guest network. With no CI guest attached, this guard was installed on Benzene and the
+guard service reloaded. Its SHA-256 is
+`d5cd5fdcd250ca30ab7b9a4b707d4e28f36c8122137ec2be501457ea850b50e5`. This is the deployed
+revision before removal of an unreachable hairpin-drop rule. The candidate hash is
+`2040ee96893d2405387a79d0dcde590bb3104aa9c78c9ec69c2d2790e29ca084`; the supervisor
+installer replaces the deployed file and reloads the guard. The new isolated
+namespace packet test allows HTTPS egress and established replies, and asserts the inbound
+forwarding drop and disallowed private HTTPS and SSH egress increment their exact nftables
+drop-rule counters. It passed locally and on Benzene. **UNVERIFIED:** a running guest has not yet
+exercised the live rules or proven the tap name at runtime.
+
+**Disposable runner implementation, 2026-10-23:** the candidate adds a root supervisor on
+Benzene, Ubuntu 24.04 cloud-init guests, a 24-hour idle-job wait and a fresh 24-hour job
+execution window once Forgejo Runner reports that it fetched a task, a pinned base-image
+checksum, a per-cycle token in a temporary cloud-init ISO, a SHA-256-pinned Node.js 24.10.0
+runtime for JavaScript actions, and Forgejo v15's `one-job`
+ephemeral mode. A fixed runner identifier lets the server-side CLI rotate credentials
+without accumulating idle runner records. Registration is repository-scoped to
+`jason/Solarinet`; Benzene's SSH key is accepted on Cesium only from Benzene's observed
+source address `10.5.2.50`, through a forced command that validates the secret and invokes
+that registration command. The live Forgejo `ROOT_URL` is
+`http://cesium.akoria.net:3000/`, resolves to `10.1.0.200` from Benzene, and returned
+version `15.0.3` there. The SoR inventory and developer reference still call the service
+`git.akoria.net`, which currently has no DNS answer; Actions checkout is expected to use the
+live `ROOT_URL`, whose endpoint is allowed by the guard. The guest uses `ci-tap0`,
+and the supervisor checks the libvirt XML before waiting for a job. Benzene's existing base
+image matches the pinned SHA-256. The VM exposes a serial console for first-boot logs; guest
+login remains locked and the ttyS0 serial getty is masked to keep its login prompt out of
+the status stream. A bounded host-side serial parser retains at most 4 MiB of log output
+and extracts CRLF-safe job-start and exit markers separately. The guest reports job start
+and one-job exit status over its serial console using the runner account's unrestricted
+passwordless sudo, which host-mode workflow jobs already require. The supervisor treats
+missing or nonzero status as a failed cycle and backs off before
+registering another runner. Stopping the supervisor/network tears down the disposable VM
+and cancels any active job. Local tests cover cloud-init rendering, credential shape, shell
+syntax, forced-command installation, tap selection, and bounded serial capture under output
+flood. **UNVERIFIED:** installation of the
+forced key, first guest boot, serial-result capture, tap attachment, complete Forgejo job
+execution, and teardown have not yet been exercised. The registration-key installer checks
+that Jason can run the Forgejo CLI as the `forgejo` account before it changes SSH access.
+The first independent review found serial-log growth and CRLF-marker issues; both are fixed
+and covered by a serial flood/marker test. A second cross-lab review found no deployment
+blockers in network ordering, registration, firewall, or bounded serial parsing.
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private; this does not establish whether the repository Actions unit is
@@ -95,9 +153,9 @@ enabled. The server has no explicit `[actions]` override in `app.ini` (Forgejo v
 Actions to enabled), but repository unit state still needs authenticated verification.
 
 Therefore Forgejo CI execution is **UNVERIFIED**. Do not describe this workflow as a green
-hosted gate until a dedicated runner has run the complete matrix. GitHub remains a secondary
-mirror and verification path when its service is healthy; its current Actions incident does
-not change Forgejo's primary status.
+hosted gate until a dedicated runner has run the complete matrix. GitHub run `39898481633`
+completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
+2026-10-23; GitHub remains a secondary mirror and verification path when available.
 
 ## Forgejo references
 
@@ -109,6 +167,8 @@ not change Forgejo's primary status.
   — Docker socket access grants substantial authority over the runner host.
 - [Actions security guidance](https://forgejo.org/docs/v15.0/admin/actions/security/)
   — host execution is not job isolation.
+- [Forgejo v15.0 release](https://forgejo.org/2026-04-release-v15-0/) — ephemeral runner
+  creation and the `one-job --token-url file://...` flow.
 - [Actions service reference](https://forgejo.org/docs/v15.0/user/actions/reference/)
   — service-container networking behavior.
 - [Artifact action guidance](https://forgejo.org/docs/v15.0/user/actions/advanced-features/)

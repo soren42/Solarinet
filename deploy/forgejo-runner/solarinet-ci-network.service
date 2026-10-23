@@ -7,7 +7,8 @@ After=solarinet-ci-guard.service virtnetworkd.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/virsh net-start solarinet-ci
+ExecStartPre=/usr/bin/bash -c '/usr/bin/virsh net-info solarinet-ci | /usr/bin/grep -q "^Bridge:.*virbr-ci0$"'
+ExecStart=/usr/bin/bash -c '/usr/bin/virsh net-info solarinet-ci | /usr/bin/grep -q "^Active:.*yes" || /usr/bin/virsh net-start solarinet-ci'
 ExecStop=/usr/bin/virsh net-destroy solarinet-ci
 
 [Install]
