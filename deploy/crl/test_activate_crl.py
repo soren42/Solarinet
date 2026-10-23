@@ -197,13 +197,23 @@ class ActivateCrlTests(unittest.TestCase):
             "-addext", "basicConstraints=critical,CA:TRUE",
             "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         ], check=True, capture_output=True)
-        self.assertNotEqual(other_cert.read_bytes(), self.ca_cert.read_bytes())
+        other_public_key = subprocess.run(
+            ["openssl", "x509", "-in", str(other_cert), "-pubkey", "-noout"],
+            check=True, capture_output=True).stdout
+        configured_public_key = subprocess.run(
+            ["openssl", "x509", "-in", str(self.ca_cert), "-pubkey", "-noout"],
+            check=True, capture_output=True).stdout
+        self.assertNotEqual(other_public_key, configured_public_key)
         other = other_dir / "other.cnf"
-        other.write_text(self.config.read_text(encoding="ascii").replace(
-            str(self.ca_dir), str(other_dir)).replace(str(self.ca_cert), str(other_cert)).replace(
-                str(self.ca_key), str(other_key)).replace("serial = $dir/serial",
-                "serial = $dir/serial").replace("crlnumber = $dir/crlnumber",
-                "crlnumber = $dir/other-crlnumber"), encoding="ascii")
+        other.write_text(
+            "[ ca ]\ndefault_ca = issuer\n[ issuer ]\n"
+            f"dir = {other_dir}\ndatabase = {other_dir / 'index.txt'}\n"
+            f"new_certs_dir = {other_dir / 'newcerts'}\n"
+            f"certificate = {other_cert}\nprivate_key = {other_key}\n"
+            f"serial = {other_dir / 'serial'}\ncrlnumber = {other_dir / 'other-crlnumber'}\n"
+            "default_md = sha256\ndefault_crl_hours = 24\n"
+            "policy = policy\nunique_subject = no\n"
+            "[ policy ]\ncommonName = supplied\n", encoding="ascii")
         (other_dir / "newcerts").mkdir()
         (other_dir / "index.txt").write_text("", encoding="ascii")
         (other_dir / "serial").write_text("01\n", encoding="ascii")
