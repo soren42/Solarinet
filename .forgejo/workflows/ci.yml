@@ -467,7 +467,7 @@ jobs:
     name: dashboard API + ops scripts
     runs-on: solarinet-ci-host
     needs: server
-    if: ${{ !cancelled() && needs.server.result == 'success' }}
+    if: ${{ !cancelled() }}
     steps:
       - uses: actions/checkout@v4
         with:

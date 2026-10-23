@@ -192,16 +192,20 @@ daemon listener/codec suite passed. The firmware host suite passed 107 tests and
 page/firmware parity suite passed 59 checks locally. The firmware build used `TMPDIR=/var/tmp`
 because this development host's `/tmp` hit its user quota during ASAN compilation.
 
-**Follow-up run, 2026-10-23:** Forgejo run `66` used commit
+**Follow-up runs, 2026-10-23:** Forgejo run `66` used commit
 `9dd7d9b9f0b6b15f41f63ee1f2ca1b27843e1988`. The Opie/Python job, all four SoR broker jobs,
 RackWire browser flow, server, panel, and cross-build jobs passed. Forgejo again marked the
 dashboard job skipped, even though both the Python job and its declared `server` prerequisite
 passed. The row-level run record does not contain a skip explanation, so the precise cause is
 **UNVERIFIED**. The workflow source now sets the dashboard condition explicitly to run when
 not cancelled and when `needs.server.result == 'success'`; the renderer enforces this contract.
-This uses Forgejo v15's documented job condition functions and `needs` context ([Actions
-reference](https://forgejo.org/docs/v15.0/user/actions/reference/)). This condition has not
-yet been exercised by a Forgejo run.
+Run `67`, commit `8c06b443557cd5680f95ac2d2797a649a16b51e0`, also skipped dashboard even though
+the server job succeeded. Its stored workflow payload contains the explicit condition. Forgejo
+15.0.3 documentation says the `needs` edge requires its listed jobs to succeed and recommends
+`!cancelled()` for jobs that should proceed despite unrelated failures. The explicit `needs.server.result`
+comparison is not documented for job conditions and has been removed; run `68` will verify the
+documented pattern. See the [Forgejo v15 reference](https://forgejo.org/docs/v15.0/user/actions/reference/)
+and [conditional guide](https://forgejo.org/docs/v15.0/user/actions/basic-concepts/).
 
 Unauthenticated requests to the repository Actions API and UI returned 404 because the
 repository is private. Forgejo run `65` confirms that Actions are enabled and dispatch jobs for
@@ -209,7 +213,7 @@ this repository. The server has no explicit `[actions]` override in `app.ini` (F
 defaults Actions to enabled).
 
 Therefore the complete Forgejo matrix is **UNVERIFIED**. Do not describe this workflow as a
-green hosted gate until the dashboard gate and the new explicit condition have run successfully.
+green hosted gate until the dashboard gate and the corrected condition have run successfully.
 GitHub run `39898481633`
 completed successfully for commit `853b0bc6007f274bfc281d62ad4d0a531e12f74c` on
 2026-10-23; GitHub remains a secondary mirror and verification path when available.
