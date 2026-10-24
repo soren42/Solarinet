@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "warning_days": 21,
+  "critical_days": 7,
+  "state_file": "/var/lib/solarinet-pki/acme-expiry-state.json",
+  "notify_command": [
+    "/usr/local/libexec/solarinet-pki/notify-send.py",
+    "--config",
+    "/etc/solarinet/pki/notify.conf"
+  ],
+  "services": [
+    {
+      "id": "akoria_public",
+      "certificate": "/etc/letsencrypt/live/akoria.net/fullchain.pem",
+      "domains": ["akoria.net", "www.akoria.net", "xenon.akoria.net"]
+    },
+    {
+      "id": "dashboard",
+      "certificate": "/etc/ssl/solarinet/dashboard.pem",
+      "domains": [
+        "dashboard.akoria.net",
+        "solarinet.akoria.net",
+        "xenon.akoria.net",
+        "monitor.akoria.net",
+        "solari.akoria.net",
+        "xenon",
+        "localhost"
+      ],
+      "ip_sans": ["10.0.0.20", "127.0.0.1"]
+    },
+    {
+      "id": "rackwire",
+      "certificate": "/etc/ssl/rackwire/rackwire.pem",
+      "domains": ["rackwire.akoria.net", "xenon.akoria.net", "xenon"],
+      "ip_sans": ["10.0.0.20", "127.0.0.1"]
+    }
+  ]
+}

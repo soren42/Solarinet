@@ -3147,3 +3147,124 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   be applied safely until the step-ca SAN/subject requirements are audited or
   a separately trusted web-CA design is chosen. This is an inference from the
   documented authority-wide enforcement and the observed provisioner set.
+
+## 2026-10-24 — certificate leaf policy and public renewal recheck
+
+- The ACME deployment helper now enforces the Apple-compatible TLS leaf
+  baseline locally as well as relying on CA policy: RSA at least 2048 bits,
+  NIST P-256/P-384/P-521 EC keys, SHA-256 or stronger SHA-2 signatures, and
+  no more than 825 days of validity. Unit coverage rejects weak RSA, SHA-1,
+  and excessive validity and accepts P-256. The full PKI test suite passes
+  79/79; the isolated step-ca/Certbot/Apache lifecycle integration also passes.
+- Added `acme_expiry_watch.py`: exact SAN and expiry checks, warning/critical
+  escalation, recovery notices, fingerprint-based deduplication, atomic private
+  state, and RabbitMQ publication through `notify-send.py`. Added a selectable
+  notification-config path, example config, root systemd service/hourly timer,
+  and test coverage. The timer is not installed or enabled; real broker delivery
+  has not been exercised. The notify dispatcher/publisher tests pass 5/5, the
+  unit-section audit passes across 52 services, and `systemd-analyze verify`
+  accepts the renewal and watcher units. The generated Forgejo workflow was
+  updated from the GitHub source and its parity check passes locally.
+- Ran the watcher with `--dry-run` against read-only certificate copies from
+  Xenon: the expired `akoria.net` public lineage was critical, while the
+  dashboard (DNS plus two IP SANs) and RackWire leaves were healthy. No alert
+  was published and no state file was saved.
+- Added `acme_expiry_watch.xenon.example.json` with the verified public,
+  dashboard, and RackWire certificate paths and exact DNS/IP SAN inventory.
+  The config is a template only; it has not been installed on Xenon.
+- Refreshed `docs/SolariNet_Certificate_Operations.html` and its matching
+  9-page Letter PDF. The manual now separates current local verification from
+  the prior GitHub run and cross-lab review, both of which predate this diff.
+- Read-only Xenon checks confirm the public Let's Encrypt leaf remains expired
+  (notAfter 2026-07-19), the Certbot timer is active, and its latest recorded
+  run failed with HTTP-01 Cloudflare 521 responses for `akoria.net` and `www`;
+  the same run saw NXDOMAIN for `xenon.akoria.net`. Current public DNS via
+  1.1.1.1 returns Cloudflare addresses for the apex and `www` but
+  `xenon.akoria.net A 10.0.0.20`. A direct edge request still returns 521,
+  while the in-network HTTP endpoint returns 200. **Inference:** external
+  validation cannot route to the private Xenon record and Cloudflare cannot
+  reach the origin; the cause is unverified. No CA, DNS, Cloudflare, router,
+  certificate, or service state was changed.
+- The leaf-policy changes remain local and uncommitted. The current GitHub
+  check run covers `5a51e38`, not this diff; Forgejo CI and a cross-lab review
+  for this specific change are outstanding. Real Chlorine issuance, device
+  trust, RabbitMQ alert delivery, and all fleet rollout gates remain open.
+
+## 2026-10-24 — expiry watcher root-command review
+
+- A read-only independent review found a high-severity deployment issue: the
+  watcher unit runs as root, while the first Xenon example pointed its notifier
+  into Jason's writable checkout. Updated the template to use `/usr/bin/python3`
+  and `/usr/local/libexec/solarinet-pki/notify-send.py`; the operator guidance
+  now requires a root-owned executable and root-owned, non-writable parent
+  directories, plus a root-owned mode-`0600` AMQP config. The watcher timer
+  remains uninstalled and disabled.
+- Review also confirmed argv-only notifier execution, bounded runtime, and
+  state saved only after successful sends. Partial multi-alert failure may
+  duplicate alerts on retry. Forgejo's workflow is not identical to GitHub's:
+  its current macOS coverage is absent and its artifact/service-container setup
+  differs. Local generation parity passes, but native macOS coverage is an open
+  CI gap. This was an independent same-lab review, not the requested cross-lab
+  release gate.
+- Latest local verification: PKI tests 80/80; notify tests 5/5; systemd unit
+  verification; unit-section checks across 52 service files; Forgejo workflow
+  parity; Python compilation; and `git diff --check` all pass. The certificate
+  operations manual and matching Letter PDF were refreshed to 10 pages. A
+  subsequent remote dry-run attempt was blocked by the protected-config owner
+  check; the temporary `/dev/shm/solarinet-pki-audit-20261024` fixture and its
+  bytecode cache were removed. No notification, persistent host change, CI
+  run, commit, push, deployment, or release occurred.
+- **UNVERIFIED:** notifier installation and ownership on Xenon, runtime package
+  availability, real RabbitMQ publication, renewed public certificate,
+  current Forgejo execution, GitHub checks for this diff, and cross-lab review.
+- After that review, tightened the launch boundary in code: before running the
+  notifier, the watcher now resolves and verifies that the executable and all
+  parent directories are root-owned and that no path directory or executable
+  is group/world-writable. The notifier is directly executable, and both
+  generic and Xenon templates no longer refer to a checkout or Python venv.
+  The check covers both the configured path and resolved executable, so a
+  writable symlink location cannot hide behind a trusted target. Added
+  negative tests for user-owned code paths and a symlink beneath `/tmp`. The
+  full test rerun and manual refresh are recorded in the next entry.
+- Final focused run for this continuation passes 13 watcher tests and 5 notify
+  tests; the full PKI suite count is now 82 including helper tests. The
+  certificate manual records 82/82 and 47 focused tests. The 10-page Letter
+  PDF has been regenerated and its text confirms the updated verification and
+  executable-safety guidance. Full PKI/notify tests, Python compilation,
+  systemd unit verification, systemd section checks across 52 services,
+  Forgejo workflow parity, and `git diff --check` pass locally.
+- A read-only Xenon check confirms the watcher timer is not found/active,
+  `/usr/local/libexec/solarinet-pki/notify-send.py` and
+  `/etc/solarinet/pki/notify.conf` are absent, and the OS `python3-pika`
+  package is not installed. Do not enable the watcher until dependencies and
+  reviewed root-owned config are installed, and delivery is tested. Nothing
+  was installed or activated on Xenon in this continuation.
+- A fresh independent review found the install instructions omitted the
+  watcher's sibling `acme_certificates.py` module and the notifier accepted
+  permissive or symlinked credential files. Added the missing install step,
+  isolated-mode installed-layout startup test, and config ownership/mode/type
+  checks (including root-only parent-directory protection). Added tests for
+  permissive mode, symlinks, and writable parent paths. This is a same-lab
+  review, not a cross-lab gate; no cross-lab invocation facility is available.
+- A second review found a config path race between metadata checking and opening
+  the AMQP file. Root reads now walk parent components with `openat`-style
+  directory descriptors and `O_NOFOLLOW`, then validate the opened file with
+  `fstat`; non-root reads also use `O_NOFOLLOW` and validate the opened file.
+  Tests cover symlinked final and parent paths plus writable root directories.
+- The notifier now reports generic parse/connection failures instead of
+  exception text that could contain the AMQP credential URL. Regression tests
+  verify malformed config lines and simulated broker exceptions do not echo a
+  secret.
+- Final rerun passes 83 PKI tests, 11 notification tests as Jason (with the
+  two root-only checks skipped), and all 11 notification tests as root. The 48
+  focused ACME/watch tests, Python compilation,
+  isolated-mode startup check, systemd unit verification, 52-unit section
+  audit, Forgejo workflow parity, and `git diff --check` pass. Refreshed HTML
+  and its 10-page Letter PDF; extracted PDF text confirms install dependencies,
+  protected no-follow config reads, and current test counts.
+- A same-lab static review rechecked the descriptor-based config open and the
+  generic error/redaction changes and found no remaining issue. Cross-lab
+  review is unavailable here; no remote CI or broker-delivery test has run for
+  this uncommitted candidate.
+- **UNVERIFIED:** current remote CI, Forgejo runner reachability, cross-lab
+  review, actual Xenon notifier dependency installation, and RabbitMQ delivery.

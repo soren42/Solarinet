@@ -238,6 +238,65 @@ delete its lineage with Certbot using the private `--config-dir`, `--work-dir`,
 and `--logs-dir`, then verify the remaining registry and renewal files match
 before restarting the timer.
 
+## Certificate expiry alerts
+
+`acme_expiry_watch.py` checks each configured leaf's exact DNS and IP SAN sets
+and `notAfter` date, then publishes warning/critical transitions through the
+existing `notify-send.py` and RabbitMQ `notify.events` path. It alerts at 21
+days and escalates at 7 days by default. Notifications are deduplicated by
+service, state, and certificate fingerprint; a renewed healthy leaf emits a
+recovery message. Its state file is replaced atomically and contains no
+credentials. Certificate parse errors and SAN mismatches are critical.
+
+Install a root-owned mode-`0600` config from
+`acme_expiry_watch.example.json`; Xenon's reviewed current certificate
+inventory is in `acme_expiry_watch.xenon.example.json`. Replace or remove
+entries as endpoints are migrated, and replace placeholder certificate paths
+and names with the approved service inventory; include optional `ip_sans` when
+a deployed certificate intentionally contains IP SANs. Include public ACME
+lineages and private-CA releases as needed. The root-run watcher's
+`notify_command` is
+an argv array, not a shell command, but remains executable root policy; keep
+the configuration root-owned and mode `0600`. Because the unit runs as root,
+the notifier executable and its resolved target must be root-owned and located
+beneath root-owned, non-writable directories. The watcher checks both the
+configured path and resolved target immediately before execution. Both
+programs use Python isolated mode so environment variables and user-site
+packages cannot redirect imports. Never point
+it at a checkout, home directory, venv, or other user-writable path. The Xenon
+example invokes an installed executable copy of
+`notify-send.py` under `/usr/local/libexec/solarinet-pki`; install the distro's
+`python3-pika` package (or another root-managed Python environment) and keep
+the AMQP config at
+`/etc/solarinet/pki/notify.conf`, root-owned mode `0600`. Keep credentials out
+of the watcher config and repository. The notifier emits generic parse and
+publisher errors so malformed config or broker failures do not print the AMQP
+URL.
+
+Run the inert check first, then verify the notify publisher against the
+existing RabbitMQ notification path before enabling the timer:
+
+```sh
+sudo install -o root -g root -m 0600 deploy/pki/acme_expiry_watch.example.json \
+  /etc/solarinet/pki/acme_expiry_watch.json
+sudo /usr/bin/python3 -I /usr/local/libexec/solarinet-pki/acme_expiry_watch.py \
+  --config /etc/solarinet/pki/acme_expiry_watch.json --dry-run
+```
+
+Replace the example config before running it. Install the watcher at
+`/usr/local/libexec/solarinet-pki/acme_expiry_watch.py`, then install
+`acme_certificates.py` beside it at
+`/usr/local/libexec/solarinet-pki/acme_certificates.py`; the watcher imports
+that sibling module in Python isolated mode. Install
+`notify-send.py` at `/usr/local/libexec/solarinet-pki/notify-send.py` with
+mode `0755`, then install `solarinet-acme-expiry-watch.service` and `.timer` under
+`/etc/systemd/system/`. The unit runs as root to read root-only Certbot paths
+and uses `StateDirectory` for private state storage. Verify with
+`sudo systemd-analyze verify` and a real notification before enabling the
+hourly timer. The watcher does not issue certificates. Do not enable unattended
+certificate renewal until both expiry alerts and the renewal/reload/rollback
+rehearsal pass.
+
 The opt-in integration test `deploy/pki/acme_integration.py` builds a disposable
 Certbot 4.0.0/Apache client image from a digest-pinned Certbot base and pinned
 Alpine packages, then runs step-ca v0.30.2 and the client on an internal,
@@ -291,11 +350,11 @@ rollback intentionally makes `--renew` fail its post-check until the Certbot
 lineage is restored to `current` (for example, with `--deploy-service`) or
 successfully renewed. Keep unattended renewal disabled during recovery.
 
-Certificate key size, signature algorithm, and maximum validity remain CA
-policy requirements. The helper validates SANs, TLS server usage, validity at
-the time of deployment, chain, and key correspondence, but does not enforce
-the Apple key-size/signature profile or the 825-day validity ceiling. Test
-those constraints in the isolated CA policy before the pilot is accepted.
+The helper validates SANs, TLS server usage, validity at the time of
+deployment, chain, and key correspondence. It also rejects leaves below RSA
+2048 bits, EC keys outside NIST P-256/P-384/P-521, signatures below SHA-256,
+and validity periods over Apple's 825-day TLS ceiling. Keep the issuing CA
+policy aligned with these checks and test both layers in the isolated pilot.
 
 Focused tests cover valid chain/SAN/key acceptance, domain and fullchain
 mismatch rejection, key permissions, atomic activation, rollback after reload

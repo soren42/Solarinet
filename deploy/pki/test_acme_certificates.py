@@ -85,14 +85,18 @@ class AcmeCertificateTests(unittest.TestCase):
 
     def _make_leaf(self, domain: str, label: str | None = None, extra_san: bool = False,
                    critical_san: bool = False,
-                   basic_constraints: str | None = "CA:FALSE", days: int = 7) -> None:
+                   basic_constraints: str | None = "CA:FALSE", days: int = 7,
+                   rsa_bits: int = 2048, digest: str | None = None,
+                   ec_curve: str | None = None) -> None:
         stem = label or domain
         self.leaf_key = self.ca_dir / f"{stem}.key"
         csr = self.ca_dir / f"{stem}.csr"
         self.leaf = self.ca_dir / f"{stem}.pem"
-        openssl("req", "-new", "-newkey", "rsa:2048", "-nodes",
-                "-keyout", str(self.leaf_key), "-out", str(csr),
-                "-subj", f"/CN={domain}")
+        key_args = ["-newkey", f"rsa:{rsa_bits}"]
+        if ec_curve:
+            key_args = ["-newkey", "ec", "-pkeyopt", f"ec_paramgen_curve:{ec_curve}"]
+        openssl("req", "-new", *key_args, "-nodes", "-keyout", str(self.leaf_key),
+                "-out", str(csr), "-subj", f"/CN={domain}")
         ext = self.ca_dir / f"{stem}.cnf"
         extensions = "[server]\n"
         if basic_constraints:
@@ -104,9 +108,12 @@ class AcmeCertificateTests(unittest.TestCase):
             + (",IP:127.0.0.1\n" if extra_san else "\n")
         )
         ext.write_text(extensions, encoding="utf-8")
-        openssl("x509", "-req", "-in", str(csr), "-CA", str(self.intermediate),
+        args = ["x509", "-req", "-in", str(csr), "-CA", str(self.intermediate),
                 "-CAkey", str(self.intermediate_key), "-CAcreateserial", "-days", str(days),
-                "-out", str(self.leaf), "-extfile", str(ext), "-extensions", "server")
+                "-out", str(self.leaf), "-extfile", str(ext), "-extensions", "server"]
+        if digest:
+            args.insert(1, f"-{digest}")
+        openssl(*args)
 
     def _install_lineage(self, archive: pathlib.Path, generation: int = 1) -> None:
         (archive / f"cert{generation}.pem").write_bytes(self.leaf.read_bytes())
@@ -255,6 +262,25 @@ class AcmeCertificateTests(unittest.TestCase):
         self._make_leaf("test.internal", "ca-leaf", basic_constraints="CA:TRUE")
         with self.assertRaisesRegex(acme.AcmeError, "must not mark a TLS leaf as a CA"):
             acme._require_tls_leaf(self.leaf)
+
+    def test_rejects_rsa_key_below_2048_bits(self) -> None:
+        self._make_leaf("test.internal", "weak-rsa", rsa_bits=1024)
+        with self.assertRaisesRegex(acme.AcmeError, "RSA with at least 2048 bits"):
+            acme._require_tls_leaf(self.leaf)
+
+    def test_rejects_sha1_certificate_signature(self) -> None:
+        self._make_leaf("test.internal", "sha1", digest="sha1")
+        with self.assertRaisesRegex(acme.AcmeError, "SHA-256 or a stronger SHA-2"):
+            acme._require_tls_leaf(self.leaf)
+
+    def test_rejects_certificate_validity_over_apple_limit(self) -> None:
+        self._make_leaf("test.internal", "long-lived", days=826)
+        with self.assertRaisesRegex(acme.AcmeError, "Apple's 825-day TLS limit"):
+            acme._require_tls_leaf(self.leaf)
+
+    def test_accepts_nist_p256_leaf_key(self) -> None:
+        self._make_leaf("test.internal", "ecdsa-p256", ec_curve="prime256v1")
+        acme._require_tls_leaf(self.leaf)
 
     def test_failed_reload_restores_previous_certificate_pointer(self) -> None:
         config = acme.load_registry(self.registry)

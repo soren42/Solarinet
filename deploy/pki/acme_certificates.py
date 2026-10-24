@@ -34,14 +34,16 @@ SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 LINEAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 MAX_CONFIG_BYTES = 256 * 1024
 MIN_CERTIFICATE_LIFETIME = dt.timedelta(days=6)
+MAX_APPLE_TLS_LIFETIME = dt.timedelta(days=825)
 OPENSSL = "/usr/bin/openssl"
 TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
-def _run(args: list[str], *, timeout: int = 30) -> bytes:
+def _run(args: list[str], *, timeout: int = 30, input_bytes: bytes | None = None) -> bytes:
     try:
         result = subprocess.run(args, check=False, capture_output=True,
-                                stdin=subprocess.DEVNULL, timeout=timeout)
+                                input=input_bytes, stdin=subprocess.DEVNULL if input_bytes is None else None,
+                                timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise AcmeError(f"command could not complete: {pathlib.Path(args[0]).name}") from exc
     if result.returncode:
@@ -271,6 +273,47 @@ def _require_tls_leaf(certificate: pathlib.Path) -> None:
         constraints = certificate_text.split("X509v3 Basic Constraints", 1)[1].split("X509v3", 1)[0]
         if re.search(r"\bCA\s*:\s*TRUE\b", constraints, re.I) or not re.search(r"\bCA\s*:\s*FALSE\b", constraints, re.I):
             raise AcmeError("certificate basicConstraints must not mark a TLS leaf as a CA")
+
+    _require_apple_tls_compatibility(certificate)
+
+
+def _require_apple_tls_compatibility(certificate: pathlib.Path) -> None:
+    """Reject leaf algorithms and validity periods Apple clients do not accept."""
+    text = _run([OPENSSL, "x509", "-in", str(certificate), "-noout", "-text"])
+    certificate_text = text.decode("utf-8", "replace")
+    signature = re.search(r"^\s*Signature Algorithm:\s*([^\r\n]+)", certificate_text, re.M)
+    if not signature or not re.search(r"sha(?:256|384|512)", signature.group(1), re.I):
+        raise AcmeError("certificate signature must use SHA-256 or a stronger SHA-2 algorithm")
+
+    public_key = _run([OPENSSL, "x509", "-in", str(certificate), "-pubkey", "-noout"])
+    details = _run([OPENSSL, "pkey", "-pubin", "-text", "-noout"], input_bytes=public_key)
+    key_text = details.decode("utf-8", "replace")
+    bit_count = re.search(r"Public-Key:\s*\((\d+) bit\)", key_text)
+    key_algorithm = re.search(r"^\s*Public Key Algorithm:\s*([^\r\n]+)", certificate_text, re.M)
+    if not bit_count:
+        raise AcmeError("certificate public key type could not be validated")
+    bits = int(bit_count.group(1))
+    curve = re.search(r"ASN1 OID:\s*([^\r\n]+)", key_text)
+    algorithm = key_algorithm.group(1).casefold() if key_algorithm else ""
+    if bits >= 2048 and "rsa" in algorithm:
+        pass
+    elif bits >= 256 and "ec" in algorithm and curve and curve.group(1).strip().casefold() in {
+        "prime256v1", "secp384r1", "secp521r1",
+    }:
+        pass
+    else:
+        raise AcmeError("certificate public key must be RSA with at least 2048 bits or NIST P-256 or stronger")
+
+    output = _run([OPENSSL, "x509", "-in", str(certificate), "-noout",
+                   "-startdate", "-enddate"]).decode("ascii", "replace")
+    dates = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+    try:
+        start = dt.datetime.strptime(dates["notBefore"], "%b %d %H:%M:%S %Y %Z")
+        end = dt.datetime.strptime(dates["notAfter"], "%b %d %H:%M:%S %Y %Z")
+    except (KeyError, ValueError) as exc:
+        raise AcmeError("certificate validity dates could not be parsed") from exc
+    if end - start > MAX_APPLE_TLS_LIFETIME:
+        raise AcmeError("certificate validity exceeds Apple's 825-day TLS limit")
 
 
 def _require_minimum_lifetime(certificate: pathlib.Path) -> None:

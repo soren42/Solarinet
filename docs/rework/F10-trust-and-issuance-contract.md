@@ -84,6 +84,19 @@ undone.
   status are **UNVERIFIED**. The cause of the Cloudflare 521, router/NAT
   configuration, and Cloudflare-to-origin TLS mode remain **UNVERIFIED**. No
   public DNS or certificate settings were changed.
+- Read-only recheck on 2026-10-24 confirmed `certbot.timer` remains active, but
+  its latest recorded `certbot.service` run failed on 2026-10-23 with exit 1.
+  Certbot's log identifies HTTP-01 responses of 521 from Cloudflare for
+  `akoria.net` and `www.akoria.net`, plus NXDOMAIN for `xenon.akoria.net`.
+  Direct queries to public resolver 1.1.1.1 currently return Cloudflare
+  addresses for the apex and `www`, but `xenon.akoria.net` returns the private
+  address `10.0.0.20`. A forced request to the Cloudflare edge still returns
+  HTTP 521; the in-network resolver reaches Xenon and its local HTTP endpoint
+  returns 200. **Inference:** the edge-to-origin path is failing, and external
+  HTTP-01 validation for `xenon.akoria.net` cannot route to its RFC1918 answer.
+  The origin reachability cause, Cloudflare origin mode, NAT/forwarding, and
+  intended public status of the private `xenon` record remain **UNVERIFIED**.
+  No renewal, DNS, Cloudflare, router, or service configuration was changed.
 - A TLS-verified, GET-only UniFi Integration API check reported the `chemistry`
   UDM Pro Max online and returned four WAN interface definitions. The documented
   sites/WAN/devices endpoints did not provide current WAN state or port-forward
@@ -139,7 +152,10 @@ separate user-facing paths around it:
    current Certbot lineage is restored; keep unattended renewal disabled
    while recovering. The
    twice-daily timer checks frequently but does not itself force issuance.
-   Connect external pre-expiry alerting before unattended renewal is enabled.
+   A candidate expiry watcher now checks configured deployed leaves and routes
+   deduplicated warning/critical/recovery transitions through `notify.events`.
+   Configure and verify its real broker notification before unattended renewal
+   is enabled; the systemd timer is not installed or enabled on a host.
    Certbot still reads the host and per-user default `cli.ini` files even with
    the dedicated store. The helper clears global pre/post hooks, disables hook
    directory executables, and supplies its own deploy hook; review other CLI
@@ -195,9 +211,9 @@ versions.
   enrolling it. Start with an isolated development service.
 - Verify issuance and unattended renewal end to end, including key permissions,
   SANs, chain presentation, service reload, expiry alerting, and rollback.
-  The current helper delegates key-size, signature-algorithm, and maximum
-  validity requirements to the tested CA policy; it does not enforce those
-  three properties on each issued leaf.
+  The helper now rejects weak RSA keys, unsupported EC curves, signatures below
+  SHA-256, and validity periods over 825 days. Keep equivalent CA-side policy
+  and verify both enforcement layers during the isolated pilot.
 
 ### Stage 2 — reduce repeated device and service work
 
@@ -286,6 +302,62 @@ versions.
 - Smallstep, [Certificate issuance policies](https://smallstep.com/docs/step-ca/policies/) and [certificate renewal options](https://smallstep.com/docs/step-ca/renewal/).
 
 ## UNVERIFIED
+
+On 2026-10-24, the issuance helper was tightened to enforce the leaf profile
+locally as well as relying on CA policy: RSA keys must be at least 2048 bits,
+EC keys must use NIST P-256/P-384/P-521, signatures must use SHA-256 or stronger
+SHA-2, and validity must not exceed 825 days. Rejection tests cover weak RSA,
+SHA-1, and excessive lifetime; an acceptance test covers P-256. All 34 focused
+PKI tests and the disposable step-ca/Certbot/Apache integration passed after
+the change. GitHub hosted checks and Forgejo execution for this new commit are
+not yet run.
+
+The candidate also now includes an expiry watcher that checks exact configured
+SANs and expiry, deduplicates events by status and leaf fingerprint, and
+publishes through the existing `notify-send.py` RabbitMQ path. Unit tests cover
+warning/critical/recovery transitions, fingerprint changes, parse and SAN
+errors, private state permissions, and argv-only publication. The systemd
+service/timer and example config are present but are not installed or enabled;
+no broker alert has yet been exercised.
+
+A local `--dry-run` against certificate files copied read-only from Xenon
+verified the watcher accepts the current dashboard certificate's DNS and IP
+SAN inventory, reports it healthy through 2036, and reports RackWire healthy
+through 2028. It correctly reports the public `akoria.net` lineage critical
+and expired at 2026-07-19. Dry-run did not publish a notification or save state.
+The tracked `acme_expiry_watch.xenon.example.json` now captures those exact
+public, dashboard, and RackWire paths/SANs, including the dashboard and
+RackWire IP SANs. It remains a deployment template; no watcher service or
+timer has been installed on Xenon.
+
+An independent read-only review identified that running the watcher as root
+while invoking a notifier from Jason's writable checkout would permit root
+code execution if that checkout changed. The Xenon template now invokes the
+planned root-owned executable `/usr/local/libexec/solarinet-pki/notify-send.py`;
+the watcher verifies its resolved executable and every parent directory are
+root-owned and not group/world-writable immediately before launch. Deployment
+guidance also requires a root-owned mode-`0600` AMQP config. The timer remains
+uninstalled. The reviewer also noted GitHub/Forgejo CI
+differences (including absent native macOS coverage); exact workflow parity is
+not claimed. No independent cross-lab review or current remote CI run covers
+this diff.
+
+A follow-up independent review caught two deployment gaps: the instructions
+omitted the watcher's required sibling `acme_certificates.py`, and the notifier
+did not enforce the documented credential-file protections. The install steps
+now include the sibling module; tests exercise `python3 -I` startup from an
+installed-style directory. The notifier now requires an absolute, private
+regular config owned by its service user, with protected root-owned parent
+directories when running as root. Tests reject permissive modes, symlinks, and
+writable root config directories. Current counts are recorded in the
+stabilization log after the final rerun.
+
+Also on 2026-10-24, a read-only recheck confirmed Xenon's Certbot timer is
+active but its latest service run failed; the public Cloudflare edge still
+returns 521 for the apex and `www`. Public resolver 1.1.1.1 returns
+`xenon.akoria.net A 10.0.0.20`, so that hostname's external HTTP-01 challenge
+cannot reach the private address. The root cause is unverified and no live
+configuration was changed.
 
 The generator's seventeen isolated tests pass, and its generated profile was
 verified to contain the exact live CA root with a matching checksum manifest.
