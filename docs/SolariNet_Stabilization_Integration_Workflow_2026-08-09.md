@@ -3102,11 +3102,48 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   generated Forgejo workflow parity; `git diff --check`; isolated ACME
   integration all pass. The HTML/PDF certificate operations manual is paired
   and records the same evidence.
-- Committed as `6705335` and pushed to the existing integration branch on both
-  Forgejo and GitHub; GitHub PR #38 remains open as a draft. GitHub run
+- Code committed as `6705335` and pushed to the existing integration branch on
+  both Forgejo and GitHub; the follow-up documentation commit is `5a51e38`.
+  GitHub PR #38 remains open as a draft. GitHub run
   `40056882739` passed all 16 jobs, including the ACME lifecycle and authenticated
-  scanner/RackWire flows. Cesium currently has no Forgejo runner or container
-  engine, so Forgejo-hosted CI remains unavailable. **OPEN:** real issuance and
+  scanner/RackWire flows; the follow-up run `40057443974` passed all 16 jobs on
+  `5a51e38`. Read-only host inspection found the Forgejo ephemeral
+  runner supervisor, guard/network services, and QEMU runner VM active on
+  Benzene. Cesium is the Forgejo server, not the runner host; this candidate's
+  Forgejo run result remains unverified. **OPEN:** real issuance and
   browser trust verification, expiry alerting, peer activation, platform
   release gates, and deployment. No live CA, DNS, production service, or network
   state was changed.
+
+## 2026-10-24 — read-only internal CA and web endpoint audit
+
+- Verified Chlorine (`10.7.0.10`) is running step-ca on TCP/443 with Akoria Root
+  CA fingerprint `D7:40:F6:B0:1A:6E:25:47:D1:3D:6A:37:55:0C:B2:85:EA:16:4C:91:51:A9:31:6A:ED:34:F2:83:8F:39:48:88`.
+  The active `acme` provisioner has no per-provisioner options, challenge list,
+  or claims, and `authority.policy` is absent. Its issuance names, HTTP-01-only
+  rule, and lifetime are therefore not explicitly restricted in configuration.
+  No CA configuration or service was changed.
+- Xenon (`10.0.0.20`) currently runs Apache on ports 80/443 and nginx on 8080.
+  Its public `akoria.net` and `solarianmedia.akoria.net` vhosts use Let's Encrypt;
+  keep those on public ACME. Internal dashboard and RackWire vhosts currently
+  use separate self-signed certificates. Dashboard DNS aliases
+  `dashboard`, `solarinet`, `monitor`, and `solari` resolve internally to Xenon.
+  The live dashboard vhost also aliases `proto.akoria.net`, but that name has
+  no internal DNS answer and is not in the active certificate SANs. The
+  `rackwire.akoria.net` vhost has no internal DNS record, so its private
+  HTTP-01 path is not currently usable by internal clients.
+- Next rollout gate: make the private CA policy explicit for reviewed internal
+  names and HTTP-01 only; pilot the dashboard SAN set with the existing
+  certificate helper; resolve RackWire's intended DNS name through the SoR/DNS
+  workflow; then add monitored renewal before enabling unattended timers.
+  Leave public vhosts and UniFi unchanged. The restricted policy, DNS update,
+  certificate issue, and service cutover remain unimplemented pending those
+  checks.
+- The policy question has a wider effect than the web-service inventory:
+  Smallstep documents that open-source self-hosted step-ca permits X.509
+  policy only at authority scope, not per provisioner. That affects the same
+  CA's JWK and S/MIME issuance; SolariNet node enrollment uses a separate mTLS
+  CA and is not directly governed by this policy. A web-only allowlist cannot
+  be applied safely until the step-ca SAN/subject requirements are audited or
+  a separately trusted web-CA design is chosen. This is an inference from the
+  documented authority-wide enforcement and the observed provisioner set.

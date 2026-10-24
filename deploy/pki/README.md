@@ -139,6 +139,20 @@ can issue for any name whose challenge can be satisfied and recommends
 explicit name policies and challenge controls ([provisioner guidance](https://smallstep.com/docs/step-ca/provisioners/),
 [production considerations](https://smallstep.com/docs/step-ca/certificate-authority-server-production/)).
 
+**Policy scope requires a CA-wide identity audit.** Open-source self-hosted
+step-ca only supports X.509 name policy at the authority level; applying a
+DNS/IP allowlist for web services also constrains JWK and S/MIME issuance,
+but not SolariNet's separate mTLS CA used by `solariCtl` node enrollment. The
+live Chlorine configuration currently has no authority X.509 policy, and its
+ACME provisioner has no explicit challenge list or claims. Before changing it,
+inventory every current and planned step-ca certificate SAN/subject across
+S/MIME, CA endpoints, CRL publication, and web services. Then either define a
+complete tested authority-wide allowlist or design a separate web-only CA
+trust path. Do not
+assume that a per-provisioner name policy is available in self-hosted step-ca;
+the [policy reference](https://smallstep.com/docs/step-ca/policies/) documents
+the authority-wide limit.
+
 The checked-in [example registry](acme_services.example.json) uses the reserved
 `example.invalid` DNS name and a non-routable `ca.example.invalid` CA address.
 Replace both names and every certificate path before any issuance. Copy it to a root-owned,
