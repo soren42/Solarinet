@@ -27,14 +27,14 @@ the barcode path exercises recovery rather than a normal first-try request,
 and planner-model presence is not a rendered-device timing. It does not yet
 establish physical scanner, native scan-worker, client-device, or production
 latency, and no latency threshold is enforced.
-On candidate `ac13d08`, GitHub Actions run `40120364102` passed and produced
-two samples in the dashboard API job: the source-tree flow and packaged
-release acceptance. In that order, export-to-summary was 19/22 ms,
-preview-to-ready status 73/66 ms, preview-to-destination details 79/73 ms,
-apply-to-complete 75/77 ms, RackWire profile save-to-success 55/66 ms,
-forced-CSRF-refresh barcode click-to-success response 292/288 ms, and
-barcode click-to-device-in-plan 316/310 ms. These are two single-run samples
-from the same GitHub-hosted environment, not medians or production targets.
+GitHub Actions runs `40120364102` (`ac13d08`) and `40121091293` (`f4e862b`)
+both passed and each exercised the source-tree flow and packaged-release
+acceptance. Across those four single-run samples, export-to-summary ranged
+19–23 ms, preview-to-ready status 66–75 ms, preview-to-destination details
+73–81 ms, apply-to-complete 75–84 ms, RackWire profile save-to-success
+55–66 ms, forced-CSRF-refresh barcode click-to-success response 288–293 ms,
+and barcode click-to-device-in-plan 310–316 ms. These are diagnostic samples
+from comparable GitHub-hosted environments, not medians or production targets.
 
 - Implemented a browser-side JSX loader with no build step. It hashes each editable `.jsx` source plus Babel pipeline options and caches transformed classic scripts in CacheStorage. The pipeline preserves the former script-tag defaults: React and Env presets plus class-properties, object-rest-spread, and Flow-strip plugins. The Babel version is included in the digest and checked against the vendored runtime. Cold transforms run in a same-origin Web Worker that reports progress; a 45-second inactivity timeout, worker absence, or load failure falls back to main-thread Babel. A 15-second render watchdog replaces a perpetual loading message if scripts finish without a view. Warm visits still revalidate/hash sources but skip Babel. Cache keys exclude deployment query strings, and a pipeline change uses a new cache namespace. React scripts are deferred; an accessible loading state paints while transforms complete. The code executes through the existing same-origin `unsafe-eval` CSP allowance; the shipped policy still forbids `unsafe-inline` scripts. Persistent transform caching requires HTTPS or localhost; plain HTTP uses the worker without persistent caching.
 - The service worker now preserves the independently versioned transform cache across shell upgrades and catches CacheStorage enumeration/cleanup failures during activation. Its authenticated `/api/*` network-only policy remains unchanged; session data is not cached. Tests cover that privacy boundary, transform-cache preservation, and activation failure handling.
