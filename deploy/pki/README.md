@@ -152,10 +152,15 @@ ACME provisioner has no explicit challenge list or claims. Before changing it,
 inventory every current and planned step-ca certificate SAN/subject across
 S/MIME, CA endpoints, CRL publication, and web services. Then either define a
 complete tested authority-wide allowlist or design a separate web-only CA
-trust path. A separate web CA is the current architectural recommendation to
-contain its strict DNS allowlist and HTTP-01-only policy; determine first
-whether target browsers already trust Chlorine's root, because a second root
-could add client setup. No live CA policy or provisioner was changed. Do not
+trust path. The current recommendation is a separate web-only `step-ca` using
+its own pathLen=0 intermediate, with critical DNS name constraints, signed
+directly by the existing root. This preserves the existing browser root while
+isolating the web authority's strict DNS allowlist and HTTP-01-only policy.
+The root has `pathLen=1`, so this chain depth is possible, but root-key custody
+and name-constraint enforcement across browsers remain unverified and the
+offline signing ceremony is not planned or approved yet. If it cannot be done
+safely, use a separate web root and account for the added trust installation.
+No live CA policy or provisioner was changed. Do not
 assume that a per-provisioner name policy is available in self-hosted step-ca;
 the [policy reference](https://smallstep.com/docs/step-ca/policies/) documents
 the authority-wide limit.

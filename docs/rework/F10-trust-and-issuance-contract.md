@@ -51,6 +51,20 @@ service cutover, external expiry alerts, and fleet rollout remain undone.
   six-month default / one-year maximum TLS claims. The live ACME provisioner
   has no claims or challenge list. A broad authority policy therefore needs an
   audit of existing non-ACME identities before it can be applied.
+- A read-only, field-filtered query confirmed the live CA uses the `badgerv2`
+  database. Smallstep documents no simple issuance-history export interface;
+  its embedded Badger/Bolt databases cannot be read by a second process while
+  `step-ca` is running. No database rows were read and the CA was not stopped.
+  Therefore the current extant-certificate inventory is incomplete; a
+  CA-wide policy must not be applied based only on the provisioner list or the
+  web-endpoint scan. See [step-ca database/export documentation](https://smallstep.com/docs/step-ca/configuration/).
+- Public-certificate inspection on 2026-10-24 found the current root has
+  `pathLen=1` and its current intermediate has `pathLen=0`. A metadata-only
+  existence check found a root-signing-key file on Chlorine; the key contents
+  were not read, and its encryption and custody are **UNVERIFIED**. A separate
+  pathLen=0 web intermediate directly beneath the root is structurally
+  possible, while a subordinate beneath the current intermediate is not.
+  This is a design opportunity only; no signing operation was attempted.
 - The live CA endpoint's `Step Online CA` TLS leaf was valid through
   2026-10-24 18:58 UTC. No separate renewal timer is installed; Smallstep
   documents this self-certificate as a 24-hour leaf renewed internally by
@@ -174,14 +188,22 @@ separate user-facing paths around it:
 
 Do not add a web-host allowlist to Chlorine's current self-hosted authority
 without a complete identity and SAN inventory: its X.509 policy is authority-
-wide and would also constrain existing JWK and S/MIME issuance. The preliminary
-architecture recommendation is a dedicated web-only CA with an explicit DNS
-allowlist and HTTP-01 only. This isolates the web certificate scope and keeps
-Chlorine unchanged. Whether a separate root adds client setup depends on which
-roots browsers already trust; that trust inventory is **UNVERIFIED**. If clients
-already trust Chlorine or need its other certificates, account for the added
-root or test a constrained intermediate path before selecting the deployment
-design. This recommendation is a design inference, not live CA verification.
+wide and would also constrain existing JWK and S/MIME issuance. The current
+recommendation is a separate web-only `step-ca` using its own pathLen=0
+intermediate, critically constrained to approved DNS names, signed directly by
+the existing root. Its own authority policy would allow only the web registry,
+and its ACME provisioner would allow HTTP-01 only. This preserves the existing
+browser root and isolates issuance without stopping Chlorine's Badger
+database. Smallstep documents intermediate name constraints and bootstrapping
+a separate CA under an existing PKI ([templates](https://smallstep.com/docs/step-ca/templates/),
+[existing-root intermediate tutorial](https://smallstep.com/docs/tutorials/intermediate-ca-new-ca/)).
+The root certificate's `pathLen=1` makes this chain depth possible, but a
+controlled root-signing ceremony and safe root-key custody are required. The
+root key's encryption/custody, real-client trust state, and browser enforcement
+of the chosen constraint set remain **UNVERIFIED**. If an offline signing
+ceremony cannot be made safe, the fallback is a separate web root with an
+additional client trust installation. This is a design recommendation, not a
+live CA change.
 
 Do not place CA signing keys, provisioner JWK secrets, ACME account private
 keys, or leaf private keys in the portal, database, or shared repository.
@@ -329,10 +351,12 @@ EC keys must use NIST P-256/P-384/P-521, signatures must use SHA-256 or stronger
 SHA-2, and validity must not exceed 825 days. Rejection tests cover weak RSA,
 SHA-1, and excessive lifetime; an acceptance test covers P-256. All 34 focused
 PKI tests and the disposable step-ca/Certbot/Apache integration passed after
-the change. GitHub Actions run `40117491695` passed all jobs for code commit
-`defb7f1`; documentation-only updates through `b6d58ff` are undergoing the
-same CI matrix. Forgejo hosted execution remains unavailable because Cesium
-has no Forgejo runner service.
+the change. GitHub Actions runs `40117491695` (code commit `defb7f1`),
+`40118388636` (`b6d58ff`), and `40118805909` (`bb039d8`) all completed with all
+jobs passing. The current local F-10 revision is documentation-only and is not
+covered by those runs; runtime code is unchanged.
+Forgejo hosted execution remains unavailable because Cesium has no Forgejo
+runner service.
 
 The candidate also now includes an expiry watcher that checks exact configured
 SANs and expiry, deduplicates events by status and leaf fingerprint, and
@@ -401,7 +425,12 @@ device, portal HTTPS/bootstrap, issuance for a real SolariNet server, renewal
 and reload of a real service, expiry notification delivery, or a reviewed
 hostname/challenge policy on Chlorine. Disposable issuance, forced renewal,
 HTTPS, reload, and rollback passed, but do not establish those live gates. A
-read-only inspection of browser trust stores and the extant X.509 issuance
-inventory is still needed to choose between a new web-only root and a
-constrained intermediate path. The latest CA configuration and certificate
-observations above were read-only checks made on 2026-10-24.
+read-only survey of actual browser trust stores, root-key custody review, and
+disposable tests of the constrained-intermediate chain remain necessary before
+selecting the final web CA deployment. A complete Chlorine X.509 issuance
+inventory would require either an approved maintenance window to stop the
+embedded Badger CA for export, or a reviewed online export method; neither has
+been attempted. Keeping Chlorine's current authority configuration unchanged
+avoids needing that database export before a separate web CA can be designed.
+The latest CA configuration and certificate observations above were read-only
+checks made on 2026-10-24.
