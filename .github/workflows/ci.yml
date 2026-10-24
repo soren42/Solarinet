@@ -750,29 +750,51 @@ jobs:
         env:
           MYSQL_PWD: rwci_scratch
         run: |
+          set -euo pipefail
+          ledger_tmp="$(mktemp -d)"
+          trap 'rm -rf "$ledger_tmp"' EXIT
           mariadb -h127.0.0.1 -P3306 -uroot -e 'CREATE DATABASE monitoring_migration_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE sor_migration_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
+          echo 'ledger-gate: scratch databases created'
           python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root
+          echo 'ledger-gate: monitoring migrations applied'
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root
+          echo 'ledger-gate: SoR migrations applied'
           python3 tools/migrate.py --database monitoring --db-name monitoring_migration_ci --host 127.0.0.1 --port 3306 --user root --check
+          echo 'ledger-gate: monitoring migration check passed'
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --check
-          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" = 36
-          test "$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" = 13
-          python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output /tmp/monitoring-schema.sql
-          python3 tools/export_schema.py --database sor --user root --host 127.0.0.1 --port 3306 --output /tmp/sor-schema.sql
-          diff -u db/schema.sql /tmp/monitoring-schema.sql
-          diff -u netdb/sor/schema.snapshot.sql /tmp/sor-schema.sql
+          echo 'ledger-gate: SoR migration check passed'
+          monitoring_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read monitoring migration count' >&2; exit 1; }
+          test "$monitoring_migration_count" = 36 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 36" >&2; exit 1; }
+          echo "ledger-gate: monitoring applied-migration count is $monitoring_migration_count"
+          sor_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read SoR migration count' >&2; exit 1; }
+          test "$sor_migration_count" = 13 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 13" >&2; exit 1; }
+          echo "ledger-gate: SoR applied-migration count is $sor_migration_count"
+          python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output "$ledger_tmp/monitoring-schema.sql"
+          echo 'ledger-gate: monitoring schema exported'
+          python3 tools/export_schema.py --database sor --user root --host 127.0.0.1 --port 3306 --output "$ledger_tmp/sor-schema.sql"
+          echo 'ledger-gate: SoR schema exported'
+          diff -u db/schema.sql "$ledger_tmp/monitoring-schema.sql"
+          echo 'ledger-gate: monitoring schema snapshot matches'
+          diff -u netdb/sor/schema.snapshot.sql "$ledger_tmp/sor-schema.sql"
+          echo 'ledger-gate: SoR schema snapshot matches'
           mariadb -h127.0.0.1 -P3306 -uroot -e 'CREATE DATABASE monitoring_snapshot_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE sor_snapshot_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
-          mariadb -h127.0.0.1 -P3306 -uroot monitoring_snapshot_ci < /tmp/monitoring-schema.sql
-          mariadb -h127.0.0.1 -P3306 -uroot sor_snapshot_ci < /tmp/sor-schema.sql
-          diff -u \
-            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='monitoring_migration_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') AND TABLE_NAME <> 'solari_migration_ledger' ORDER BY TABLE_NAME") \
-            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='monitoring_snapshot_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') ORDER BY TABLE_NAME")
-          diff -u \
-            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='sor_migration_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') AND TABLE_NAME <> 'solari_migration_ledger' ORDER BY TABLE_NAME") \
-            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='sor_snapshot_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') ORDER BY TABLE_NAME")
-          diff -u \
-            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='sor_migration_ci' ORDER BY TRIGGER_NAME") \
-            <(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='sor_snapshot_ci' ORDER BY TRIGGER_NAME")
+          echo 'ledger-gate: snapshot databases created'
+          mariadb -h127.0.0.1 -P3306 -uroot monitoring_snapshot_ci < "$ledger_tmp/monitoring-schema.sql"
+          echo 'ledger-gate: monitoring snapshot restored'
+          mariadb -h127.0.0.1 -P3306 -uroot sor_snapshot_ci < "$ledger_tmp/sor-schema.sql"
+          echo 'ledger-gate: SoR snapshot restored'
+          mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='monitoring_migration_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') AND TABLE_NAME <> 'solari_migration_ledger' ORDER BY TABLE_NAME" > "$ledger_tmp/monitoring-migrated-objects.txt"
+          mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='monitoring_snapshot_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') ORDER BY TABLE_NAME" > "$ledger_tmp/monitoring-snapshot-objects.txt"
+          diff -u "$ledger_tmp/monitoring-migrated-objects.txt" "$ledger_tmp/monitoring-snapshot-objects.txt"
+          echo 'ledger-gate: monitoring table and view parity passed'
+          mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='sor_migration_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') AND TABLE_NAME <> 'solari_migration_ledger' ORDER BY TABLE_NAME" > "$ledger_tmp/sor-migrated-objects.txt"
+          mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='sor_snapshot_ci' AND TABLE_TYPE IN ('BASE TABLE','VIEW') ORDER BY TABLE_NAME" > "$ledger_tmp/sor-snapshot-objects.txt"
+          diff -u "$ledger_tmp/sor-migrated-objects.txt" "$ledger_tmp/sor-snapshot-objects.txt"
+          echo 'ledger-gate: SoR table and view parity passed'
+          mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='sor_migration_ci' ORDER BY TRIGGER_NAME" > "$ledger_tmp/sor-migrated-triggers.txt"
+          mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='sor_snapshot_ci' ORDER BY TRIGGER_NAME" > "$ledger_tmp/sor-snapshot-triggers.txt"
+          diff -u "$ledger_tmp/sor-migrated-triggers.txt" "$ledger_tmp/sor-snapshot-triggers.txt"
+          echo 'ledger-gate: SoR trigger parity passed'
       - name: Deploy script syntax
         run: |
           bash -n \
