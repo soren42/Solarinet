@@ -11,8 +11,8 @@
 #   2. This script generates a keypair + CSR locally (the private key never
 #      leaves the host).
 #   3. It presents {token, CSR, role, fqdn} to the server's enrollment endpoint
-#      (HTTPS to the dashboard /api/enrollments, which routes through solariCtl,
-#      or directly to a local solariCtl Unix socket on the server itself).
+#      through the bearer-authenticated HTTPS route, which delegates to
+#      solariCtl without exposing the CA key.
 #   4. The server signs the CSR against the internal CA (step-ca root), registers
 #      the node row, and returns the signed cert + CA root.
 #   5. This script installs cert/key/CA under /etc/solari and writes nodeId into
@@ -30,8 +30,6 @@
 #                        --csr-only).
 #   --server URL         Enrollment endpoint base URL
 #                        (default: https://${SOLARI_SERVER:-localhost}).
-#   --ctl-socket PATH    Submit via a local solariCtl Unix socket instead of
-#                        HTTPS (server-host enrollment); requires curl --unix-socket.
 #   --fqdn FQDN          This node's FQDN (default: hostname -f).
 #   --conf-dir DIR       TLS/material dir (default: /etc/solari).
 #   --config FILE        Node config to stamp nodeId into
@@ -41,16 +39,16 @@
 #   --csr-only           Generate key+CSR and stop (print CSR path); no submit.
 #   --insecure           Allow curl to skip TLS verification (bootstrap only).
 #   --force              Regenerate key/CSR and overwrite installed material.
+#   --resume             Recover an installed cert whose server ACK failed; only
+#                        succeeds if the server returns the exact installed cert.
 #   -h | --help          Show this help.
 #
 set -euo pipefail
 
 # ---- defaults -------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLE=""
 TOKEN=""
 SERVER_URL="https://${SOLARI_SERVER:-localhost}"
-CTL_SOCKET=""
 FQDN=""
 CONF_DIR="/etc/solari"
 CONFIG=""
@@ -59,8 +57,11 @@ USE_RSA=0
 CSR_ONLY=0
 INSECURE=0
 FORCE=0
+RESUME=0
+TEMP_KEY_FILE=""
+WORK_KEY_FILE=""
 
-log()  { printf '\033[1;36m[enroll]\033[0m %s\n' "$*"; }
+log()  { printf '\033[1;36m[enroll]\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33m[enroll][warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[enroll][error]\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -70,7 +71,6 @@ while [ $# -gt 0 ]; do
     --role)        ROLE="${2:?}"; shift ;;
     --token)       TOKEN="${2:?}"; shift ;;
     --server)      SERVER_URL="${2:?}"; shift ;;
-    --ctl-socket)  CTL_SOCKET="${2:?}"; shift ;;
     --fqdn)        FQDN="${2:?}"; shift ;;
     --conf-dir)    CONF_DIR="${2:?}"; shift ;;
     --config)      CONFIG="${2:?}"; shift ;;
@@ -79,11 +79,16 @@ while [ $# -gt 0 ]; do
     --csr-only)    CSR_ONLY=1 ;;
     --insecure)    INSECURE=1 ;;
     --force)       FORCE=1 ;;
+    --resume)      RESUME=1 ;;
     -h|--help)     grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
   shift
 done
+
+if [ "${RESUME}" -eq 1 ] && { [ "${FORCE}" -eq 1 ] || [ "${CSR_ONLY}" -eq 1 ]; }; then
+  die "--resume cannot be combined with --force or --csr-only"
+fi
 
 # ---- validation -----------------------------------------------------------
 command -v openssl >/dev/null 2>&1 || die "openssl is required"
@@ -105,12 +110,14 @@ fi
 [ -n "${CONFIG}" ] || CONFIG="${CONF_DIR}/${ROLE}.conf"
 
 KEY_FILE="${CONF_DIR}/node.key"
+WORK_KEY_FILE="${KEY_FILE}"
 CSR_FILE="${CONF_DIR}/node.csr"
 CERT_FILE="${CONF_DIR}/node.pem"
 CA_FILE="${CONF_DIR}/ca.pem"
 
-# CN encodes role + FQDN exactly as the signer expects (§15.1, §5.5).
-CERT_CN="${ROLE}:${FQDN}"
+# CN's first label encodes the role consumed by server ingest authorization.
+# The server identity contract is <role>.<fqdn>, e.g. monitor.beryl.akoria.net.
+CERT_CN="${ROLE}.${FQDN}"
 
 # ---- privilege / dirs -----------------------------------------------------
 if [ ! -d "${CONF_DIR}" ]; then
@@ -119,25 +126,36 @@ if [ ! -d "${CONF_DIR}" ]; then
 fi
 chmod 0750 "${CONF_DIR}" 2>/dev/null || true
 
+cleanup_temp_key() {
+  if [ -n "${TEMP_KEY_FILE}" ] && [ -e "${TEMP_KEY_FILE}" ]; then
+    rm -f "${TEMP_KEY_FILE}"
+  fi
+}
+trap cleanup_temp_key EXIT
+
 # ---- key + CSR ------------------------------------------------------------
 generate_key_and_csr() {
   if [ -f "${KEY_FILE}" ] && [ "${FORCE}" -eq 0 ]; then
     log "reusing existing private key ${KEY_FILE} (--force to regenerate)"
   else
-    log "generating private key ${KEY_FILE}"
+    if [ "${FORCE}" -eq 1 ] && [ -f "${CERT_FILE}" ]; then
+      TEMP_KEY_FILE="$(mktemp "${CONF_DIR}/.node.key.XXXXXXXX")" || die "cannot create staged private key"
+      WORK_KEY_FILE="${TEMP_KEY_FILE}"
+    fi
+    log "generating private key ${WORK_KEY_FILE}"
     umask 077
     if [ "${USE_RSA}" -eq 1 ]; then
       openssl genpkey -algorithm RSA \
-        -pkeyopt "rsa_keygen_bits:${KEY_BITS}" -out "${KEY_FILE}"
+        -pkeyopt "rsa_keygen_bits:${KEY_BITS}" -out "${WORK_KEY_FILE}"
     else
       openssl genpkey -algorithm EC \
-        -pkeyopt ec_paramgen_curve:P-256 -out "${KEY_FILE}"
+        -pkeyopt ec_paramgen_curve:P-256 -out "${WORK_KEY_FILE}"
     fi
-    chmod 0600 "${KEY_FILE}"
+    chmod 0600 "${WORK_KEY_FILE}"
   fi
 
   log "generating CSR ${CSR_FILE} (CN=${CERT_CN})"
-  openssl req -new -key "${KEY_FILE}" -out "${CSR_FILE}" \
+  openssl req -new -key "${WORK_KEY_FILE}" -out "${CSR_FILE}" \
     -subj "/CN=${CERT_CN}/O=SolariNet/OU=${ROLE}" \
     -addext "subjectAltName=DNS:${FQDN}"
   chmod 0640 "${CSR_FILE}"
@@ -153,7 +171,7 @@ csr_fingerprint() {
 
 # ---- submit ---------------------------------------------------------------
 # Builds the enrollment request JSON; submits over HTTPS to the dashboard
-# /api/enrollments endpoint, or to a local solariCtl Unix socket. The response
+# /api/enrollments endpoint. The response
 # is expected to contain { nodeId, cert (PEM), ca (PEM) }.
 submit_enrollment() {
   local csr_pem fp payload resp
@@ -170,27 +188,39 @@ submit_enrollment() {
 
   local -a curl_args=(--fail --silent --show-error
                       -H 'Content-Type: application/json'
-                      -X POST --data-binary "${payload}")
+                      -X POST --data-binary @-)
   [ "${INSECURE}" -eq 1 ] && curl_args+=(--insecure)
 
-  if [ -n "${CTL_SOCKET}" ]; then
-    log "submitting CSR via solariCtl socket ${CTL_SOCKET}"
-    resp="$(curl "${curl_args[@]}" --unix-socket "${CTL_SOCKET}" \
-             "http://localhost/api/enrollments")" \
-      || die "enrollment submission failed (solariCtl socket)"
-  else
-    log "submitting CSR to ${SERVER_URL}/api/enrollments"
-    resp="$(curl "${curl_args[@]}" \
-             "${SERVER_URL%/}/api/enrollments")" \
-      || die "enrollment submission failed (HTTPS endpoint)"
-  fi
+  log "submitting CSR to ${SERVER_URL}/api/enrollments"
+  resp="$(printf '%s' "${payload}" | curl "${curl_args[@]}" \
+           "${SERVER_URL%/}/api/enrollments")" \
+    || die "enrollment submission failed (HTTPS endpoint)"
 
   printf '%s' "${resp}"
 }
 
+# Revoke the bearer only after the leaf and trust anchor are installed.
+ack_enrollment() {
+  local payload resp status
+  payload="$(jq -cn --arg token "${TOKEN}" '{token:$token}')"
+  local -a curl_args=(--fail --silent --show-error
+                      -H 'Content-Type: application/json'
+                      -X POST --data-binary @-)
+  [ "${INSECURE}" -eq 1 ] && curl_args+=(--insecure)
+  resp="$(printf '%s' "${payload}" | curl "${curl_args[@]}" \
+    "${SERVER_URL%/}/api/enrollments/ack")" || {
+      warn "certificate installed, but server acknowledgement failed; retry enrollment with the same token"
+      return 0
+    }
+  status="$(printf '%s' "${resp}" | jq -r '.status // .data.status // empty')"
+  if [ "${status}" != "acknowledged" ]; then
+    warn "certificate installed, but server did not confirm token revocation"
+  fi
+}
+
 # ---- install --------------------------------------------------------------
 install_material() {
-  local resp="$1" status nodeId cert ca
+  local resp="$1" status nodeId cert ca staging cert_pub key_pub had_ca=0 key_committed=0
 
   status="$(printf '%s' "${resp}" | jq -r '.status // .data.status // empty')"
   if [ "${status}" = "pending" ]; then
@@ -206,17 +236,140 @@ install_material() {
   [ -n "${cert}" ] || die "server response contained no signed certificate"
   [ -n "${ca}" ]   || die "server response contained no CA root"
 
-  log "installing signed certificate ${CERT_FILE}"
-  printf '%s\n' "${cert}" > "${CERT_FILE}"; chmod 0644 "${CERT_FILE}"
-  log "installing CA root ${CA_FILE}"
-  printf '%s\n' "${ca}"   > "${CA_FILE}";   chmod 0644 "${CA_FILE}"
+  # Validate into a private staging directory before touching installed files.
+  # This also protects an existing identity when --force is used and the server
+  # returns malformed, unrelated, or incorrectly signed certificate material.
+  staging="$(mktemp -d "${CONF_DIR}/.enroll.XXXXXXXX")" || die "cannot create certificate staging directory"
+  chmod 0700 "${staging}"
+  printf '%s\n' "${cert}" > "${staging}/node.pem"
+  printf '%s\n' "${ca}"   > "${staging}/ca.pem"
+  chmod 0600 "${staging}/node.pem" "${staging}/ca.pem"
 
-  # sanity: the new cert must verify against the CA root and match our key.
-  if ! openssl verify -CAfile "${CA_FILE}" "${CERT_FILE}" >/dev/null 2>&1; then
-    warn "installed cert does not verify against CA root - check the signer"
+  if ! openssl x509 -in "${staging}/node.pem" -noout >/dev/null 2>&1; then
+    rm -rf "${staging}"
+    die "server response contained an invalid certificate"
+  fi
+  if ! openssl x509 -in "${staging}/ca.pem" -noout >/dev/null 2>&1; then
+    rm -rf "${staging}"
+    die "server response contained an invalid CA certificate"
+  fi
+  if ! openssl verify -CAfile "${staging}/ca.pem" "${staging}/node.pem" >/dev/null 2>&1; then
+    rm -rf "${staging}"
+    die "issued certificate does not verify against the returned CA"
   fi
 
+  cert_pub="$(openssl x509 -in "${staging}/node.pem" -pubkey -noout \
+    | openssl pkey -pubin -outform DER 2>/dev/null \
+    | openssl dgst -sha256 | awk '{print $NF}')" || {
+      rm -rf "${staging}"
+      die "cannot read issued certificate public key"
+    }
+  key_pub="$(openssl pkey -in "${WORK_KEY_FILE}" -pubout -outform DER 2>/dev/null \
+    | openssl dgst -sha256 | awk '{print $NF}')" || {
+      rm -rf "${staging}"
+      die "cannot read local private key public key"
+    }
+  if [ -z "${cert_pub}" ] || [ "${cert_pub}" != "${key_pub}" ]; then
+    rm -rf "${staging}"
+    die "issued certificate does not match the local private key"
+  fi
+
+  # A prior run may have installed the leaf and then lost the server ACK. In
+  # resume mode, accept only a byte-identical X.509 leaf from the same token;
+  # never replace a working identity during recovery.
+  if [ "${RESUME}" -eq 1 ] && [ -f "${CERT_FILE}" ]; then
+    local installed_fp returned_fp
+    if ! openssl x509 -in "${CERT_FILE}" -noout >/dev/null 2>&1 ||
+       ! openssl verify -CAfile "${CA_FILE}" "${CERT_FILE}" >/dev/null 2>&1; then
+      rm -rf "${staging}"
+      die "installed certificate is invalid; refusing enrollment resume"
+    fi
+    installed_fp="$(openssl x509 -in "${CERT_FILE}" -noout -fingerprint -sha256 | sed 's/^[^=]*=//')"
+    returned_fp="$(openssl x509 -in "${staging}/node.pem" -noout -fingerprint -sha256 | sed 's/^[^=]*=//')"
+    if [ -z "${installed_fp}" ] || [ "${installed_fp}" != "${returned_fp}" ]; then
+      rm -rf "${staging}"
+      die "server returned a different certificate; refusing to replace installed identity during resume"
+    fi
+    rm -rf "${staging}"
+    stamp_node_id "${nodeId}"
+    ack_enrollment
+    log "resume complete (installed certificate unchanged, nodeId=${nodeId:-unknown}, role=${ROLE})"
+    return 0
+  fi
+
+  chmod 0644 "${staging}/node.pem" "${staging}/ca.pem"
+  if [ -e "${CA_FILE}" ]; then
+    cp -p "${CA_FILE}" "${staging}/previous-ca.pem" || {
+      rm -rf "${staging}"
+      die "cannot preserve the installed CA before replacement"
+    }
+    had_ca=1
+  fi
+  if [ -n "${TEMP_KEY_FILE}" ] && [ -e "${KEY_FILE}" ]; then
+    cp -p "${KEY_FILE}" "${staging}/previous-key.pem" || {
+      rm -rf "${staging}"
+      die "cannot preserve the installed private key before replacement"
+    }
+  fi
+  # Publish the trust anchor first and the leaf certificate last. The client
+  # treats node.pem as the enrollment-complete marker, so it never sees a leaf
+  # before its CA is installed.
+  log "installing CA root ${CA_FILE}"
+  if ! mv -f "${staging}/ca.pem" "${CA_FILE}"; then
+    rm -rf "${staging}"
+    die "cannot install the CA certificate"
+  fi
+  if [ -n "${TEMP_KEY_FILE}" ]; then
+    log "installing renewed private key ${KEY_FILE}"
+    if ! mv -f "${TEMP_KEY_FILE}" "${KEY_FILE}"; then
+      local rollback_failed=0
+      if [ "${had_ca}" -eq 1 ]; then
+        mv -f "${staging}/previous-ca.pem" "${CA_FILE}" || {
+          warn "could not restore the previous CA certificate"
+          rollback_failed=1
+        }
+      else
+        rm -f "${CA_FILE}" || rollback_failed=1
+      fi
+      if [ "${rollback_failed}" -eq 1 ]; then
+        die "cannot install the renewed key and CA rollback failed; recovery files retained in ${staging}"
+      fi
+      rm -rf "${staging}"
+      die "cannot install the renewed private key; restored the previous CA state"
+    fi
+    key_committed=1
+    TEMP_KEY_FILE=""
+  fi
+  log "installing signed certificate ${CERT_FILE}"
+  if ! mv -f "${staging}/node.pem" "${CERT_FILE}"; then
+    local rollback_failed=0
+    if [ "${had_ca}" -eq 1 ]; then
+      mv -f "${staging}/previous-ca.pem" "${CA_FILE}" || {
+        warn "could not restore the previous CA certificate"
+        rollback_failed=1
+      }
+    else
+      rm -f "${CA_FILE}" || rollback_failed=1
+    fi
+    if [ -e "${staging}/previous-key.pem" ]; then
+      mv -f "${staging}/previous-key.pem" "${KEY_FILE}" || {
+        warn "could not restore the previous private key"
+        rollback_failed=1
+      }
+    elif [ "${key_committed}" -eq 1 ]; then
+      rm -f "${KEY_FILE}" || rollback_failed=1
+    fi
+    if [ "${rollback_failed}" -eq 1 ]; then
+      die "cannot install the issued certificate and rollback failed; recovery files retained in ${staging}"
+    fi
+    rm -rf "${staging}"
+    die "cannot install the issued certificate; restored the previous CA state"
+  fi
+  rm -f "${staging}/previous-ca.pem" "${staging}/previous-key.pem"
+  rmdir "${staging}"
+
   stamp_node_id "${nodeId}"
+  ack_enrollment
   log "enrollment complete (nodeId=${nodeId:-unknown}, role=${ROLE})"
 }
 
@@ -243,20 +396,36 @@ stamp_node_id() {
 # ---- run ------------------------------------------------------------------
 log "SolariNet enrollment (role=${ROLE} fqdn=${FQDN})"
 
-if [ -f "${CERT_FILE}" ] && [ "${FORCE}" -eq 0 ] && [ "${CSR_ONLY}" -eq 0 ]; then
-  die "a certificate already exists at ${CERT_FILE} (use --force to re-enroll)"
+if [ -f "${CERT_FILE}" ] && [ "${FORCE}" -eq 0 ] && [ "${RESUME}" -eq 0 ] && [ "${CSR_ONLY}" -eq 0 ]; then
+  die "a certificate already exists at ${CERT_FILE} (use --force to re-enroll or --resume to retry a failed server acknowledgement)"
 fi
 
-command -v jq >/dev/null 2>&1 || die "jq is required for submission/install"
+if [ "${RESUME}" -eq 1 ] && [ -f "${CERT_FILE}" ]; then
+  [ -f "${KEY_FILE}" ] || die "cannot resume enrollment without the installed private key"
+  [ -f "${CA_FILE}" ] || die "cannot resume enrollment without the installed CA certificate"
+  openssl verify -CAfile "${CA_FILE}" "${CERT_FILE}" >/dev/null 2>&1 || die "installed certificate does not verify against the installed CA"
+  existing_pub="$(openssl x509 -in "${CERT_FILE}" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 | awk '{print $NF}')" || die "cannot read installed certificate public key"
+  key_pub="$(openssl pkey -in "${KEY_FILE}" -pubout -outform DER 2>/dev/null | openssl dgst -sha256 | awk '{print $NF}')" || die "cannot read local private key public key"
+  [ -n "${existing_pub}" ] && [ "${existing_pub}" = "${key_pub}" ] || die "installed certificate does not match the local private key"
+fi
 
 generate_key_and_csr
 
 if [ "${CSR_ONLY}" -eq 1 ]; then
+  if [ -n "${TEMP_KEY_FILE}" ]; then
+    if [ -f "${CERT_FILE}" ]; then
+      die "cannot use --csr-only --force while a certificate is installed; use a complete forced renewal"
+    fi
+    mv -f "${TEMP_KEY_FILE}" "${KEY_FILE}" || die "cannot install generated private key"
+    TEMP_KEY_FILE=""
+    WORK_KEY_FILE="${KEY_FILE}"
+  fi
   log "CSR generated: ${CSR_FILE}"
   log "fingerprint: $(csr_fingerprint)"
   log "(--csr-only) skipping submission"
   exit 0
 fi
 
+command -v jq >/dev/null 2>&1 || die "jq is required for submission/install"
 response="$(submit_enrollment)"
 install_material "${response}"

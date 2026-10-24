@@ -38,7 +38,7 @@ if (is_string($scenario) && $scenario !== '') {
     $tok = bin2hex(str_repeat("\x11", 32));
     $mk  = static fn(string $role): array => [
         'username' => 'tester', 'role' => $role,
-        'displayName' => 'Tester', 'source' => 'local',
+        'displayName' => 'Tester', 'source' => 'directory',
     ];
 
     $method = 'POST';
@@ -86,6 +86,10 @@ if (is_string($scenario) && $scenario !== '') {
         default:
             fwrite(STDERR, "unknown scenario: $scenario\n");
             exit(2);
+    }
+    if (isset($_SESSION['solari'])) {
+        $_SESSION['solari_created_at'] = time();
+        $_SESSION['solari_seen_at'] = time();
     }
 
     Policy::enforce($method, '/api/test', $policy);

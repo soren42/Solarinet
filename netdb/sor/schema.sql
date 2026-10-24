@@ -193,6 +193,19 @@ CREATE TABLE IF NOT EXISTS `entities` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='Supertype for everything the SoR tracks: servers, devices, appliances, apps, services';
 
+-- One-to-one current association registry. Its primary/unique keys enforce
+-- cardinality without relying on generated-column behavior for FK columns.
+CREATE TABLE IF NOT EXISTS `entity_hardware_unit_links` (
+  `hardware_unit_id` INT UNSIGNED NOT NULL,
+  `entity_id` BIGINT UNSIGNED NOT NULL,
+  `linked_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`hardware_unit_id`),
+  UNIQUE KEY `uq_entity_hardware_unit_entity` (`entity_id`),
+  CONSTRAINT `fk_entity_hardware_unit_link_unit` FOREIGN KEY (`hardware_unit_id`) REFERENCES `hardware_units` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_entity_hardware_unit_link_entity` FOREIGN KEY (`entity_id`) REFERENCES `entities` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='Current one-to-one association of physical units to SoR entities';
+
 -- ----------------------------------------------------------------------------
 -- 7. applications -- subtype detail for entity_type=application
 -- ----------------------------------------------------------------------------

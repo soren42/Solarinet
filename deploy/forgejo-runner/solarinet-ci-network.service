@@ -1,0 +1,15 @@
+[Unit]
+Description=Isolated SolariNet Forgejo CI libvirt network
+Requires=solarinet-ci-guard.service virtnetworkd.service
+BindsTo=solarinet-ci-guard.service
+After=solarinet-ci-guard.service virtnetworkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/bash -c '/usr/bin/virsh net-info solarinet-ci | /usr/bin/grep -q "^Bridge:.*virbr-ci0$"'
+ExecStart=/usr/bin/bash -c '/usr/bin/virsh net-info solarinet-ci | /usr/bin/grep -q "^Active:.*yes" || /usr/bin/virsh net-start solarinet-ci'
+ExecStop=/usr/bin/virsh net-destroy solarinet-ci
+
+[Install]
+WantedBy=multi-user.target

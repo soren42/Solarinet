@@ -103,32 +103,16 @@ script, or `$MDNS_INSPECT_CONF`). DB creds come from `mdns_inspect.conf` (same
 `[db]` shape as `avahi_import.conf`) or `$SOLARI_DB_PASS` — source
 `run/db.env` first, same convention as `deploy/alertbridge/alertbridge.py`.
 
-### Wiring into a discovery probe
+### Independent enrichment sidecars
 
-`mdns_inspect.py`/`solari-mdns-inspect.service` are standalone — the C
-control plane (`solariServer`'s `serverScan.c` / `solariMonitor`) is **not**
-modified to call them. Two ways to make "runs with each discovery probe" real
-without touching the C core:
+`mdns_inspect.py` and its systemd unit remain standalone. The SolariNet scan
+worker does not call `systemctl`: its service account has no system-manager
+authority, and attempting that from the scanner failed under the hardened
+service boundary. Use an operator-run action or an independently managed timer
+to trigger the sidecars. They still write to the same `discovered` table and
+correlate by IP.
 
-1. **Scan hook (recommended).** `serverScanRun()` (`serverScan.h`) is the
-   entry point an operator-driven discovery scan already funnels through
-   (`solariCtl` -> `serverScan.c`). Add a thin wrapper around whatever
-   invokes a scan (an operator script, a cron/systemd-timer, or a future
-   `solariCtl scan` post-hook) that does, after the scan:
-   `systemctl start solari-mdns-inspect.service` (or, run from the repo
-   directly, `deploy/discovery/.venv/bin/python3
-   deploy/discovery/mdns_inspect.py --once`). This keeps the mDNS browse
-   fully out-of-process from `solariServer` — same arm's-length relationship
-   `avahi_import.py` already had to the core. **`oui_enrich.py` should run
-   in the same hook, right alongside `solari-mdns-inspect.service`**
-   (`systemctl start solari-oui-enrich.service`) — a scan freshly populates
-   `discovered.mac` via ARP/portscan/SNMP, so this is the natural point to
-   also fill in `vendor` from it. **`nmap_enrich.py` should run in the same
-   hook too** (`systemctl start solari-nmap-enrich.service`) — it's the
-   heaviest of the three (a real per-host `nmap -sV -O` sweep, rate-limited
-   by `--limit`), so it's fine for it to lag a scan by a few minutes; a scan
-   is exactly what turns up the bare-IPv4 rows this tool exists to flesh out.
-2. **Its own cadence.** Since `mdns_inspect.py --once` is cheap
+**Recommended cadence.** Since `mdns_inspect.py --once` is cheap
    (`--timeout`-bounded, a handful of seconds) and idempotent, it's also fine
    to just enable a `systemd` timer (`solari-mdns-inspect.timer`, not
    included — copy the pattern from `deploy/backups/`) firing every few
@@ -292,10 +276,12 @@ VARCHAR(512) NULL`, additive/idempotent, alongside the existing `mdnsName`
 `vendor`/`enrichedAt`. `db/migrations/015_nmap_enrich.sql` adds
 `discovered.openPorts TEXT`, `osGuess VARCHAR(255)`, `banners TEXT`,
 `nmapEnrichedAt DATETIME`, additive/idempotent — `nmap_enrich.py` only ever
-writes those four columns. `db/schema.sql` is the baseline-only (migration 001)
-canonical schema and doesn't define `discovered` at all — that table (and
-every other migration since 002) already isn't mirrored there, so this
-migration follows the same, established precedent.
+writes those four columns. `db/schema.sql` is generated from the complete
+monitoring migration stream and includes the current `discovered` columns.
+Regenerate it with `python3 tools/export_schema.py --database monitoring`;
+install or upgrade with `tools/migrate.py`, which records and verifies the
+applied migration ledger. The generated snapshot is for review and tooling, not
+an installation path.
 
 ## Export shape
 

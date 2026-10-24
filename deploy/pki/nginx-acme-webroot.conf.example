@@ -1,0 +1,7 @@
+# Include inside the intended HTTP server block. Keep this location reachable
+# before HTTP-to-HTTPS redirects and route it to Certbot's dedicated webroot.
+location ^~ /.well-known/acme-challenge/ {
+    root /var/lib/solarinet/acme-webroot;
+    default_type text/plain;
+    try_files $uri =404;
+}

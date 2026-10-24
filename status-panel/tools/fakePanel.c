@@ -199,14 +199,17 @@ int main(int argc, char **argv) {
   /* Teardown race guard: the final PROVACK may still sit unread in the
    * slave input queue when the loop condition goes false. Closing the
    * master then destroys the pty and the client sees EIO instead of the
-   * ack. FIONREAD on our held slave fd reports the shared queue, so wait
-   * (bounded) until the client has actually consumed it. */
+   * ack. FIONREAD on our held slave fd reports the shared queue, but can
+   * briefly report zero while the PTY and client settle. Require a short
+   * quiet window after the queue drains before closing the master. */
   {
-    int spins;
-    for (spins = 0; spins < 200; ++spins) {
+    int spins, quietSpins = 0;
+    for (spins = 0; spins < 200 && quietSpins < 5; ++spins) {
       int queued = 0;
       struct timespec nap = {0, 10000000L};
-      if (ioctl(heldSlave, FIONREAD, &queued) != 0 || queued == 0) break;
+      if (ioctl(heldSlave, FIONREAD, &queued) != 0) break;
+      if (queued == 0) ++quietSpins;
+      else quietSpins = 0;
       nanosleep(&nap, NULL);
     }
   }

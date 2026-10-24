@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically retry Xenon to chlorine DNS secondary refresh
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=solari-dns-secondary-refresh.service
+
+[Install]
+WantedBy=timers.target

@@ -2,7 +2,7 @@
  * serverIngest.c - frame intake -> persistence (§9.1).
  *
  * Binds the PULL (+ RESPONDENT) sink, validates frames (msgType legal for the
- * presenting cert role, dedup by (sourceNodeId, seqNo)), and dispatches each
+ * presenting cert role, durable report identity), and dispatches each
  * parsed report/advert to the right handler. seq/dedup discipline lives here.
  *
  * Two public entry points, both fed by main's recv loop after solariFrameParse
@@ -12,8 +12,8 @@
  *     presenting node's role from its certificate CN (leading dotted label of
  *     "<role>.<fqdn>", per §2 / solariCertCn) and rejects any frame whose
  *     msgType is illegal for that role (ERR_AUTH_ROLE). It then runs the
- *     (sourceNodeId, seqNo) dedup ring and returns ERR_CONN_RETRY (benign) for
- *     a recognised duplicate so the caller drops it without persisting twice.
+ *     (sourceNodeId, seqNo) ring for non-report traffic. Reports bypass that
+ *     process-local ring and reserve a session/sequence receipt in their DB txn.
  *
  *   serverIngestDispatch - the router. Each accepted msgType is parsed with the
  *     matching libsolari typed parser and handed to its owning subsystem:
@@ -22,7 +22,7 @@
  *       WATCHDOG        -> serverDbTouchNode (liveness heartbeat)
  *       DISCOVERY_ADVERT-> serverDiscovery
  *       TOPOLOGY_REPORT -> serverTopology
- *       SURVEY_RESP     -> serverControl (-> master reconcile)
+ *       SURVEY_RESP     -> monitor report persistence + master reconcile
  *       CONTROL_RESULT  -> serverControl (convergence tracker)
  *
  * The role matrix and the dedup ring are factored into small static helpers
@@ -37,8 +37,11 @@
 #include "solari/solariCrypto.h"
 #include "solari/solariLog.h"
 #include "solari/solariTime.h"
+#include "solari/solariTlv.h"
 
+#include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 /* ------------------------------------------------------------- role matrix */
 
@@ -71,6 +74,38 @@ static serverIngestRole serverIngestRoleFromCn(const char *cn)
     if (labelLen == 7 && strncmp(cn, "monitor", 7) == 0) return INGEST_ROLE_MONITOR;
     if (labelLen == 6 && strncmp(cn, "server", 6) == 0)  return INGEST_ROLE_SERVER;
     return INGEST_ROLE_UNKNOWN;
+}
+
+/* A HELLO's self-declared identity must match the already-authenticated
+ * role.fqdn certificate identity. This prevents a valid node from changing the
+ * authoritative role or hostFqdn columns by sending a forged HELLO body. */
+bool serverIngestHelloMatchesIdentity(solariRole role, const char *hostFqdn,
+                                      const char *peerCertCn)
+{
+    const char *roleLabel;
+    const char *expectedHost;
+    const char *certHost;
+    const char *dot;
+    char expectedCn[SERVER_CN_MAX];
+    int n;
+
+    if (!hostFqdn || !hostFqdn[0] || !peerCertCn || !peerCertCn[0]) return false;
+    switch (role) {
+    case ROLE_CLIENT:  roleLabel = "client"; break;
+    case ROLE_MONITOR: roleLabel = "monitor"; break;
+    case ROLE_SERVER:  roleLabel = "server"; break;
+    default: return false;
+    }
+    n = snprintf(expectedCn, sizeof expectedCn, "%s.%s", roleLabel, hostFqdn);
+    if (n <= 0 || (size_t)n >= sizeof expectedCn) return false;
+    dot = strchr(expectedCn, '.');
+    if (!dot) return false;
+    expectedHost = dot + 1;
+    if (strncmp(expectedCn, peerCertCn, (size_t)(expectedHost - expectedCn)) != 0)
+        return false;  /* role label is case-sensitive */
+    certHost = peerCertCn + (expectedHost - expectedCn);
+    return certHost[0] != '\0' && strcasecmp(expectedHost, hostFqdn) == 0 &&
+           strcasecmp(expectedHost, certHost) == 0;
 }
 
 /* The authorization matrix: is msgType legal coming from a node presenting
@@ -220,6 +255,8 @@ solariStatus serverIngestValidate(serverContext *ctx,
 {
     serverIngestRole role;
     uint64_t nowMs;
+    bool identityMatches = false;
+    solariStatus identityStatus;
 
     if (!ctx || !hdr) return ERR_INVALID_ARG;
 
@@ -235,10 +272,26 @@ solariStatus serverIngestValidate(serverContext *ctx,
         return ERR_AUTH_ROLE;
     }
 
+    /* The certificate role alone does not authorize a frame to claim another
+     * node's source ID. Bind the transport identity to the approved SoR-backed
+     * node record on every frame; a DB error or missing identity fails closed. */
+    if (!peerCertCn || !peerCertCn[0] || !ctx->db) return ERR_AUTH_ROLE;
+    identityStatus = serverDbNodeCertMatches(ctx->db, hdr->sourceNodeId,
+                                             peerCertCn, &identityMatches);
+    if (identityStatus != SOLARI_OK || !identityMatches) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest reject: cert identity does not match node src=0x%llx (%s)",
+                   (unsigned long long)hdr->sourceNodeId,
+                   identityStatus == SOLARI_OK ? "not enrolled" : "lookup failed");
+        return identityStatus == SOLARI_OK ? ERR_AUTH_ROLE : identityStatus;
+    }
+
     /* 2. Replay: drop a frame whose (sourceNodeId, seqNo) we already processed.
      *    Reported as the benign ERR_CONN_RETRY so the caller simply discards. */
     nowMs = solariNowUnixMs();
-    if (serverDedupSeen(hdr->sourceNodeId, hdr->seqNo, nowMs)) {
+    if (hdr->msgType != SCP_MSG_CLIENT_REPORT && hdr->msgType != SCP_MSG_MONITOR_REPORT &&
+        hdr->msgType != SCP_MSG_SURVEY_RESP &&
+        serverDedupSeen(hdr->sourceNodeId, hdr->seqNo, nowMs)) {
         solariLogf(SOLARI_LOG_DEBUG,
                    "ingest dup: src=0x%llx seq=%u msgType=0x%02x (dropped)",
                    (unsigned long long)hdr->sourceNodeId,
@@ -251,6 +304,135 @@ solariStatus serverIngestValidate(serverContext *ctx,
 
 /* ------------------------------------------------------------- dispatch */
 
+static bool serverIngestLowerHex(const char *value, size_t length)
+{
+    size_t i;
+    for (i = 0; i < length; ++i)
+        if (!((value[i] >= '0' && value[i] <= '9') ||
+              (value[i] >= 'a' && value[i] <= 'f'))) return false;
+    return true;
+}
+
+static solariStatus serverIngestParseCrlActivation(const uint8_t *payload,
+                                                    size_t payloadLen,
+                                                    bool *found,
+                                                    char issuerFp[65],
+                                                    uint64_t *crlNumber,
+                                                    char crlFp[65])
+{
+    solariTlvReader reader;
+    const uint8_t *value;
+    uint16_t type, valueLen;
+    solariStatus rc;
+
+    if ((!payload && payloadLen) || !found || !issuerFp || !crlNumber || !crlFp)
+        return ERR_INVALID_ARG;
+    *found = false;
+    issuerFp[0] = '\0'; crlFp[0] = '\0'; *crlNumber = 0;
+    solariTlvReaderInit(&reader, payload, payloadLen);
+    while ((rc = solariTlvNext(&reader, &type, &value, &valueLen)) == SOLARI_OK) {
+        char text[151];
+        char *first, *second;
+        size_t i, digits;
+        uint64_t number = 0;
+        if (type != TLV_CRL_ACTIVATION) continue;
+        if (*found || valueLen < 131 || valueLen > 150) return ERR_INVALID_ARG;
+        memcpy(text, value, valueLen);
+        text[valueLen] = '\0';
+        first = strchr(text, ':');
+        if (!first || first - text != 64) return ERR_INVALID_ARG;
+        second = strchr(first + 1, ':');
+        if (!second || second - first < 2 || strlen(second + 1) != 64 ||
+            strchr(second + 1, ':')) return ERR_INVALID_ARG;
+        digits = (size_t)(second - first - 1);
+        if (digits > 20 || !serverIngestLowerHex(text, 64) ||
+            !serverIngestLowerHex(second + 1, 64) ||
+            (digits > 1 && first[1] == '0')) return ERR_INVALID_ARG;
+        for (i = 0; i < digits; ++i) {
+            unsigned digit;
+            char c = first[1 + i];
+            if (c < '0' || c > '9') return ERR_INVALID_ARG;
+            digit = (unsigned)(c - '0');
+            if (number > (UINT64_MAX - digit) / 10u) return ERR_INVALID_ARG;
+            number = number * 10u + digit;
+        }
+        if (!number) return ERR_INVALID_ARG;
+        memcpy(issuerFp, text, 64); issuerFp[64] = '\0';
+        memcpy(crlFp, second + 1, 64); crlFp[64] = '\0';
+        *crlNumber = number;
+        *found = true;
+    }
+    return rc == ERR_TLV_END ? SOLARI_OK : rc;
+}
+
+static solariStatus serverIngestApplyCrlActivation(serverContext *ctx,
+                                                    const solariFrameHeader *hdr,
+                                                    const uint8_t *payload,
+                                                    size_t payloadLen)
+{
+    char issuerFp[65], crlFp[65];
+    uint64_t crlNumber = 0;
+    bool found = false;
+    solariStatus rc = serverIngestParseCrlActivation(payload, payloadLen, &found,
+                                                      issuerFp, &crlNumber, crlFp);
+    if (rc != SOLARI_OK) {
+        /* Receipt metadata is optional. The report was persisted before this
+         * helper runs, so malformed metadata must not turn an accepted report
+         * into a retry loop. The parser still rejects it for focused tests. */
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest ignored malformed CRL receipt src=0x%llx status=%s",
+                   (unsigned long long)hdr->sourceNodeId, solariStrError(rc));
+        return SOLARI_OK;
+    }
+    if (!found) return SOLARI_OK;
+    rc = serverDbCertificateCrlAcknowledge(ctx->db, hdr->sourceNodeId,
+                                            issuerFp, crlNumber, crlFp);
+    if (rc == ERR_REJECTED) {
+        solariLogf(SOLARI_LOG_INFO,
+                   "ingest rejected stale or unpublished CRL receipt src=0x%llx issuer=%s number=%llu",
+                   (unsigned long long)hdr->sourceNodeId, issuerFp,
+                   (unsigned long long)crlNumber);
+        return SOLARI_OK; /* accept the report; only the stale receipt is ignored */
+    }
+    if (rc != SOLARI_OK) {
+        /* Acknowledgement persistence is supplemental to a report already
+         * committed. Later reports carry the receipt again, so a DB outage or
+         * unapplied migration must not make the durable report retry forever. */
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest could not store CRL receipt src=0x%llx issuer=%s number=%llu status=%s",
+                   (unsigned long long)hdr->sourceNodeId, issuerFp,
+                   (unsigned long long)crlNumber, solariStrError(rc));
+    }
+    return SOLARI_OK;
+}
+
+/* Reports carry a restart-safe identity. Receipt insertion happens only in
+ * the same transaction as current/history writes, never during validation. */
+static solariStatus serverReportIdentity(const solariFrameHeader *hdr,
+                                         const uint8_t *payload, size_t len,
+                                         serverReportReceipt *receipt)
+{
+    solariTlvReader reader;
+    const uint8_t *value;
+    uint16_t type, length;
+    bool found = false;
+    solariStatus rc;
+    memset(receipt, 0, sizeof *receipt);
+    receipt->seqNo = hdr->seqNo;
+    receipt->msgType = hdr->msgType;
+    solariTlvReaderInit(&reader, payload, len);
+    while ((rc = solariTlvNext(&reader, &type, &value, &length)) == SOLARI_OK) {
+        if (type != TLV_REPORT_SESSION) continue;
+        if (found || length != sizeof receipt->session) return ERR_INVALID_ARG;
+        memcpy(receipt->session, value, sizeof receipt->session);
+        found = true;
+    }
+    if (rc != ERR_TLV_END) return rc;
+    if (!found) return ERR_INVALID_ARG;
+    solariSha256(payload, len, receipt->payloadHash);
+    return SOLARI_OK;
+}
+
 /* CLIENT_REPORT (0x10): persist the host snapshot, then evaluate host-scoped
  * alert rules. A persistence failure is fatal to the frame; an alert-eval
  * failure is logged but not propagated (the data is already durable). */
@@ -259,6 +441,7 @@ static solariStatus serverIngestClientReport(serverContext *ctx,
                                              const uint8_t *payload, size_t len)
 {
     solariClientReport rep;
+    serverReportReceipt receipt;
     solariStatus rc;
     bool urgent = (hdr->flags & SCP_FLAG_URGENT) != 0;
 
@@ -270,7 +453,10 @@ static solariStatus serverIngestClientReport(serverContext *ctx,
         return rc;
     }
 
-    rc = serverDbWriteClientReport(ctx, hdr->sourceNodeId, &rep);
+    rc = serverReportIdentity(hdr, payload, len, &receipt);
+    if (rc != SOLARI_OK) return rc;
+    rc = serverDbWriteClientReport(ctx, hdr->sourceNodeId, &rep, &receipt);
+    if (rc == ERR_CONN_RETRY) return SOLARI_OK;    /* already committed; no repeat alerts */
     if (rc != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR,
                    "ingest CLIENT_REPORT persist failed src=0x%llx: %s",
@@ -301,6 +487,7 @@ static solariStatus serverIngestMonitorReport(serverContext *ctx,
                                               const uint8_t *payload, size_t len)
 {
     solariMonitorReport rep;
+    serverReportReceipt receipt;
     solariStatus rc;
     bool urgent = (hdr->flags & SCP_FLAG_URGENT) != 0;
 
@@ -312,7 +499,10 @@ static solariStatus serverIngestMonitorReport(serverContext *ctx,
         return rc;
     }
 
-    rc = serverDbWriteMonitorReport(ctx, hdr->sourceNodeId, &rep);
+    rc = serverReportIdentity(hdr, payload, len, &receipt);
+    if (rc != SOLARI_OK) return rc;
+    rc = serverDbWriteMonitorReport(ctx, hdr->sourceNodeId, &rep, &receipt);
+    if (rc == ERR_CONN_RETRY) return SOLARI_OK;
     if (rc != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR,
                    "ingest MONITOR_REPORT persist failed src=0x%llx: %s",
@@ -354,11 +544,15 @@ solariStatus serverIngestDispatch(serverContext *ctx,
     if (len > 0 && !payload) return ERR_INVALID_ARG;
 
     switch (hdr->msgType) {
-    case SCP_MSG_CLIENT_REPORT:
-        return serverIngestClientReport(ctx, hdr, payload, len);
+    case SCP_MSG_CLIENT_REPORT: {
+        solariStatus rc = serverIngestClientReport(ctx, hdr, payload, len);
+        return rc == SOLARI_OK ? serverIngestApplyCrlActivation(ctx, hdr, payload, len) : rc;
+    }
 
-    case SCP_MSG_MONITOR_REPORT:
-        return serverIngestMonitorReport(ctx, hdr, payload, len);
+    case SCP_MSG_MONITOR_REPORT: {
+        solariStatus rc = serverIngestMonitorReport(ctx, hdr, payload, len);
+        return rc == SOLARI_OK ? serverIngestApplyCrlActivation(ctx, hdr, payload, len) : rc;
+    }
 
     case SCP_MSG_WATCHDOG:
         return serverIngestWatchdog(ctx, hdr);
@@ -369,8 +563,10 @@ solariStatus serverIngestDispatch(serverContext *ctx,
     case SCP_MSG_TOPOLOGY_REPORT:
         return serverTopologyOnReport(ctx, hdr->sourceNodeId, payload, len);
 
-    case SCP_MSG_SURVEY_RESP:
-        return serverControlOnSurveyResp(ctx, hdr->sourceNodeId, payload, len);
+    case SCP_MSG_SURVEY_RESP: {
+        solariStatus rc = serverIngestMonitorReport(ctx, hdr, payload, len);
+        return rc == SOLARI_OK ? serverIngestApplyCrlActivation(ctx, hdr, payload, len) : rc;
+    }
 
     case SCP_MSG_CONTROL_RESULT:
         return serverControlOnResult(ctx, hdr->sourceNodeId,

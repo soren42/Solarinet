@@ -84,6 +84,18 @@ typedef struct {
 
     /* operator bridge (solariCtl) */
     char     ctlSocket[SERVER_PATH_MAX];     /* Unix domain socket path      */
+    /* PHP→host security boundary (Task #1). When ctlEnforcePeer is true the
+     * bridge classifies each connecting peer by its SO_PEERCRED uid and refuses
+     * PRIVILEGED (destructive) verbs to the dashboard uid, which must instead
+     * REQUEST_SUBMIT them to the ctl_requests queue for the privileged server to
+     * execute. Left false the bridge behaves exactly as before (legacy: caller
+     * uid == server uid), so the hardening is opt-in per deployment. uids of 0
+     * mean "unset": ctlOperatorUid falls back to the server's own euid, and an
+     * unset ctlDashboardUid matches no peer (no peer is classed dashboard). */
+    bool     ctlEnforcePeer;                  /* default false (opt-in)       */
+    uint32_t ctlOperatorUid;                  /* uid allowed privileged verbs; 0 = server euid */
+    uint32_t ctlDashboardUid;                 /* dashboard/PHP uid (enqueue only); 0 = unset */
+    uint32_t ctlSocketGid;                    /* gid to chown the socket to for 0660 access; 0 = leave */
 
     /* discovery / provisioning policy (Handoff §7.1) - conservative default */
     bool     autoDiscover;                   /* default true                 */
@@ -113,6 +125,7 @@ struct serverContext {
     uint64_t            nodeId;      /* this server's id                    */
     serverRoleState     role;        /* current lease role                  */
     uint64_t            epoch;       /* lease epoch (advances on fresh claim)*/
+    uint64_t            leaseRetryAfterMs; /* bind failure cooldown          */
 
     /* bound transport endpoints (owned here; NULL until serverApplyRole) */
     solariConn         *ingest;      /* PULL sink                           */
@@ -152,6 +165,71 @@ solariStatus serverDbUpsertNode(serverDb *db, uint64_t nodeId, solariRole role,
 solariStatus serverDbTouchNode(serverDb *db, uint64_t nodeId, uint64_t whenUnixMs);
 /* Set derived health state ('up'/'degraded'/'down'/'unknown'/'retired'). */
 solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *state);
+/* Decommission confirmation stores only a token digest. Each issue advances a
+ * per-node generation. Confirm consumes the challenge atomically but leaves the
+ * node active until a matching authenticated node acknowledgement is received. */
+solariStatus serverDbDecommissionIssue(serverDb *db, uint64_t nodeId,
+                                       uint32_t wipeScope, const char *requestedBy,
+                                       const char tokenHash[65],
+                                       uint64_t issuedAtUnixMs,
+                                       uint64_t expiresAtUnixMs,
+                                       uint64_t *generationOut);
+solariStatus serverDbDecommissionConfirm(serverDb *db, uint64_t nodeId,
+                                         uint32_t wipeScope, const char *requestedBy,
+                                         const char tokenHash[65],
+                                         uint64_t nowUnixMs,
+                                         uint64_t *generationOut);
+/* Mark a consumed challenge acknowledged only for its current generation;
+ * atomically retires the node when the TLS-authenticated client reports success. */
+solariStatus serverDbDecommissionAck(serverDb *db, uint64_t nodeId,
+                                     uint64_t generation);
+typedef struct {
+    uint64_t nodeId;
+    uint32_t wipeScope;
+    uint64_t generation;
+    uint32_t deliveryAttempts;
+} serverDecommissionDelivery;
+solariStatus serverDbDecommissionListDue(serverDb *db, uint64_t nowUnixMs,
+                                         serverDecommissionDelivery *out,
+                                         size_t cap, size_t *count);
+solariStatus serverDbDecommissionNoteAttempt(serverDb *db, uint64_t nodeId,
+                                             uint64_t generation,
+                                             uint64_t nowUnixMs,
+                                             uint64_t nextRetryUnixMs);
+solariStatus serverDbRetireNode(serverDb *db, uint64_t nodeId);
+/* Verify that an authenticated peer certificate CN is the one currently
+ * assigned to this node ID. Fails closed when the row is absent. */
+solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t nodeId,
+                                     const char *certCn, bool *matches);
+/* Persist and consume a short-lived confirmation for the exact currently
+ * installed leaf identity. These records do not themselves alter TLS trust. */
+solariStatus serverDbCertificateRevocationIssue(
+    serverDb *db, uint64_t nodeId, const char *issuerFp, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *requestedBy,
+    const char tokenHash[65], uint64_t issuedAtUnixMs, uint64_t expiresAtUnixMs);
+solariStatus serverDbCertificateRevocationConfirm(
+    serverDb *db, uint64_t nodeId, const char *issuerFp, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *requestedBy,
+    const char tokenHash[65], uint64_t nowUnixMs);
+/* Accept a receipt only when it matches the currently published, unexpired
+ * CRL for that issuer. A stale receipt returns ERR_REJECTED without writing. */
+solariStatus serverDbCertificateCrlAcknowledge(serverDb *db, uint64_t nodeId,
+                                              const char *issuerFp,
+                                              uint64_t crlNumber,
+                                              const char *crlFp);
+/* Resolve the issuer recorded atomically with the current leaf identity. */
+solariStatus serverDbGetLeafCertificateIssuer(serverDb *db, uint64_t nodeId,
+                                               const char *serialHex,
+                                               const char *leafCertFp,
+                                               char issuerFp[65],
+                                               uint64_t *resolvedNodeId);
+/* Record a directly operator-issued certificate before returning its PEM. */
+solariStatus serverDbRecordIssuedCertificate(serverDb *db,
+                                              const char *issuerFp,
+                                              const char *serialHex,
+                                              const char *leafCertFp,
+                                              const char *issuedBy,
+                                              uint64_t issuedAtUnixMs);
 
 /* Upsert a probe target (the authoritative catalog /api/probes reads). Created
  * when a discovered entity is adopted so the target is visible (and assignable
@@ -242,13 +320,55 @@ solariStatus serverDbUpdateAlertRule(serverDb *db, const serverAlertRuleEdit *e)
 solariStatus serverDbDeleteAlertRule(serverDb *db, uint64_t ruleId);
 solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eventId);
 
+/* ---- privileged control-verb request queue (ctl_requests, Task #1) ---- */
+/* Enqueue ONE pending request. `verb` is the inner privileged verb; `argsWire`
+ * is its line-protocol args (stored verbatim for replay); `requestedBy` is the
+ * authenticated operator string; `peerUid` is the SO_PEERCRED uid of the
+ * submitter (audit). `idemKey` (may be NULL) makes the submit idempotent: a
+ * resubmit with the same live key returns the EXISTING request id in *reqIdOut
+ * rather than enqueuing a duplicate. Returns SOLARI_OK with *reqIdOut set. */
+solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *verb,
+                                      const char *argsWire, const char *requestedBy,
+                                      uint32_t peerUid, const char *idemKey,
+                                      unsigned long long *reqIdOut);
+/* Atomically claim the oldest pending request (state pending->claimed via an
+ * affected-rows CAS, so exactly one claimer wins). On success returns SOLARI_OK
+ * and fills *reqIdOut + verbOut + argsWireOut. ERR_TLV_END when the queue is
+ * empty. `claimedBy` identifies the winning consumer (audit). */
+solariStatus serverDbCtlRequestClaim(serverDb *db, const char *claimedBy,
+                                     unsigned long long *reqIdOut,
+                                     char *verbOut, size_t verbCap,
+                                     char *argsWireOut, size_t argsCap,
+                                     char *requestedByOut, size_t requestedByCap);
+/* Settle a claimed request: ok=true -> state done + resultText; ok=false ->
+ * state failed + resultText stored as the error. */
+solariStatus serverDbCtlRequestComplete(serverDb *db, unsigned long long reqId,
+                                        bool ok, const char *resultText);
+/* Read a request's state (+ raw result on done / raw error on failed) for the
+ * REQUEST_GET poll. When requestedBy is non-NULL the lookup is requester-scoped.
+ * detailOut is empty while pending/claimed. ERR_TLV_END if not visible. */
+solariStatus serverDbCtlRequestGet(serverDb *db, unsigned long long reqId,
+                                   const char *requestedBy,
+                                   char *stateOut, size_t stateCap,
+                                   char *detailOut, size_t detailCap);
+
 /* ---- report persistence (§9.1 representative writers, §10) ---- */
-/* Upsert hostCurrent + append hostHistory in one txn (§9.1). All time UTC. */
+typedef struct {
+    uint8_t session[16];
+    uint32_t seqNo;
+    uint8_t msgType;
+    uint8_t payloadHash[32];
+} serverReportReceipt;
+
+/* Receipt + hostCurrent + hostHistory in one txn. ERR_CONN_RETRY means the
+ * identical receipt already committed; changed content under one ID is rejected. */
 solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
-                                       const solariClientReport *rep);
-/* Upsert probeCurrent + append probeHistory per probe result, one txn. */
+                                       const solariClientReport *rep,
+                                       const serverReportReceipt *receipt);
+/* Receipt + probeCurrent + probeHistory, one txn; same duplicate semantics. */
 solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
-                                        const solariMonitorReport *rep);
+                                        const solariMonitorReport *rep,
+                                        const serverReportReceipt *receipt);
 
 /* ---- alerts / audit (§10 alertEvent) ---- */
 /* Append an alertEvent row (alerting + the decommission audit trail). targetId
@@ -282,6 +402,20 @@ solariStatus serverDbSetNodeTargetEpoch(serverDb *db, uint64_t nodeId,
 solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t nodeId,
                                     uint64_t appliedEpoch, const char *lastResult,
                                     uint64_t whenUnixMs);
+/* Persist an outbound control before publication; cancel it if publication
+ * fails. A result is accepted only once for its node/correlation/verb tuple,
+ * then consumed atomically with the node convergence update. */
+solariStatus serverDbControlDirectiveAdd(serverDb *db, uint64_t nodeId,
+                                         uint32_t correlationId, uint8_t verb,
+                                         uint64_t targetEpoch);
+solariStatus serverDbControlDirectiveCancel(serverDb *db, uint64_t nodeId,
+                                            uint32_t correlationId);
+solariStatus serverDbControlResultApply(serverDb *db, uint64_t nodeId,
+                                        uint32_t correlationId, uint8_t verb,
+                                        uint64_t appliedEpoch, bool haveAppliedEpoch,
+                                        uint16_t errorCode,
+                                        const char *lastResult,
+                                        uint64_t whenUnixMs);
 
 /* ---- lease ops (§10 serverLease) ---- */
 /* The conditional UPDATE that IS the election: claim/renew the single lease row
@@ -290,6 +424,10 @@ solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t nodeId,
  * from a different/expired holder). Single txn. */
 solariStatus serverDbLeaseClaim(serverDb *db, uint64_t selfNodeId,
                                 uint32_t ttlSec, bool *won, uint64_t *epoch);
+/* Relinquish only the exact live fencing token owned by selfNodeId. A stale
+ * process cannot expire a successor's lease. */
+solariStatus serverDbLeaseRelease(serverDb *db, uint64_t selfNodeId,
+                                  uint64_t epoch);
 /* Read the current lease holder + epoch (for WHO_IS_PRIMARY answers). *holder
  * is 0 if the lease is unheld/expired. */
 solariStatus serverDbLeaseRead(serverDb *db, uint64_t *holder, uint64_t *epoch);
@@ -310,6 +448,45 @@ typedef struct {
     char     sysDescr[256];
     char     mdnsName[128];
 } serverDiscEntity;
+typedef struct {
+    uint64_t scanId;
+    uint64_t ownerNodeId;
+    uint64_t leaseEpoch;
+    char requestedBy[129];
+    char cidr[33];
+    char ports[256];
+    char status[16];
+    uint32_t hostsTotal;
+    uint32_t hostsDone;
+    uint32_t hostsFound;
+    int32_t errorCode;
+    char errorText[256];
+} serverDiscoveryScanJob;
+/* Create/claim/update a durable scan row only while node+epoch hold the live
+ * server lease. Submit is globally serialized and returns ERR_CONN_RETRY when
+ * a queued/running job already exists. Claim returns ERR_CONN_RETRY if empty. */
+solariStatus serverDbDiscoveryScanSubmit(serverDb *db, uint64_t ownerNodeId,
+                                         uint64_t leaseEpoch, const char *requestedBy,
+                                         const char *cidr, const char *ports,
+                                         uint32_t hostsTotal, uint64_t *scanIdOut);
+solariStatus serverDbDiscoveryScanClaim(serverDb *db, uint64_t ownerNodeId,
+                                        uint64_t leaseEpoch,
+                                        serverDiscoveryScanJob *out);
+solariStatus serverDbDiscoveryScanUpdate(serverDb *db, uint64_t scanId,
+                                         uint64_t ownerNodeId, uint64_t leaseEpoch,
+                                         const char *status, uint32_t hostsDone,
+                                         uint32_t hostsFound, int32_t errorCode,
+                                         const char *errorText);
+solariStatus serverDbDiscoveryScanGet(serverDb *db, uint64_t scanId,
+                                      const char *requestedBy,
+                                      serverDiscoveryScanJob *out);
+/* Upsert the scan result in the same transaction as a live lease+epoch check. */
+solariStatus serverDbUpsertDiscoveredFenced(serverDb *db,
+                                            const serverDiscEntity *entity,
+                                            uint64_t whenUnixMs,
+                                            uint64_t ownerNodeId,
+                                            uint64_t leaseEpoch,
+                                            uint64_t *discId);
 /* Upsert a discovered candidate keyed (ip, kind): insert new or bump seenCount
  * + lastSeenAt. *discId returns the row id. */
 solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,
@@ -364,6 +541,7 @@ typedef enum {
 } serverEnrollStatus;
 typedef struct {
     uint64_t           enrId;
+    uint64_t           nodeId;
     char               host[SOLARI_FQDN_MAX];
     char               ip[SERVER_IP_MAX];
     solariRole         role;
@@ -374,14 +552,46 @@ typedef struct {
 /* Create an enrollment row (status TOKEN or PENDING). *enrId returns its id. */
 solariStatus serverDbEnrollCreate(serverDb *db, const serverEnrollment *e,
                                   uint64_t whenUnixMs, uint64_t *enrId);
+/* Create an operator-issued token enrollment. Only the token digest is stored;
+ * `expiresUnixMs` is the last time an unsubmitted CSR may consume it. */
+solariStatus serverDbEnrollCreateToken(serverDb *db, const serverEnrollment *e,
+                                       const char *tokenHashHex,
+                                       uint64_t expiresUnixMs,
+                                       uint64_t whenUnixMs, uint64_t *enrId);
 /* Attach a received CSR PEM + its fingerprint, moving TOKEN -> PENDING. */
 solariStatus serverDbEnrollSetCsr(serverDb *db, uint64_t enrId,
                                   const char *csrPem, const char *certFp);
+/* Authenticate and attach a CSR by its token digest. Exact retries with the
+ * same host, role, and CSR fingerprint are idempotent; mismatches fail closed. */
+solariStatus serverDbEnrollSubmitToken(serverDb *db, const char *tokenHashHex,
+                                       const char *hostFqdn, solariRole role,
+                                       const char *csrPem, const char *certFp,
+                                       uint64_t nowUnixMs);
+/* Fetch token-bound enrollment status and an issued certificate, if approved.
+ * Certificate retrieval remains repeatable until serverDbEnrollAckToken. */
+solariStatus serverDbEnrollGetByToken(serverDb *db, const char *tokenHashHex,
+                                      serverEnrollment *out, char *certBuf,
+                                      size_t certCap);
+/* Acknowledge local certificate installation and revoke the bearer token. */
+solariStatus serverDbEnrollAckToken(serverDb *db, const char *tokenHashHex,
+                                    uint64_t whenUnixMs);
 /* Decide an enrollment: status APPROVED/REJECTED + decidedBy + decidedAt.
  * On approval the caller nulls csrPem after signing. */
 solariStatus serverDbEnrollDecide(serverDb *db, uint64_t enrId,
                                   serverEnrollStatus status, const char *decidedBy,
                                   uint64_t whenUnixMs);
+/* Atomically record a pending enrollment's approval and signed public cert,
+ * clear its CSR, persist the leaf and signer identities, and upsert the node.
+ * Returns ERR_AUTH_ROLE if
+ * another decision already moved the enrollment out of PENDING. */
+solariStatus serverDbEnrollFinalize(serverDb *db, uint64_t enrId,
+                                    uint64_t nodeId, solariRole role,
+                                    const char *hostFqdn, const char *certCn,
+                                    const char *issuedCertPem,
+                                    const char *leafCertFp,
+                                    const char *leafCertSerial,
+                                    const char *leafIssuerFp,
+                                    const char *decidedBy, uint64_t whenUnixMs);
 /* Load one enrollment by id (csrPem is NOT returned here; use the CSR getter). */
 solariStatus serverDbEnrollGet(serverDb *db, uint64_t enrId, serverEnrollment *out);
 /* Fetch the held CSR PEM for signing into csrBuf; ERR_BUFFER_FULL if too small. */
@@ -417,6 +627,10 @@ solariStatus serverDbBuildConvergence(serverDb *db, serverBuildRow *out,
 solariStatus serverIngestValidate(serverContext *ctx,
                                   const solariFrameHeader *hdr,
                                   const char *peerCertCn);
+/* True only when HELLO's role and FQDN exactly match the authenticated
+ * role.fqdn certificate CN. */
+bool serverIngestHelloMatchesIdentity(solariRole role, const char *hostFqdn,
+                                      const char *peerCertCn);
 /* Dispatch one validated frame to the right handler:
  *   CLIENT_REPORT/MONITOR_REPORT/WATCHDOG -> db writers
  *   DISCOVERY_ADVERT  -> serverDiscovery
@@ -498,9 +712,6 @@ solariStatus serverControlBuildSurvey(serverContext *ctx,
 solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
                                    uint32_t correlationId,
                                    const uint8_t *payload, size_t len);
-/* Handle an inbound SURVEY_RESP (0x21): hand off to master reconcile. */
-solariStatus serverControlOnSurveyResp(serverContext *ctx, uint64_t nodeId,
-                                       const uint8_t *payload, size_t len);
 
 /* ===================================================================== */
 /* serverProvision.c - enrollment + lifecycle (Handoff §7.3, §7.4)        */
@@ -516,7 +727,8 @@ enum {
 };
 
 /* Advance an enrollment through token->pending->approved/rejected. Approval
- * signs the CSR via the internal CA (through solariCtl) and upserts the node. */
+ * signs via the internal CA (through solariCtl), then atomically stores the
+ * issued certificate and approved node identity. */
 solariStatus serverProvisionApprove(serverContext *ctx, uint64_t enrId,
                                     const char *operator_);
 solariStatus serverProvisionReject(serverContext *ctx, uint64_t enrId,
@@ -528,16 +740,33 @@ solariStatus serverProvisionNode(serverContext *ctx, uint64_t nodeId,
                                  uint64_t buildId, const char *configJson,
                                  uint64_t targetEpoch);
 
-/* Begin a guarded decommission: generate a one-time confirm token, persist an
- * audit alertEvent row, and emit SCP_MSG_DECOMMISSION (0x32) carrying
- * CTRL_DECOMMISSION + the confirm token + wipeScope. *confirmToken returns the
- * issued token (the node must echo it). Requires the caller already enforced
- * operator RBAC + explicit confirm (§11). */
+/* Issue a guarded decommission challenge: generate a one-time confirm token
+ * and persist its digest plus an audit alertEvent row. This call does not
+ * publish a destructive directive. *confirmToken returns the issued token.
+ * Requires the caller already enforced operator RBAC + explicit confirm. */
 solariStatus serverProvisionDecommission(serverContext *ctx, uint64_t nodeId,
                                          uint32_t wipeScope, const char *operator_,
                                          uint64_t *confirmToken);
-/* Finalize a decommission once the node's CONTROL_RESULT arrives (or on a
- * force-retire): set node.state='retired'. */
+/* Consume the pending operator challenge and publish a node-addressed
+ * SCP_MSG_DECOMMISSION directive. Retirement waits for a matching authenticated
+ * success acknowledgement carrying the challenge generation. */
+solariStatus serverProvisionConfirmDecommission(serverContext *ctx,
+                                                uint64_t nodeId,
+                                                uint32_t wipeScope,
+                                                const char *operator_,
+                                                uint64_t confirmToken);
+solariStatus serverProvisionIssueCertificateRevocation(
+    serverContext *ctx, uint64_t nodeId, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *operator_,
+    uint64_t *confirmToken);
+solariStatus serverProvisionConfirmCertificateRevocation(
+    serverContext *ctx, uint64_t nodeId, const char *serialHex,
+    const char *leafCertFp, const char *reason, const char *operator_,
+    uint64_t confirmToken);
+/* Republish due, persisted decommission directives while this server holds the
+ * active lease. Retries use bounded exponential backoff until node ack/cancel. */
+void serverProvisionRetryDecommissions(serverContext *ctx, uint64_t nowUnixMs);
+/* Force-retire an operator-selected node and cancel any pending challenge. */
 solariStatus serverProvisionRetire(serverContext *ctx, uint64_t nodeId);
 
 /* Adopt a discovered entity as a live probe target (Handoff §7.4): resolve the
@@ -604,10 +833,25 @@ void         serverCtlClose(serverCtl *ctl);
  * frame through ctx, and write the reply. Non-blocking; processes what is ready.
  * Returns SOLARI_OK (including when nothing was ready). */
 solariStatus serverCtlPoll(serverCtl *ctl);
+/* Privileged request-queue consumer (Task #1): claim and execute at most one
+ * pending ctl_requests row, running with the server's own (operator) authority
+ * out of the dashboard's reach. Returns SOLARI_OK if a row ran, ERR_CONN_RETRY
+ * if the queue was empty, or a DB/platform error. Call once per main-loop tick. */
+solariStatus serverCtlQueuePoll(serverCtl *ctl);
 /* Sign a CSR with the internal CA, returning the issued cert PEM into certBuf.
+ * expectedCn + expectedFqdn bind enrollment signing to the approved identity;
+ * both must be NULL for the explicitly operator-gated generic SIGN verb.
+ * Optional output buffers receive the leaf fingerprint, serial, and the exact
+ * CA certificate fingerprint used by this signing operation.
  * Holds the CA key material so it never reaches the web tier. ERR_BUFFER_FULL
  * if certBuf is too small, ERR_TLS on a signing failure. */
 solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
-                              char *certBuf, size_t cap);
+                              const char *expectedCn, const char *expectedFqdn,
+                              char *certBuf, size_t cap,
+                              char *leafCertFp, size_t leafCertFpCap,
+                              char *leafCertSerial, size_t leafCertSerialCap,
+                              char *leafIssuerFp, size_t leafIssuerFpCap);
+/* SHA-256 of the DER certificate currently configured as the local signer. */
+solariStatus serverCtlCaFingerprint(serverCtl *ctl, char out[65]);
 
 #endif /* SOLARI_SERVER_H */

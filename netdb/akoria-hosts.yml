@@ -20,7 +20,10 @@ ad_domain: akoria.org          # authoritative on radium (AD/BIND9_DLZ); mirrore
 
 hosts:
   # ---- core networking (10.0.0.1-20) ----
-  chemistry:  { ip: 10.0.0.1,   hw: "UDR7 Dream Router 7",  role: "gateway / firewall / UniFi" }
+  # UniFi Integration API read-only observation 2026-10-23: name=chemistry,
+  # model=UDM Pro Max, state=ONLINE. Its reported device IP differs from this
+  # LAN address; retain this host mapping until the API field is confirmed.
+  chemistry:  { ip: 10.0.0.1,   hw: "UDM Pro Max",          role: "gateway / firewall / UniFi" }
   halogen:    { ip: 10.0.0.2,   hw: "UGC Max",              role: "old primary router", status: "offline (pending minirack redeploy)" }
   laboratory: { ip: 10.0.0.3,   hw: "USW Pro Max 16",       role: "primary switch (etherlighting)" }
   beaker:     { ip: 10.0.0.7,   hw: "Ubiquiti U7 Pro",      role: "WiFi 7 AP" }
@@ -29,8 +32,11 @@ hosts:
   xenon:      { ip: 10.0.0.20,  hw: "YouYeeToo X1 (x86_64)", role: "SolariNet monitoring + dashboard + BIND primary" }
   carbon:     { ip: 10.0.0.10,  hw: "UGREEN DXP4800",       role: "NAS" }
   helium:     { ip: 10.0.0.254, hw: "Raspberry Pi",         role: "Pi-hole primary / resolver" }
-  mercury:    { ip: 10.0.0.253, hw: "ZimaBoard",            role: "Pi-hole secondary / resolver" }
-  scandium:   { ip: 10.0.0.12,  hw: "ZimaBoard",            role: "services (n8n / Uptime-Kuma)", status: "planned (offline)" }
+  # Operator confirms only three Zima devices total: one Blade, one Board, one
+  # Board 2. Their host mapping is pending; do not treat these legacy model
+  # labels as physically verified.
+  mercury:    { ip: 10.0.0.253, hw: "Zima (model unverified)", role: "Pi-hole secondary / resolver" }
+  scandium:   { ip: 10.0.0.12,  hw: "Zima (model unverified)", role: "services (n8n / Uptime-Kuma)", status: "planned (offline)" }
   silver:     { ip: 10.0.0.85,  hw: "Epson ET-8550",        role: "printer (grandfathered IP)" }
   hydrogen:   { ip: 10.0.1.50,  hw: "Mac Mini M4 Pro",      role: "primary workstation" }
   # ---- production (10.1.0.x) ----
@@ -76,7 +82,7 @@ hosts:
   tin:        { ip: 10.3.0.60,  hw: "?",                    role: "?" }
   eleksmaker: { ip: 10.5.87.15, hw: "EleksMaker",           role: "?" }
   # ---- provisioned 2026-07-08 ----
-  chlorine:   { ip: 10.7.0.10,  hw: "Khadas VIM4",          role: "internal CA / key server (step-ca)" }
+  chlorine:   { ip: 10.7.0.10,  hw: "Khadas VIM4",          role: "internal CA / key server (step-ca) + akoria.net BIND secondary" }
   silicon:    { ip: 10.0.0.250, hw: "Raspberry Pi 4",       role: "edge proxy (Caddy auto-ACME)" }
   valence:    { ip: 10.6.0.20,  hw: "NanoPi-R1",            role: "monitoring outpost (armhf)" }
 
@@ -108,7 +114,7 @@ cnames:
   solari: xenon
   nas: carbon
   nas-x: carbon         # legacy alias (family devices know this)
-  db: benzene           # -> iron once the ZimaBlade is reprovisioned
+  db: benzene
   n8n: amino
   hass: sodium
   grafana: quanta
@@ -130,6 +136,13 @@ cnames:
   dns1: helium
   dns2: mercury
 
-# reserved names (not live yet)
+# reserved names (not live yet). `iron` is planned for the separate ZimaBlade
+# after console access and redeployment. Jason confirms that the ZimaBlade has
+# the Steel inventory label, is on port 12 of `laboratory`, and booted without
+# useful services. The operator confirms three separate devices: one ZimaBlade,
+# one ZimaBoard, and one ZimaBoard 2; map the other two units to host records.
+# Live SoR/DNS still assigns .11 to `steel`; retain that identity until the
+# post-redeployment name/IP handoff is deliberately completed. Planned `iron`
+# role: tertiary authoritative DNS.
 reserved:
-  iron: { ip: 10.0.0.11, hw: "ZimaBlade", role: "db (post-reprovision); db CNAME repoints here" }
+  iron: { ip: 10.0.0.11, hw: "ZimaBlade", role: "tertiary authoritative DNS (post-redeployment)" }

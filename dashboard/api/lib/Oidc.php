@@ -23,9 +23,11 @@ require_once __DIR__ . '/Response.php';
  *      GET /api/auth/oidc/callback?code=...&state=...
  *   3. We verify state, exchange the code for tokens at the token endpoint,
  *      validate the ID token (signature via JWKS, iss/aud/exp/nonce), map the
- *      claims to a dashboard operator + role, and pin the principal into the
- *      same server-side session the local login uses (Auth::establishSession).
+ *      claims to a dashboard operator + role, and pin the principal and token
+ *      refresh data into the same server-side session the local login uses.
  *   4. We 302 back to the dashboard; the SPA re-boots authenticated.
+ *   5. Authenticated requests refresh group-derived roles from HTTPS UserInfo
+ *      at most every 60 seconds, rotating access tokens when required.
  *
  * TLS: Keycloak here uses a self-signed cert. All server-side calls (discovery,
  * token, JWKS) verify the peer against `oidc.caBundle` (a PEM CA file). A dev-
@@ -41,6 +43,22 @@ final class Oidc
 {
     /** Session keys for the in-flight transaction (state/nonce). */
     private const SESS_TX = 'solari_oidc_tx';
+    private const MAX_STATE_AGE_SEC = 600;
+    private const ROLE_RECHECK_SEC = 60;
+    private const MAX_HTTP_BODY_BYTES = 1048576;
+
+    /** Accept a one-use callback only within ten minutes of its login request. */
+    public static function validTransaction(array $tx, string $state, int $now): bool
+    {
+        $saved = $tx['state'] ?? null;
+        $nonce = $tx['nonce'] ?? null;
+        $started = $tx['ts'] ?? null;
+        return is_string($saved) && $saved !== '' && $state !== ''
+            && is_string($nonce) && $nonce !== ''
+            && is_int($started) && $started <= $now
+            && $now - $started <= self::MAX_STATE_AGE_SEC
+            && hash_equals($saved, $state);
+    }
 
     // ------------------------------------------------------------------ config
 
@@ -52,6 +70,7 @@ final class Oidc
         return $c + [
             'enabled'            => false,
             'issuer'             => '',
+            'allowedEndpointOrigins' => [], // explicit HTTPS origins for split-host IdPs
             'clientId'           => '',
             'clientSecret'       => '',
             'redirectUri'        => '',
@@ -104,7 +123,7 @@ final class Oidc
 
         $disc = self::discovery();
         $authEp = (string) ($disc['authorization_endpoint'] ?? '');
-        if ($authEp === '') {
+        if ($authEp === '' || !self::endpointAllowedForConfig($authEp, self::config())) {
             self::fail('Authorization endpoint missing from discovery document.');
         }
 
@@ -148,19 +167,25 @@ final class Oidc
         $code  = (string) ($query['code'] ?? '');
         $state = (string) ($query['state'] ?? '');
         if ($code === '' || !is_array($tx)
-            || !hash_equals((string) ($tx['state'] ?? ''), $state)) {
+            || !self::validTransaction($tx, $state, time())) {
             self::fail('Invalid or expired SSO login attempt. Please try again.');
         }
 
-        $claims    = self::exchangeAndVerify($code, (string) $tx['nonce']);
+        $tokens    = self::exchangeAndVerify($code, (string) $tx['nonce']);
+        $claims    = $tokens['claims'];
         $principal = self::principalFromClaims($claims);
+        $principal['oidcSubject'] = (string) $claims['sub'];
         Auth::establishSession($principal);
+        $_SESSION['solari_oidc_access_token'] = $tokens['accessToken'];
+        $_SESSION['solari_oidc_refresh_token'] = $tokens['refreshToken'];
+        $_SESSION['solari_oidc_access_expires_at'] = $tokens['accessExpiresAt'];
+        $_SESSION['solari_oidc_role_checked_at'] = time();
 
         $c = self::config();
         self::redirect((string) ($c['postLoginRedirect'] ?: '/'));
     }
 
-    /** Exchange the auth code for tokens and return the validated ID-token claims. */
+    /** Exchange the auth code, validate its ID token, and retain server-side refresh data. */
     private static function exchangeAndVerify(string $code, string $nonce): array
     {
         $c    = self::config();
@@ -178,12 +203,29 @@ final class Oidc
             'client_secret' => (string) $c['clientSecret'],
         ]);
         $tok = json_decode($resp, true);
-        if (!is_array($tok) || empty($tok['id_token'])) {
+        if (!is_array($tok) || empty($tok['id_token']) || empty($tok['access_token'])
+            || !is_string($tok['access_token']) || !self::isSafeHeaderToken($tok['access_token'])
+            || !is_string($tok['token_type'] ?? null)
+            || strcasecmp($tok['token_type'], 'Bearer') !== 0) {
             error_log('[solari-oidc] token endpoint returned no id_token: ' . substr($resp, 0, 300));
             self::fail('SSO token exchange failed.');
         }
 
-        return self::verifyIdToken((string) $tok['id_token'], $nonce);
+        $expiresIn = $tok['expires_in'] ?? null;
+        if (!is_int($expiresIn) || $expiresIn < 1 || $expiresIn > 86400) {
+            self::fail('SSO access-token lifetime is invalid.');
+        }
+        $refresh = $tok['refresh_token'] ?? '';
+        if (!is_string($refresh) || strlen($refresh) > 16384
+            || preg_match('/[\x00-\x1F\x7F]/', $refresh)) {
+            self::fail('SSO refresh token is invalid.');
+        }
+        return [
+            'claims' => self::verifyIdToken((string) $tok['id_token'], $nonce),
+            'accessToken' => $tok['access_token'],
+            'refreshToken' => $refresh,
+            'accessExpiresAt' => time() + $expiresIn,
+        ];
     }
 
     // --------------------------------------------------------- token validation
@@ -224,29 +266,200 @@ final class Oidc
             self::fail('ID token signature verification failed.');
         }
 
-        // Standard claim checks.
-        $c   = self::config();
-        $iss = (string) ($claims['iss'] ?? '');
-        if (!hash_equals(rtrim((string) $c['issuer'], '/'), rtrim($iss, '/'))) {
-            self::fail('ID token issuer mismatch.');
-        }
-        $aud = $claims['aud'] ?? '';
-        $audOk = is_array($aud) ? in_array($c['clientId'], $aud, true) : ($aud === $c['clientId']);
-        if (!$audOk) {
-            self::fail('ID token audience mismatch.');
-        }
-        $now = time();
-        if (isset($claims['exp']) && $now >= ((int) $claims['exp'] + 60)) {
-            self::fail('ID token has expired.');
-        }
-        if (isset($claims['nbf']) && $now + 60 < (int) $claims['nbf']) {
-            self::fail('ID token not yet valid.');
-        }
-        if ($expectedNonce !== '' && !hash_equals($expectedNonce, (string) ($claims['nonce'] ?? ''))) {
-            self::fail('ID token nonce mismatch.');
-        }
+        $claimError = self::claimError($claims, self::config(), $expectedNonce, time());
+        if ($claimError !== null) self::fail($claimError);
 
         return $claims;
+    }
+
+    /** Return the first OIDC claim defect; pure so negative cases are testable. */
+    public static function claimError(array $claims, array $config,
+                                      string $expectedNonce, int $now): ?string
+    {
+        $issuer = $claims['iss'] ?? null;
+        if (!is_string($issuer) || $issuer === ''
+            || !hash_equals(rtrim((string) ($config['issuer'] ?? ''), '/'), rtrim($issuer, '/'))) {
+            return 'ID token issuer mismatch.';
+        }
+        $clientId = $config['clientId'] ?? null;
+        $aud = $claims['aud'] ?? null;
+        if (!is_string($clientId) || $clientId === ''
+            || !(is_string($aud) ? $aud === $clientId
+                : (is_array($aud) && in_array($clientId, $aud, true)))) {
+            return 'ID token audience mismatch.';
+        }
+        $azp = $claims['azp'] ?? null;
+        if ((is_array($aud) && count($aud) > 1 && $azp === null)
+            || ($azp !== null && $azp !== $clientId)) {
+            return 'ID token authorized party mismatch.';
+        }
+        if (!is_string($claims['sub'] ?? null) || $claims['sub'] === '') {
+            return 'ID token subject missing.';
+        }
+        $exp = $claims['exp'] ?? null;
+        $iat = $claims['iat'] ?? null;
+        if (!is_int($exp) || !is_int($iat) || $exp <= $iat
+            || $now >= $exp + 60 || $iat > $now + 60) {
+            return 'ID token lifetime invalid.';
+        }
+        if (array_key_exists('nbf', $claims)
+            && (!is_int($claims['nbf']) || $now + 60 < $claims['nbf'])) {
+            return 'ID token not yet valid.';
+        }
+        $nonce = $claims['nonce'] ?? null;
+        if ($expectedNonce === '' || !is_string($nonce)
+            || !hash_equals($expectedNonce, $nonce)) {
+            return 'ID token nonce mismatch.';
+        }
+        return null;
+    }
+
+    /** Refresh OIDC group-derived roles from the provider's UserInfo endpoint. */
+    public static function revalidateCurrentSession(): bool
+    {
+        if (!self::isEnabled()) return false;
+        $principal = $_SESSION['solari'] ?? null;
+        if (!is_array($principal) || ($principal['source'] ?? '') !== 'oidc'
+            || !is_string($principal['oidcSubject'] ?? null)
+            || $principal['oidcSubject'] === '') {
+            return false;
+        }
+        $now = time();
+        $checked = $_SESSION['solari_oidc_role_checked_at'] ?? null;
+        if (is_int($checked) && $checked <= $now && $now - $checked < self::ROLE_RECHECK_SEC) {
+            return true;
+        }
+        if (!empty(self::config()['insecureSkipVerify'])) {
+            self::setSessionRole('viewer', $now);
+            return true;
+        }
+
+        $expiresAt = $_SESSION['solari_oidc_access_expires_at'] ?? 0;
+        if (!is_int($expiresAt) || $expiresAt <= $now + 10) {
+            $refresh = $_SESSION['solari_oidc_refresh_token'] ?? '';
+            if (!is_string($refresh) || $refresh === '' || !self::refreshAccessToken($refresh)) {
+                self::setSessionRole('viewer', $now);
+                return true;
+            }
+        }
+
+        $discovery = self::discovery(true, 3);
+        $endpoint = is_array($discovery) ? ($discovery['userinfo_endpoint'] ?? null) : null;
+        $access = $_SESSION['solari_oidc_access_token'] ?? '';
+        if (!is_string($endpoint) || !self::isHttpsEndpointUrl($endpoint)
+            || !is_string($access) || !self::isSafeHeaderToken($access)) {
+            self::setSessionRole('viewer', $now);
+            return true;
+        }
+        $body = self::http($endpoint, 'GET', null, ['Authorization: Bearer ' . $access], true, 3);
+        $claims = $body === '' ? null : json_decode($body, true);
+        if (!is_array($claims)) {
+            self::setSessionRole('viewer', $now);
+            return true;
+        }
+        if (!is_string($claims['sub'] ?? null)
+            || !hash_equals($principal['oidcSubject'], $claims['sub'])) {
+            error_log('[solari-oidc] UserInfo subject changed; revoking dashboard session');
+            return false;
+        }
+        $principal['role'] = self::roleForClaims($claims, self::config());
+        if (is_string($claims['name'] ?? null) && $claims['name'] !== '') {
+            $principal['displayName'] = $claims['name'];
+        }
+        $_SESSION['solari'] = $principal;
+        $_SESSION['solari_oidc_role_checked_at'] = $now;
+        return true;
+    }
+
+    private static function refreshAccessToken(string $refreshToken): bool
+    {
+        if (strlen($refreshToken) > 16384 || preg_match('/[\x00-\x1F\x7F]/', $refreshToken)) return false;
+        $discovery = self::discovery(true, 3);
+        $endpoint = is_array($discovery) ? ($discovery['token_endpoint'] ?? null) : null;
+        if (!is_string($endpoint) || !self::isHttpsEndpointUrl($endpoint)) return false;
+        $c = self::config();
+        $body = self::http($endpoint, 'POST', http_build_query([
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+            'client_id' => (string) $c['clientId'],
+            'client_secret' => (string) $c['clientSecret'],
+        ]), ['Content-Type: application/x-www-form-urlencoded'], true, 3);
+        $tokens = $body === '' ? null : json_decode($body, true);
+        if (!is_array($tokens) || !is_string($tokens['access_token'] ?? null)
+            || $tokens['access_token'] === '' || strlen($tokens['access_token']) > 16384
+            || !self::isSafeHeaderToken($tokens['access_token'])) return false;
+        if (!is_string($tokens['token_type'] ?? null)
+            || strcasecmp($tokens['token_type'], 'Bearer') !== 0) return false;
+        $expiresIn = $tokens['expires_in'] ?? null;
+        if (!is_int($expiresIn) || $expiresIn < 1 || $expiresIn > 86400) return false;
+        $rotated = $tokens['refresh_token'] ?? $refreshToken;
+        if ($rotated === '') $rotated = $refreshToken;
+        if (!is_string($rotated) || $rotated === '' || strlen($rotated) > 16384
+            || preg_match('/[\x00-\x1F\x7F]/', $rotated)) return false;
+        $_SESSION['solari_oidc_access_token'] = $tokens['access_token'];
+        $_SESSION['solari_oidc_refresh_token'] = $rotated;
+        $_SESSION['solari_oidc_access_expires_at'] = time() + $expiresIn;
+        return true;
+    }
+
+    private static function setSessionRole(string $role, int $checkedAt): void
+    {
+        $principal = $_SESSION['solari'] ?? null;
+        if (is_array($principal)) {
+            $principal['role'] = $role;
+            $_SESSION['solari'] = $principal;
+        }
+        $_SESSION['solari_oidc_role_checked_at'] = $checkedAt;
+    }
+
+    private static function isHttpsEndpointUrl(string $url): bool
+    {
+        $parts = parse_url($url);
+        return is_array($parts) && ($parts['scheme'] ?? '') === 'https'
+            && is_string($parts['host'] ?? null) && $parts['host'] !== ''
+            && !isset($parts['user']) && !isset($parts['pass']);
+    }
+
+    /** Origin comparison prevents discovery metadata from exfiltrating secrets/tokens. */
+    public static function endpointAllowedForConfig(string $url, array $config): bool
+    {
+        $target = self::httpsOrigin($url);
+        if ($target === null) return false;
+        $issuerOrigin = self::httpsOrigin((string) ($config['issuer'] ?? ''));
+        if ($issuerOrigin === null) return false;
+        $configured = $config['allowedEndpointOrigins'] ?? [];
+        if (!is_array($configured)) return false;
+        $allowed = [$issuerOrigin];
+        foreach ($configured as $origin) {
+            if (!is_string($origin)) return false;
+            $parsed = self::httpsOrigin($origin);
+            // Allowlist entries are origins, never URLs with paths, queries, or fragments.
+            $parts = parse_url($origin);
+            if ($parsed === null || !is_array($parts)
+                || isset($parts['path']) && $parts['path'] !== ''
+                || isset($parts['query']) || isset($parts['fragment'])) return false;
+            $allowed[] = $parsed;
+        }
+        return in_array($target, array_unique($allowed), true);
+    }
+
+    private static function httpsOrigin(string $url): ?string
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts) || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || !is_string($parts['host'] ?? null) || $parts['host'] === ''
+            || isset($parts['user']) || isset($parts['pass'])) return null;
+        $host = strtolower($parts['host']);
+        $port = isset($parts['port']) ? (int) $parts['port'] : 443;
+        if ($port < 1 || $port > 65535) return null;
+        return 'https://' . (str_contains($host, ':') ? '[' . $host . ']' : $host)
+            . ($port === 443 ? '' : ':' . $port);
+    }
+
+    private static function isSafeHeaderToken(string $token): bool
+    {
+        return $token !== '' && strlen($token) <= 16384
+            && preg_match('/[\x00-\x1F\x7F]/', $token) !== 1;
     }
 
     /** Find the JWKS key with the given kid and return it as a PEM public key. */
@@ -294,21 +507,30 @@ final class Oidc
         }
         $display = (string) ($claims['name'] ?? $claims['preferred_username'] ?? $username);
 
-        $memberships = self::gatherGroups($claims);
-        $role = (string) ($c['defaultRole'] ?: 'viewer');
-        if (self::intersectsCI($memberships, (array) ($c['operatorGroups'] ?? []))) {
-            $role = 'operator';
-        }
-        if (self::intersectsCI($memberships, (array) ($c['adminGroups'] ?? []))) {
-            $role = 'admin';   // admin wins over operator
-        }
+        $role = self::roleForClaims($claims, $c);
 
         return [
             'username'    => $username,
             'role'        => $role,
             'displayName' => $display,
             'source'      => 'oidc',
+            'oidcSubject' => (string) ($claims['sub'] ?? ''),
         ];
+    }
+
+    /** Compute authorization role from one validated provider claim set. */
+    public static function roleForClaims(array $claims, array $config): string
+    {
+        $memberships = self::gatherGroups($claims);
+        $role = strtolower((string) ($config['defaultRole'] ?: 'viewer'));
+        if (!in_array($role, ['viewer', 'operator', 'admin'], true)) $role = 'viewer';
+        if (self::intersectsCI($memberships, (array) ($config['operatorGroups'] ?? []))) {
+            $role = 'operator';
+        }
+        if (self::intersectsCI($memberships, (array) ($config['adminGroups'] ?? []))) {
+            $role = 'admin';   // admin wins over operator
+        }
+        return $role;
     }
 
     /** Collect group/role names from the common Keycloak claim shapes. */
@@ -343,7 +565,7 @@ final class Oidc
     // ------------------------------------------------------------- HTTP + discovery
 
     /** Fetch + cache the OIDC discovery document for this request. */
-    private static function discovery(): array
+    private static function discovery(bool $softFailure = false, int $timeout = 10): array
     {
         static $cache = null;
         if ($cache !== null) {
@@ -351,18 +573,40 @@ final class Oidc
         }
         $c   = self::config();
         $url = rtrim((string) $c['issuer'], '/') . '/.well-known/openid-configuration';
-        $doc = json_decode(self::httpGet($url), true);
+        $body = self::httpGet($url, $softFailure, $timeout);
+        if ($softFailure && $body === '') return [];
+        $doc = json_decode($body, true);
         if (!is_array($doc) || empty($doc['authorization_endpoint'])) {
+            if ($softFailure) return [];
             error_log("[solari-oidc] discovery failed at $url");
             self::fail('Could not reach the SSO provider (discovery).');
+        }
+        $issuer = (string) ($c['issuer'] ?? '');
+        if (!is_string($doc['issuer'] ?? null)
+            || !hash_equals(rtrim($issuer, '/'), rtrim($doc['issuer'], '/'))) {
+            if ($softFailure) return [];
+            self::fail('SSO discovery issuer does not match the configured issuer.');
+        }
+        foreach (['authorization_endpoint', 'token_endpoint', 'jwks_uri'] as $field) {
+            if (!is_string($doc[$field] ?? null)
+                || !self::endpointAllowedForConfig($doc[$field], $c)) {
+                if ($softFailure) return [];
+                self::fail('SSO discovery contains an endpoint outside the configured HTTPS origin allowlist.');
+            }
+        }
+        if (isset($doc['userinfo_endpoint'])
+            && (!is_string($doc['userinfo_endpoint'])
+                || !self::endpointAllowedForConfig($doc['userinfo_endpoint'], $c))) {
+            if ($softFailure) return [];
+            self::fail('SSO UserInfo endpoint is outside the configured HTTPS origin allowlist.');
         }
         return $cache = $doc;
     }
 
     /** HTTP GET with TLS verification against the configured CA bundle. */
-    private static function httpGet(string $url): string
+    private static function httpGet(string $url, bool $softFailure = false, int $timeout = 10): string
     {
-        return self::http($url, 'GET', null, []);
+        return self::http($url, 'GET', null, [], $softFailure, $timeout);
     }
 
     /** HTTP POST of a urlencoded form body. */
@@ -378,8 +622,15 @@ final class Oidc
      * oidc.caBundle (system trust store when unset). The insecureSkipVerify
      * escape hatch is DEV ONLY and loudly logged.
      */
-    private static function http(string $url, string $method, ?string $body, array $headers): string
+    private static function http(string $url, string $method, ?string $body, array $headers,
+                                 bool $softFailure = false, int $timeout = 10): string
     {
+        if (!self::endpointAllowedForConfig($url, self::config())) {
+            error_log('[solari-oidc] refusing an endpoint outside the configured HTTPS origin allowlist');
+            if ($softFailure) return '';
+            self::fail('SSO provider endpoint is not on the configured HTTPS origin allowlist.');
+            return '';
+        }
         $c   = self::config();
         $ssl = ['verify_peer' => true, 'verify_peer_name' => true, 'allow_self_signed' => false];
 
@@ -403,18 +654,40 @@ final class Oidc
                 'method'        => $method,
                 'header'        => implode("\r\n", $hdr),
                 'content'       => $body,
-                'timeout'       => 10,
+                'timeout'       => max(1, min(30, $timeout)),
+                'follow_location' => 0,
+                'max_redirects' => 0,
                 'ignore_errors' => true,   // read body on 4xx/5xx too
             ],
             'ssl' => $ssl,
         ]);
 
-        $resp = @file_get_contents($url, false, $ctx);
-        if ($resp === false) {
+        $stream = @fopen($url, 'rb', false, $ctx);
+        if ($stream === false) {
             $err = error_get_last();
             error_log('[solari-oidc] HTTP ' . $method . ' failed for ' . $url . ': '
                 . ($err['message'] ?? 'unknown'));
+            if ($softFailure) return '';
             self::fail('Could not reach the SSO provider.');
+            return '';
+        }
+        $statusLine = $http_response_header[0] ?? '';
+        if (!is_string($statusLine)
+            || !preg_match('/^HTTP\/\S+ ([1-5][0-9]{2})(?:\s|$)/', $statusLine, $match)
+            || (int) $match[1] < 200 || (int) $match[1] >= 300) {
+            fclose($stream);
+            error_log('[solari-oidc] HTTP ' . $method . ' returned an unsuccessful response');
+            if ($softFailure) return '';
+            self::fail('SSO provider returned an unsuccessful response.');
+            return '';
+        }
+        $resp = stream_get_contents($stream, self::MAX_HTTP_BODY_BYTES + 1);
+        fclose($stream);
+        if ($resp === false || strlen($resp) > self::MAX_HTTP_BODY_BYTES) {
+            error_log('[solari-oidc] HTTP ' . $method . ' response exceeded the configured size limit');
+            if ($softFailure) return '';
+            self::fail('SSO provider response exceeded the configured size limit.');
+            return '';
         }
         return $resp;
     }

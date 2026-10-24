@@ -1,0 +1,23 @@
+{
+  "releaseRoot": "/etc/bind/solarinet-releases",
+  "runtimeRoot": "/etc/bind/solarinet-releases",
+  "currentLink": "/etc/bind/solarinet-current",
+  "incomingRoot": "/var/lib/solarinet-dns/incoming",
+  "candidateUser": "jason",
+  "includeParent": "/etc/bind/named.conf.local",
+  "legacyZoneRoot": "/etc/bind/zones",
+  "legacyIncludes": [
+    {"hostPath": "/etc/bind/named.conf.akoria", "runtimePath": "/etc/bind/named.conf.akoria"},
+    {"hostPath": "/etc/bind/named.conf.bare", "runtimePath": "/etc/bind/named.conf.bare"}
+  ],
+  "transfer": ["10.1.0.10", "10.0.0.11", "10.7.0.10"],
+  "checkZoneCommand": ["/usr/bin/named-checkzone"],
+  "expandCommand": ["/usr/bin/named-checkconf", "-p", "/etc/bind/named.conf"],
+  "checkConfigCommand": ["/usr/bin/named-checkconf", "-z"],
+  "reloadCommand": ["/usr/sbin/rndc", "reload"],
+  "digCommand": ["/usr/bin/dig"],
+  "queryAddress": "127.0.0.1",
+  "queryPort": 53,
+  "healthTimeout": 60,
+  "commandTimeout": 60
+}

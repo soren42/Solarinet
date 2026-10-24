@@ -12,7 +12,7 @@ Conservative by design: only status='adopted' (operator-curated) rows with a rea
 hostname are synced, so random transient scan hits never pollute the SoR.
 
 Usage: sor_reconcile_discovery.py [--once] [--dry-run]
-Config: sorsync.conf [sor] + [discovery].
+Config: sorsync.conf [sor_discovery] + [discovery].
 """
 import argparse
 import configparser
@@ -22,6 +22,7 @@ import sys
 import time
 
 import pymysql
+from db_config import database_options
 
 CONF = os.environ.get("SORSYNC_CONF",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "sorsync.conf"))
@@ -53,6 +54,14 @@ def aton_arg(ip):
     return ip if ":" in ip else f"::ffff:{ip}"
 
 
+def connect_sor(config):
+    db = database_options(config, "sor_discovery")
+    return pymysql.connect(
+        host=db["host"], port=db["port"], user=db["user"], password=db["password"],
+        database=db["name"], autocommit=False, connect_timeout=10,
+        cursorclass=pymysql.cursors.DictCursor)
+
+
 def reconcile(cfg, dry_run):
     mon = pymysql.connect(
         host=cfg.get("discovery", "mon_host", fallback="127.0.0.1"),
@@ -60,11 +69,7 @@ def reconcile(cfg, dry_run):
         user=cfg.get("discovery", "mon_user"), password=cfg.get("discovery", "mon_password"),
         database=cfg.get("discovery", "mon_name", fallback="solarinet"),
         autocommit=True, connect_timeout=10, cursorclass=pymysql.cursors.DictCursor)
-    sor = pymysql.connect(
-        host=cfg.get("sor", "host"), port=cfg.getint("sor", "port", fallback=3306),
-        user=cfg.get("sor", "user"), password=cfg.get("sor", "password"),
-        database=cfg.get("sor", "name", fallback="sor"),
-        autocommit=False, connect_timeout=10, cursorclass=pymysql.cursors.DictCursor)
+    sor = connect_sor(cfg)
     added = skipped = 0
     try:
         with mon.cursor() as mc:

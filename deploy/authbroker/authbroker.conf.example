@@ -9,19 +9,20 @@
 # Format: INI (Python configparser).
 
 [mqtt]
-# Mosquitto on benzene. TLS on :8883 is a follow-up; :1883 for now.
-host = 10.5.2.50
-port = 1883
+# Mosquitto on benzene. The certificate must contain this DNS name.
+host = benzene.akoria.net
+port = 8883
 username = solari
 password = CHANGE_ME
-tls = false
-; ca_cert = /etc/solarinet/mqtt-ca.pem   ; required when tls = true
+tls = true
+ca_cert = /etc/solarinet/mqtt-ca.pem
 client_id = authbrokerd
 
 [http]
 # The tiny HTTP API the dashboard calls. Keep it bound to localhost (or the
 # dashboard host) — it must NOT be internet-reachable. `token` is a shared
-# bearer secret the dashboard sends in `Authorization: Bearer <token>`.
+# bearer secret the dashboard sends in `Authorization: Bearer <token>`. The
+# daemon refuses to start if this is empty or left at the example value.
 bind = 127.0.0.1
 port = 9444
 token = CHANGE_ME_LONG_RANDOM
@@ -31,6 +32,9 @@ token = CHANGE_ME_LONG_RANDOM
 # <prefix>/response/<id>. request_ttl_sec bounds how long a login waits.
 topic_prefix = auth
 request_ttl_sec = 60
+request_signing_key_id = primary
+request_signing_key_file = /home/jason/.config/solarinet/authbroker-request-signing.pem
+allow_plaintext_dev = false
 
 # ---- Enrolled devices ------------------------------------------------------
 # One [device.<id>] section per Tab5. <id> must match the device_id the

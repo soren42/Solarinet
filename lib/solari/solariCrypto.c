@@ -3,7 +3,9 @@
  * All implementations are public-domain-style and endian-independent.
  */
 #include "solari/solariCrypto.h"
+#include "solari/solariMsg.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* ----------------------------------------------------------------- FNV-1a */
@@ -26,6 +28,20 @@ uint64_t solariFnv1a64(const void *data, size_t len)
 uint64_t solariFnv1a64Str(const char *s)
 {
     return solariFnv1a64(s, s ? strlen(s) : 0);
+}
+
+uint64_t solariNodeIdFromFqdnRole(const char *fqdn, solariRole role)
+{
+    char identity[SOLARI_FQDN_MAX + 8];
+    size_t fqdnLen;
+    int n;
+
+    if (!fqdn || role < ROLE_CLIENT || role > ROLE_SERVER) return 0;
+    for (fqdnLen = 0; fqdnLen < SOLARI_FQDN_MAX && fqdn[fqdnLen]; fqdnLen++) {}
+    if (fqdnLen == 0 || fqdnLen >= SOLARI_FQDN_MAX) return 0;
+    n = snprintf(identity, sizeof identity, "%s|%d", fqdn, (int)role);
+    if (n <= 0 || (size_t)n >= sizeof identity) return 0;
+    return solariFnv1a64(identity, (size_t)n);
 }
 
 /* ------------------------------------------------------------------ CRC-32 */

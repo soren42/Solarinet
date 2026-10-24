@@ -50,8 +50,6 @@ bool monitorOwnsTarget(uint64_t self, const uint64_t *fleet, size_t fleetLen,
 uint64_t monitorNodeId(const monitorConfig *cfg)
 {
     char fqdn[SOLARI_FQDN_MAX];
-    char buf[SOLARI_FQDN_MAX + 8];
-    int n;
     if (cfg->nodeId) return cfg->nodeId;
     if (cfg->hostFqdn[0]) {
         strncpy(fqdn, cfg->hostFqdn, sizeof fqdn - 1);
@@ -60,8 +58,20 @@ uint64_t monitorNodeId(const monitorConfig *cfg)
         strncpy(fqdn, "unknown", sizeof fqdn - 1);
         fqdn[sizeof fqdn - 1] = '\0';
     }
-    n = snprintf(buf, sizeof buf, "%s|%d", fqdn, (int)ROLE_MONITOR);
-    return solariFnv1a64(buf, (size_t)(n > 0 ? n : 0));
+    return solariNodeIdFromFqdnRole(fqdn, ROLE_MONITOR);
+}
+
+bool monitorPeerIdentityMatchesCn(uint64_t nodeId, const char *peerCertCn)
+{
+    static const char prefix[] = "monitor.";
+    const char *host;
+
+    if (!nodeId || !peerCertCn ||
+        strncmp(peerCertCn, prefix, sizeof prefix - 1) != 0)
+        return false;
+    host = peerCertCn + sizeof prefix - 1;
+    if (!host[0] || strlen(host) >= SOLARI_FQDN_MAX) return false;
+    return solariNodeIdFromFqdnRole(host, ROLE_MONITOR) == nodeId;
 }
 
 /* ---- peer registry ---- */

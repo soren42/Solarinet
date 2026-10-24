@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for an updated SolariNet CRL publication
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=solari-crl-publish.service
+
+[Install]
+WantedBy=timers.target

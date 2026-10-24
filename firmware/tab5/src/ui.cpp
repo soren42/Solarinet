@@ -178,8 +178,13 @@ void Ui::drawHome_() {
   auto accounts = config().loadTotpAccounts();
   tile("TOTP", String(accounts.size()) + " codes", kTileTotp, TFT_CYAN);
   size_t pend = approvals().pendingCount();
-  tile("Approvals", pend ? (String(pend) + " PENDING") : String("idle"),
-       kTileApprove, pend ? TFT_YELLOW : TFT_GREEN);
+  const bool approvalTrustReady = !config().brokerRequestKeyIds().empty() &&
+                                  !config().loadMqttCaPem().isEmpty();
+  tile("Approvals", pend ? (String(pend) + " PENDING")
+                          : approvalTrustReady ? String("idle")
+                                               : String("setup required"),
+       kTileApprove, pend ? TFT_YELLOW
+                          : approvalTrustReady ? TFT_GREEN : TFT_RED);
   tile("Vault", vault().isUnlocked() ? "unlocked" : "locked", kTileVault,
        TFT_GREEN);
 
@@ -256,7 +261,16 @@ void Ui::drawApproval_() {
     d.setTextColor(TFT_LIGHTGREY);
     d.setTextDatum(middle_center);
     d.setTextSize(3);
-    d.drawString("No pending approvals", kW / 2, kH / 2);
+    const bool trustReady = !config().brokerRequestKeyIds().empty() &&
+                            !config().loadMqttCaPem().isEmpty();
+    d.drawString(trustReady ? "No pending approvals"
+                            : "Approval trust is not provisioned",
+                 kW / 2, kH / 2 - 30);
+    if (!trustReady) {
+      d.setTextSize(2);
+      d.drawString("USB serial 115200: SOLARI:SHOW_KEYS", kW / 2, kH / 2 + 30);
+      d.drawString("Import broker key + CA, then restart", kW / 2, kH / 2 + 65);
+    }
     d.setTextDatum(top_left);
     return;
   }
@@ -412,9 +426,11 @@ void Ui::drawSetup_() {
   d.setTextSize(3);
   d.drawString("SolariNet Authenticator — Setup", kW / 2, 180);
   d.setTextSize(2);
-  d.drawString("Provision Wi-Fi, MQTT broker, and enroll the device key.",
-               kW / 2, 250);
-  d.drawString("(first-boot wizard — TODO)", kW / 2, 300);
+  d.drawString("Approval needs a pinned broker key and verified MQTT CA.",
+               kW / 2, 245);
+  d.drawString("USB serial 115200: SOLARI:SHOW_KEYS", kW / 2, 285);
+  d.drawString("Import key + CA, then restart. No plaintext fallback.",
+               kW / 2, 325);
   // Show the enrolled public key so the operator can paste it into the broker.
   String pub = approvals().publicKeyHex();
   if (!pub.isEmpty()) {
@@ -425,8 +441,7 @@ void Ui::drawSetup_() {
     d.drawString(pub.substring(66), kW / 2, 425);
   }
   d.setTextDatum(top_left);
-  // TODO(setup): multi-step wizard — Wi-Fi scan+join, MQTT host/creds, device
-  // id, then provisioned=true; saveSettings(). Enroll pubkey to authbroker.
+  // TODO(setup): finish Wi-Fi/MQTT credential entry and device identity.
 }
 
 void Ui::drawToast_() {

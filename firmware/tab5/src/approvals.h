@@ -8,24 +8,29 @@
 // enrolled PUBLIC key, so only this Tab5 (holding the private key in encrypted
 // NVS) can approve. See DESIGN.md "Approval flow + signing scheme".
 //
-//   request  auth/request/<id>   {v,id,ts,ttl,action,subject,detail,source_ip,nonce}
-//   response auth/response/<id>  {v,id,ts,decision,device_id,nonce,sig}
-//   signed bytes: "<v>\n<id>\n<decision>\n<nonce>\n<device_id>"  (ECDSA-P256/SHA-256)
+//   request  auth/request/<id>   signed complete v2 envelope
+//   response auth/response/<id>  {v,id,ts,decision,device_id,nonce,req_digest,sig}
+// Both signatures use domain-separated, length-prefixed UTF-8 fields.
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <deque>
 #include <functional>
+#include <vector>
 
 namespace solari {
 
 struct ApprovalRequest {
   String id;
+  String brokerKeyId; // identifies the imported broker request verification key
   String action;     // "login" | "elevate" | "approve"
   String subject;    // who is authenticating, e.g. "jason"
   String detail;     // e.g. "SolariNet dashboard"
   String sourceIp;   // origin of the auth attempt
+  String targetDevice; // empty means any enrolled device
   String nonce;      // server random (base64); echoed + signed in the response
+  String reqDigest;  // SHA-256 of the verified canonical broker request
   time_t ts = 0;
   uint32_t ttl = 60;         // seconds the request is valid
   uint32_t receivedMs = 0;   // millis() at receipt, for the countdown
@@ -60,9 +65,12 @@ class Approvals {
   String publicKeyHex() const;   // enrolled public key, or "" if none
 
  private:
-  void handleRequest_(const uint8_t* payload, unsigned len);
+  void handleRequest_(const char* topic, const uint8_t* payload, unsigned len);
+  bool verifyRequest_(JsonDocument& doc, ApprovalRequest& request,
+                      const char* topic) const;
   bool respond_(const ApprovalRequest& r, const char* decision);
-  bool signCanonical_(const String& canonical, String& sigB64Out) const;
+  bool signCanonical_(const std::vector<uint8_t>& canonical,
+                      String& sigB64Out) const;
 
   std::deque<ApprovalRequest> queue_;
   AlertFn alert_;

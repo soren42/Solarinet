@@ -16,6 +16,8 @@
 #include "solari/solariNet.h"
 
 #include <mariadb/mysql.h>
+#include <stdio.h>
+#include <string.h>
 
 #define WEAK __attribute__((weak))
 
@@ -40,10 +42,61 @@ WEAK solariStatus serverDbTouchNode(serverDb *db, uint64_t n, uint64_t w)
 { (void)db;(void)n;(void)w; return ERR_DB; }
 WEAK solariStatus serverDbSetNodeState(serverDb *db, uint64_t n, const char *s)
 { (void)db;(void)n;(void)s; return ERR_DB; }
+WEAK solariStatus serverDbDecommissionIssue(serverDb *db, uint64_t n,
+    uint32_t scope, const char *op, const char hash[65], uint64_t issued,
+    uint64_t expires, uint64_t *generation)
+{
+    (void)db; (void)n; (void)scope; (void)op; (void)hash; (void)issued; (void)expires;
+    if (generation) *generation = 0;
+    return ERR_DB;
+}
+WEAK solariStatus serverDbDecommissionConfirm(serverDb *db, uint64_t n,
+    uint32_t scope, const char *op, const char hash[65], uint64_t now,
+    uint64_t *generation)
+{
+    (void)db; (void)n; (void)scope; (void)op; (void)hash; (void)now;
+    if (generation) *generation = 0;
+    return ERR_DB;
+}
+WEAK solariStatus serverDbDecommissionAck(serverDb *db, uint64_t n, uint64_t g)
+{ (void)db;(void)n;(void)g; return ERR_DB; }
+WEAK solariStatus serverDbDecommissionListDue(serverDb *db, uint64_t now,
+    serverDecommissionDelivery *out, size_t cap, size_t *count)
+{ (void)db;(void)now;(void)out;(void)cap; if (count) *count = 0; return ERR_DB; }
+WEAK solariStatus serverDbDecommissionNoteAttempt(serverDb *db, uint64_t n,
+    uint64_t g, uint64_t now, uint64_t next)
+{ (void)db;(void)n;(void)g;(void)now;(void)next; return ERR_DB; }
+WEAK solariStatus serverDbRetireNode(serverDb *db, uint64_t n)
+{ (void)db;(void)n; return ERR_DB; }
+WEAK solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t n,
+    const char *cn, bool *matches)
+{ (void)db;(void)n;(void)cn; if (matches) *matches = false; return ERR_DB; }
+WEAK solariStatus serverDbCertificateRevocationIssue(serverDb *db, uint64_t n,
+    const char *issuer, const char *serial, const char *fp, const char *reason,
+    const char *op, const char hash[65], uint64_t issued, uint64_t expires)
+{ (void)db;(void)n;(void)issuer;(void)serial;(void)fp;(void)reason;(void)op;(void)hash;(void)issued;(void)expires; return ERR_DB; }
+WEAK solariStatus serverDbCertificateRevocationConfirm(serverDb *db, uint64_t n,
+    const char *issuer, const char *serial, const char *fp, const char *reason,
+    const char *op, const char hash[65], uint64_t now)
+{ (void)db;(void)n;(void)issuer;(void)serial;(void)fp;(void)reason;(void)op;(void)hash;(void)now; return ERR_DB; }
+WEAK solariStatus serverDbCertificateCrlAcknowledge(serverDb *db, uint64_t n,
+    const char *issuer, uint64_t number, const char *fp)
+{ (void)db;(void)n;(void)issuer;(void)number;(void)fp; return ERR_DB; }
+WEAK solariStatus serverDbGetLeafCertificateIssuer(serverDb *db, uint64_t n,
+    const char *serial, const char *fp, char issuer[65], uint64_t *resolvedNodeId)
+{ (void)db;(void)n;(void)serial;(void)fp; if (issuer) issuer[0] = '\0';
+  if (resolvedNodeId) *resolvedNodeId = 0;
+  return ERR_DB; }
+WEAK solariStatus serverDbRecordIssuedCertificate(serverDb *db,
+    const char *issuer, const char *serial, const char *fp, const char *by,
+    uint64_t when)
+{ (void)db;(void)issuer;(void)serial;(void)fp;(void)by;(void)when; return ERR_DB; }
 WEAK solariStatus serverDbWriteClientReport(serverContext *c, uint64_t n,
-    const solariClientReport *r) { (void)c;(void)n;(void)r; return ERR_DB; }
+    const solariClientReport *r, const serverReportReceipt *receipt)
+{ (void)c;(void)n;(void)r;(void)receipt; return ERR_DB; }
 WEAK solariStatus serverDbWriteMonitorReport(serverContext *c, uint64_t n,
-    const solariMonitorReport *r) { (void)c;(void)n;(void)r; return ERR_DB; }
+    const solariMonitorReport *r, const serverReportReceipt *receipt)
+{ (void)c;(void)n;(void)r;(void)receipt; return ERR_DB; }
 WEAK solariStatus serverDbWriteAlertEvent(serverDb *db, int rid, uint64_t n,
     const char *t, const char *sev, const char *d, uint64_t f, const char *k,
     uint64_t opened, uint64_t asset, int tier, const char *disp, uint64_t *event)
@@ -73,8 +126,18 @@ WEAK solariStatus serverDbSetNodeTargetEpoch(serverDb *db, uint64_t n,
     uint64_t e, const char *j) { (void)db;(void)n;(void)e;(void)j; return ERR_DB; }
 WEAK solariStatus serverDbSetNodeApplied(serverDb *db, uint64_t n, uint64_t e,
     const char *r, uint64_t w) { (void)db;(void)n;(void)e;(void)r;(void)w; return ERR_DB; }
+WEAK solariStatus serverDbControlDirectiveAdd(serverDb *db, uint64_t n,
+    uint32_t c, uint8_t v, uint64_t e) { (void)db;(void)n;(void)c;(void)v;(void)e; return SOLARI_OK; }
+WEAK solariStatus serverDbControlDirectiveCancel(serverDb *db, uint64_t n,
+    uint32_t c) { (void)db;(void)n;(void)c; return SOLARI_OK; }
+WEAK solariStatus serverDbControlResultApply(serverDb *db, uint64_t n,
+    uint32_t c, uint8_t v, uint64_t e, bool haveEpoch, uint16_t x,
+    const char *r, uint64_t w)
+{ (void)db;(void)n;(void)c;(void)v;(void)e;(void)haveEpoch;(void)x;(void)r;(void)w; return ERR_DB; }
 WEAK solariStatus serverDbLeaseClaim(serverDb *db, uint64_t s, uint32_t t,
     bool *won, uint64_t *e) { (void)db;(void)s;(void)t; if (won)*won=false; if(e)*e=0; return ERR_DB; }
+WEAK solariStatus serverDbLeaseRelease(serverDb *db, uint64_t s, uint64_t e)
+{ (void)db;(void)s;(void)e; return ERR_DB; }
 WEAK solariStatus serverDbLeaseRead(serverDb *db, uint64_t *h, uint64_t *e)
 { (void)db; if(h)*h=0; if(e)*e=0; return ERR_DB; }
 WEAK solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,
@@ -91,11 +154,28 @@ WEAK solariStatus serverDbUpsertNetGear(serverDb *db, const serverNetGear *g,
     uint64_t w) { (void)db;(void)g;(void)w; return ERR_DB; }
 WEAK solariStatus serverDbEnrollCreate(serverDb *db, const serverEnrollment *e,
     uint64_t w, uint64_t *id) { (void)db;(void)e;(void)w; if(id)*id=0; return ERR_DB; }
+WEAK solariStatus serverDbEnrollCreateToken(serverDb *db, const serverEnrollment *e,
+    const char *h, uint64_t exp, uint64_t w, uint64_t *id)
+{ (void)db;(void)e;(void)h;(void)exp;(void)w; if(id)*id=0; return ERR_DB; }
 WEAK solariStatus serverDbEnrollSetCsr(serverDb *db, uint64_t id,
     const char *p, const char *f) { (void)db;(void)id;(void)p;(void)f; return ERR_DB; }
+WEAK solariStatus serverDbEnrollSubmitToken(serverDb *db, const char *h,
+    const char *host, solariRole role, const char *csr, const char *fp, uint64_t now)
+{ (void)db;(void)h;(void)host;(void)role;(void)csr;(void)fp;(void)now; return ERR_DB; }
+WEAK solariStatus serverDbEnrollGetByToken(serverDb *db, const char *h,
+    serverEnrollment *o, char *cert, size_t cap)
+{ (void)db;(void)h;(void)o; if(cert&&cap)cert[0]='\0'; return ERR_DB; }
+WEAK solariStatus serverDbEnrollAckToken(serverDb *db, const char *h, uint64_t when)
+{ (void)db;(void)h;(void)when; return ERR_DB; }
 WEAK solariStatus serverDbEnrollDecide(serverDb *db, uint64_t id,
     serverEnrollStatus s, const char *by, uint64_t w)
 { (void)db;(void)id;(void)s;(void)by;(void)w; return ERR_DB; }
+WEAK solariStatus serverDbEnrollFinalize(serverDb *db, uint64_t id,
+    uint64_t nodeId, solariRole role, const char *host, const char *cn,
+    const char *cert, const char *leafFp, const char *leafSerial,
+    const char *issuerFp, const char *by, uint64_t when)
+{ (void)db;(void)id;(void)nodeId;(void)role;(void)host;(void)cn;(void)cert;
+  (void)leafFp;(void)leafSerial;(void)issuerFp;(void)by;(void)when; return ERR_DB; }
 WEAK solariStatus serverDbEnrollGet(serverDb *db, uint64_t id, serverEnrollment *o)
 { (void)db;(void)id;(void)o; return ERR_DB; }
 WEAK solariStatus serverDbEnrollGetCsr(serverDb *db, uint64_t id, char *b, size_t c)
@@ -117,8 +197,6 @@ WEAK solariStatus serverMasterAcceptHello(serverContext *c, const solariFrameHea
 { (void)c;(void)h;(void)hello;(void)cn;(void)o;(void)cap; if(ol)*ol=0; if(tc)*tc=0; return SOLARI_OK; }
 WEAK solariStatus serverControlOnResult(serverContext *c, uint64_t n, uint32_t cor,
     const uint8_t *p, size_t l) { (void)c;(void)n;(void)cor;(void)p;(void)l; return SOLARI_OK; }
-WEAK solariStatus serverControlOnSurveyResp(serverContext *c, uint64_t n,
-    const uint8_t *p, size_t l) { (void)c;(void)n;(void)p;(void)l; return SOLARI_OK; }
 WEAK solariStatus serverControlBuild(serverContext *c, uint64_t tn,
     solariCtrlVerb v, uint64_t te, const uint8_t *p, uint16_t pl,
     uint8_t *o, size_t cap, size_t *ol)
@@ -144,6 +222,17 @@ WEAK solariStatus serverProvisionNode(serverContext *c, uint64_t n, uint64_t b,
 WEAK solariStatus serverProvisionDecommission(serverContext *c, uint64_t n,
     uint32_t ws, const char *op, uint64_t *tok)
 { (void)c;(void)n;(void)ws;(void)op; if(tok)*tok=0; return SOLARI_OK; }
+WEAK solariStatus serverProvisionConfirmDecommission(serverContext *c,
+    uint64_t n, uint32_t ws, const char *op, uint64_t tok)
+{ (void)c;(void)n;(void)ws;(void)op;(void)tok; return SOLARI_OK; }
+WEAK solariStatus serverProvisionIssueCertificateRevocation(serverContext *c,
+    uint64_t n, const char *serial, const char *fp, const char *reason,
+    const char *op, uint64_t *token)
+{ (void)c;(void)n;(void)serial;(void)fp;(void)reason;(void)op; if(token)*token=0; return SOLARI_OK; }
+WEAK solariStatus serverProvisionConfirmCertificateRevocation(serverContext *c,
+    uint64_t n, const char *serial, const char *fp, const char *reason,
+    const char *op, uint64_t token)
+{ (void)c;(void)n;(void)serial;(void)fp;(void)reason;(void)op;(void)token; return SOLARI_OK; }
 WEAK solariStatus serverProvisionRetire(serverContext *c, uint64_t n)
 { (void)c;(void)n; return SOLARI_OK; }
 WEAK solariStatus serverProvisionAdoptTarget(serverContext *c, uint64_t id, const char *s)
@@ -151,6 +240,19 @@ WEAK solariStatus serverProvisionAdoptTarget(serverContext *c, uint64_t id, cons
 WEAK solariStatus serverScanRun(serverContext *c, const char *cidr,
     const char *ports, size_t *found)
 { (void)c;(void)cidr;(void)ports; if(found)*found=0; return SOLARI_OK; }
+WEAK solariStatus serverScanPlan(const char *cidr, const char *ports, uint32_t *total)
+{ (void)cidr;(void)ports; if(total)*total=1; return SOLARI_OK; }
+WEAK solariStatus serverDbDiscoveryScanSubmit(serverDb *db, uint64_t owner,
+    uint64_t epoch, const char *requestedBy, const char *cidr, const char *ports,
+    uint32_t total, uint64_t *scanId)
+{ (void)db;(void)owner;(void)epoch;(void)requestedBy;(void)cidr;(void)ports;(void)total; if(scanId)*scanId=1; return SOLARI_OK; }
+WEAK solariStatus serverDbDiscoveryScanGet(serverDb *db, uint64_t scanId,
+    const char *requestedBy, serverDiscoveryScanJob *out)
+{ (void)db;(void)scanId;(void)requestedBy;(void)out; return ERR_TLV_END; }
+WEAK solariStatus serverDbUpsertDiscoveredFenced(serverDb *db,
+    const serverDiscEntity *entity, uint64_t when, uint64_t owner, uint64_t epoch,
+    uint64_t *discId)
+{ (void)db;(void)entity;(void)when;(void)owner;(void)epoch; if(discId)*discId=0; return SOLARI_OK; }
 WEAK solariStatus serverDbUpsertProbeTarget(serverDb *db, const char *tid,
     const char *host, int port, const char *proto, int repl,
     const char *label, const char *seg, uint64_t asset,
@@ -194,6 +296,22 @@ WEAK solariStatus serverDbDeleteAlertRule(serverDb *db, uint64_t rid)
 { (void)db;(void)rid; return SOLARI_OK; }
 WEAK solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eid)
 { (void)db;(void)eid; return SOLARI_OK; }
+WEAK solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *v,
+    const char *a, const char *rb, uint32_t pu, const char *ik, unsigned long long *ro)
+{ (void)db;(void)v;(void)a;(void)rb;(void)pu;(void)ik; if(ro)*ro=1; return SOLARI_OK; }
+WEAK solariStatus serverDbCtlRequestClaim(serverDb *db, const char *cb,
+    unsigned long long *ro, char *vo, size_t vc, char *ao, size_t ac,
+    char *rbo, size_t rbc)
+{ (void)db;(void)cb; if(ro)*ro=0; if(vo&&vc)vo[0]='\0'; if(ao&&ac)ao[0]='\0';
+  if(rbo&&rbc)rbo[0]='\0';
+  return ERR_TLV_END; }   /* stub: queue always empty */
+WEAK solariStatus serverDbCtlRequestComplete(serverDb *db, unsigned long long r,
+    bool ok, const char *t)
+{ (void)db;(void)r;(void)ok;(void)t; return SOLARI_OK; }
+WEAK solariStatus serverDbCtlRequestGet(serverDb *db, unsigned long long r,
+    const char *requestedBy, char *so, size_t sc, char *do_, size_t dc)
+{ (void)db;(void)r;(void)requestedBy; if(so&&sc)snprintf(so,sc,"pending"); if(do_&&dc)do_[0]='\0';
+  return SOLARI_OK; }
 WEAK solariStatus serverAssetsAdopt(serverContext *c, const serverAdoptOpts *o, uint64_t *aid)
 { (void)c;(void)o; if(aid)*aid=0; return SOLARI_OK; }
 WEAK solariStatus serverAssetsSetMeta(serverContext *c, const char *ip, const char *dn,
@@ -202,8 +320,18 @@ WEAK solariStatus serverAssetsSetMeta(serverContext *c, const char *ip, const ch
 WEAK solariStatus serverAssetsRemove(serverContext *c, const char *key, bool byIp,
     const char *op, size_t *removed)
 { (void)c;(void)key;(void)byIp;(void)op; if(removed)*removed=0; return SOLARI_OK; }
-WEAK solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csr, char *b, size_t c)
-{ (void)ctl;(void)csr; if(b&&c)b[0]='\0'; return ERR_TLS; }
+WEAK solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csr,
+    const char *expectedCn, const char *expectedFqdn, char *b, size_t c,
+    char *fp, size_t fpCap, char *serial, size_t serialCap,
+    char *issuer, size_t issuerCap)
+{ (void)ctl;(void)csr;(void)expectedCn;(void)expectedFqdn;
+  if (b && c) b[0] = '\0';
+  if (fp && fpCap) fp[0] = '\0';
+  if (serial && serialCap) serial[0] = '\0';
+  if (issuer && issuerCap) issuer[0] = '\0';
+  return ERR_TLS; }
+WEAK solariStatus serverCtlCaFingerprint(serverCtl *ctl, char out[65])
+{ (void)ctl; if (out) out[0] = '\0'; return ERR_TLS; }
 
 solariStatus serverAssetsResyncHeartbeat(serverContext *ctx, uint64_t assetId)
 {

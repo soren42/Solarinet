@@ -6,9 +6,9 @@ declare(strict_types=1);
  *
  * Pulls three independent things and folds them into one payload:
  *   1. step-ca health + root/intermediate certificates from the internal CA on
- *      chlorine (https://10.7.0.10). The CA is internal-only with a private root,
- *      so TLS verification is deliberately DISABLED for these two calls (we are
- *      not authenticating a public endpoint, only reading its published roots).
+ *      chlorine (https://chlorine.akoria.net). TLS peer and hostname validation
+ *      use the host's trusted CA store; STEPCA_CA_FILE can pin the internal root
+ *      when it is not installed in that store.
  *   2. The SolariNet mTLS CA certificate shipped in the repo (run/pki/ca.pem),
  *      parsed with openssl_x509_parse() for its own expiry.
  *   3. The per-node mTLS cert inventory from the solarinet DB `node` table.
@@ -19,7 +19,8 @@ declare(strict_types=1);
  * (§11.1: cert/CA operations belong to step-ca + solariCtl, not the web tier).
  *
  * CONFIG (env, with sane internal defaults):
- *   STEPCA_URL      step-ca base URL (default https://10.7.0.10)
+ *   STEPCA_URL      step-ca base URL (default https://chlorine.akoria.net)
+ *   STEPCA_CA_FILE  optional PEM trust bundle for the step-ca HTTPS connection
  *   SOLARINET_CA_PEM  path to the mTLS CA pem (default <repo>/run/pki/ca.pem)
  */
 final class Ca
@@ -44,7 +45,7 @@ final class Ca
     public static function stepCaUrl(): string
     {
         $u = getenv('STEPCA_URL');
-        $u = ($u === false || $u === '') ? 'https://10.7.0.10' : $u;
+        $u = ($u === false || $u === '') ? 'https://chlorine.akoria.net' : $u;
         return rtrim($u, '/');
     }
 
@@ -73,7 +74,143 @@ final class Ca
             'roots'        => $roots,
             'provisioners' => self::PROVISIONERS,
             'nodeCerts'    => self::nodeCerts(),
+            'crl'          => self::crlRollout(),
             'warnDays'     => self::WARN_DAYS,
+        ];
+    }
+
+    /**
+     * Latest generated CRL generation and its client/monitor reporting peers.
+     * Server-role peers do not yet send this receipt type and are deliberately
+     * outside the acknowledgement denominator.
+     *
+     * @return array<string,mixed>
+     */
+    private static function crlRollout(): array
+    {
+        try {
+            $generations = Db::rows(
+                'SELECT issuerFp, publishedNumber AS crlNumber, crlFp, generatedAt, nextUpdate,
+                        (nextUpdate IS NULL OR nextUpdate <= UTC_TIMESTAMP(6)) AS expired
+                   FROM certificateCrlState
+                  WHERE publishedNumber IS NOT NULL AND publishedNumber > 0
+                  ORDER BY issuerFp'
+            );
+            $nodes = Db::rows(
+                'SELECT n.nodeId, n.hostFqdn, n.role, n.state, n.leafIssuerFp AS issuerFp,
+                        n.lastSeenAt, TIMESTAMPDIFF(SECOND, n.lastSeenAt, UTC_TIMESTAMP()) AS staleSec
+                   FROM node n
+                  WHERE n.role IN (\'client\',\'monitor\') AND n.state <> \'retired\'
+                  ORDER BY n.hostFqdn'
+            );
+            $acknowledgements = Db::rows(
+                'SELECT a.nodeId, a.issuerFp, a.crlNumber, a.crlFp, a.acknowledgedAt
+                   FROM certificateCrlAcknowledgement a
+                   JOIN node n ON n.nodeId=a.nodeId
+                  WHERE n.role IN (\'client\',\'monitor\') AND n.state <> \'retired\''
+            );
+        } catch (\Throwable $e) {
+            error_log('Ca::crlRollout read failed: ' . $e->getMessage());
+            return [
+                'available' => false,
+                'reason' => 'CRL acknowledgement data unavailable',
+                'scope' => 'Client and monitor agents whose current leaf issuer matches the generation',
+                'generations' => [],
+            ];
+        }
+
+        $ackByNodeIssuer = [];
+        foreach ($acknowledgements as $ack) {
+            $ackByNodeIssuer[(string) $ack['nodeId']][(string) $ack['issuerFp']] = $ack;
+        }
+        $out = [];
+        foreach ($generations as $generation) {
+            $issuer = (string) $generation['issuerFp'];
+            $number = (string) $generation['crlNumber'];
+            $fingerprint = (string) ($generation['crlFp'] ?? '');
+            $expired = (bool) $generation['expired'];
+            $peers = [];
+            $excludedPeers = [];
+            $unknownIssuerCount = 0;
+            $otherIssuerCount = 0;
+            $counts = ['current' => 0, 'stale' => 0, 'pending' => 0, 'offline' => 0, 'expired' => 0];
+            foreach ($nodes as $node) {
+                if (!is_string($node['issuerFp']) || $node['issuerFp'] === '') {
+                    $unknownIssuerCount++;
+                    $excludedPeers[] = [
+                        'nodeId' => (string) $node['nodeId'],
+                        'hostFqdn' => (string) $node['hostFqdn'],
+                        'role' => (string) $node['role'],
+                        'reason' => 'unknown_issuer',
+                    ];
+                    continue;
+                }
+                if ($node['issuerFp'] !== $issuer) {
+                    $otherIssuerCount++;
+                    $excludedPeers[] = [
+                        'nodeId' => (string) $node['nodeId'],
+                        'hostFqdn' => (string) $node['hostFqdn'],
+                        'role' => (string) $node['role'],
+                        'reason' => 'different_issuer',
+                        'issuerFp' => (string) $node['issuerFp'],
+                    ];
+                    continue;
+                }
+                $ack = $ackByNodeIssuer[(string) $node['nodeId']][$issuer] ?? null;
+                $ackNumber = $ack === null || $ack['crlNumber'] === null
+                    ? null : (string) $ack['crlNumber'];
+                $ackFp = $ack === null || $ack['crlFp'] === null
+                    ? null : (string) $ack['crlFp'];
+                $matches = $ackNumber === $number && $ackFp === $fingerprint;
+                $isCurrent = !$expired && $matches;
+                $staleSec = $node['staleSec'] === null ? null : (int) $node['staleSec'];
+                if ($staleSec === null || $staleSec > 900 || $node['state'] === 'down') {
+                    $status = 'offline';
+                } elseif ($expired && $matches) {
+                    $status = 'expired';
+                } elseif ($matches) {
+                    $status = 'current';
+                } elseif ($ackNumber !== null) {
+                    $status = 'stale';
+                } else {
+                    $status = 'pending';
+                }
+                $counts[$status]++;
+                $peers[] = [
+                    'nodeId' => (string) $node['nodeId'],
+                    'hostFqdn' => (string) $node['hostFqdn'],
+                    'role' => (string) $node['role'],
+                    'status' => $status,
+                    'acknowledgementCurrent' => $isCurrent,
+                    'acknowledgedNumber' => $ackNumber,
+                    'acknowledgedFp' => $ackFp,
+                    'acknowledgedAt' => Coerce::iso($ack['acknowledgedAt'] ?? null),
+                    'lastSeenAt' => Coerce::iso($node['lastSeenAt'] ?? null),
+                    'staleSec' => $staleSec,
+                ];
+            }
+            $out[] = [
+                'issuerFp' => $issuer,
+                'crlNumber' => $number,
+                'crlFp' => $fingerprint,
+                'generatedAt' => Coerce::iso($generation['generatedAt'] ?? null),
+                'nextUpdate' => Coerce::iso($generation['nextUpdate'] ?? null),
+                'expired' => $expired,
+                'counts' => $counts,
+                'peerCount' => count($peers),
+                'excludedPeerCount' => count($excludedPeers),
+                'unknownIssuerCount' => $unknownIssuerCount,
+                'otherIssuerCount' => $otherIssuerCount,
+                'excludedPeers' => $excludedPeers,
+                'peers' => $peers,
+            ];
+        }
+        return [
+            'available' => true,
+            'reason' => null,
+            'scope' => 'Client and monitor agents whose current leaf issuer matches the generation',
+            'offlineAfterSeconds' => 900,
+            'generations' => $out,
         ];
     }
 
@@ -278,22 +415,38 @@ final class Ca
     }
 
     /**
-     * HTTP GET with TLS verification DISABLED (internal CA, private root) and a
-     * short timeout. cURL when available, else a stream-context fallback. Returns
-     * the body or null on any failure.
+     * HTTPS GET with peer and hostname verification and a short timeout. Uses
+     * the system trust store unless STEPCA_CA_FILE supplies an explicit bundle.
+     * cURL and stream fallbacks enforce the same trust and URL requirements.
      */
     private static function http(string $url): ?string
     {
+        $parts = parse_url($url);
+        if (!is_array($parts) || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || !isset($parts['host']) || $parts['host'] === ''
+            || isset($parts['user']) || isset($parts['pass'])) {
+            return null;
+        }
+        $caFile = getenv('STEPCA_CA_FILE');
+        if ($caFile !== false && $caFile !== '' && !is_readable($caFile)) {
+            error_log('Ca::http STEPCA_CA_FILE is not readable');
+            return null;
+        }
+
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
-            curl_setopt_array($ch, [
+            $options = [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_CONNECTTIMEOUT => 3,
                 CURLOPT_TIMEOUT        => 6,
-                CURLOPT_SSL_VERIFYPEER => false,
-                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
                 CURLOPT_HTTPHEADER     => ['Accept: application/json', 'User-Agent: SolariNet-Dashboard'],
-            ]);
+            ];
+            if ($caFile !== false && $caFile !== '') {
+                $options[CURLOPT_CAINFO] = $caFile;
+            }
+            curl_setopt_array($ch, $options);
             $body = curl_exec($ch);
             $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
@@ -311,8 +464,12 @@ final class Ca
                 'ignore_errors' => true,
             ],
             'ssl'  => [
-                'verify_peer'      => false,
-                'verify_peer_name' => false,
+                'verify_peer'      => true,
+                'verify_peer_name' => true,
+                'allow_self_signed' => false,
+                'SNI_enabled'      => true,
+                'peer_name'        => (string) $parts['host'],
+                ...(is_string($caFile) && $caFile !== '' ? ['cafile' => $caFile] : []),
             ],
         ]);
         $body = @file_get_contents($url, false, $ctx);

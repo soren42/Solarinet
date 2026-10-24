@@ -7,10 +7,16 @@ usage() {
 }
 
 ACTIVE_TMP=
+ACTIVE_TMPDIR=
 cleanup_tmp() {
     if [ -n "${ACTIVE_TMP:-}" ] && [ -f "$ACTIVE_TMP" ]; then
         rm -f -- "$ACTIVE_TMP"
     fi
+    if [ -n "${ACTIVE_TMPDIR:-}" ] && [ -d "$ACTIVE_TMPDIR" ]; then
+        rm -rf -- "$ACTIVE_TMPDIR"
+    fi
+    ACTIVE_TMP=
+    ACTIVE_TMPDIR=
 }
 
 on_error() {
@@ -87,6 +93,34 @@ require_secret_file_safe() {
     esac
 }
 
+require_private_target() {
+    path=$1
+    stat_out=$(stat -c '%u %a' "$path" 2>/dev/null) || {
+        echo "solari-backup: cannot stat target directory: $path" >&2
+        exit 73
+    }
+    owner_uid=${stat_out%% *}
+    mode=${stat_out#* }
+    if [ "$owner_uid" != "0" ] || [ "$mode" != "700" ]; then
+        echo "solari-backup: target directory must be root-owned mode 0700: $path (owner=$owner_uid mode=$mode)" >&2
+        exit 73
+    fi
+}
+
+require_private_artifact() {
+    path=$1
+    stat_out=$(stat -c '%u %a' "$path" 2>/dev/null) || {
+        echo "solari-backup: cannot stat backup artifact: $path" >&2
+        exit 74
+    }
+    owner_uid=${stat_out%% *}
+    mode=${stat_out#* }
+    if [ "$owner_uid" != "0" ] || [ "$mode" != "600" ]; then
+        echo "solari-backup: backup artifact must be root-owned mode 0600: $path (owner=$owner_uid mode=$mode)" >&2
+        exit 74
+    fi
+}
+
 validate_artifact_prefix() {
     case "$1" in
         ''|*/*|*'..'*|*'*'*|*'?'*|*'['*|*']'*)
@@ -155,10 +189,12 @@ MYSQL_PASSWORD_FILE=
 MYSQL_ENV_FILE=
 MYSQL_DEFAULTS_EXTRA_FILE=
 MYSQLDUMP_BIN=mysqldump
+MYSQLDUMP_RUN_AS=
 FORGEJO_BIN=forgejo
 FORGEJO_CONFIG=
 FORGEJO_WORK_PATH=
 FORGEJO_RUN_AS=
+TARGET_MOUNTPOINT_REQUIRED=0
 
 # shellcheck source=/dev/null
 . "$CONFIG_FILE"
@@ -206,6 +242,20 @@ if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "/" ]; then
     echo "solari-backup: resolved TARGET_DIR is unsafe: $TARGET_DIR" >&2
     exit 64
 fi
+case "${TARGET_MOUNTPOINT_REQUIRED:-0}" in
+    0) ;;
+    1)
+        if ! command -v mountpoint >/dev/null 2>&1 || ! mountpoint -q -- "$TARGET_DIR"; then
+            echo "solari-backup: target must be a mounted filesystem: $TARGET_DIR" >&2
+            exit 73
+        fi
+        ;;
+    *)
+        echo "solari-backup: TARGET_MOUNTPOINT_REQUIRED must be 0 or 1" >&2
+        exit 64
+        ;;
+esac
+require_private_target "$TARGET_DIR"
 if [ -n "${MYSQL_DEFAULTS_EXTRA_FILE:-}" ] && [ ! -r "$MYSQL_DEFAULTS_EXTRA_FILE" ]; then
     echo "solari-backup: MYSQL_DEFAULTS_EXTRA_FILE not readable: $MYSQL_DEFAULTS_EXTRA_FILE" >&2
     exit 66
@@ -233,8 +283,10 @@ done
 
 for db in "${DB_LIST[@]}"; do
     dest="${TARGET_DIR}/${db}-${DATE}.sql.gz"
-    tmp="${dest}.tmp.$$"
+    tmp=$(mktemp "${dest}.tmp.XXXXXXXX")
     ACTIVE_TMP=$tmp
+    chmod 600 "$tmp"
+    require_private_artifact "$tmp"
     dump_cmd=("$MYSQLDUMP_PATH")
     if [ -n "${MYSQL_DEFAULTS_EXTRA_FILE:-}" ]; then
         dump_cmd+=("--defaults-extra-file=$MYSQL_DEFAULTS_EXTRA_FILE")
@@ -245,15 +297,37 @@ for db in "${DB_LIST[@]}"; do
     [ -n "${MYSQL_USER:-}" ] && dump_cmd+=("--user=$MYSQL_USER")
     dump_cmd+=("$db")
 
-    if "${dump_cmd[@]}" | gzip -c > "$tmp"; then
+    if [ -n "${MYSQLDUMP_RUN_AS:-}" ]; then
+        dump_runner=(run_as_user "$MYSQLDUMP_RUN_AS" "${dump_cmd[@]}")
+    else
+        dump_runner=("${dump_cmd[@]}")
+    fi
+    if "${dump_runner[@]}" | gzip -c > "$tmp"; then
         if [ ! -s "$tmp" ]; then
             rm -f -- "$tmp"
             ACTIVE_TMP=
             echo "solari-backup: dump produced empty file for $db" >&2
             exit 74
         fi
+        # The gzip container is nonempty even when mysqldump emitted no SQL.
+        # Count bytes while fully decoding it: this also validates the stream
+        # before publishing the artifact without retaining an uncompressed copy.
+        if ! uncompressed_bytes=$(gzip -dc -- "$tmp" | wc -c | tr -d '[:space:]'); then
+            rm -f -- "$tmp"
+            ACTIVE_TMP=
+            echo "solari-backup: compressed dump verification failed for $db" >&2
+            exit 74
+        fi
+        if [ "$uncompressed_bytes" = "0" ]; then
+            rm -f -- "$tmp"
+            ACTIVE_TMP=
+            echo "solari-backup: dump contained no SQL for $db" >&2
+            exit 74
+        fi
         mv -f -- "$tmp" "$dest"
         chmod 600 "$dest"
+        ACTIVE_TMP=$dest
+        require_private_artifact "$dest"
         ACTIVE_TMP=
     else
         rm -f -- "$tmp"
@@ -280,6 +354,7 @@ if [ -n "${FORGEJO_CONFIG:-}" ] && [ -f "$FORGEJO_CONFIG" ]; then
                 echo "solari-backup: could not create forgejo temp dir as $FORGEJO_RUN_AS" >&2
                 exit 74
             }
+            ACTIVE_TMPDIR=$forgejo_tmpdir
             tmp="${forgejo_tmpdir}/forgejo-${DATE}.zip"
         else
             tmp="${dest}.tmp.$$"
@@ -308,8 +383,13 @@ if [ -n "${FORGEJO_CONFIG:-}" ] && [ -f "$FORGEJO_CONFIG" ]; then
         fi
         mv -f -- "$tmp" "$dest"
         chmod 600 "$dest"
+        ACTIVE_TMP=$dest
+        require_private_artifact "$dest"
         ACTIVE_TMP=
-        [ -n "${forgejo_tmpdir:-}" ] && rm -rf -- "$forgejo_tmpdir"
+        if [ -n "${forgejo_tmpdir:-}" ]; then
+            rm -rf -- "$forgejo_tmpdir"
+            ACTIVE_TMPDIR=
+        fi
         forgejo_result=" forgejo=$(bytes_of "$dest")B"
     fi
 fi

@@ -18,6 +18,7 @@
 #include "solari/solariLog.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #define GOSSIP_DRAIN_MAX 256
@@ -61,10 +62,34 @@ solariStatus monitorGossipOpen(const monitorConfig *cfg, uint64_t selfNodeId,
     if (!cfg || !out) return ERR_INVALID_ARG;
     *out = NULL;
     if (!cfg->gossipUrl[0]) return SOLARI_OK;        /* gossip disabled */
+    if (!cfg->useTls || !cfg->caFile[0] || !cfg->certFile[0] || !cfg->keyFile[0]) {
+        solariLogf(SOLARI_LOG_ERROR,
+                   "gossip refused: mutual TLS CA, certificate, and key are required");
+        return ERR_TLS;
+    }
 
     g = calloc(1, sizeof *g);
     if (!g) return ERR_PLATFORM;
     g->selfNodeId = selfNodeId;
+    {
+        char host[SOLARI_FQDN_MAX], selfCn[SOLARI_FQDN_MAX + 16];
+        int n;
+        if (cfg->hostFqdn[0]) {
+            strncpy(host, cfg->hostFqdn, sizeof host - 1);
+            host[sizeof host - 1] = '\0';
+        } else if (monitorHostFqdn(host, sizeof host) != SOLARI_OK) {
+            free(g);
+            return ERR_INVALID_ARG;
+        }
+        n = snprintf(selfCn, sizeof selfCn, "monitor.%s", host);
+        if (n <= 0 || (size_t)n >= sizeof selfCn ||
+            !monitorPeerIdentityMatchesCn(selfNodeId, selfCn)) {
+            solariLogf(SOLARI_LOG_ERROR,
+                       "gossip refused: local node ID does not match monitor certificate identity");
+            free(g);
+            return ERR_AUTH_ROLE;
+        }
+    }
     g->useTls = cfg->useTls;
     if (cfg->caFile[0])   { strncpy(g->caFile,   cfg->caFile,   sizeof g->caFile   - 1); g->hasCa   = true; }
     if (cfg->certFile[0]) { strncpy(g->certFile, cfg->certFile, sizeof g->certFile - 1); g->hasCert = true; }
@@ -122,8 +147,21 @@ solariStatus monitorGossipTick(monitorGossip *g, monitorPeers *reg, uint64_t now
                solariConnRecv(g->listener, &rx, &rlen) == SOLARI_OK) {
             solariFrameHeader rh;
             if (solariFrameParse(rx, rlen, &rh, NULL, NULL, NULL) == SOLARI_OK &&
-                rh.msgType == SCP_MSG_PEER_ALIVE)
-                monitorPeersHeard(reg, rh.sourceNodeId, nowMs);
+                rh.msgType == SCP_MSG_PEER_ALIVE) {
+                char peerCn[256];
+                solariStatus cnStatus = solariConnPeerCn(g->listener, peerCn,
+                                                         sizeof peerCn);
+                if (cnStatus == SOLARI_OK &&
+                    monitorPeerIdentityMatchesCn(rh.sourceNodeId, peerCn)) {
+                    monitorPeersHeard(reg, rh.sourceNodeId, nowMs);
+                } else {
+                    solariLogf(SOLARI_LOG_WARN,
+                               "gossip reject PEER_ALIVE src=0x%llx cert=%s (%s)",
+                               (unsigned long long)rh.sourceNodeId,
+                               cnStatus == SOLARI_OK ? peerCn : "(unavailable)",
+                               cnStatus == SOLARI_OK ? "identity mismatch" : "TLS identity unavailable");
+                }
+            }
             drained++;
         }
     }

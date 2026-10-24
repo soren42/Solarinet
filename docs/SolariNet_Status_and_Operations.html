@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SolariNet — Phase 7 Status &amp; Operations Guide</title>
+<title>SolariNet — Status &amp; Operations Guide</title>
 <style>
   :root{
     --bg:#0d1117;--panel:#11161e;--panel2:#161c26;--ink:#d7dee8;--ink-dim:#9aa7b8;
@@ -15,36 +15,285 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
   .wrap{max-width:940px;margin:0 auto;padding:44px 28px 90px}
-  h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,46px);margin:0 0 4px}
+  h1{font-family:var(--serif);font-weight:600;font-size:46px;margin:0 0 4px}
   .sub{color:var(--ink-dim);font-style:italic;margin:0 0 22px}
   h2{font-family:var(--serif);font-size:25px;margin:42px 0 8px;border-bottom:1px solid var(--line);padding-bottom:7px}
   h3{font-family:var(--serif);font-size:19px;margin:26px 0 6px}
   p{margin:0 0 13px} code{font-family:var(--mono);font-size:.88em;background:rgba(124,158,255,.1);color:#bcd0f0;padding:1.5px 6px;border-radius:4px}
-  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-wrap:anywhere;white-space:pre-wrap;font-family:var(--mono);font-size:12.5px;color:#c8d3e0}
   table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
   th,td{text-align:left;padding:8px 12px;border:1px solid var(--line);vertical-align:top}
   th{background:var(--panel2);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
   td{background:var(--panel)}
-  .ok{color:var(--ok);font-weight:650}
-  .warn{color:var(--warn);font-weight:650}
+  .ok{color:var(--ok);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
   ul{padding-left:22px} li{margin:5px 0}
   .note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
   .gap{border-left:3px solid var(--warn);background:var(--panel);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
   .toc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 20px;margin:18px 0;font-size:14px}
   .toc a{color:var(--accent);text-decoration:none} .toc a:hover{text-decoration:underline}
-  .footer{margin-top:46px;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .footer{margin-top:0;color:var(--ink-dim);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .actions{display:flex;justify-content:flex-end;margin:0 0 14px}
+  .actions button{border:1px solid var(--line);border-radius:7px;padding:9px 13px;background:var(--panel2);color:var(--ink);font:600 13px var(--sans);cursor:pointer}
+  .actions button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  .status-now{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:18px;margin:20px 0}
+  .status-now h2{margin:0 0 8px;font-size:22px}
+  .status-now p:last-child{margin-bottom:0}
+  .system-map{display:block;width:100%;height:auto;margin:15px 0 18px;background:#0a0e14;border:1px solid var(--line);border-radius:8px}
+  .system-map text{font-family:var(--sans)}
+  @page{size:Letter;margin:.45in}
+  @media print{
+    body{background:#fff;color:#111}
+    .wrap{max-width:none;padding:0}
+    .toc,.gap,.system-map{break-inside:avoid}
+    .note,.gap,.toc{background:#f4f7fa;color:#17202a;border-color:#8796a6}
+    .toc a{color:#155c70}
+    code{background:#eef2f6;color:#1d3857}
+    .status-now{break-inside:auto}
+    .status-now li{break-inside:avoid}
+    .actions{display:none}
+    .status-now{background:#fff;color:#111;border-color:#7b8794}
+    .status-now h2,.status-now p,.status-now li,.status-now a{color:#111}
+    .status-now code{background:#eef2f6;color:#1d3857}
+    h2,h3{break-after:avoid}
+    tr{break-inside:avoid}
+    a{color:inherit;text-decoration:none}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="actions"><button id="print-guide" type="button">Print or save as PDF</button></div>
   <h1>Status &amp; Operations Guide</h1>
-  <p class="sub">SolariNet Monitoring · Phase 7 completion + operator / developer handbook · gates green in-session</p>
+  <p class="sub">SolariNet platform · operator / developer handbook · current status 22 October 2026</p>
 
-  <p>This document closes <strong>Phase 7</strong> (topology depth, MCP catch-up, and
-  operational hardening) and doubles as the operator / developer handbook for the whole
-  system. It is self-contained: inline CSS, no external fetches, in keeping with the
-  no-cloud tenet. For the earlier phases see <code>PHASE1_REPORT</code> through
-  <code>PHASE6_REPORT</code> and the Phase&nbsp;3 Handoff.</p>
+  <p>This guide summarizes system operation and retains the Phase 7 implementation notes
+  below. It is self-contained with inline CSS, JavaScript, and SVG. The dated status card is
+  authoritative for the current integration candidate; Phase 7 counts and claims below are
+  historical snapshots. Follow the linked stabilization workflow and baseline for current
+  release gates.</p>
+
+  <section class="status-now" aria-labelledby="status-now-title">
+    <h2 id="status-now-title">Current platform state · 22 October 2026</h2>
+    <p>The integration candidate is not released: branch <code>integrate/stability-20261020</code>
+    is maintained on Forgejo first and mirrored to GitHub; their <code>main</code> refs match at <code>5e8d688</code>.
+    The last fully CI-validated code ref is <code>c867bcb</code>; its GitHub run passed all 15 jobs.
+    Documentation-only status updates are published to Forgejo first; GitHub may lag while its
+    Actions service is degraded. Both <code>main</code> refs remain at <code>5e8d688</code>. The code candidate
+    <code>c1ce64d</code> includes the
+    realtime scan/SoR code, RackWire CSRF behavioral tests, scanner/RackWire browser retry
+    acceptance, Discovery poll lifecycle hardening, and intranet-only scan range enforcement.
+    GitHub reports an active Actions incident affecting workflow and step results
+    (<a href="https://www.githubstatus.com/api/v2/incidents/unresolved.json">incident q29p76qtnkyk</a>, checked 22 October).
+    Forgejo remains the authoritative remote; GitHub is secondary during service disruptions. Commit <code>3b16f7e</code> publishes <code>.forgejo/workflows/ci.yml</code>, generated from the GitHub workflow by <code>tools/ci/render_forgejo_workflow.py</code>. It preserves loopback-only scratch DB/broker checks and Docker upgrade behavior on a dedicated disposable host runner. Local schema validation with Forgejo Runner v13.2.0 passed. The Forgejo 15.0.3 service is active, but no runner VM has been provisioned. Benzene now has a separate guarded <code>solarinet-ci</code> network with libvirt autostart disabled; a temporary namespace test confirmed Forgejo TCP 3000, gateway DNS, and public TCP 443 are reachable while Cesium database TCP 3306 and host SSH TCP 22 are blocked. The network has no attached guest; per-job VM reset and hosted CI execution remain unverified. Anonymous Actions API/UI requests return 404 for the private repository and do not establish its unit state. See <a href="FORGEJO_CI.md">the Forgejo CI guide</a>. GitHub reports continuing Actions workflow and step result delays under an active incident.
+    The previous docs-only run
+    <code>39738275605</code> passed all 15 jobs on <code>46045e9</code>; code run
+    <code>39737421770</code> passed all 15 jobs, including the database-backed
+    Discovery API and browser-to-native-worker candidate-ingest acceptance, plus the separate
+    portable Release server/worker build, lifecycle checks, and package activation/rollback suite.
+    The prior code head
+    <code>c4b8975</code> passed all 17 checks in run <code>39730919455</code>, including live Discovery worker/API,
+    candidate adoption, scanner/RackWire browser flow, and release-package/rollback checks.
+    RackWire PR #1 at <code>a66bd21</code> has green hosted checks (run
+    <code>39719734709</code>). Scanner-ingest documentation is committed locally at
+    <code>c2a3f7b</code>, but that repository has no release remote. A read-only Cesium preflight
+    found ample disk and MariaDB but no PHP CLI or container runtime before the isolated dev
+    runtime was assembled.
+    The new browser follow-up injects an expiry-shaped CSRF rejection, refreshes identity, and succeeds
+    against the real barcode/SoR API. Hosted run <code>39720370015</code> for commit
+    <code>23aee5b</code> passed the full CI matrix. Actual elapsed-token expiry and deployed PHP-FPM
+    behavior remain unverified. The clean <code>dev-20261022-2cb099c-static</code> package is
+    installed as a loopback-only Cesium development instance. Its Release server and scan worker
+    start with the pinned NNG/mbedTLS libraries statically linked; the earlier sanitizer and dynamic
+    NNG packages could not start on Cesium and were not retained. Authenticated browser acceptance
+    verified the deployed intranet policy rejects <code>192.0.2.0/24</code>, then scanned only
+    <code>127.0.0.1/32</code>: the durable job completed 1/1, saved one candidate, and Discovery
+    displayed it. The page was in live mode, API reads returned HTTP 200, and the browser reported
+    no page errors or cross-origin requests. The first run exposed missing dev DB environment in
+    PHP; after configuring the isolated development DB, acceptance passed. This remains a
+    loopback-only development deployment, not a production release. A repeatable CI Release
+    build was added to the current integration candidate: it statically links pinned NNG/mbedTLS,
+    checks for sanitizer and build-path dependencies, runs the release server and worker against
+    scratch databases, and packages those same binaries. Hosted verification of that addition is
+    complete: GitHub run <code>39737421770</code> passed all 15 jobs, including release server
+    failover, scan worker lifecycle, and dashboard package activation/rollback tests using the
+    portable Release artifacts.
+    A separate real-time Discovery integration acceptance used a bounded direct-route
+    <code>10.0.0.0/24</code> scan: the worker processed 254/254 addresses, the browser displayed
+    candidates before completion, and a retried admission response did not create duplicate work.
+    Adopting <code>10.0.0.20</code> updated monitoring and SoR rows only in disposable test
+    databases. This validates the development workflow and does not establish production scan or
+    adoption behavior.
+    This status refresh is published to Forgejo first. The GitHub draft review branch is
+    open as draft PR <code>#37</code>; no main branch merge or release tag exists. The
+    Xenon backup utility is deployed as a local-only recovery path.</p>
+    <svg class="system-map" viewBox="0 0 900 260" role="img" aria-labelledby="map-title map-desc" xmlns="http://www.w3.org/2000/svg">
+      <title id="map-title">SolariNet integration boundaries</title>
+      <desc id="map-desc">Operators use the authenticated dashboard and RackWire. The dashboard writes inventory to the SoR. The SoR feeds DNS and notifications. Monitoring clients and scan workers report to the C control server. The Khadas VIM4 runs an authoritative DNS secondary.</desc>
+      <defs><marker id="ops-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4 0 8" fill="#3fb6d3"/></marker></defs>
+      <g fill="#11161e" stroke="#3fb6d3" stroke-width="2">
+        <rect x="22" y="72" width="150" height="76" rx="10"/><rect x="235" y="35" width="190" height="82" rx="10"/>
+        <rect x="235" y="155" width="190" height="76" rx="10"/><rect x="495" y="35" width="170" height="82" rx="10"/>
+        <rect x="495" y="155" width="170" height="76" rx="10"/><rect x="728" y="72" width="150" height="76" rx="10"/>
+      </g>
+      <g fill="none" stroke="#3fb6d3" stroke-width="2.5" marker-end="url(#ops-arrow)">
+        <path d="M172 100L235 78"/><path d="M172 121L235 192"/><path d="M425 76H495"/>
+        <path d="M425 194H495"/><path d="M665 76L728 100"/><path d="M665 194L728 121"/>
+      </g>
+      <g fill="#d7dee8" text-anchor="middle" font-size="15" font-weight="700">
+        <text x="97" y="103">Operators</text><text x="97" y="125">Monitors</text>
+        <text x="330" y="70">Dashboard</text><text x="330" y="94">RackWire · planning</text>
+        <text x="330" y="188">C server</text><text x="330" y="210">scan worker</text>
+        <text x="580" y="70">SoR · MariaDB</text><text x="580" y="94">outbox · broker</text>
+        <text x="580" y="188">DNS delivery</text><text x="580" y="210">Xenon · Chlorine</text>
+        <text x="803" y="103">Network</text><text x="803" y="125">authoritative DNS</text>
+      </g>
+    </svg>
+    <ul>
+      <li><strong>RabbitMQ:</strong> Benzene runs RabbitMQ <code>3.13.7</code> in rootful
+      Podman. The live container still references the floating <code>rabbitmq:3-management</code>
+      tag, although its local image digest matches the CI-pinned 3.13.7 image. The 22 October
+      check found it fully booted with no alarms; each of four <code>solari</code> queues had one
+      consumer and zero ready/unacknowledged messages, with seven client connections. Xenon emitter,
+      apply, reconciliation, and notification services were active. A rootful Quadlet definition
+      now pins the digest and health-checks the container, but remains a reviewed candidate; the
+      live container has not been replaced. Upgrade and recovery remain release gates.</li>
+      <li><strong>Mosquitto:</strong> Benzene’s Mosquitto <code>2.1.2</code> had a rapid
+      config-open restart loop. With no MQTT clients connected, it was recreated using the
+      same ports and persistent mounts, with a read-only config mount. The password file is
+      owned by UID/GID <code>1883:1883</code>, mode <code>0700</code>. The replacement runs
+      with zero restarts; the failed container is retained for incident analysis. The original mount
+      failure cause remains unknown. Authbroker is not deployed on Xenon: its unit, virtual
+      environment, and config are absent, so authenticated MQTT client behavior remains
+      unverified. See the <a href="../deploy/mosquitto/README.md">Mosquitto deployment guide</a>
+      for the pinned image, secret-free config example, and verification steps.</li>
+      <li><strong>Backups:</strong> Cesium’s 21 October SoR dump restored successfully into
+      a disposable MariaDB instance and all 41 tables passed checks. On 22 October, the
+      Xenon runner wrote a 56.4 MB root-only archive and the exact artifact restored into
+      scratch MariaDB; all 29 base tables passed checks. Xenon’s nightly timer is enabled
+      for a local root-NVMe target. This shares Xenon’s host failure domain. NAS-X
+      provisioning, permissions, and an off-host restore remain unverified.</li>
+      <li><strong>DNS:</strong> Khadas VIM4 chlorine is active as an authoritative-only secondary
+      for 109 zones. Rechecked 22 October at 22:37 UTC: <code>solari-bind9</code> and
+      <code>step-ca</code> are active, BIND configuration validates, and TCP/UDP port 53
+      listens only on <code>10.7.0.10</code>. The authoritative NS/SOA answers are present,
+      recursion returns <code>REFUSED</code>, and canonical zone contents plus SOAs match
+      Xenon for all 109 zones. Steel at <code>10.0.0.11</code> remains the last-known
+      unreachable ZimaBlade; its tertiary DNS role awaits console redeployment.</li>
+      <li><strong>Network discovery:</strong> operators can start a bounded asynchronous scan
+      of RFC1918, loopback, or IPv4 link-local ranges (public and boundary-crossing ranges are
+      rejected by both the API and worker);
+      the native worker records live results as reviewable Discovery candidates, which remain
+      separate from physical inventory until explicitly handled. The dashboard polls worker
+      progress every second and refreshes candidate rows every 2.5 seconds while a scan runs, so
+      new hosts appear before completion. RackWire launches the same live Discovery workflow
+      and receives candidate handoff. The native-worker browser acceptance scanned the directly
+      connected <code>10.0.0.0/24</code>,
+      processed all 254 addresses, and recorded 14 candidates in a disposable database; the local
+      listener appeared in Discovery before scan completion. The accepted path polls live worker
+      status without overlapping requests, cancels in-flight polling when leaving Discovery,
+      resumes polling on return, refreshes candidates during execution, and supports reviewing and ingesting
+      discovered candidates into inventory. A 22 October combined scan-and-ingest acceptance
+      processed 254/254 addresses, found 12 candidates, observed the listener candidate while
+      the worker was running, retried a lost response without duplicating the job, and adopted
+      <code>10.0.0.20</code> into monitoring and the SoR. It used separate disposable stores; no
+      production database was changed.
+      A separate UI acceptance verified candidate refresh before its controlled scan fixture
+      reaches a terminal state. The latest browser acceptance delayed status responses, navigated
+      away during a poll, verified cancellation, returned to Discovery, and confirmed at most one
+      status request was active. Larger-range throughput and candidate deployment remain
+      unverified. A read-only Xenon check found the standalone RackWire discovery service and
+      Apache health proxy returning HTTP 200, while the dashboard's unauthenticated discovery
+      endpoint returned HTTP 401 as expected. Cesium now serves this candidate in a loopback-only
+      development instance; its authenticated scan/adoption flow used isolated scratch stores.
+      PHP-FPM/Apache and production data remain unverified.
+      The 22 October scratch-database browser acceptance also exercised the full operator
+      ingest step: it dropped the response after durable scan admission, retried with the same
+      idempotency key, observed one live candidate, adopted it through the Monitor dialog, and
+      verified one monitoring asset plus the mapped address on a SoR entity. The test used
+      separate disposable monitoring and SoR schemas. The combined direct-route <code>/24</code>
+      run verified this whole path. Adoption creates a monitored host and
+      SoR host/address; it does not create a physical asset. Physical assets enter through the
+      scanner-ingest preview/apply flow. Full monitoring CTest passed 36/36 against a disposable
+      MariaDB migrated through 033; the separate loopback transport test passed. Hosted run
+      <code>39715155684</code> passed all 15 jobs, including the scanner import and scan-to-SoR
+      browser flows. Cross-lab review and the authenticated Xenon browser path remain pending.</li>
+      <li><strong>Inventory:</strong> scanner export, dashboard import, and transactional SoR
+      paths are implemented and pass scratch-database tests. No scanner rows have been imported
+      into the live SoR. The authenticated browser E2E loaded the launched app's exact
+      two-item/two-asset export, previewed and applied it to a disposable SoR, read both assets
+      back, and carried one through RackWire profile setup, barcode resolution, and plan save.
+      On 22 October, the standalone checkout passed 63 tests (16 optional database/ZXing tests
+      skipped in the base run); a second isolated MariaDB run passed all 20 source/exporter tests.
+      The temporary server used a private Unix socket with networking disabled; no live SoR rows
+      were written.
+      It explicitly mapped source locations to duplicate scratch rows; this does not resolve which
+      of the two duplicate root “Painted Fern” sites (IDs <code>9103</code>, <code>9104</code>)
+      “Bin #5” and “Nook” should map to. A read-only transaction against the live SoR, using
+      the existing SoR-sync service configuration, confirmed both active sites have blank notes,
+      no child locations, and no associated hardware units or entities; no exact “Bin #5” or
+      “Nook” SoR locations exist. This still does not establish the physical mapping. The standalone scanner-ingest
+      app has a local Git repository but no configured release remotes; GitHub and Forgejo lookups
+      found no published <code>scanner-ingest</code> repository, so its release ownership/path is
+      unresolved.</li>
+      <li><strong>UniFi topology:</strong> a new GET-only discovery command now reads all
+      network pages and details, validates gateway/subnet/DHCP relationships, and emits a
+      canonical snapshot without writing to UniFi or the SoR. The live Default site currently
+      reports only VLAN 1, <code>10.0.0.0/8</code>, gateway <code>10.0.0.1</code>, and DHCP
+      <code>10.1.0.26–10.7.161.117</code>. This conflicts with the project’s segmented network
+      model. The command requires HTTPS and either a trusted controller CA or an explicit
+      insecure-TLS opt-in. No topology import or SoR write is enabled; reconcile this source state before
+      designing the transactional importer. A read-only SoR query returned 16 active /24s across
+      eight named segments; all have VLAN and gateway unset. The UniFi /8 overlaps all 16 and
+      matches none exactly. The cause and source authority are unresolved.</li>
+      <li><strong>Deployment target:</strong> a read-only Xenon check found the active server
+      runs from a separate, dirty checkout at <code>/home/jason/Code/Solarinet</code>, while
+      Apache serves <code>/var/www/solarinet</code>. The release contract's
+      <code>/opt/solarinet/current</code> path is absent and
+      <code>solarinet-scan-worker.service</code> is inactive. No host files or services were
+      changed; establish an isolated candidate target or reconcile the host with the atomic
+      release contract before deployment.</li>
+      <li><strong>Release gates:</strong> authenticated browser acceptance now passes against
+      disposable SoR and broker fixtures, including scanner import and RackWire iframe save.
+      Staged production browser verification, cross-lab review, production migration/rollback,
+      and application deployment remain open. The root review branch has a GitHub draft PR
+      <code>#37</code>; RackWire's public GitHub mirror now has main and integration branches plus
+      draft PR <code>#1</code>. RackWire's GitHub workflow passed in run
+      <code>39719734709</code>; root CI also recursively checks out its pinned gitlink.
+      Scanner-ingest at <code>~/Code/scanner-ingest</code> remains a local
+      repository without remotes or matching GitHub/Forgejo repositories. Claude CLI reports no
+      authenticated session, so cross-lab review is unavailable. The latest root PR CI run,
+      <code>39733247468</code> at code candidate <code>c1ce64d</code> passed all 15 jobs, including the
+      scan-range policy, authenticated HTTP flow, and native worker browser acceptance. The preceding run
+      <code>39731954897</code> at <code>2f850c3</code> passed after retrying its core job, which had
+      failed before compilation when the hosted runner's Microsoft apt endpoint returned HTTP 403.
+      The prior code run <code>39730919455</code> at <code>c4b8975</code> passed all 17 checks. It includes
+      realtime Discovery poll cancellation/overlap coverage, scan/candidate ingest, scanner/RackWire
+      browser acceptance, release package activation/rollback, broker recovery, and clean install checks.
+      The prior run <code>39720370015</code> at integration commit <code>23aee5b</code> passed the full
+      hosted workflow matrix. It includes the scanner/RackWire retry browser acceptance, lifecycle UI, live
+      Discovery scan and adoption, release package activation/rollback, broker recovery, and clean
+      install checks. The browser flow first injects an expiry-shaped 403, refreshes identity through
+      the real endpoint, then succeeds through the real barcode/SoR handler. Actual elapsed-token
+      expiry and deployed PHP-FPM behavior remain unverified. The preceding root run
+      <code>39718723877</code> at <code>5160202</code> also passed all 15 jobs. A read-only Cesium preflight found MariaDB and ample disk but no PHP CLI or
+      container runtime; no app instance was deployed there. The preceding location/deployment
+      documentation run <code>39718050283</code> at commit <code>fa1ba87</code> passed all 15 jobs;
+      the status-documentation commit <code>b81e2cc</code>
+      passed all 15 in run <code>39716727270</code>; commit <code>04e80be</code> passed all 15 in
+      run <code>39715807073</code>; code-bearing commit <code>789b1d3</code> passed all 15 in
+      run <code>39715155684</code>. These follow-ups changed documentation only. The earlier
+      code-bearing run <code>39705502734</code> at <code>0a322eb</code> passed the real-time
+      scan/candidate-ingest, scanner/RackWire browser, and release-package checks. During an earlier
+      run, the clean-install snapshot check exposed MariaDB client-version drift: hosted 10.11 emits
+      <code>SQL_NOTES</code> wrappers while the 11.8 snapshot uses <code>NOTE_VERBOSITY</code>;
+      cross-version normalization now passes in hosted CI. The PRs remain drafts pending independent
+      review and release gates. Root and RackWire remain draft PRs, and no release tags exist.</li>
+    </ul>
+    <p>Current evidence and next gates: <a href="SolariNet_Stabilization_Baseline_2026-10-20.html">Stabilization Baseline</a>,
+    <a href="SolariNet_Stabilization_Integration_Workflow_2026-08-09.md">Integration Workflow</a>, and the
+    <a href="SolariNet_Cross_Lab_Review_Brief_2026-10-22.md">cross-lab review brief</a>.</p>
+  </section>
 
   <div class="toc">
     <strong>Contents</strong> ·
@@ -88,18 +337,23 @@
     (from <code>networkGear</code> + <code>lldpEdge</code> + the assembled uplink chain).</li>
   </ul>
   <div class="note">
-    <strong>SNMP is a seam, off by default.</strong> The only place a real net-snmp
-    dependency would live, <code>topoSnmpFetchLldp</code>, is guarded by
-    <code>#ifdef SOLARI_WITH_SNMP</code> (undefined by default). In the default build it
-    returns <code>ERR_PLATFORM</code> and writes zero records, so the build carries
-    <em>zero</em> added dependencies; <code>serverTopologyDeepWalk</code> cleanly no-ops.
-    <code>src/server/server.h</code> was left untouched — it is frozen for subsystem
-    implementers per its own contract.
+    <strong>SNMP capabilities are optional.</strong> With <code>SOLARI_WITH_SNMP=ON</code>,
+    the LLDP topology fetch (<code>topoSnmpFetchLldp</code>) walks LLDP-MIB columns with
+    the net-snmp CLI, then feeds the tested normalizer; the IF-MIB poller stores interface
+    counters in <code>gearInterfaceCurrent</code> and <code>gearInterfaceHistory</code>.
+    Both fetch paths return <code>ERR_PLATFORM</code> in the default build. The option is
+    off by default and adds no SNMP library build dependency, but requires
+    <code>snmpbulkwalk</code> at runtime. Neither path has been verified against a live
+    network device in this release candidate. The IF-MIB walk parser now rejects malformed
+    numeric OIDs, invalid or out-of-range values, and interface names that would otherwise
+    be silently truncated; tests pass with the feature both off and on. A fake CLI integration
+    fixture exercises LLDP column collection, normalization, and nonzero-command failure
+    handling without contacting a device.
   </div>
 
   <h3>MCP — Phase 7 catch-up</h3>
   <p>The Python / FastMCP server (<code>integrations/mcp/</code>) grew from 14 to
-  <strong>27 registered tools</strong>, covering the §5/§6 read surface and a gated,
+  <strong>26 registered tools</strong>, covering the §5/§6 read surface and a gated,
   audited control surface. The SQL-query tool also gained a table allow-list. Details in
   <a href="#mcp">the MCP section</a>.</p>
 
@@ -121,7 +375,7 @@
       <tr><td><code>SOLARI_WITH_SQLITE</code></td><td>OFF</td><td>SQLite</td><td>the store-and-forward spool</td></tr>
       <tr><td><code>SOLARI_WITH_JSON</code></td><td>OFF</td><td>cJSON</td><td>the JSON config overlay</td></tr>
       <tr><td><code>SOLARI_BUILD_SERVER</code></td><td>OFF</td><td>libmariadb (+ IO transitively)</td><td>solariServer (x86_64 / arm64 only)</td></tr>
-      <tr><td><code>SOLARI_WITH_SNMP</code></td><td>undefined</td><td>net-snmp (none vendored)</td><td>the topology deep-walk SNMP fetch seam</td></tr>
+      <tr><td><code>SOLARI_WITH_SNMP</code></td><td>OFF</td><td>net-snmp <code>snmpbulkwalk</code> at runtime (none vendored or linked)</td><td>IF-MIB interface metrics and LLDP topology walks</td></tr>
     </tbody>
   </table>
 
@@ -144,8 +398,9 @@ cmake --build build && ctest --test-dir build --output-on-failure</pre>
     <strong>Verified in this session.</strong> A clean-from-scratch full-server configure +
     build under <code>-Wall -Wextra -Wpedantic</code> reports
     <span class="ok">0 warnings, 0 errors</span>; MariaDB was found via pkg-config and
-    linked. <code>ctest</code>: <span class="ok">100% passed, 0 failed out of 22</span>
-    (server suites included). The MCP suite reports <span class="ok">81 passed</span>.
+    linked. <code>ctest</code>: <span class="ok">0 failed across 33 registered tests</span>
+    (server suites included); the DB-live test self-skips without its scratch-DB settings.
+    The MCP suite reports <span class="ok">81 passed</span>.
   </div>
 
   <h2 id="run">Running server / client / monitor</h2>
@@ -165,9 +420,12 @@ systemctl daemon-reload
 systemctl enable --now solari-server.service       # the C2 tier
 systemctl enable --now solari-monitor.service      # probe monitor(s)
 systemctl enable --now solari-client.service       # on each monitored host</pre>
-  <p>Each unit's <code>ExecStart</code> points at the installed binary and a config file;
-  until the binaries are installed, <code>systemd-analyze verify</code> flags only the
-  expected "binary not installed yet" diagnostic — every directive is otherwise recognized.</p>
+  <p>The candidate contains 49 service, timer, socket, and path unit files, including 43
+  services. The dedicated section-placement test passes across all 43 service files.
+  <code>systemd-analyze verify</code> reports 14 missing-executable diagnostics for
+  deployment paths absent from this development checkout; it exits nonzero for those
+  unresolved paths. No directive-section errors were emitted. Start-limit directives on
+  the SoR sync and notification units are in <code>[Unit]</code>, where systemd applies them.</p>
 
   <h2 id="dash">Dashboard on-prem setup</h2>
   <p>The dashboard (Phase 6) is fully on-prem: React / ReactDOM / Babel are vendored under
@@ -188,8 +446,10 @@ systemctl enable --now solari-client.service       # on each monitored host</pre
     <li><strong>Destructive actions require an operator token <em>and</em> explicit
     confirmation.</strong> Approve-enrollment (signs a CSR) and decommission (wipes a node)
     refuse before any network call unless both the operator token and an explicit
-    <code>confirm=true</code> are present. Decommission carries a one-time confirm token
-    (<code>TLV_LIFE_CONFIRM</code>) echoed for audit.</li>
+    <code>confirm=true</code> are present. Decommission uses a stored SHA-256 digest of a
+    random one-time confirmation token, bound to node, wipe scope, operator, and a ten-minute
+    expiry. The server consumes it and retires the node in one transaction; raw tokens are
+    never written to audit details.</li>
     <li><strong>solariCtl verbs:</strong> <code>PING</code>, <code>SURVEY</code>,
     <code>APPROVE</code>/<code>REJECT</code>, <code>PROVISION</code>, <code>ADOPT</code>,
     <code>IGNORE</code>, <code>CONTROL</code>, <code>DECOMMISSION</code>/<code>RETIRE</code>.</li>
@@ -198,8 +458,9 @@ systemctl enable --now solari-client.service       # on each monitored host</pre
   <h2 id="mcp">The MCP</h2>
   <p><code>integrations/mcp/</code> is a Python / FastMCP server exposing SolariNet to an
   AI assistant. It wraps the same REST surface (envelope-unwrapping <code>RestClient</code>)
-  and a read-only SQL surface; clients are injectable for tests. Deps live in a
-  git-ignored <code>.venv</code>. <strong>27 tools</strong> total after Phase&nbsp;7.</p>
+  and fixed read-only database tools; generic caller-supplied SQL is removed. Clients
+  are injectable for tests. Deps live in a git-ignored <code>.venv</code>.
+  <strong>26 tools</strong> are listed by the current candidate CLI.</p>
 
   <h3>Read tools (GET, read-only)</h3>
   <p>Among the §6 reads added this phase: <code>solarinet_list_discovery</code>,
@@ -220,25 +481,24 @@ systemctl enable --now solari-client.service       # on each monitored host</pre
     discipline. A <code>_require_operator_token()</code> helper enforces the token gate.</li>
   </ul>
 
-  <h3>SQL guard — table allow-list</h3>
-  <p>The read-only SQL tool now enforces an explicit table allow-list
-  (<code>solarinet_mcp/db.py</code>) on top of the existing SELECT/WITH-only,
-  anti-stacking, no-OUTFILE checks. <code>_enforce_table_allow_list()</code> extracts every
-  <code>FROM</code>/<code>JOIN</code> target, exempts CTE names declared via <code>WITH</code>,
-  and rejects anything unlisted — blocking <code>information_schema</code> / <code>mysql</code>
-  / <code>performance_schema</code> exfiltration. The allow-list covers the §10 base tables
-  plus the new §5 tables (<code>segment</code>, <code>networkGear</code>, <code>lldpEdge</code>,
-  <code>discovered</code>, <code>enrollment</code>, <code>buildArtifact</code>).</p>
+  <h3>Database access boundary</h3>
+  <p>MCP callers cannot provide SQL or identifiers. The database client accepts only three
+  registered query identifiers (fleet roster, active alerts, and host history); values are
+  bound as parameters, node IDs are checked against the decimal <code>BIGINT UNSIGNED</code>
+  range, and each query is limited to at most 1000 rows. It fetches one extra row to report
+  truncation. The MCP database account's SELECT-only grants remain an external configuration
+  requirement and must be checked on the target deployment.</p>
 
   <pre># run the MCP test suite
-cd integrations/mcp && .venv/bin/python -m pytest -q     # 81 passed</pre>
+cd integrations/mcp && .venv/bin/python -m pytest -q     # 48 passed</pre>
 
   <h2 id="enroll">Enrollment runbook</h2>
   <p><code>deploy/enrollment/solari-enroll.sh</code> enrolls a node end-to-end, generating
   key material <em>locally</em> and only ever sending a CSR:</p>
   <ol>
     <li>Generates an EC P-256 key + CSR locally (<code>--rsa</code> for an RSA key). The CN
-    encodes <code>role:fqdn</code> per §15.1 / §5.5 (e.g. <code>CN=monitor:beryl.akoria.net</code>).</li>
+    encodes <code>role.fqdn</code> so the role is the leading DNS label used by server ingest
+    authorization (e.g. <code>CN=monitor.beryl.akoria.net</code>); the FQDN is also in the DNS SAN.</li>
     <li>Submits <code>{token, role, fqdn, certFp, csrPem}</code> to the server — over HTTPS
     (<code>--server</code>) or a local <code>solariCtl</code> Unix socket
     (<code>--ctl-socket</code>).</li>
@@ -258,12 +518,20 @@ deploy/enrollment/solari-enroll.sh --role monitor --fqdn beryl.akoria.net --csr-
   <code>--config</code>, <code>--insecure</code>, <code>--force</code>.</p>
   <p class="note"><strong>Verified:</strong> <code>--csr-only</code> produced a real EC key +
   CSR whose <code>openssl req -verify</code> returns "self-signature verify OK"
-  (<code>subject=CN=monitor:beryl.akoria.net</code>).</p>
+  (<code>subject=CN=monitor.beryl.akoria.net</code>).</p>
 
   <h2 id="decom">Decommission runbook</h2>
-  <p><code>deploy/enrollment/solari-decommission.sh</code> is the node-local
-  <code>CTRL_DECOMMISSION</code> executor (Handoff §4.2 / §7.3). It is deliberately hard to
-  fire by accident:</p>
+  <p>The dashboard issues a durable decommission challenge on the first queued request.
+  The second request supplies that same token; the server checks its stored digest, node,
+  wipe scope, operator, and expiry before consuming it and publishing a directive with the
+  challenge generation. The node remains active until an authenticated success result echoes
+  that generation. Expired, mismatched, replayed, or force-cancelled challenges fail. The active
+  server persists delivery attempts and retries from 5 seconds up to a 5-minute interval until
+  acknowledgement or cancellation, including after restart or failover. The client currently
+  has no receiver for this directive, so remote teardown still cannot complete. The privileged
+  request queue also retains the raw confirmation token in its request/result text. Do not treat a sent directive as a completed
+  wipe. <code>deploy/enrollment/solari-decommission.sh</code> remains a separate node-local,
+  operator-driven executor (Handoff §4.2 / §7.3), not an SCP message receiver:</p>
   <ol>
     <li>Requires a server-issued <code>--confirm-token</code> (<code>TLV_LIFE_CONFIRM</code>)
     echoed for audit, plus an interactive phrase confirmation.</li>
@@ -287,7 +555,9 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
   <code>TO_DAYS(sampledAt)</code> RANGE partition scheme from <code>db/schema.sql</code>:</p>
   <ul>
     <li><code>retention.sql</code> — <code>solari_purge_retired</code> /
-    <code>solari_purge_history</code> / <code>solari_retention_run</code>: purge
+    <code>solari_purge_pending_controls</code> / <code>solari_purge_history</code> /
+    <code>solari_retention_run</code>: expire unanswered control directives after
+    seven days, purge
     <code>state='retired'</code> nodes (with FK-cascade children plus explicit
     <code>nodeConfig</code> / <code>hostHistory</code>) past the retention window, with a
     row-level history safety net.</li>
@@ -298,48 +568,80 @@ deploy/enrollment/solari-decommission.sh --confirm-token "$TOKEN" --wipe-scope c
     guards; dynamic DDL via PREPARE/EXECUTE.</li>
   </ul>
   <p>Schedule them from cron / an event scheduler, e.g. <code>CALL solari_retention_run(...)</code>
-  nightly and <code>CALL solari_roll_partitions(...)</code> monthly.</p>
+  nightly and <code>CALL solari_roll_partitions(...)</code> monthly. The procedure is
+  installed in the candidate and scratch-tested; an active cron, event, or systemd schedule
+  on the current host has not been verified.</p>
 
   <h2 id="ci">CI</h2>
-  <p><code>.github/workflows/ci.yml</code> defines four jobs (validated as well-formed YAML):</p>
+  <p><code>.github/workflows/ci.yml</code> defines ten job groups and the current draft PR runs
+  15 hosted checks. The local <code>build-server-asan</code> CTest run passed
+  <strong>37/37</strong>. The first hosted run passed 12 of 15 checks; subsequent runs caught a
+  date-dependent SOA serial test, a missing RackWire mirror, a missing server-binary artifact in
+  the dashboard job, server checkout omitting the RackWire submodule, and clean-install schema
+  formatting between MariaDB 10.11 and 11.8 dump clients and release packaging initially included
+  subproject CI metadata; the packager now excludes that non-runtime tree. Run
+  <code>39705502734</code> passed all
+  15 hosted checks, including the clean-install ledger and schema snapshot comparison. RackWire's
+  own workflow, run <code>39704732584</code>, independently passed its 45 backend tests and four
+  runtime checksum checks.</p>
   <ul>
-    <li><code>core</code> — the default zero-dependency build + ctest.</li>
-    <li><code>server</code> — the full <code>SOLARI_BUILD_SERVER + IO + SQLITE + JSON</code>
-    build with the bootstrap dependency set.</li>
-    <li><code>cross</code> — a matrix (linux-arm64 / arm32, windows-x86_64) via the
-    <code>cmake/toolchains/*</code> files, with a qemu-user smoke run of the cross-built
-    <code>test_*</code> binaries.</li>
-    <li><code>macos</code> — a universal build on the native runner.</li>
+    <li><code>core</code> — the default zero-dependency build and CTest suite.</li>
+    <li><code>server</code> — full server build with ASan/UBSan, database migrations,
+    enrollment and lease failover tests, scan-worker and adoption integration, and browser
+    acceptance.</li>
+    <li><code>dashboard</code> — PHP/API and authorization tests, migration contracts, RackWire
+    APIs, scanner-to-RackWire browser flow, and deployment-package checks.</li>
+    <li><code>rackwire-browser</code> — standalone offline, accessible, responsive planner flow.</li>
+    <li><code>python-integrations</code> — MCP, alertbridge, UniFi, authbroker, notifications, and
+    Opie tests.</li>
+    <li><code>sorsync</code> — SoR outbox delivery across RabbitMQ releases and an upgrade/recovery
+    rehearsal.</li>
+    <li><code>protocol-fuzz</code> — coverage-instrumented SCP parser fuzz smoke tests.</li>
+    <li><code>panel</code> — firmware, daemon, provisioning-tool, and dashboard parity suites.</li>
+    <li><code>cross</code> — Linux ARM, Windows, and other cross-target builds with qemu-user
+    smoke runs where available.</li>
+    <li><code>macos</code> — universal build and native core tests.</li>
   </ul>
-  <p>Loopback / transport staging is best-effort, mirroring <code>bootstrap-xenon.sh</code>.</p>
+  <p>Loopback transport staging is best-effort, mirroring <code>bootstrap-xenon.sh</code>.
+  The RackWire and dashboard jobs check out submodules recursively; the RackWire GitHub mirror
+  is available. The RackWire repository now runs its own backend and runtime-integrity checks on
+  pull requests. Other CI results remain local or unverified as stated in their
+  gates.</p>
 
   <h2 id="gaps">Known gaps &amp; deferred items</h2>
   <div class="gap">
   <ul>
-    <li><strong>No live MariaDB execution here.</strong> Schema, migrations, and the
-    maintenance / retention procedures are authored to valid MariaDB syntax and reviewed —
-    one FETCH-into-user-variable issue was fixed to use a declared cursor variable — but
-    they were <em>not</em> run against a live MariaDB instance in this session.</li>
-    <li><strong>No browser / live-PHP validation here.</strong> The dashboard SPA and the
-    PHP API are authored-correct but were not loaded in a browser or run against a live
-    PHP-FPM + MariaDB + <code>solariCtl</code> stack. SSE was not exercised end-to-end.</li>
-    <li><strong>SNMP topology fetch is a stub.</strong> The deep-walk normalizer and
-    assembler are real and tested; the actual net-snmp fetch is behind
-    <code>SOLARI_WITH_SNMP</code> and returns <code>ERR_PLATFORM</code> until a backend is
-    compiled in. No SNMP dependency is vendored.</li>
-    <li><strong>shellcheck not run.</strong> shellcheck is not installed in this environment
-    and could not be fetched; the enrollment / decommission scripts pass <code>bash -n</code>
-    and were written to shellcheck conventions and manually reviewed.</li>
-    <li><strong>systemd / CI not executed against real infra.</strong> Units pass
-    <code>systemd-analyze verify</code> (only the expected "binary not installed" ExecStart
-    diagnostics); the CI workflow is valid YAML but has not run on GitHub from this session.</li>
+    <li><strong>Production MariaDB adoption remains unverified.</strong> Disposable MariaDB
+    integration tests have exercised the migration ledger and selected SoR transaction paths.
+    They do not prove migration adoption against current production databases, backups, or
+    restore procedures. Review the current stabilization baseline before operational changes.</li>
+    <li><strong>Production browser / PHP-FPM acceptance remains open.</strong> Authenticated
+    browser tests now exercise multi-session freshness, scanner import, and embedded RackWire
+    save against local PHP and disposable MariaDB fixtures. These do not establish behavior
+    after deployment with PHP-FPM, production authentication, the live MariaDB, and
+    <code>solariCtl</code>. The retired SSE endpoint is covered by a route test; a durable
+    event bridge remains future work.</li>
+    <li><strong>Live SNMP device acceptance remains open.</strong> Both LLDP topology
+    fetching and IF-MIB interface polling are implemented behind
+    <code>SOLARI_WITH_SNMP</code> and use the net-snmp CLI at runtime. Parser and merge
+    tests pass, and the server builds with the feature both off and on. No live switch or
+    router query has verified credentials, device OID support, data freshness, or persisted
+    results in this release candidate.</li>
+    <li><strong>Production systemd acceptance remains open.</strong> The
+    section-placement check passes for 43 service files. Structural verification of 49
+    candidate unit files still returns 14 missing-executable diagnostics for binaries or
+    virtual environments absent from this workspace. Enrollment and decommission scripts passed ShellCheck with sourced-file
+    analysis. The code-bearing candidate and its status documentation passed GitHub PR runs
+    <code>39715155684</code> and <code>39716727270</code>, with 15/15 jobs successful in each.
+    Live systemd deployment remains unverified.</li>
   </ul>
   </div>
 
-  <p class="footer">Generated at the close of the Phase 7 work session.
-  In-session gates: full-server build clean (0 warnings/errors), 22/22 ctest green,
-  MCP 81/81 green. Live-MariaDB, browser/PHP, SNMP-backend, and CI-on-infra acceptance
-  are operator steps, faithfully noted as not performed here.</p>
 </div>
+<script>
+  document.getElementById('print-guide').addEventListener('click', function () {
+    window.print();
+  });
+</script>
 </body>
 </html>

@@ -120,6 +120,33 @@ final class Sor
         return $eid === false ? null : (int) $eid;
     }
 
+    /** Serialize desired-state mirror operations for the same address. */
+    private static function acquireIpLock(PDO $db, string $ip): string
+    {
+        // MariaDB lock names are limited to 64 bytes. Hash the canonical address
+        // so IPv4 and its mapped IPv6 form share one lock without exposing it.
+        $packed = @inet_pton($ip);
+        if ($packed === false) {
+            throw new InvalidArgumentException('The SoR host address is not a valid IP address.');
+        }
+        if (strlen($packed) === 4) {
+            $packed = str_repeat("\0", 10) . "\xff\xff" . $packed;
+        }
+        $lock = 'sorhost:' . substr(hash('sha256', $packed), 0, 56);
+        $st = $db->prepare('SELECT GET_LOCK(:name, 5)');
+        $st->execute([':name' => $lock]);
+        if ((int) $st->fetchColumn() !== 1) {
+            throw new RuntimeException('Could not acquire the SoR host mutation lock.');
+        }
+        return $lock;
+    }
+
+    private static function releaseIpLock(PDO $db, string $lock): void
+    {
+        $st = $db->prepare('SELECT RELEASE_LOCK(:name)');
+        $st->execute([':name' => $lock]);
+    }
+
     /**
      * Create-or-rename a host entity keyed by IP. Existing entity → refresh name
      * (only if the display name yields a valid DNS label). New IP → insert a
@@ -131,11 +158,15 @@ final class Sor
         if (!self::enabled() || $ip === '') {
             return;
         }
+        $db = null;
+        $lock = null;
         try {
             $db = self::pdo();
             if ($db === null) {
                 return;
             }
+            $lock = self::acquireIpLock($db, $ip);
+            $db->beginTransaction();
             $label = self::label($name);
             $src   = self::sourceId($db);
             $eid   = self::entityIdForIp($db, $ip);
@@ -151,8 +182,24 @@ final class Sor
                 $db->prepare("INSERT INTO ip_addresses (entity_id, address, is_primary, source_id, asserted_kind) VALUES (:e, INET6_ATON(:a), 1, :s, 'human')")
                    ->execute([':e' => $eid, ':a' => self::aton($ip), ':s' => $src]);
             }
+            $db->commit();
         } catch (\Throwable $e) {
+            if ($db instanceof PDO && $db->inTransaction()) {
+                try {
+                    $db->rollBack();
+                } catch (\Throwable $rollbackError) {
+                    error_log('Sor::upsertHost rollback failed: ' . $rollbackError->getMessage());
+                }
+            }
             error_log('Sor::upsertHost soft-fail (' . $ip . '): ' . $e->getMessage());
+        } finally {
+            if ($db instanceof PDO && $lock !== null) {
+                try {
+                    self::releaseIpLock($db, $lock);
+                } catch (\Throwable $e) {
+                    error_log('Sor::upsertHost lock release failed: ' . $e->getMessage());
+                }
+            }
         }
     }
 
@@ -166,19 +213,40 @@ final class Sor
         if (!self::enabled() || $ip === '') {
             return;
         }
+        $db = null;
+        $lock = null;
         try {
             $db = self::pdo();
             if ($db === null) {
                 return;
             }
+            $lock = self::acquireIpLock($db, $ip);
+            $db->beginTransaction();
             $eid = self::entityIdForIp($db, $ip);
             if ($eid === null) {
+                $db->commit();
                 return;
             }
             $db->prepare('UPDATE ip_addresses SET deleted_at = NOW() WHERE entity_id = :e AND deleted_at IS NULL')->execute([':e' => $eid]);
             $db->prepare('UPDATE entities SET deleted_at = NOW() WHERE id = :e AND deleted_at IS NULL')->execute([':e' => $eid]);
+            $db->commit();
         } catch (\Throwable $e) {
+            if ($db instanceof PDO && $db->inTransaction()) {
+                try {
+                    $db->rollBack();
+                } catch (\Throwable $rollbackError) {
+                    error_log('Sor::removeHost rollback failed: ' . $rollbackError->getMessage());
+                }
+            }
             error_log('Sor::removeHost soft-fail (' . $ip . '): ' . $e->getMessage());
+        } finally {
+            if ($db instanceof PDO && $lock !== null) {
+                try {
+                    self::releaseIpLock($db, $lock);
+                } catch (\Throwable $e) {
+                    error_log('Sor::removeHost lock release failed: ' . $e->getMessage());
+                }
+            }
         }
     }
 }

@@ -5,6 +5,7 @@
  */
 #include "unity.h"
 #include "monitor.h"
+#include "solari/solariCrypto.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +38,27 @@ static void test_registry_heard_prune(void)
     TEST_ASSERT_EQUAL_size_t(1, p.count);
     n = monitorPeersFleet(&p, 100000, 90, fleet, 8);
     TEST_ASSERT_EQUAL_size_t(2, n);          /* self + 2000 */
+}
+
+static void test_peer_certificate_binds_monitor_node_id(void)
+{
+    monitorConfig cfg;
+    uint64_t id;
+    monitorConfigDefaults(&cfg);
+    snprintf(cfg.hostFqdn, sizeof cfg.hostFqdn, "outpost.akoria.net");
+    id = monitorNodeId(&cfg);
+    TEST_ASSERT_EQUAL_UINT64(
+        solariNodeIdFromFqdnRole("outpost.akoria.net", ROLE_MONITOR), id);
+    TEST_ASSERT_TRUE(monitorPeerIdentityMatchesCn(id,
+        "monitor.outpost.akoria.net"));
+    TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id + 1,
+        "monitor.outpost.akoria.net"));
+    TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id,
+        "client.outpost.akoria.net"));
+    TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id, "monitor."));
+    TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(0,
+        "monitor.outpost.akoria.net"));
+    TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id, NULL));
 }
 
 static void test_schedule_partition(void)
@@ -72,6 +94,7 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_registry_heard_prune);
+    RUN_TEST(test_peer_certificate_binds_monitor_node_id);
     RUN_TEST(test_schedule_partition);
     return UNITY_END();
 }

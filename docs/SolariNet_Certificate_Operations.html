@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Candidate operations manual for SolariNet browser trust, private ACME server certificates, certificate revocation, CRL publication, peer activation, and acknowledgement.">
+<title>SolariNet Certificate Operations</title>
+<style>
+:root { color-scheme: light; --ink:#14222d; --muted:#526574; --paper:#fff; --canvas:#e8eff2; --line:#cbd6dc; --blue:#087a96; --green:#08784f; --amber:#895700; --red:#9b2d34; --soft:#f1f6f7; --mono:ui-monospace,"SFMono-Regular",Consolas,monospace; }
+* { box-sizing:border-box; }
+html { background:var(--canvas); color:var(--ink); font:15px/1.52 system-ui,-apple-system,"Segoe UI",sans-serif; }
+body { max-width:980px; margin:auto; padding:24px 20px 50px; background:var(--paper); }
+header { display:flex; align-items:center; gap:17px; padding-bottom:17px; border-bottom:3px solid var(--blue); }
+header svg { width:58px; height:58px; flex:none; }
+h1 { margin:0; font-size:1.65rem; line-height:1.15; letter-spacing:-.025em; }
+h2 { margin:30px 0 9px; padding-bottom:5px; border-bottom:1px solid var(--line); color:#075a70; font-size:1.2rem; break-after:avoid; }
+h3 { margin:19px 0 6px; color:#075a70; font-size:1rem; break-after:avoid; }
+p,li { max-width:88ch; } li { margin:5px 0; }
+.meta,.muted { color:var(--muted); } .meta { margin:5px 0 0; font-size:.88rem; }
+.notice { margin:20px 0; padding:13px 16px; border-left:5px solid var(--red); background:#fff5f3; }
+.notice strong { color:var(--red); }
+.callout { margin:14px 0; padding:12px 15px; border-left:4px solid var(--blue); background:#eef7f9; }
+.flow { margin:18px 0; padding:10px; border:1px solid var(--line); background:#fbfdfe; }
+.flow svg { display:block; width:100%; height:auto; }
+table { width:100%; border-collapse:collapse; margin:12px 0 18px; }
+th,td { padding:8px 9px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+th { background:#e8f2f5; }
+code,pre { font-family:var(--mono); font-size:.88em; }
+code { overflow-wrap:anywhere; }
+pre { position:relative; margin:10px 0 16px; padding:12px 14px; overflow-wrap:anywhere; white-space:pre-wrap; border:1px solid #dce5e9; background:var(--soft); break-inside:avoid; }
+.copy { float:right; margin:0 0 5px 10px; padding:4px 8px; border:1px solid var(--line); border-radius:4px; background:white; color:var(--muted); font:11px system-ui,sans-serif; cursor:pointer; }
+.copy:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+.steps { padding-left:23px; }
+.state { font-weight:600; white-space:nowrap; }
+.ok { color:var(--green); } .warn { color:var(--amber); } .bad { color:var(--red); }
+details { margin:10px 0; border:1px solid var(--line); border-radius:5px; padding:0 12px; }
+summary { min-height:44px; display:flex; align-items:center; cursor:pointer; font-weight:600; }
+summary:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+footer { margin-top:30px; padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:.82rem; }
+@page { size:Letter; margin:.5in .55in; }
+@media print { html { background:white; font-size:9.5pt; } body { max-width:none; padding:0; } .copy,footer { display:none; } h2 { margin-top:18px; } #verification-gates { break-before:page; } pre,table,.flow,.notice,.callout { break-inside:avoid; } a { color:inherit; text-decoration:none; } }
+</style>
+</head>
+<body>
+<header>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Certificate shield and revocation list"><path d="M32 4 54 12v17c0 14-9 24-22 31C19 53 10 43 10 29V12z" fill="#e8f2f5" stroke="#087a96" stroke-width="2.5"/><path d="M21 25h22M21 32h22M21 39h14" fill="none" stroke="#087a96" stroke-width="3" stroke-linecap="round"/><circle cx="45" cy="43" r="7" fill="#fff5f3" stroke="#9b2d34" stroke-width="2"/><path d="m42 40 6 6m0-6-6 6" stroke="#9b2d34" stroke-width="2"/></svg>
+<div><h1>SolariNet Certificate Operations</h1><p class="meta">Candidate operations manual · refreshed 24 October 2026 · F‑01 CRL lifecycle · F‑10 trust and issuance</p></div>
+</header>
+
+<div class="notice"><strong>Candidate only — do not enable a rollout from this manual yet.</strong> The generator, publisher, peer updater, acknowledgement path, and dashboard view exist in the local candidate. The HTTPS endpoint, host configuration, peer activation, rollout policy, and deployment are not installed or verified. This document describes the reviewed procedure for a later staged rollout; it is not evidence of a live service.</div>
+
+<h2>1. What a revocation means</h2>
+<p>The MariaDB revocation ledger is authoritative. A ledger entry alone does not change a TLS handshake. Effective revocation requires a fresh CA-signed CRL, authenticated HTTPS distribution, validation and activation on every relevant peer, and a subsequent authenticated report receipt. The current candidate receipt proves only that the reporting client or monitor agent included the local updater's activation marker. It does not attest every service on that host.</p>
+<p>Keep the immutable root bundle separate from the generated active bundle. Never copy the CA private key to a publisher, proxy, dashboard, or peer. Do not expose a CRL endpoint over plaintext HTTP.</p>
+
+<div class="flow"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 180" role="img" aria-labelledby="flow-title flow-desc"><title id="flow-title">Certificate revocation distribution flow</title><desc id="flow-desc">The database ledger feeds a CA-side generator and static HTTPS publisher. Peers validate and activate the CRL, then report an authenticated receipt to the server and dashboard.</desc><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8z" fill="#087a96"/></marker></defs><g fill="#eef7f9" stroke="#087a96" stroke-width="2"><rect x="16" y="48" width="150" height="76" rx="8"/><rect x="205" y="48" width="150" height="76" rx="8"/><rect x="394" y="48" width="150" height="76" rx="8"/><rect x="583" y="48" width="135" height="76" rx="8"/><rect x="757" y="48" width="127" height="76" rx="8"/></g><g fill="#14222d" font-family="system-ui,sans-serif" font-size="14" text-anchor="middle"><text x="91" y="78">MariaDB</text><text x="91" y="99">revocation ledger</text><text x="280" y="78">CA generator</text><text x="280" y="99">sign + verify</text><text x="469" y="78">Publisher</text><text x="469" y="99">HTTPS static file</text><text x="650" y="78">Peer updater</text><text x="650" y="99">validate + restart</text><text x="820" y="78">Receipt</text><text x="820" y="99">report + status</text></g><g fill="none" stroke="#087a96" stroke-width="2.5" marker-end="url(#arrow)"><path d="M166 86h32M355 86h32M544 86h33M718 86h33"/></g><text x="450" y="158" fill="#526574" font-family="system-ui,sans-serif" font-size="12" text-anchor="middle">The dashboard counts only client and monitor reporting agents. It does not prove all host services loaded the CRL.</text></svg></div>
+
+<h2>2. Components and access boundaries</h2>
+<table><thead><tr><th>Component</th><th>Runs as / reads</th><th>Writes or authority</th></tr></thead><tbody>
+<tr><td>CRL generator</td><td><code>solari</code>; CA key, CA certificate, revocation ledger, issuance-inventory gate</td><td>Signs a bounded-lifetime CRL and advances per-issuer generation state</td></tr>
+<tr><td>Static publisher</td><td>Dedicated unprivileged account; generated CRL and public CA certificate</td><td>Publishes only a verified issuer-fingerprint-named CRL</td></tr>
+<tr><td>Peer updater</td><td>Root oneshot; trusted HTTPS endpoint, immutable roots, issuer certificate</td><td>Replaces one active bundle and restarts one allowlisted SolariNet service</td></tr>
+<tr><td>Reporter/server</td><td>Existing authenticated durable report; enrolled certificate identity</td><td>Stores latest exact-generation receipt; receipt DB failure does not reject the persisted report</td></tr>
+<tr><td>Dashboard</td><td>Read-only API; generated generation, node state and receipt rows</td><td>Displays latest generation and client/monitor receipt status</td></tr>
+</tbody></table>
+
+<h2>3. Preconditions before any installation</h2>
+<ol class="steps"><li>Apply and verify the candidate migration set, including migration 035, using the approved migration process. Reconcile and attest the certificate issuance inventory before generating a CRL.</li><li>Confirm the issuer certificate and private key match. Keep the key owned by <code>solari</code> with mode <code>0600</code>. Do not grant the publisher, peer updater, web server, or dashboard access to it.</li><li>Establish a peer-trusted HTTPS hostname and certificate. Verify an unauthenticated peer GET serves exactly the generated CRL, and that the same path is unavailable over HTTP.</li><li>Review the exact service allowlist, active bundle paths, systemd sandbox, database grants, rollback behavior, and recovery access for each target host.</li><li>Use a staged, non-production peer first. Keep rollout policy fail-closed until the intended missing-CRL behavior is separately tested and approved.</li></ol>
+
+<h2>4. Database accounts</h2>
+<h3>Dashboard read account</h3>
+<p>The dashboard's read-only DB account also needs these CRL table reads in addition to its existing <code>node</code> privileges:</p>
+<pre><button class="copy" type="button">Copy</button>GRANT SELECT ON solarinet.certificateCrlState TO 'SOLARINET_DASHBOARD'@'DASHBOARD_HOST';
+GRANT SELECT ON solarinet.certificateCrlAcknowledgement TO 'SOLARINET_DASHBOARD'@'DASHBOARD_HOST';</pre>
+<h3>Server receipt account</h3>
+<p>Add only these rights to the existing SolariNet server account after migration 035 is present. Replace both account placeholders on the database host; do not paste secrets into commands or repository files.</p>
+<pre><button class="copy" type="button">Copy</button>GRANT SELECT ON solarinet.certificateCrlState TO 'SOLARINET_SERVER'@'SERVER_HOST';
+GRANT SELECT, INSERT, UPDATE ON solarinet.certificateCrlAcknowledgement TO 'SOLARINET_SERVER'@'SERVER_HOST';</pre>
+<p>Acknowledgement persistence is best-effort. Missing migration or rights are logged and later reports retry the local receipt. The dashboard remains pending or stale until a valid matching row is recorded.</p>
+<h3>Generator account</h3>
+<pre><button class="copy" type="button">Copy</button>GRANT SELECT ON solarinet.certificateInventoryState TO 'solari_crl'@'CRL_HOST';
+GRANT SELECT ON solarinet.certificateRevocation TO 'solari_crl'@'CRL_HOST';
+GRANT SELECT, INSERT, UPDATE ON solarinet.certificateCrlState TO 'solari_crl'@'CRL_HOST';</pre>
+<p>Use the narrowest DB host identity available and a generated password. Store client credentials in <code>/etc/solarinet/crl-generator.my.cnf</code>, readable only by <code>solari</code>:</p>
+<pre><button class="copy" type="button">Copy</button>[client]
+host=DB_HOST
+port=3306
+user=solari_crl
+password=REPLACE_ON_HOST_ONLY</pre>
+<pre><button class="copy" type="button">Copy</button>sudo install -d -o root -g solari -m 0750 /etc/solarinet
+sudoedit /etc/solarinet/crl-generator.my.cnf
+sudo chown root:solari /etc/solarinet/crl-generator.my.cnf
+sudo chmod 0640 /etc/solarinet/crl-generator.my.cnf</pre>
+
+<h2>5. Install the CA-side generator and publisher</h2>
+<p>Install only reviewed release files. SolariNet C server daemon connections initialize their MariaDB session timezone to UTC on connect and reconnect; the generator uses UTC for ledger reads and generation writes. Xenon's active monitoring MariaDB was observed in <code>SYSTEM</code> mode with the host on UTC, and its <code>NOW()</code> matched <code>UTC_TIMESTAMP()</code>; no historical timestamp offset was observed there. Verify the actual configured database host before deployment. The generator service runs every six hours; a separate one-minute publisher timer exposes the generated CRL. Pre-publication failures preserve the previous CRL. There is a short non-transactional boundary after the atomic CRL replacement and before the generator advances the DB generation row; if that DB commit fails, the file can be one CRL number ahead of acknowledgement state.</p>
+<pre><button class="copy" type="button">Copy</button>sudo install -d -o root -g root -m 0755 /usr/local/libexec/solarinet
+sudo install -o root -g root -m 0755 deploy/crl/generate_crl.py /usr/local/libexec/solarinet/generate_crl.py
+sudo install -o root -g root -m 0644 deploy/crl/solari-crl-generate.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/crl/solari-crl-generate.timer /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/crl/solari-crl-publisher.sysusers.conf /etc/sysusers.d/solari-crl-publisher.conf
+sudo systemd-sysusers /etc/sysusers.d/solari-crl-publisher.conf
+sudo install -o root -g root -m 0755 deploy/crl/publish_crl.py /usr/local/libexec/solarinet/publish_crl.py
+sudo install -o root -g root -m 0644 deploy/crl/solari-crl-publish.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/crl/solari-crl-publish.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/solari-crl-generate.service /etc/systemd/system/solari-crl-generate.timer /etc/systemd/system/solari-crl-publish.service /etc/systemd/system/solari-crl-publish.timer</pre>
+<p>Before enabling timers, check schema and inventory readiness, file ownership, account grants, and key/certificate match. Run one generation and inspect the issuer fingerprint, number, revoked count, CRL fingerprint, and expiry:</p>
+<pre><button class="copy" type="button">Copy</button>sudo systemctl start solari-crl-generate.service
+sudo systemctl status solari-crl-generate.service --no-pager
+sudo openssl crl -in /var/lib/solari-crl/current.pem -noout -verify \
+  -CAfile /var/lib/solarinet/pki/ca.pem -crlnumber -lastupdate -nextupdate
+sudo systemctl enable --now solari-crl-generate.timer solari-crl-publish.timer</pre>
+<p>Configure a static-only path inside a peer-trusted HTTPS virtual host using <code>deploy/crl/apache-crl-location.conf.example</code> or an equivalent rule. Do not expose directory listings, dotfiles, signing material, or database credentials.</p>
+
+<h2>6. Configure a peer updater</h2>
+<p>One updater instance handles one issuer and one service. Keep the immutable base bundle free of CRLs and include the issuer certificate. The timer first runs two minutes after boot or at the next hour with up to five minutes of jitter. Seed the active bundle from the configured base bundle before setting the service's <code>tls.caFile</code>; otherwise an early service restart can fail because the file does not yet exist. The per-service configuration contains public paths and a URL, not a secret:</p>
+<pre><button class="copy" type="button">Copy</button>CRL_URL=https://crl-host.example/solarinet/crl/ISSUER_SHA256.crl.pem
+BASE_CA_BUNDLE=/etc/solarinet/trust-roots.pem
+ISSUER_CA=/etc/solarinet/issuing-ca.pem
+SOLARI_SERVICE=solari-client.service</pre>
+<p>Replace the issuer placeholder with the lowercase SHA-256 fingerprint printed by the generator. The endpoint hostname must match its HTTPS certificate. Seed the active bundle using the same base bundle path, then configure <code>tls.caFile</code> to the active path. Install the updater only after the endpoint has been independently verified from the peer.</p>
+<p>The updater refuses every HTTP redirect. It uses the operating system CA store by default. For direct invocations, <code>--https-ca-file</code> selects an exclusive trust file; it does not add to the system roots.</p>
+<pre><button class="copy" type="button">Copy</button>sudo install -d -o root -g root -m 0755 /var/lib/solari-crl-active
+sudo install -o root -g root -m 0644 /etc/solarinet/trust-roots.pem /var/lib/solari-crl-active/client.pem
+sudo install -d -o root -g root -m 0755 /usr/local/libexec/solarinet
+sudo install -o root -g root -m 0755 deploy/crl/activate_crl.py /usr/local/libexec/solarinet/activate_crl.py
+sudo install -o root -g root -m 0644 deploy/crl/solari-crl-activate@.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/crl/solari-crl-activate@.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/solari-crl-activate@.service /etc/systemd/system/solari-crl-activate@.timer
+sudo systemctl enable --now solari-crl-activate@client.timer</pre>
+<p>The updater verifies HTTPS, issuer, signature, expiry, and monotonic number; rejects rollback or conflicting same-number CRLs; limits files to 4 MiB and validation to 120 seconds; serializes work per active bundle; and restarts only an allowlisted service. If restart/active verification fails, it restores the previous bundle and attempts recovery. A failed rollback requires manual intervention. The activation service has a 360-second outer timeout to leave 240 seconds for bounded recovery.</p>
+
+<h2>7. Verify reports and dashboard status</h2>
+<p>After a successful restart, the updater atomically writes <code>&lt;active-bundle&gt;.activated</code> as <code>issuer-sha256:number:crl-sha256</code>, mode <code>0644</code>. The client/monitor reporter includes this public marker in its authenticated durable report. The server records it only for the latest generated, unexpired generation. Stale, malformed, or unwriteable optional receipts do not reject the ordinary report.</p>
+<p>The Certificates screen shows the latest generated issuer and CRL number, expiry, and peer receipt states. <strong>Current</strong> means an exact issuer/number/fingerprint receipt for an unexpired generation and a check-in within 15 minutes. <strong>Expired generation</strong> means the receipt matches the latest CRL, but that CRL has passed its next-update time or the expiry value is missing. <strong>Stale</strong> means a prior receipt does not match the latest generation. <strong>Pending</strong> means a recently seen peer has no receipt. <strong>Offline</strong> means no check-in within 15 minutes or node state is down. The denominator includes client and monitor nodes whose current leaf issuer matches that generation. Excluded agents are listed separately: an unknown issuer means no current leaf issuer is recorded; a different issuer means it is recorded but does not match. Server-role peers and other services on each host remain outside this status view.</p>
+<div class="callout"><strong>Interpret carefully:</strong> a current marker is evidence from one reporting agent, not cryptographic proof of runtime process state or host-wide convergence. A generated CRL is not necessarily already served, and a served CRL is not proof it was activated.</div>
+
+<h2>8. Recovery and rollback</h2>
+<table><thead><tr><th>Observed result</th><th>Operator action</th></tr></thead><tbody>
+<tr><td>Generator fails before output replacement</td><td>Read the systemd journal. Check ledger completeness, migration state, CA key/certificate match, DB rights, and system clock. Do not replace the last good CRL manually.</td></tr>
+<tr><td>CRL file is one number ahead of DB state</td><td>A DB commit may have failed just after atomic file replacement. Restore DB availability, rerun the generator to allocate a higher number, and verify the output file and <code>certificateCrlState</code> agree before reading dashboard status.</td></tr>
+<tr><td>Publisher fails or endpoint returns an old object</td><td>Verify generator output and publisher service/timer. Confirm the HTTPS static path serves the expected fingerprint-named file. Do not enable peer timers until this is corrected.</td></tr>
+<tr><td>Updater rejects signature, issuer, number, or expiry</td><td>Keep the current trust bundle. Inspect endpoint URL, issuer fingerprint, current CRL metadata, and system clock; correct the source instead of bypassing validation.</td></tr>
+<tr><td>Service restart fails</td><td>The updater restores the prior bundle and retries the prior service state. Inspect unit logs and verify the active bundle. If rollback reports failure, stop automation and restore the known-good bundle manually before restarting.</td></tr>
+<tr><td>Dashboard shows pending/stale</td><td>Check peer check-in, receipt file ownership/mode, reporter config, server migration 035 and grants, and whether the peer has fetched the latest generated generation.</td></tr>
+<tr><td>Dashboard says acknowledgement data unavailable</td><td>Check API logs, migration 035, and read access. The API fails soft; this state is not evidence that all peers are current.</td></tr>
+</tbody></table>
+<p>Do not delete acknowledgement rows to make a dashboard count appear healthy. To roll back an updater, disable its timer, restore the previous reviewed active bundle and matching service configuration, then restart and verify the exact target service. Preserve logs and the activation marker for diagnosis.</p>
+
+<h2>9. Browser trust and web-server certificates</h2>
+<p>The browser trust page publishes only the public CA root and setup instructions. It does not issue certificates or contain a signing key. Verify the root SHA-256 fingerprint through a trusted channel independent of the portal before installation.</p>
+<table><thead><tr><th>Client</th><th>Functional setup</th><th>Verification</th></tr></thead><tbody>
+<tr><td>Safari on iPhone/iPad; Firefox on iOS</td><td>Transfer the unsigned root profile over AirDrop or Files after verifying its fingerprint. Install it in Settings, then enable full trust under Settings → General → About → Certificate Trust Settings. Device management is not required. An Apple Developer key does not establish TLS trust and is not used.</td><td>Open a known internal HTTPS service, confirm its hostname matches the certificate SAN, and confirm the browser shows no certificate warning.</td></tr>
+<tr><td>Safari and Zen on macOS</td><td>Install the root in the System keychain after verifying its fingerprint. Scope trust to SSL and basic X.509 validation with <code>sudo security add-trusted-cert -d -r trustRoot -p ssl -p basic -k /Library/Keychains/System.keychain root_ca.pem</code>. Firefox-family browsers may need their system-root option enabled.</td><td>Restart each browser and test an internal HTTPS hostname. Remove the root by its fingerprint in Keychain Access if trust must be withdrawn.</td></tr>
+<tr><td>Firefox on Linux</td><td>Install the root and Firefox enterprise policy from the trust package. Confirm the policy in <code>about:policies</code>; Flatpak/Snap installations can use a different policy path.</td><td>Restart Firefox and test the internal HTTPS hostname and its SAN.</td></tr>
+<tr><td>Firefox on Android</td><td>Install the root through Android's certificate settings after verifying its fingerprint. Firefox 120 or later can use third-party roots from the OS store; check the actual browser build.</td><td>Restart Firefox and open a known internal HTTPS service without bypassing a warning.</td></tr>
+</tbody></table>
+<p>On first use, the portal itself cannot establish trust in its own HTTPS connection. Transfer and fingerprint-check the public root first; then visit the portal over HTTPS.</p>
+
+<h3>Web-server ACME lifecycle</h3>
+<p>The candidate ACME helper uses Certbot and HTTP-01 with an isolated private-CA store at <code>/etc/letsencrypt-solarinet</code>. It requires Python 3.10 or later, apt-packaged Certbot 4.0.0 or later, and OpenSSL 3.0 or later for short-lived renewal behavior and isolated chain verification. Certbot still reads <code>/etc/letsencrypt/cli.ini</code> and its user's XDG <code>letsencrypt/cli.ini</code> with a dedicated store; command-line values take precedence. The helper clears global pre/post hooks, disables hook-directory executables, and supplies its own deploy hook. Review both default files for other settings before use; a legacy <code>renew-hook</code> conflicts with the helper deploy hook. The helper validates the exact registered DNS names, server-auth usage, a minimum six-day lifetime, chain, and key match; writes a versioned certificate/key pair; switches <code>TARGET/current</code> atomically; runs the service configuration test; and reloads the server. A failed check or reload restores the prior pointer and reports up to five diagnostic lines. Renewal verifies after Certbot exits that every registered live lineage matches the active release, so a deploy-hook error is visible to systemd. The key is private to the host and is not copied to the CA, dashboard, or Git.</p>
+<div class="notice"><strong>Do not issue against the live CA yet.</strong> Its ACME provisioner has no explicit challenge list or name policy. Self-hosted step-ca applies X.509 name policy authority-wide, which also affects JWK and S/MIME issuance; SolariNet node enrollment uses a separate mTLS CA. Audit step-ca identities before adding policy. Use only the disposable ACME test CA until this audit and the name-restricted pilot pass.</div>
+<ol class="steps"><li>Inventory each HTTPS endpoint, exact SANs, server owner, HTTP-01 route, certificate paths, key-reader group, config-check command, and reload command. Give each service a distinct lineage.</li><li>Copy <code>deploy/pki/acme_services.example.json</code> to a root-owned mode-<code>0600</code> registry. It uses reserved <code>example.invalid</code> and <code>ca.example.invalid</code> placeholders; replace both with the approved disposable CA and test-service values. The registry's commands run as root.</li><li>Route <code>/.well-known/acme-challenge/</code> to <code>/var/lib/solarinet/acme-webroot/.well-known/acme-challenge/</code> on the intended HTTP virtual host. Confirm the CA host can retrieve a test challenge over port 80.</li><li>Run <code>acme_certificates.py --registry /etc/solarinet/pki/acme_services.json --plan-service SERVICE_ID</code> to inspect the inert enrollment command. Then run <code>--issue-service SERVICE_ID</code> only against the approved disposable CA.</li><li>After the first certificate exists, update the intended server block to use <code>TARGET/current/fullchain.pem</code> and <code>TARGET/current/privkey.pem</code>. Test the complete server config and HTTPS handshake.</li><li>Configure the test ACME provisioner for a seven-day default and no more than a 30-day maximum lifetime. The helper rejects leaves under six days. Certbot 4.0 uses a lifetime-based renewal threshold (half the lifetime for certificates of ten days or less; one third for longer certificates), so twice-daily checks do not issue twice daily. Verify the installed Certbot version and behavior in the pilot. Run <code>--renew --force-renewal</code> to rehearse the complete unattended path, including HTTP-01, atomic installation, service validation, and reload. If issuance succeeded but deployment did not, retry the stored lineage with <code>--deploy-service SERVICE_ID</code>.</li><li>Configure <code>acme_expiry_watch.py</code> with the reviewed exact SANs and certificate paths. Run <code>--dry-run</code>, then confirm a real test alert reaches the existing notification channel. Install the watcher timer only after the broker notification is verified. Enroll every registered service before adding it to the renewal timer's registry; renewal fails closed if registry lineages and Certbot renewal files differ. Review Certbot's default <code>cli.ini</code> files. Install and enable <code>solarinet-acme-renew.timer</code> only after forced renewal, expiry alerting, and rollback rehearsal succeed for every service. It renews certificates only from the dedicated private-CA Certbot store; the host's public Let's Encrypt store stays separate. <code>UMask=0022</code> lets the HTTP server read public challenge files; Certbot retains private-key mode <code>0600</code>.</li></ol>
+<p>Use the documented systemd paths or add matching reviewed write paths. The timer supplies a 20-minute randomized start; Certbot's extra delay is disabled. The service allows 45 minutes for the helper's 30-minute Certbot limit. The helper rejects RSA keys below 2048 bits, EC curves below NIST P-256, signatures below SHA-256, and validity beyond Apple's 825-day limit; enforce the same policy at the CA. Unexpected release files block deployment. For rollback, stop the timer, atomically point <code>TARGET/current</code> to a verified release, then run the service check and reload. The renewal post-check will fail until the Certbot lineage is restored with <code>--deploy-service</code> or successfully renewed; keep unattended renewal disabled during recovery.</p>
+<p>The watcher service executes its notification command as root to read root-only Certbot files. Install <code>acme_expiry_watch.py</code> and its sibling <code>acme_certificates.py</code> under <code>/usr/local/libexec/solarinet-pki</code>, then install the executable notifier there with root ownership, mode <code>0755</code>, and non-writable parent directories. The watcher checks the configured path and resolved executable before launching it. Both programs use Python isolated mode to prevent environment and user-site import overrides. Install <code>python3-pika</code> from the OS package manager. The notifier opens its AMQP config through verified no-follow directory handles and rejects symlinks, permissive modes, or untrusted parent directories. Keep the credential file root-owned mode <code>0600</code> at <code>/etc/solarinet/pki/notify.conf</code>. This timer template is not installed or enabled.</p>
+<p>See <a href="../deploy/pki/README.md">deploy/pki/README.md</a> for server snippets, timer settings, and recovery steps. The ACME helper and expiry watcher have 48 focused tests covering certificate validation, alert transitions, and path safety. The notification tools have eleven tests covering config protections, secret redaction, and routing. The isolated integration test exercises step-ca, HTTP-01, Apache, renewal, name-policy rejection, HTTPS, and rollback. Real issuance against Chlorine, browser/device trust, RabbitMQ alert delivery, and rollout remain <strong>unverified</strong>.</p>
+
+<h2 id="verification-gates">10. Current verification and release gates</h2>
+<p>Current local checks pass: PKI 83/83, eleven notification publisher/dispatcher tests, Python compilation, diff whitespace validation, systemd unit verification, Letter HTML-to-PDF rendering, and the isolated ACME lifecycle integration. A no-publish dry-run against Xenon's copied certificate files correctly reports its public lineage expired and its dashboard/RackWire leaves healthy while accepting the configured DNS and IP SANs. The earlier cross-lab Fable review and GitHub run <code>40057443974</code> (all 16 jobs on <code>5a51e38</code>) predate the current leaf-policy and expiry-watcher diffs and do not verify them. Forgejo's ephemeral runner supervisor and VM were previously observed active on Benzene, but this candidate's Forgejo result and current runner reachability remain <strong>unverified</strong>. Real Chlorine issuance, browser trust, RabbitMQ alert delivery, peer activation, service cutover, and rollout remain <strong>unverified</strong>.</p>
+
+<footer>Standalone HTML manual with inline CSS, JavaScript, and SVG. Matching Letter PDF is generated from this file. No external assets are required. Candidate-only state as of 24 October 2026.</footer>
+<script>
+"use strict";
+document.querySelectorAll("pre").forEach(function (block) {
+  var button = block.querySelector(".copy");
+  if (!button) return;
+  button.addEventListener("click", function () {
+    var text = block.innerText.replace(/^Copy\s*/, "");
+    navigator.clipboard.writeText(text).then(function () {
+      button.textContent = "Copied";
+      window.setTimeout(function () { button.textContent = "Copy"; }, 1200);
+    }).catch(function () { button.textContent = "Select text"; });
+  });
+});
+</script>
+</body>
+</html>

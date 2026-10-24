@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll for fresh SolariNet CRLs for the %i service
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* *:00:00
+RandomizedDelaySec=5min
+Persistent=true
+Unit=solari-crl-activate@%i.service
+
+[Install]
+WantedBy=timers.target

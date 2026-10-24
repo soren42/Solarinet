@@ -12,6 +12,8 @@ hostFqdn = my-host
 [server]
 primaryUrl = tls+tcp://solari.example.intranet:7701
 # failoverUrl = tls+tcp://solari-2.example.intranet:7701
+# Optional when the control listener is not the standard primaryUrl port + 1.
+# reportAckUrl = tls+tcp://solari.example.intranet:7702
 
 [tls]
 # From enrollment (deploy/enrollment/solari-enroll.sh) or your internal CA.

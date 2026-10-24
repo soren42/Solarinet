@@ -51,34 +51,32 @@
     <strong>Engineering rules.</strong> ISO C99, functions only — no C++, no OOP
     emulation beyond the opaque-handle pattern. <code>camelCase</code> identifiers,
     K&amp;R braces, four-space indent. No Node.js / server-side JS anywhere in the
-    toolchain; the only non-C runtime is PHP 8.x for the dashboard. All wire data is
+    toolchain. The dashboard uses PHP 8.x and browser JavaScript; operational
+    integrations use Python. No Node.js server or bundler is required. All wire data is
     big-endian and packed field-by-field — never <code>memcpy</code> a struct onto the wire.
   </div>
 
-  <h2>Build status by phase</h2>
-  <table>
-    <thead><tr><th>Phase</th><th>Scope</th><th>State</th></tr></thead>
-    <tbody>
-      <tr><td>0 · Foundation</td><td>Repo layout, CMake + Makefile, toolchains</td><td><span class="pill ok">done</span></td></tr>
-      <tr><td>1 · libsolari core</td><td>common, error, time, log, crypto, framing, TLV, messages</td><td><span class="pill ok">done</span></td></tr>
-      <tr><td>2 · libsolari I/O</td><td>config parser + SQLite spool done &amp; tested; nng/mbedTLS transport written to contract (compile-pending vendored nng)</td><td><span class="pill wip">in progress</span></td></tr>
-      <tr><td>3 · Client + PAL</td><td>solariClient across the OS matrix</td><td><span class="pill wip">pending</span></td></tr>
-      <tr><td>4 · Remote Monitor</td><td>probe engine + HRW redundancy</td><td><span class="pill wip">pending</span></td></tr>
-      <tr><td>5 · Server</td><td>ingest, lease failover, MariaDB persistence</td><td><span class="pill wip">pending</span></td></tr>
-      <tr><td>6 · Dashboard</td><td>Design handoff imported to dashboard/public (in-browser React PWA); reconciled vs §11.2 (see dashboard/API_RECONCILIATION.html). PHP/Apache REST+SSE layer still to build.</td><td><span class="pill wip">in progress</span></td></tr>
-      <tr><td>7 · Hardening</td><td>enrollment, packaging, CI, docs</td><td><span class="pill wip">pending</span></td></tr>
-    </tbody>
-  </table>
+  <h2>Current status</h2>
+  <p>The C client, monitor, server, PHP API, browser dashboard, System of Record,
+  and deployment integrations have implementations and run on the intranet. The
+  original phase table became stale as those components were built.
+  <strong>Implementation is not release readiness.</strong> The
+  <a href="docs/SolariNet_Stabilization_Integration_Workflow_2026-08-09.md">stabilization workflow</a>
+  freezes new feature work until authorization, identity, durable delivery,
+  schema, freshness, and fault-injection gates pass. The
+  <a href="docs/SolariNet_Stabilization_Baseline_2026-10-20.html">October 2026 baseline</a>
+  records what was checked and what remains unverified.</p>
 
   <h2>Building</h2>
-  <p>The Phase 1 core and its test suite have <strong>no external dependencies</strong>
-  and build with any C99 compiler. CMake ≥ 3.16 drives everything; a thin
+  <p>The core and its test suite have <strong>no external dependencies</strong>
+  and build with any C99 compiler. The full build uses nng, mbedTLS, SQLite,
+  cJSON, and MariaDB Connector/C. CMake ≥ 3.16 drives everything; a thin
   <code>Makefile</code> wraps the common invocations.</p>
   <pre>make core      # build libsolari core + tests (zero external deps)
 make test      # build and run the full Unity / ctest suite
 make clean     # remove all build trees
 
-# Later phases (need vendored nng / mbedTLS / SQLite under third_party/):
+# Full components (require the development libraries described below):
 make client    # solariClient   (all OS targets)
 make monitor   # solariMonitor  (Linux, all arch)
 make server    # solariServer   (x86_64 / arm64)
@@ -109,10 +107,9 @@ lib/solari/       libsolari implementation
 src/client/       solariClient + platform abstraction (plat/)
 src/monitor/      solariMonitor probe engine
 src/server/       solariServer ingest / lease / DB / control
-dashboard/        PHP 8.x data layer (contract only)
+dashboard/        PHP 8.x API + browser dashboard
 db/               MariaDB schema + migrations
-config/           sample .conf files
-deploy/           systemd units + enrollment scripts
+deploy/           systemd units, integrations, enrollment and sample configs
 tests/            unit (Unity), integration, fault injection, fixtures
 third_party/      vendored deps (nng, mbedTLS, SQLite, cJSON, Unity)
 cmake/toolchains/ cross-compile toolchain files

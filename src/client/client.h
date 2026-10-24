@@ -37,6 +37,7 @@ typedef struct {
     /* server + transport */
     char     primaryUrl[CLIENT_URL_MAX];  /* empty = local-only (no reporting) */
     char     failoverUrl[CLIENT_URL_MAX];
+    char     reportAckUrl[CLIENT_URL_MAX]; /* optional authenticated ACK REQ/REP */
     char     subUrl[CLIENT_URL_MAX];      /* server PUB channel (directives);
                                            * empty = derive from primaryUrl
                                            * with the standard pub port 7703 */

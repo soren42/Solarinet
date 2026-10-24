@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet — UniFi Topology Discovery</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1117;--panel:#151c26;--ink:#d9e1eb;--muted:#9ba9ba;--line:#2a3646;--cyan:#55c5df;--green:#73d5a4;--amber:#f0b45d;--red:#f17968;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;--sans:Inter,"Segoe UI",Arial,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 var(--sans)}main{max-width:900px;margin:auto;padding:44px 28px 72px}h1,h2,h3{line-height:1.2}h1{font-size:2.6rem;margin:8px 0}h2{font-size:1.55rem;margin:42px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{font-size:1.13rem;margin:25px 0 8px}.eyebrow,.meta{color:var(--muted);font-size:.88rem}.eyebrow{letter-spacing:.12em;text-transform:uppercase;color:var(--cyan)}p{margin:10px 0}a{color:var(--cyan)}code,pre{font-family:var(--mono);font-size:.88em}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#090d13;border:1px solid var(--line);border-radius:8px;padding:16px;color:#dce8f7}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:20px 0}.callout{border-left:4px solid var(--amber)}.verified{border-left:4px solid var(--green)}.danger{border-left:4px solid var(--red)}table{width:100%;border-collapse:collapse;margin:14px 0}th,td{text-align:left;vertical-align:top;padding:9px 11px;border:1px solid var(--line)}th{background:#1c2633;color:var(--cyan);font-size:.8rem;text-transform:uppercase;letter-spacing:.06em}td{background:#111821}.flow{width:100%;height:auto;background:#090d13;border:1px solid var(--line);border-radius:10px;margin:10px 0 18px}.flow text{font-family:var(--sans)}.flow .sub{font-size:13px}.copy{float:right;border:1px solid var(--line);border-radius:6px;padding:7px 11px;background:#1c2633;color:var(--ink);cursor:pointer}.copy:focus-visible{outline:3px solid var(--cyan)}li{margin:5px 0}.footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);font-size:.87rem;color:var(--muted)}@media print{body{background:#fff;color:#18212c;font-size:11pt}main{max-width:none;padding:0}h1,h2,h3{color:#152335}h2{border-color:#bbc5d0}.panel,td,pre{background:#f4f6f8;color:#18212c;border-color:#c4ccd5}.callout{border-left-color:#b27400}.verified{border-left-color:#16804e}.danger{border-left-color:#b73030}.flow{background:#f7f9fb;border-color:#c4ccd5}.flow text{font-family:var(--sans)}.flow .sub{font-size:13px}.copy{display:none}a{color:#12657a}pre{font-size:8pt}h2,h3{break-after:avoid}tr,.panel,svg{break-inside:avoid}}
+</style>
+</head>
+<body><main>
+<header>
+  <div class="eyebrow">SolariNet · Operator guide</div>
+  <h1>UniFi topology discovery</h1>
+  <p class="meta">Revision 2 · 21 October 2026 · Status: read-only discovery and SoR comparison; no writer</p>
+  <p>This guide covers the UniFi topology collector in <code>deploy/unifi/unifi_topology.py</code>. It reads network pages and detail records through the UniFi Network Integration API, validates the returned topology, and prints a versioned JSON snapshot. An optional SoR comparison reads the current VLAN, network, subnet, DHCP range, and external-reference rows in a read-only transaction and reports correlation candidates and conflicts.</p>
+</header>
+
+<div class="panel callout"><strong>Current reconciliation gate.</strong> The last recorded live UniFi read reported one Default network, VLAN 1, with <code>10.0.0.1/8</code> and DHCP pool <code>10.1.0.26–10.7.161.117</code>. This differs from the documented SolariNet segmented network model. The comparison command is read-only and reports the mismatch; it does not write to UniFi or the SoR. Do not apply a subnet or DHCP import until the source discrepancy is reconciled.</div>
+
+<h2>What the command does</h2>
+<svg class="flow" viewBox="0 0 840 190" role="img" aria-labelledby="flow-title flow-desc">
+ <title id="flow-title">Read-only UniFi topology discovery</title>
+ <desc id="flow-desc">The collector reads sites, paginated network summaries, and network details from UniFi, validates them, optionally reads current SoR topology, then prints a normalized snapshot and comparison. No SoR or UniFi writes occur.</desc>
+ <defs><marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9z" fill="#55c5df"/></marker></defs>
+ <g fill="#151c26" stroke="#55c5df" stroke-width="2"><rect x="24" y="50" width="175" height="82" rx="10"/><rect x="250" y="50" width="175" height="82" rx="10"/><rect x="476" y="50" width="150" height="82" rx="10"/><rect x="674" y="50" width="142" height="82" rx="10"/></g>
+ <g stroke="#55c5df" stroke-width="2.5" marker-end="url(#arr)"><path d="M199 91H246"/><path d="M425 91H472"/><path d="M626 91H670"/></g>
+ <g text-anchor="middle" font-size="14" font-weight="700" fill="#d9e1eb"><text x="111" y="82">UniFi GET API</text><text x="111" y="106" class="sub" font-size="12" font-weight="400" fill="#9ba9ba">sites + network detail</text><text x="337" y="82">Completeness checks</text><text x="337" y="106" class="sub" font-size="12" font-weight="400" fill="#9ba9ba">pagination + IDs</text><text x="551" y="82">Validation</text><text x="551" y="106" class="sub" font-size="12" font-weight="400" fill="#9ba9ba">VLAN + IP + DHCP</text><text x="745" y="82">JSON snapshot</text><text x="745" y="106" class="sub" font-size="12" font-weight="400" fill="#9ba9ba">stdout only</text></g>
+</svg>
+<ul>
+ <li>Follows paginated site and network lists until <code>totalCount</code> is satisfied. It checks response offsets, page counts, limits, stable UUIDs, and duplicate IDs.</li>
+ <li>Fetches each network's detail record and validates enabled state, management mode, VLAN tag, IPv4 subnet and gateway, and DHCP server range.</li>
+ <li>Rejects empty, malformed, partial, inconsistent, or ambiguous data. Multiple UniFi sites require an explicit site ID.</li>
+ <li>Reports overlapping source subnets inside the snapshot. With <code>--compare-sor</code>, it also reads the active SoR VLANs, networks, subnets, DHCP ranges, and UniFi external references and reports exact matches, candidate matches, and conflicts.</li>
+ <li>Uses GET requests for UniFi and a read-only SoR transaction. It has no SoR writer; names and VLAN tags are review hints, while a UniFi network external reference is the exact correlation.</li>
+</ul>
+
+<h2>Run a discovery</h2>
+<p>Run from the SolariNet repository root. The credential file is sourced into the process environment; the command never prints its contents. Do not enable shell tracing.</p>
+<div class="panel">
+ <button class="copy" type="button" data-copy="cmd">Copy command</button>
+ <pre id="cmd"><code>set -a
+source /home/jason/Code/Solarinet/run/unifi.env
+set +a
+python3 deploy/unifi/unifi_topology.py --site-id 88f7af54-98f8-306a-a1c7-c9349722b1f6 --allow-insecure-tls</code></pre>
+ <div id="copy-status" class="meta" aria-live="polite"></div>
+</div>
+<p>Set <code>UNIFI_SITE_ID</code> in the environment or pass <code>--site-id</code> when selecting a site. When <code>UNIFI_CA_FILE</code> points to a trusted controller CA certificate, omit <code>--allow-insecure-tls</code>.</p>
+<pre><code>python3 deploy/unifi/unifi_topology.py --site-id 88f7af54-98f8-306a-a1c7-c9349722b1f6 --allow-insecure-tls --compare-sor</code></pre>
+<p>To include the SoR comparison, configure <code>SOR_DB_HOST</code>, <code>SOR_DB_PORT</code>, <code>SOR_DB_NAME</code>, <code>SOR_DB_USER</code>, and <code>SOR_DB_PASSWORD</code> (or <code>SOR_DB_PASS</code>) through the approved protected environment, then add <code>--compare-sor</code>. The password is never placed on the command line or included in output. The comparison uses <code>SET TRANSACTION READ ONLY</code> and returns a <code>sor_comparison</code> object; without these variables, collection remains UniFi-only.</p>
+<div class="panel danger"><strong>TLS note.</strong> The existing controller uses a certificate that is not trusted by this machine. The explicit <code>--allow-insecure-tls</code> option disables certificate verification for this GET session and prints a warning to standard error on every run. The UniFi API key is sent over that TLS connection and could be exposed to an active network interceptor. Prefer a trusted CA file and verified TLS; verified mode emits no insecure-TLS warning.</div>
+<p>JSON is written to standard output. Redirect it to a protected local file if it needs to be retained. The snapshot contains internal site, network, subnet, gateway, and DHCP data.</p>
+
+<h2>Snapshot fields</h2>
+<table><thead><tr><th>Field</th><th>Meaning</th><th>Validation</th></tr></thead><tbody>
+ <tr><td><code>schema_version</code></td><td>Snapshot contract version; currently 1.</td><td>Required value 1.</td></tr>
+ <tr><td><code>collected_at</code></td><td>UTC completion time for the collection.</td><td>The UniFi API calls are sequential; this is not an atomic controller snapshot.</td></tr>
+ <tr><td><code>sites[].id</code>, <code>networks[].id</code></td><td>Native UniFi UUIDs used to correlate source records.</td><td>Canonical UUID format; duplicate IDs rejected.</td></tr>
+ <tr><td><code>vlan_tag</code></td><td>802.1Q VLAN tag from network configuration.</td><td>Integer 1–4094.</td></tr>
+ <tr><td><code>subnet</code>, <code>gateway_ip</code></td><td>IPv4 prefix and configured gateway.</td><td>Valid IPv4 address and prefix; malformed or incomplete pairs fail.</td></tr>
+ <tr><td><code>dhcp</code></td><td>Mode and inclusive start/stop range when UniFi runs DHCP.</td><td>Both endpoints must be ordered, inside the subnet, outside network/broadcast, and must not contain the gateway. DHCP relay configurations fail closed until their server-address contract is represented.</td></tr>
+ <tr><td><code>source_subnet_conflicts</code></td><td>Overlaps among networks in this UniFi snapshot.</td><td>Any entry requires investigation before reconciliation.</td></tr>
+ <tr><td><code>sor_comparison</code></td><td>Optional read-only comparison with current SoR rows, including native network references, name/tag candidates, overlapping prefixes and overlapping DHCP ranges.</td><td>Rows with missing external references, ambiguous candidates, prefix/gateway/VLAN/DHCP differences, or source overlaps have <code>status="review_required"</code>. No actions are applied.</td></tr>
+</tbody></table>
+
+<h2>Current observed state</h2>
+<div class="panel verified"><strong>Read-only UniFi check · 21 October 2026.</strong> The controller returned one site and one network. The normalized result reported VLAN 1, Default, subnet <code>10.0.0.0/8</code>, gateway <code>10.0.0.1</code>, DHCP mode <code>SERVER</code>, and pool <code>10.1.0.26–10.7.161.117</code>. The collector completed with no internal source-subnet overlaps.</div>
+<p>A separate read-only query through the existing SoR sync account returned 16 active SoR subnets. Every row had <code>vlan_id=NULL</code> and <code>gateway_ip=NULL</code>.</p>
+<table><thead><tr><th>SoR network</th><th>Active subnets</th></tr></thead><tbody>
+ <tr><td>core</td><td><code>10.0.0.0/24</code>, <code>10.0.1.0/24</code></td></tr>
+ <tr><td>production</td><td><code>10.1.0.0/24</code></td></tr>
+ <tr><td>IoT</td><td><code>10.2.0.0/24</code>, <code>10.2.2.0/24</code>, <code>10.2.3.0/24</code>, <code>10.2.4.0/24</code></td></tr>
+ <tr><td>peripherals</td><td><code>10.3.0.0/24</code></td></tr>
+ <tr><td>personal</td><td><code>10.4.1.0/24</code>, <code>10.4.4.0/24</code></td></tr>
+ <tr><td>workstations</td><td><code>10.5.0.0/24</code>, <code>10.5.2.0/24</code>, <code>10.5.87.0/24</code></td></tr>
+ <tr><td>netmgmt</td><td><code>10.6.0.0/24</code>, <code>10.6.6.0/24</code></td></tr>
+ <tr><td>security</td><td><code>10.7.0.0/24</code></td></tr>
+</tbody></table>
+<p>The collector's pure prefix comparison reports 16 overlapping UniFi-to-SoR pairs, all <code>overlap</code> and none <code>same</code>. No SoR table rows were written. <strong>Inference:</strong> current SoR segmentation has no direct one-to-one CIDR match with UniFi's single Default /8. The live DHCP pool also spans several named SoR segments, so it cannot safely be split or reassigned without an authority decision.</p>
+<p>The evidence confirms a source discrepancy but does not explain it. It could reflect an intentional broad UniFi network, incomplete SoR network metadata, or stale configuration/documentation. Do not enable automated reconciliation until the operator resolves which representation is authoritative.</p>
+<p><strong>Consistency note:</strong> UniFi site/network list and detail reads are separate API requests. <code>collected_at</code> marks when collection ended; it does not guarantee every detail came from one controller transaction. A future writer must include a freshness check and refuse a stale preview before apply.</p>
+
+<h2>Verification</h2>
+<pre><code>python3 -m unittest -v deploy/unifi/test_unifi_topology.py deploy/unifi/test_unifipolld.py
+python3 -m py_compile deploy/unifi/unifi_topology.py deploy/unifi/test_unifi_topology.py</code></pre>
+<p>The current fixture suite covers pagination, repeated and oversized pages, partial data, malformed site selection, UUID/detail matching, subnet and DHCP validation, overlap reporting, SoR read-only transaction behavior, reconciliation candidates, DHCP/gateway/VLAN mismatches, and the existing poller's behavior. CI discovers all <code>deploy/unifi/test_*.py</code> tests.</p>
+
+<h2>Remaining work</h2>
+<ul>
+ <li>Resolve the observed /8 versus segmented-prefix discrepancy and decide how the 16 SoR prefixes map to UniFi network identities.</li>
+ <li>Determine whether SoR VLAN and gateway NULL fields are intentional incomplete planning data or missing imports.</li>
+ <li>Use <code>--compare-sor</code> against an authorized read-only SoR connection and review the resulting correlation candidates. No automatic writer exists yet.</li>
+ <li>After source authority is resolved, design the transactional, idempotent SoR writer with external references, audit provenance, deletion safeguards, and subnet locking before DHCP-range changes.</li>
+ <li>Test writer replay, partial fetch failure, stale snapshots, allocator concurrency, and rollback against disposable MariaDB.</li>
+ <li>Obtain cross-lab review before release. This guide documents discovery only; it does not claim complete UniFi-to-SoR integration.</li>
+</ul>
+<div class="footer">SolariNet integration worktree · This guide describes the candidate branch. No production import or deployment is implied.</div>
+</main>
+<script>
+document.querySelectorAll("[data-copy]").forEach(button=>button.addEventListener("click",async()=>{const node=document.getElementById(button.dataset.copy);try{await navigator.clipboard.writeText(node.innerText);document.getElementById("copy-status").textContent="Command copied.";}catch{document.getElementById("copy-status").textContent="Clipboard unavailable; select and copy the command manually.";}}));
+</script>
+</body></html>

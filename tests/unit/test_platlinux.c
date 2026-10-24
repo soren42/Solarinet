@@ -4,9 +4,11 @@
  * structurally sane values; not a golden test (host state varies), a sanity
  * and contract test.
  */
+#define _GNU_SOURCE
 #include "unity.h"
 #include "platOS.h"
 #include "solari/solariError.h"
+#include "../test_temp_path.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -139,12 +141,13 @@ static void test_discovery_topology(void)
 
 static void test_log_stat(void)
 {
-    char path[64];
+    char path[512], leaf[96];
     uint64_t sizeNow = 0, off = 0;
     uint32_t matches = 0;
     FILE *f;
 
-    snprintf(path, sizeof path, "/tmp/solari_logtest_%ld", (long)getpid());
+    snprintf(leaf, sizeof leaf, "solari_logtest_%ld", (long)getpid());
+    TEST_ASSERT_TRUE(solariTestTempPath(path, sizeof path, leaf));
     f = fopen(path, "w");
     TEST_ASSERT_NOT_NULL(f);
     fputs("info: ok\nERROR: boom\nwarn: meh\nERROR: again\n", f);

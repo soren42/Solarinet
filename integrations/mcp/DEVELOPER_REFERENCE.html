@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolariNet MCP Developer Reference</title>
+<style>
+:root{color-scheme:dark;--bg:#101820;--panel:#18232d;--ink:#e8eef4;--dim:#a8b7c5;--line:#344553;--accent:#69c9f2;--warn:#f3c97a;--code:#0a1117}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.62 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:36px 28px 64px}header{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:30px}
+.eyebrow{color:var(--accent);font:600 12px/1.4 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(32px,5vw,52px);line-height:1.08;margin:10px 0}h2{font-size:25px;margin:42px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line)}h3{font-size:18px;margin:26px 0 8px}
+p{margin:10px 0 15px}.dim{color:var(--dim)}a{color:var(--accent)}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--code);padding:2px 5px;border-radius:4px;font-size:.92em}pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:15px;overflow-wrap:anywhere;white-space:pre-wrap;font-size:13px}
+.callout{border-left:4px solid var(--warn);background:var(--panel);padding:12px 16px;margin:18px 0;border-radius:0 8px 8px 0}.good{border-color:#54d6a1}
+table{border-collapse:collapse;width:100%;margin:14px 0 20px;font-size:14px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}th{background:var(--panel);color:var(--accent)}
+.diagram{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:18px 0}.diagram svg{display:block;width:100%;height:auto;max-height:330px}.svg-label{font:14px system-ui,sans-serif;fill:var(--ink)}.svg-sub{font:11px system-ui,sans-serif;fill:var(--dim)}
+.toolbar{display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px}.toolbar button,.toolbar a{border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);padding:8px 12px;cursor:pointer;font:inherit;text-decoration:none}.footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:var(--dim);font-size:13px}
+@page{size:letter;margin:.62in}@media print{ :root{color-scheme:light;--bg:#fff;--panel:#f1f4f7;--ink:#17212d;--dim:#48596a;--line:#cbd4dc;--accent:#075f91;--warn:#9b5817;--code:#f3f5f7}body{background:#fff;color:#17212d;font-size:10pt;line-height:1.45}.wrap{max-width:none;padding:0}.toolbar{display:none}h1{font-size:26pt}h2{font-size:16pt;break-after:avoid}h3{font-size:11pt;break-after:avoid}table{font-size:8.5pt}tr{break-inside:avoid}pre{font-size:8pt;break-inside:avoid}.diagram{break-inside:avoid}.footer{margin-top:22pt}}
+</style>
+</head>
+<body>
+<main class="wrap">
+<div class="toolbar"><a href="README.html">Operator guide</a><a href="DEVELOPER_REFERENCE.pdf">PDF version</a><button type="button" id="print-manual">Print / save PDF</button></div>
+<header>
+  <div class="eyebrow">SolariNet · Integration Reference · 2026-10-21</div>
+  <h1>MCP Developer Reference</h1>
+  <p class="dim">Implementation guide for the Python/FastMCP adapter in <code>integrations/mcp</code>. The server exposes the SolariNet REST contract and three fixed database views to MCP clients.</p>
+</header>
+
+<section>
+<h2>1. Component boundary</h2>
+<p>The MCP server is an adapter. It translates MCP tool inputs into calls to the dashboard API or fixed read-only database operations, then converts results into JSON or compact Markdown. The dashboard API remains the authorization boundary for REST operations; the database account should independently be read-only.</p>
+<figure class="diagram" aria-label="MCP request and data flow">
+<svg viewBox="0 0 920 260" role="img" aria-labelledby="flow-title flow-desc" xmlns="http://www.w3.org/2000/svg">
+  <title id="flow-title">MCP request and data flow</title><desc id="flow-desc">An MCP client calls the local FastMCP server, which routes tools to the dashboard REST API or fixed SQL-backed database views.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#69c9f2"/></marker></defs>
+  <rect x="22" y="83" width="190" height="90" rx="12" fill="#eef3f7" stroke="#69c9f2"/><text x="117" y="120" text-anchor="middle" fill="#17212d" class="svg-label">MCP client</text><text x="117" y="145" text-anchor="middle" fill="#344255" class="svg-sub">stdio or HTTP</text>
+  <rect x="360" y="72" width="220" height="112" rx="12" fill="#eef3f7" stroke="#69c9f2"/><text x="470" y="112" text-anchor="middle" fill="#17212d" class="svg-label">FastMCP adapter</text><text x="470" y="137" text-anchor="middle" fill="#344255" class="svg-sub">26 typed tools · 0 caller SQL</text><text x="470" y="157" text-anchor="middle" fill="#344255" class="svg-sub">validation · rendering · errors</text>
+  <rect x="708" y="23" width="190" height="82" rx="12" fill="#eef3f7" stroke="#54d6a1"/><text x="803" y="58" text-anchor="middle" fill="#17212d" class="svg-label">Dashboard REST API</text><text x="803" y="81" text-anchor="middle" fill="#344255" class="svg-sub">Bearer token · RBAC</text>
+  <rect x="708" y="153" width="190" height="82" rx="12" fill="#eef3f7" stroke="#54d6a1"/><text x="803" y="188" text-anchor="middle" fill="#17212d" class="svg-label">MariaDB</text><text x="803" y="211" text-anchor="middle" fill="#344255" class="svg-sub">fixed views · read-only grant</text>
+  <path d="M212 128 H350" stroke="#69c9f2" stroke-width="3" marker-end="url(#arrow)"/><path d="M580 103 H696" stroke="#69c9f2" stroke-width="3" marker-end="url(#arrow)"/><path d="M580 157 H696" stroke="#69c9f2" stroke-width="3" marker-end="url(#arrow)"/>
+</svg>
+</figure>
+<div class="callout good"><strong>Current scope:</strong> 15 read-only REST tools, 8 REST control tools, and 3 fixed database tools. Arbitrary SQL is not exposed to MCP callers.</div>
+</section>
+
+<section>
+<h2>2. Source map</h2>
+<table><thead><tr><th>File</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td><code>solarinet_mcp/server.py</code></td><td>FastMCP registration, typed tool inputs, REST/DB dispatch, response formatting, and transport startup.</td></tr>
+<tr><td><code>solarinet_mcp/config.py</code></td><td>Environment-only configuration. Parses REST, database, transport, and listener-port settings.</td></tr>
+<tr><td><code>solarinet_mcp/rest.py</code></td><td>Async HTTPX client; bearer auth, TLS verification, timeout, JSON envelope validation, and normalized API errors.</td></tr>
+<tr><td><code>solarinet_mcp/db.py</code></td><td>PyMySQL access via <code>asyncio.to_thread</code>, fixed query registry, parameter binding, and row limits.</td></tr>
+<tr><td><code>solarinet_mcp/formatting.py</code></td><td>JSON and Markdown rendering helpers shared by the tools.</td></tr>
+<tr><td><code>solarinet_mcp/__main__.py</code></td><td>CLI entry point and non-starting <code>--check</code> configuration/tool listing.</td></tr>
+<tr><td><code>tests/</code></td><td>Unit tests using mocked HTTP, injected DB runners, configuration cases, and tool behavior.</td></tr>
+<tr><td><code>evals/</code></td><td>Ten fixture-backed questions checked by calling the actual tool functions.</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>3. Tool contracts</h2>
+<h3>Read-only REST (15)</h3>
+<table><thead><tr><th>Tool</th><th>API operation</th></tr></thead><tbody>
+<tr><td><code>solarinet_list_nodes</code></td><td><code>GET /api/nodes</code></td></tr><tr><td><code>solarinet_get_node</code></td><td><code>GET /api/nodes/{id}</code></td></tr><tr><td><code>solarinet_get_node_history</code></td><td><code>GET /api/nodes/{id}/history</code></td></tr>
+<tr><td><code>solarinet_list_probes</code></td><td><code>GET /api/probes</code></td></tr><tr><td><code>solarinet_get_probe_history</code></td><td><code>GET /api/probes/{targetId}/history</code></td></tr><tr><td><code>solarinet_list_alerts</code></td><td><code>GET /api/alerts</code></td></tr>
+<tr><td><code>solarinet_get_topology</code></td><td><code>GET /api/topology</code></td></tr><tr><td><code>solarinet_server_status</code></td><td><code>GET /api/server/status</code></td></tr><tr><td><code>solarinet_list_discovery</code></td><td><code>GET /api/discovery</code></td></tr>
+<tr><td><code>solarinet_list_enrollments</code></td><td><code>GET /api/enrollments</code></td></tr><tr><td><code>solarinet_list_builds</code></td><td><code>GET /api/builds</code></td></tr><tr><td><code>solarinet_list_segments</code></td><td><code>GET /api/segments</code></td></tr>
+<tr><td><code>solarinet_list_netgear</code></td><td><code>GET /api/netgear</code></td></tr><tr><td><code>solarinet_get_topology_view</code></td><td><code>GET /api/topology?view=monitoring|network</code></td></tr><tr><td><code>solarinet_get_config</code></td><td><code>GET /api/config</code></td></tr>
+</tbody></table>
+<h3>Control REST (8)</h3>
+<p>Control tools call POST operations and are side-effecting. They use the configured bearer token; API role checks remain authoritative. Enrollment approval and decommission additionally require <code>confirm=true</code>. Decommission can remove the requested node scopes and retire the node, so treat it as destructive.</p>
+<table><thead><tr><th>Tool</th><th>Operation</th></tr></thead><tbody>
+<tr><td><code>solarinet_trigger_survey</code></td><td>Start a survey for the requested scope.</td></tr><tr><td><code>solarinet_push_config</code></td><td>Stage a config overlay for a node.</td></tr>
+<tr><td><code>solarinet_adopt_discovery</code></td><td>Adopt a discovered device through the dashboard API.</td></tr><tr><td><code>solarinet_ignore_discovery</code></td><td>Mark a discovery candidate ignored.</td></tr>
+<tr><td><code>solarinet_reject_enrollment</code></td><td>Reject a pending enrollment.</td></tr><tr><td><code>solarinet_provision</code></td><td>Request provisioning for a node.</td></tr>
+<tr><td><code>solarinet_approve_enrollment</code></td><td>Approve an enrollment and sign its CSR; requires explicit confirmation.</td></tr><tr><td><code>solarinet_decommission</code></td><td>Retire a node and remove requested data scopes; requires explicit confirmation.</td></tr>
+</tbody></table>
+<h3>Fixed database views (3)</h3>
+<table><thead><tr><th>Tool</th><th>Data returned</th></tr></thead><tbody>
+<tr><td><code>solarinet_db_node_summary</code></td><td>Node roster summary.</td></tr><tr><td><code>solarinet_db_active_alerts</code></td><td>Active alerts joined to their rules.</td></tr><tr><td><code>solarinet_db_host_history</code></td><td>Host history for one node, bounded by the requested row limit.</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>4. Configuration and startup</h2>
+<table><thead><tr><th>Variable</th><th>Default</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>SOLARINET_API_BASE</code></td><td>unset</td><td>Dashboard origin without trailing <code>/api</code>.</td></tr><tr><td><code>SOLARINET_API_TOKEN</code></td><td>unset</td><td>Bearer credential; required for control operations.</td></tr>
+<tr><td><code>SOLARINET_API_TIMEOUT</code></td><td>30 seconds</td><td>Per-request timeout.</td></tr><tr><td><code>SOLARINET_API_VERIFY_TLS</code></td><td>true</td><td>Set false only for controlled lab testing.</td></tr>
+<tr><td><code>SOLARINET_DB_HOST</code></td><td>127.0.0.1</td><td>MariaDB host.</td></tr><tr><td><code>SOLARINET_DB_PORT</code></td><td>3306</td><td>MariaDB port.</td></tr>
+<tr><td><code>SOLARINET_DB_NAME</code></td><td>solarinet</td><td>Database name.</td></tr><tr><td><code>SOLARINET_DB_USER</code>/<code>SOLARINET_DB_PASS</code></td><td>unset</td><td>Use a dedicated SELECT-only MariaDB account.</td></tr>
+<tr><td><code>SOLARINET_DB_TIMEOUT</code></td><td>10 seconds</td><td>Connection/read timeout.</td></tr><tr><td><code>SOLARINET_MCP_TRANSPORT</code></td><td>stdio</td><td><code>stdio</code> or <code>streamable_http</code>.</td></tr>
+<tr><td><code>SOLARINET_MCP_PORT</code></td><td>8765</td><td>HTTP port, integer 1–65535. Invalid values fail configuration.</td></tr>
+</tbody></table>
+<p>Start with <code>python -m solarinet_mcp</code>. Default stdio is suitable for a locally launched MCP client. To start streamable HTTP, set <code>SOLARINET_MCP_TRANSPORT=streamable_http</code>; the adapter maps this project value to the FastMCP 1.x transport name <code>streamable-http</code> and applies <code>SOLARINET_MCP_PORT</code> to the SDK listener settings.</p>
+<p><code>python -m solarinet_mcp --check</code> prints configuration status and registered tool names without opening a listener or connecting to the API/database. It does not print credential values.</p>
+</section>
+
+<section>
+<h2>5. Security and trust boundaries</h2>
+<ul>
+<li><strong>HTTP exposure:</strong> the tested FastMCP 1.30.0 runtime defaults to <code>127.0.0.1</code>; this project does not implement MCP-client authentication. Keep HTTP local or put remote access behind an authenticated, access-controlled tunnel or proxy. Do not expose the listener directly to an untrusted network.</li>
+<li><strong>REST writes:</strong> MCP annotations help clients distinguish read-only and side-effecting tools, but annotations are not authorization. The dashboard API's bearer token and RBAC checks enforce access.</li>
+<li><strong>Database reads:</strong> no MCP tool or DB client method accepts caller-supplied SQL. The client selects from a closed registry of reviewed statements, validates parameter count and node identifiers, binds values, and caps rows. Use a MariaDB account granted only the needed SELECT privileges.</li>
+<li><strong>Transport security:</strong> REST TLS verification defaults on. Disabling it weakens server identity checks and is intended only for controlled testing.</li>
+<li><strong>Secret handling:</strong> supply tokens and database passwords through the process environment/secret manager, never source files or command-line arguments. Do not include real values in diagnostic output.</li>
+</ul>
+</section>
+
+<section>
+<h2>6. Errors, bounds, and execution model</h2>
+<p>The REST client requires the dashboard's JSON envelope with a <code>data</code> member, maps API error envelopes and HTTP 401/403/404 responses to concise tool errors, and reports timeout or transport failures explicitly. The database driver is synchronous, so queries run in a worker thread to avoid blocking the async tool loop.</p>
+<p>Database reads use a closed registry of three reviewed statements. Callers select a query identifier and supply only validated values; SQL text, table names, and other identifiers cannot be submitted. Each tool applies its own row limit, capped at 1000, with one extra fetched row used to report truncation. The database grant remains the privilege boundary and should be restricted to the columns or tables this service needs.</p>
+<p>Tool inputs use Pydantic models with extra fields forbidden and explicit bounds where relevant. Response formatting is JSON for machine use or compact Markdown for readable summaries. Tests inject HTTP transports and database runners rather than reaching production services.</p>
+</section>
+
+<section>
+<h2>7. Development checks</h2>
+<pre>cd integrations/mcp
+python -m pip install -r requirements.txt
+python -m pytest -q
+python evals/check_answers.py
+python -m solarinet_mcp --check</pre>
+<p>The package requires Python 3.10+ and FastMCP SDK 1.x (<code>mcp&gt;=1.9.4,&lt;2</code>); the lower bound is needed for the streamable HTTP transport contract used here. At this checkpoint, the suite contains 86 tests and the evaluation has 10 fixture-backed questions.</p>
+</section>
+
+<p class="footer">SolariNet MCP · version 0.1.0 · Developer reference paired with the user guide in <code>README.html</code>. This guide documents code contracts; deployment against live API and database services requires separate integration verification.</p>
+</main>
+<script>
+document.getElementById("print-manual").addEventListener("click", function () { window.print(); });
+</script>
+</body>
+</html>

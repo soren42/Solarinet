@@ -20,6 +20,9 @@
 Description=SolariNet notification dispatcher (notifyd)
 After=network-online.target
 Wants=network-online.target
+; Rate-limit restarts. These are [Unit] directives; systemd ignores them in [Service].
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -29,11 +32,6 @@ WorkingDirectory=/home/jason/Code/Solarinet/deploy/notify
 ExecStart=/home/jason/Code/Solarinet/deploy/notify/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/notify/notifyd.py --config /home/jason/Code/Solarinet/deploy/notify/notify.conf
 Restart=on-failure
 RestartSec=5
-
-; notifyd already retries the AMQP connection internally, but a crash loop
-; from a bug should still back off rather than hammer the broker.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

@@ -12,8 +12,10 @@ function assert_true(bool $cond, string $message): void
 }
 
 $rc = new ReflectionClass(SolariCtl::class);
-assert_true($rc->getConstant('REPLY_CAP') === 16384,
+assert_true($rc->getConstant('REPLY_CAP') === 32768,
     'SolariCtl::REPLY_CAP must match src/server/solariCtl.c CTL_REPLY_CAP');
+assert_true($rc->getConstant('REQUEST_CAP') === 16384,
+    'SolariCtl::REQUEST_CAP must match src/server/solariCtl.c CTL_REQ_CAP');
 
 $parse = $rc->getMethod('parseReply');
 $parse->setAccessible(true);
@@ -27,5 +29,10 @@ $err = $parse->invoke(null, "ERR -61 operator required\n");
 assert_true($err['ok'] === false, 'ERR reply should parse as failure');
 assert_true($err['code'] === -61, 'ERR code should be preserved');
 assert_true($err['message'] === 'operator required', 'ERR message should be preserved');
+
+$statusForCode = $rc->getMethod('statusForCode');
+$statusForCode->setAccessible(true);
+assert_true($statusForCode->invoke(null, -1, 'active server required for discovery adoption') === 503,
+    'standby/lease role failures should be exposed as retryable service-unavailable responses');
 
 echo "SolariCtl parser/cap tests passed\n";

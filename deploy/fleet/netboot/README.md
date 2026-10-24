@@ -1,5 +1,19 @@
 # SolariNet Fleet — netboot & unattended install
 
+> **Security status: do not expose this service to shared networks.** The
+> current templates fetch scripts, unattended configs, kernels, and initrds
+> without a verified signature chain. F-07 is open; the signed trust contract
+> is at [`docs/rework/F07-signed-provisioning-contract.md`](../../../docs/rework/F07-signed-provisioning-contract.md).
+> Keep PXE isolated and disabled until its loader, installer, and firstboot
+> verification gates pass. A checksum downloaded from this same HTTP server is
+> not an authenticity check.
+
+The candidate `deploy/fleet/release_manifest.py` tool can stage and verify
+read-only CMS-signed release trees. It is not yet wired into this netboot flow:
+the current loader, per-MAC scripts, installer configs, kernels/initrds, and
+firstboot artifacts are still not verified end to end. Do not use the manual
+override or enable PXE on a shared network while that integration is incomplete.
+
 Netboot-driven, unattended OS installation for x86_64 (BIOS + UEFI) and arm64
 machines, plus the shared first-boot agent installer used by every path
 (including the Pi image builders under `../pi/`).

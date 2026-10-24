@@ -17,16 +17,16 @@
  *
  *   serverControlOnResult    - consume an inbound CONTROL_RESULT (0x31): parse
  *     the node's outcome TLVs (echoed verb + error magnitude, optional applied
- *     epoch) and fold it into per-node convergence via serverDbSetNodeApplied.
+ *     epoch) and fold it into per-node convergence after consuming its durable
+ *     pending directive record.
  *
- *   serverControlOnSurveyResp- consume an inbound SURVEY_RESP (0x21): parse it as
- *     a monitor report and hand it to serverMasterReconcile for authoritative
- *     state recomputation.
+ *   SURVEY_RESP uses the durable monitor-report path in serverIngest.c.
  *
  * The wire contract for CONTROL_RESULT mirrors what the monitor emits
  * (monitorControl.c): TLV_CTRL_VERB (u8) + TLV_ERROR_CODE (u16, 0 == success),
- * with an optional TLV_CTRL_TARGET_EPOCH (u64) reporting the epoch the node has
- * now applied. Parsing and the lastResult string formatting are factored into
+ * with TLV_CTRL_TARGET_EPOCH (u64) required for successful config convergence
+ * and optional for other verbs or failed results. Parsing and lastResult
+ * formatting are factored into
  * pure static helpers (no I/O) so they are unit-testable without a live MariaDB
  * or any sockets; only the two On* entry points touch serverDb / serverMaster.
  *
@@ -186,15 +186,17 @@ typedef struct {
     uint8_t  verb;          /* echoed solariCtrlVerb (0 if absent)           */
     uint16_t errCode;       /* error magnitude, 0 == success                 */
     uint64_t appliedEpoch;  /* epoch the node now reports applied            */
+    uint64_t lifeGeneration;/* decommission challenge identity              */
     bool     haveVerb;
     bool     haveErr;
     bool     haveEpoch;
+    bool     haveLifeGeneration;
 } serverControlResult;
 
-/* Parse a CONTROL_RESULT payload into res. Tolerant of unknown/extra TLVs and of
- * missing fields (a bare ACK-style result is legal: success is then assumed).
- * Pure: no I/O. Returns ERR_TLV_TRUNCATED on a malformed payload, else
- * SOLARI_OK. *res is zeroed first. */
+/* Parse a CONTROL_RESULT payload into res. Tolerant of unknown/extra TLVs;
+ * required-field validation happens at the state-changing boundary below.
+ * Pure: no I/O. Returns ERR_TLV_TRUNCATED on malformed payload, else SOLARI_OK.
+ * *res is zeroed first. */
 static solariStatus serverControlParseResult(const uint8_t *payload, size_t len,
                                              serverControlResult *res)
 {
@@ -224,6 +226,10 @@ static solariStatus serverControlParseResult(const uint8_t *payload, size_t len,
         case TLV_CTRL_TARGET_EPOCH:
             if (solariTlvReadU64(val, vlen, &res->appliedEpoch) == SOLARI_OK)
                 res->haveEpoch = true;
+            break;
+        case TLV_LIFE_GENERATION:
+            if (solariTlvReadU64(val, vlen, &res->lifeGeneration) == SOLARI_OK)
+                res->haveLifeGeneration = true;
             break;
         default:
             break;                        /* skip unknown TLVs (§5.6) */
@@ -268,19 +274,75 @@ solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
         return rc;
     }
 
+    /* A bare or uncorrelated ACK must never be interpreted as convergence. */
+    if (!correlationId || !res.haveVerb || !res.haveErr || res.verb == 0) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "control: incomplete or uncorrelated result from node=0x%llx (corr=%u)",
+                   (unsigned long long)nodeId, (unsigned)correlationId);
+        return ERR_INVALID_ARG;
+    }
+
     serverControlFormatResult(&res, lastResult, sizeof lastResult);
     whenMs = solariNowUnixMs();
 
-    /* Record convergence. If the node did not report an applied epoch we still
-     * record the outcome (epoch 0 leaves the stored applied epoch logically
-     * "unknown for this round"); the lastResult string is the operative signal
-     * the dashboard surfaces. */
-    rc = serverDbSetNodeApplied(ctx->db, nodeId, res.appliedEpoch,
-                                lastResult, whenMs);
+    /* Decommission generation is a lifecycle identity, not a config epoch.
+     * Do not feed it into applied-epoch convergence. Only a successful,
+     * generation-matched result from this TLS-authenticated node retires it. */
+    if (res.haveVerb && res.verb == CTRL_DECOMMISSION) {
+        if (!res.haveErr || !res.haveLifeGeneration || res.lifeGeneration == 0) {
+            solariLogf(SOLARI_LOG_WARN,
+                       "control: incomplete decommission result from node=0x%llx (corr=%u)",
+                       (unsigned long long)nodeId, (unsigned)correlationId);
+            return ERR_INVALID_ARG;
+        }
+        if (res.errCode != 0) {
+            solariLogf(SOLARI_LOG_WARN,
+                       "control: node=0x%llx reported decommission failure code=%u generation=%llu",
+                       (unsigned long long)nodeId, (unsigned)res.errCode,
+                       (unsigned long long)res.lifeGeneration);
+            return ERR_PLATFORM;
+        }
+        rc = serverDbDecommissionAck(ctx->db, nodeId, res.lifeGeneration);
+        if (rc != SOLARI_OK) {
+            solariLogf(SOLARI_LOG_WARN,
+                       "control: ignored stale or unmatched decommission ack from node=0x%llx generation=%llu",
+                       (unsigned long long)nodeId,
+                       (unsigned long long)res.lifeGeneration);
+            return rc;
+        }
+        solariLogf(SOLARI_LOG_INFO,
+                   "control: node=0x%llx decommission generation=%llu acknowledged (corr=%u)",
+                   (unsigned long long)nodeId,
+                   (unsigned long long)res.lifeGeneration, (unsigned)correlationId);
+        return SOLARI_OK;
+    }
+
+    /* Only config convergence can change appliedEpoch. Older agents may omit
+     * the optional epoch on non-config results. A successful convergence result
+     * without an epoch is recorded as unverified and never advances the epoch. */
+    if (res.errCode == 0 &&
+        (res.verb == CTRL_SET_CONFIG || res.verb == CTRL_PROVISION) &&
+        !res.haveEpoch) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "control: result without applied epoch from node=0x%llx (corr=%u)",
+                   (unsigned long long)nodeId, (unsigned)correlationId);
+        (void)snprintf(lastResult, sizeof lastResult, "epoch-missing");
+    }
+
+    /* Record convergence only after the required result fields were validated. */
+    rc = serverDbControlResultApply(ctx->db, nodeId, correlationId, res.verb,
+                                    res.appliedEpoch, res.haveEpoch, res.errCode,
+                                    lastResult, whenMs);
     if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_ERROR,
-                   "control: record applied for node=0x%llx (%s) failed: %s",
-                   (unsigned long long)nodeId, lastResult, solariStrError(rc));
+        if (rc == ERR_AUTH_ROLE) {
+            solariLogf(SOLARI_LOG_INFO,
+                       "control: ignored unmatched or duplicate result from node=0x%llx (corr=%u)",
+                       (unsigned long long)nodeId, (unsigned)correlationId);
+        } else {
+            solariLogf(SOLARI_LOG_ERROR,
+                       "control: record applied for node=0x%llx (%s) failed: %s",
+                       (unsigned long long)nodeId, lastResult, solariStrError(rc));
+        }
         return rc;
     }
 
@@ -289,42 +351,5 @@ solariStatus serverControlOnResult(serverContext *ctx, uint64_t nodeId,
                (unsigned long long)nodeId, (unsigned)res.verb,
                (unsigned)correlationId,
                (unsigned long long)res.appliedEpoch, lastResult);
-    return SOLARI_OK;
-}
-
-/* ------------------------------------------------- serverControlOnSurveyResp */
-
-solariStatus serverControlOnSurveyResp(serverContext *ctx, uint64_t nodeId,
-                                       const uint8_t *payload, size_t len)
-{
-    solariMonitorReport rep;
-    solariStatus        rc;
-
-    if (!ctx) return ERR_INVALID_ARG;
-    if (!payload && len > 0) return ERR_INVALID_ARG;
-
-    /* A SURVEY_RESP carries the same body as a MONITOR_REPORT - the node's
-     * immediate probe round. Parse it back into a report (the parser zeroes the
-     * struct, skips unknown TLVs, and drops overflow entries) and hand the
-     * authoritative reconciliation to master. */
-    rc = solariMsgParseMonitorReport(payload, len, &rep);
-    if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_WARN,
-                   "control: malformed SURVEY_RESP from node=0x%llx: %s",
-                   (unsigned long long)nodeId, solariStrError(rc));
-        return rc;
-    }
-
-    rc = serverMasterReconcile(ctx, nodeId, &rep);
-    if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_WARN,
-                   "control: reconcile SURVEY_RESP from node=0x%llx failed: %s",
-                   (unsigned long long)nodeId, solariStrError(rc));
-        return rc;
-    }
-
-    solariLogf(SOLARI_LOG_DEBUG,
-               "control: SURVEY_RESP node=0x%llx (%u probes) reconciled",
-               (unsigned long long)nodeId, (unsigned)rep.probeCount);
     return SOLARI_OK;
 }

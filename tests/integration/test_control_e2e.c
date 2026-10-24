@@ -16,7 +16,9 @@
  * plus restart persistence: a fresh config + state reload keeps the pushed
  * values. No TLS (the wrapper's TLS path is covered elsewhere) and no DB.
  */
+#define _GNU_SOURCE
 #include "unity.h"
+#include "../test_temp_path.h"
 
 #include "clientControl.h"
 
@@ -28,15 +30,22 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define PUB_URL  "tcp://127.0.0.1:8811"
 #define PULL_URL "tcp://127.0.0.1:8812"
 #define DIRECTIVE_SEQ 7701u
 #define TARGET_EPOCH  5ull
-#define STATE_FILE "/tmp/solari_test_ctrl_state"
+static char stateFile[512];
 
-void setUp(void) {}
-void tearDown(void) {}
+void setUp(void)
+{
+    char leaf[96];
+    snprintf(leaf, sizeof leaf, "solari_test_ctrl_state_%ld", (long)getpid());
+    TEST_ASSERT_TRUE(solariTestTempPath(stateFile, sizeof stateFile, leaf));
+    remove(stateFile);
+}
+void tearDown(void) { remove(stateFile); }
 
 /* Build a complete CONTROL frame the way the active master does: shared
  * solariMsgBuildControl payload + a header whose correlationId echoes its own
@@ -90,7 +99,6 @@ static void test_config_push_end_to_end(void)
     bool converged = false;
     const char *blob = "{\"sampleIntervalSec\":9,\"processes\":[\"sshd\"]}";
 
-    remove(STATE_FILE);
 
     /* --- "server": PUB (directives out) + PULL (ingest in) --- */
     memset(&pubOpts, 0, sizeof pubOpts);
@@ -109,7 +117,8 @@ static void test_config_push_end_to_end(void)
     snprintf(cfg.hostFqdn, sizeof cfg.hostFqdn, "e2e.test");
     snprintf(cfg.primaryUrl, sizeof cfg.primaryUrl, "%s", PULL_URL);
     snprintf(cfg.subUrl, sizeof cfg.subUrl, "%s", PUB_URL);
-    snprintf(cfg.ctrlStateFile, sizeof cfg.ctrlStateFile, "%s", STATE_FILE);
+    TEST_ASSERT_TRUE(strlen(stateFile) < sizeof cfg.ctrlStateFile);
+    memcpy(cfg.ctrlStateFile, stateFile, strlen(stateFile) + 1);
 
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientContextInit(&ctx, &cfg));
     (void)clientConnect(&ctx);
@@ -134,7 +143,7 @@ static void test_config_push_end_to_end(void)
 
     /* --- ingest side: the CONTROL_RESULT arrives with the correlation echo
      * and the applied epoch (what serverControlOnResult folds into
-     * serverDbSetNodeApplied -> convergence clears). --- */
+     * durable directive consumption -> convergence clears). --- */
     for (tries = 0; tries < 40 && !converged; tries++) {
         const uint8_t *rx = NULL, *payload = NULL;
         size_t rlen = 0, plen = 0;
@@ -177,7 +186,8 @@ static void test_config_push_end_to_end(void)
         clientConfig cfg2;
         clientControlState cst2;
         clientConfigDefaults(&cfg2);
-        snprintf(cfg2.ctrlStateFile, sizeof cfg2.ctrlStateFile, "%s", STATE_FILE);
+        TEST_ASSERT_TRUE(strlen(stateFile) < sizeof cfg2.ctrlStateFile);
+        memcpy(cfg2.ctrlStateFile, stateFile, strlen(stateFile) + 1);
         TEST_ASSERT_EQUAL_INT(SOLARI_OK, clientControlStateLoad(&cst2, &cfg2));
         TEST_ASSERT_EQUAL_UINT64(TARGET_EPOCH, cst2.appliedEpoch);
         TEST_ASSERT_EQUAL_UINT32(9, cfg2.sampleIntervalSec);
@@ -189,7 +199,6 @@ static void test_config_push_end_to_end(void)
     clientContextClose(&ctx);
     solariConnClose(pub);
     solariConnClose(pull);
-    remove(STATE_FILE);
 }
 
 int main(void)

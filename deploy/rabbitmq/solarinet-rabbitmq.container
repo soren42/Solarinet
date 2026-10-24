@@ -1,0 +1,27 @@
+[Unit]
+Description=SolariNet RabbitMQ broker
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=docker.io/library/rabbitmq:3.13.7-management@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
+Pull=never
+ContainerName=rabbitmq
+EnvironmentFile=/etc/solarinet/rabbitmq.env
+Volume=rabbitmq-data:/var/lib/rabbitmq
+PublishPort=5672:5672
+PublishPort=15672:15672
+HealthCmd=rabbitmq-diagnostics -q check_running
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+HealthStartPeriod=60s
+HealthOnFailure=kill
+
+[Service]
+Restart=always
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

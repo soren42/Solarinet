@@ -20,7 +20,11 @@
 Description=SolariNet Authenticator approval broker (authbrokerd)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
+StartLimitIntervalSec=60
+StartLimitBurst=5
 [Service]
 Type=simple
 User=jason
@@ -31,8 +35,6 @@ ExecStart=/home/jason/Code/Solarinet/deploy/authbroker/.venv/bin/python3 \
     --config /home/jason/Code/Solarinet/deploy/authbroker/authbroker.conf
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 # Hardening: the broker needs only network + its config.
 NoNewPrivileges=true

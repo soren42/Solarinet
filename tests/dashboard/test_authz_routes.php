@@ -14,6 +14,8 @@ declare(strict_types=1);
  *   operator/admin, except the two intentional auth exceptions:
  *     POST /api/auth/login  -> public   (pre-session credential exchange)
  *     POST /api/auth/logout -> session  (authenticated, CSRF-protected)
+ *     POST /api/enrollments -> public   (256-bit bearer token + CSR bootstrap)
+ *     POST /api/enrollments/ack -> public (same bearer confirms cert installation)
  *
  * This is the guard that catches a NEW ungated write route the moment it is
  * added — the exact regression (~13 silently-ungated writes) that motivated the
@@ -57,6 +59,8 @@ assert_true(count($routes) > 0, 'route table must not be empty');
 $writeExceptions = [
     'POST /api/auth/login'  => 'public',
     'POST /api/auth/logout' => 'session',
+    'POST /api/enrollments' => 'public',
+    'POST /api/enrollments/ack' => 'public',
 ];
 
 $readable = static function (string $regex): string {

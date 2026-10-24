@@ -25,6 +25,8 @@ enum solariTlvType {
     TLV_AGENT_VERSION     = 0x0102,  /* utf8 string                        */
     TLV_HOST_FQDN         = 0x0103,  /* utf8 string                        */
     TLV_CONFIG_EPOCH      = 0x0104,  /* uint64                             */
+    TLV_REPORT_SESSION    = 0x0105,  /* 16 random bytes per reporter incarnation */
+    TLV_CRL_ACTIVATION    = 0x0106,  /* ASCII issuerFp:number:crlFp receipt */
     /* --- host metrics (0x10xx) --- */
     TLV_OS_NAME           = 0x1001,  /* utf8                               */
     TLV_ARCH              = 0x1002,  /* utf8                               */
@@ -65,6 +67,7 @@ enum solariTlvType {
     TLV_LIFE_CONFIRM      = 0x3201,  /* uint64: echo token the server must match to */
                                      /* authorize a destructive decommission        */
     TLV_LIFE_WIPE_SCOPE   = 0x3202,  /* uint8 bitfield: config|certs|spool|logs|unit */
+    TLV_LIFE_GENERATION   = 0x3203,  /* uint64 challenge generation / result identity */
     /* --- error (0xFFxx) --- */
     TLV_ERROR_CODE        = 0xFF01,  /* uint16 (Appendix A)                */
     TLV_ERROR_DETAIL      = 0xFF02   /* utf8                               */

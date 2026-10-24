@@ -1,7 +1,6 @@
 /*
  * test_server_provision.c - pure layer of serverProvision.c (§7.3, §7.4):
- *   - the one-time decommission confirm-token derivation (deterministic from its
- *     inputs, never 0, sensitive to every input);
+ *   - cryptographic decommission-token generation and digest formatting;
  *   - HRW owner selection over a fleet (determinism + tie-break by nodeId);
  *   - the control-frame TLV payload builders (PROVISION / DECOMMISSION / ADOPT),
  *     verified by parsing the bytes back with the real TLV reader.
@@ -24,26 +23,37 @@ void tearDown(void) {}
 
 /* ---- confirm token ---- */
 
-static void test_confirm_token_deterministic(void)
+static void test_confirm_token_random_and_hashed(void)
 {
-    uint64_t a = provDeriveConfirmToken(0x1234, WIPE_CONFIG | WIPE_CERTS,
-                                        "alice", 1700000000000ULL, 42);
-    uint64_t b = provDeriveConfirmToken(0x1234, WIPE_CONFIG | WIPE_CERTS,
-                                        "alice", 1700000000000ULL, 42);
-    TEST_ASSERT_EQUAL_HEX64(a, b);          /* reproducible for fixed inputs */
-    TEST_ASSERT_NOT_EQUAL(0, a);            /* 0 is reserved for "none" */
+    uint64_t a = 0, b = 0;
+    char hashA[65], hashB[65];
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, provRandomConfirmToken(&a));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, provRandomConfirmToken(&b));
+    TEST_ASSERT_NOT_EQUAL_UINT64(0, a);
+    TEST_ASSERT_NOT_EQUAL_UINT64(a, b);
+    provConfirmTokenHash(a, hashA);
+    provConfirmTokenHash(a, hashB);
+    TEST_ASSERT_EQUAL_STRING(hashA, hashB); /* stable digest for the challenge row */
+    TEST_ASSERT_EQUAL_size_t(64, strlen(hashA));
 }
 
-static void test_confirm_token_input_sensitive(void)
+static void test_provision_identity_matches_shared_derivation(void)
 {
-    uint64_t base = provDeriveConfirmToken(0x1234, WIPE_CONFIG, "alice",
-                                           1700000000000ULL, 42);
-    /* every input must move the token */
-    TEST_ASSERT_NOT_EQUAL(base, provDeriveConfirmToken(0x9999, WIPE_CONFIG, "alice", 1700000000000ULL, 42));
-    TEST_ASSERT_NOT_EQUAL(base, provDeriveConfirmToken(0x1234, WIPE_CERTS,  "alice", 1700000000000ULL, 42));
-    TEST_ASSERT_NOT_EQUAL(base, provDeriveConfirmToken(0x1234, WIPE_CONFIG, "bob",   1700000000000ULL, 42));
-    TEST_ASSERT_NOT_EQUAL(base, provDeriveConfirmToken(0x1234, WIPE_CONFIG, "alice", 1700000000001ULL, 42));
-    TEST_ASSERT_NOT_EQUAL(base, provDeriveConfirmToken(0x1234, WIPE_CONFIG, "alice", 1700000000000ULL, 43));
+    TEST_ASSERT_EQUAL_UINT64(
+        solariNodeIdFromFqdnRole("argon.akoria.net", ROLE_CLIENT),
+        provNodeIdForIdentity("argon.akoria.net", ROLE_CLIENT));
+    TEST_ASSERT_EQUAL_UINT64(0,
+        provNodeIdForIdentity("", ROLE_CLIENT));
+}
+
+static void test_enrollment_node_id_is_stable_by_role_and_host(void)
+{
+    uint64_t client = provNodeIdForIdentity("beryl.akoria.net", ROLE_CLIENT);
+    uint64_t monitor = provNodeIdForIdentity("beryl.akoria.net", ROLE_MONITOR);
+    TEST_ASSERT_EQUAL_HEX64(solariFnv1a64Str("beryl.akoria.net|1"), client);
+    TEST_ASSERT_EQUAL_HEX64(solariFnv1a64Str("beryl.akoria.net|2"), monitor);
+    TEST_ASSERT_NOT_EQUAL(client, monitor);
+    TEST_ASSERT_NOT_EQUAL(0, client);
 }
 
 /* ---- HRW owner selection ---- */
@@ -122,19 +132,31 @@ static void test_build_provision_payload(void)
 static void test_build_decommission_payload(void)
 {
     uint8_t buf[256]; size_t len = 0; uint16_t count = 0;
-    solariStatus st = provBuildDecommissionPayload(0xCAFEBABEULL,
+    solariStatus st = provBuildDecommissionPayload(0x1122334455667788ULL,
+                          0xCAFEBABEULL,
                           WIPE_CONFIG | WIPE_CERTS | WIPE_SPOOL,
                           buf, sizeof buf, &len, &count);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, st);
-    TEST_ASSERT_EQUAL_UINT16(3, count);   /* verb + confirm + wipescope */
+    TEST_ASSERT_EQUAL_UINT16(4, count);   /* verb + target + generation + wipescope */
 
-    uint8_t verb = 0, scope = 0; uint64_t tok = 0;
+    uint8_t verb = 0, scope = 0; uint64_t target = 0, generation = 0;
     TEST_ASSERT_TRUE(findTlvU8 (buf, len, TLV_CTRL_VERB, &verb));
-    TEST_ASSERT_TRUE(findTlvU64(buf, len, TLV_LIFE_CONFIRM, &tok));
+    TEST_ASSERT_TRUE(findTlvU64(buf, len, TLV_CTRL_TARGET_NODE, &target));
+    TEST_ASSERT_TRUE(findTlvU64(buf, len, TLV_LIFE_GENERATION, &generation));
     TEST_ASSERT_TRUE(findTlvU8 (buf, len, TLV_LIFE_WIPE_SCOPE, &scope));
     TEST_ASSERT_EQUAL_UINT8(CTRL_DECOMMISSION, verb);
-    TEST_ASSERT_EQUAL_HEX64(0xCAFEBABEULL, tok);
+    TEST_ASSERT_EQUAL_HEX64(0x1122334455667788ULL, target);
+    TEST_ASSERT_EQUAL_HEX64(0xCAFEBABEULL, generation);
     TEST_ASSERT_EQUAL_UINT8(WIPE_CONFIG | WIPE_CERTS | WIPE_SPOOL, scope);
+}
+
+static void test_decommission_retry_backoff_is_bounded(void)
+{
+    TEST_ASSERT_EQUAL_UINT64(5000, provDecommissionRetryDelayMs(0));
+    TEST_ASSERT_EQUAL_UINT64(10000, provDecommissionRetryDelayMs(1));
+    TEST_ASSERT_EQUAL_UINT64(160000, provDecommissionRetryDelayMs(5));
+    TEST_ASSERT_EQUAL_UINT64(300000, provDecommissionRetryDelayMs(6));
+    TEST_ASSERT_EQUAL_UINT64(300000, provDecommissionRetryDelayMs(UINT32_MAX));
 }
 
 static void test_build_adopt_payload(void)
@@ -158,12 +180,14 @@ static void test_build_adopt_payload(void)
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_confirm_token_deterministic);
-    RUN_TEST(test_confirm_token_input_sensitive);
+    RUN_TEST(test_confirm_token_random_and_hashed);
+    RUN_TEST(test_provision_identity_matches_shared_derivation);
+    RUN_TEST(test_enrollment_node_id_is_stable_by_role_and_host);
     RUN_TEST(test_hrw_top_owner);
     RUN_TEST(test_hrw_weight_keying);
     RUN_TEST(test_build_provision_payload);
     RUN_TEST(test_build_decommission_payload);
+    RUN_TEST(test_decommission_retry_backoff_is_bounded);
     RUN_TEST(test_build_adopt_payload);
     return UNITY_END();
 }

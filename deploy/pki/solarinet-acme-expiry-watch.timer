@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly SolariNet web certificate expiry check
+
+[Timer]
+OnCalendar=*-*-* *:05:00
+RandomizedDelaySec=5m
+AccuracySec=1m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -35,6 +35,7 @@ return static function (Router $router): void {
         __DIR__ . '/routes/identity.php',
         __DIR__ . '/routes/push.php',
         __DIR__ . '/routes/provisioning.php',
+        __DIR__ . '/routes/network_allocator.php',
         __DIR__ . '/routes/inventory.php',
         // inv_codes.php MUST load immediately after inventory.php: it reuses
         // inventory.php's `Inv` class + inv_* helpers and must never re-require

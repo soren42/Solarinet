@@ -196,18 +196,24 @@ solariStatus serverMasterAcceptHello(serverContext *ctx,
     if (!ctx || !ctx->db || !hdr || !hello || !out || !outLen || !tlvCount)
         return ERR_INVALID_ARG;
 
+    if (!serverIngestHelloMatchesIdentity(hello->role, hello->hostFqdn,
+                                          peerCertCn)) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "master: reject HELLO identity src=0x%llx host=%s cert=%s",
+                   (unsigned long long)hdr->sourceNodeId,
+                   hello->hostFqdn[0] ? hello->hostFqdn : "(empty)",
+                   peerCertCn ? peerCertCn : "(none)");
+        return ERR_AUTH_ROLE;
+    }
+
     /* The node's stable id rides in the frame header (§5.5); the HELLO body
      * carries its declared identity. Both are needed: the header id keys the
      * node row, the body supplies fqdn/role/epoch. */
     nodeId = hdr->sourceNodeId;
 
-    /* serverDbUpsertNode requires a non-NULL fqdn and certCn. Prefer the HELLO
-     * fqdn; the cert CN is the authenticated identity (may be NULL if the caller
-     * could not resolve it - fall back to the declared fqdn so the upsert still
-     * records something stable rather than failing the whole handshake). */
-    fqdn   = hello->hostFqdn[0] ? hello->hostFqdn : "";
-    certCn = (peerCertCn && peerCertCn[0]) ? peerCertCn
-           : (fqdn[0] ? fqdn : "");
+    /* The authenticated role.fqdn CN and HELLO body now agree exactly. */
+    fqdn   = hello->hostFqdn;
+    certCn = peerCertCn;
 
     /* Upsert the node from the HELLO. HELLO does not carry os/arch (only client
      * reports do), so we pass NULL for them - the upsert leaves the existing
@@ -280,20 +286,9 @@ solariStatus serverMasterReconcile(serverContext *ctx, uint64_t nodeId,
 
     if (!ctx || !ctx->db || !rep) return ERR_INVALID_ARG;
 
-    /* Persist this vantage's view first. probeCurrent is keyed
-     * (targetId, monitorNode), so writing the report records THIS monitor's
-     * per-target state without clobbering the other vantages' rows - that is
-     * the "merge overlapping reports" step: the merge is the keyed upsert, and
-     * the union across monitorNode rows is the multi-vantage matrix the
-     * dashboard reads. */
-    rc = serverDbWriteMonitorReport(ctx, nodeId, rep);
-    if (rc != SOLARI_OK) {
-        solariLogf(SOLARI_LOG_ERROR,
-                   "master: reconcile write monitor=0x%llx (%u probes) failed: %s",
-                   (unsigned long long)nodeId, (unsigned)rep->probeCount,
-                   solariStrError(rc));
-        return rc;
-    }
+    /* Ingest has already persisted this vantage plus its durable receipt.
+     * Reconciliation only updates the derived node health; appending here used
+     * to write every monitor report to probeHistory twice. */
 
     /* Compute the fused derived health from the probes this vantage reported and
      * record it on the monitor node's row. (A link-only / empty report yields

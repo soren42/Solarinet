@@ -23,6 +23,9 @@ typedef struct solariReporter solariReporter;
 typedef struct {
     const char *primaryUrl;     /* "tls+tcp://host:port" or "tcp://..."; required */
     const char *failoverUrl;    /* optional second server                        */
+    const char *ackUrl;         /* optional REQ/REP URL for durable reports; if
+                                 * absent, derive by incrementing primary port */
+    const char *ackFailoverUrl; /* optional ACK endpoint for failover server    */
     bool        useTls;
     const char *caFile;         /* TLS material (NULL when not using TLS)         */
     const char *certFile;
@@ -59,10 +62,10 @@ solariStatus solariReporterFrameCorr(solariReporter *r, uint8_t msgType, uint8_t
                                      uint16_t tlvCount,
                                      uint8_t *out, size_t cap, size_t *outLen);
 
-/* Send a prebuilt frame durably: push if connected; on transient/offline
- * failure, spool it (when a spool exists). On a successful live send,
- * opportunistically drains the spool. Returns SOLARI_OK when the frame was sent
- * OR spooled; ERR_CONN_RETRY when offline with no spool. */
+/* Send a prebuilt frame durably. CLIENT_REPORT, MONITOR_REPORT, and SURVEY_RESP
+ * use request/reply and are considered sent only after a matching server ACK;
+ * other frames retain the one-way PUSH behavior. Failures enter the spool when
+ * configured. Returns SOLARI_OK when sent/acknowledged OR spooled. */
 solariStatus solariReporterSend(solariReporter *r, const uint8_t *frame, size_t len);
 
 /* Send a frame best-effort only - never spooled. For low-value periodic traffic

@@ -48,6 +48,7 @@
 # is given, because copying a full rootfs is slow and usually staged separately.
 # =============================================================================
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/provisioning-guard.sh"
 
 log()  { printf '\033[1;36m[pi5-netboot]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[pi5-netboot][warn]\033[0m %s\n' "$*" >&2; }
@@ -88,6 +89,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+fleet_require_unverified_override || exit 1
 
 # ---- validation -------------------------------------------------------------
 [ "$(id -u)" -eq 0 ] || die "must run as root (loop mounts + TFTP tree). Use sudo."

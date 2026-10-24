@@ -15,6 +15,7 @@
 # =============================================================================
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-lib.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/provisioning-guard.sh"
 
 HOSTNAME_="" ARCH="" DISTRO="raspios" PROFILE="standard" ROLE="sensor" OP="dashboard"
 while [ $# -gt 0 ]; do
@@ -34,6 +35,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "${HOSTNAME_}" ] || fdie "--hostname required"
 case "${ARCH}" in arm64|arm32) ;; *) fdie "image builds are arm64/arm32 (Pi) only";; esac
+fleet_require_unverified_override || exit 1
 SERVER_NAME="$(printf '%s' "${SERVER_URL}" | sed -E 's#^[a-z+]+://##; s#:[0-9]+$##')"
 FQDN="${HOSTNAME_}.${DOMAIN}"
 OUT_IMG="${HTTP_ROOT}/images/${HOSTNAME_}-${ARCH}.img"
@@ -63,10 +65,11 @@ fi
 PKGS="${FLEET_CORE_PACKAGES}"
 [ "${PROFILE}" = "minimal" ] && PKGS="sudo curl ca-certificates openssh-server chrony rsync jq"
 PUBKEY="$(fleet_admin_pubkey || true)"
+UNVERIFIED_OVERRIDE="${SOLARI_ALLOW_UNVERIFIED_PROVISIONING:-0}"
 
 # ---- run the build on benzene (needs loop-mount; jason has passwordless sudo) -
 flog "running image build on benzene (this downloads the base image and can take several minutes)…"
-bssh "sudo bash ${PROV_ROOT}/pi/build-pi-image.sh \
+bssh "sudo env SOLARI_ALLOW_UNVERIFIED_PROVISIONING=${UNVERIFIED_OVERRIDE} bash ${PROV_ROOT}/pi/build-pi-image.sh \
     --hostname $(printf %q "${HOSTNAME_}") --fqdn $(printf %q "${FQDN}") --arch ${ARCH} \
     --admin-user $(printf %q "${ADMIN_USER}") --ssh-pubkey $(printf %q "${PUBKEY}") \
     --server-url $(printf %q "${SERVER_URL}") --server-name $(printf %q "${SERVER_NAME}") \

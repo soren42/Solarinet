@@ -11,9 +11,9 @@ Design (see deploy/opie/README.md):
   * Trigger: severity=crit ALWAYS; warn only when >= STORM_COUNT related warns land
     within STORM_WINDOW_SEC on the same node. Per-incident dedup via opieReport's
     UNIQUE incidentKey. Hourly cap so a cascade can't run up cost.
-  * Investigate: `claude -p --model <opus> --allowedTools "Bash(opie-probe:*) Read Grep Glob"`.
-    That allowlist is the ENTIRE tool surface — opie-probe only runs vetted
-    read-only commands, so an investigation cannot change anything.
+  * Investigate: Claude receives one structured `mcp__opie__probe` tool.
+    Bash and generic file tools are explicitly denied; the MCP server invokes
+    only the validated read-only probe.
   * Fail-soft: never crash the loop; a failed investigation marks the report
     'failed' and moves on.
 """
@@ -60,7 +60,7 @@ def connect_db(cfg):
     return pymysql.connect(
         host=cfg.get("db", "host", fallback="127.0.0.1"),
         port=cfg.getint("db", "port", fallback=3306),
-        user=cfg.get("db", "user", fallback="solari"),
+        user=cfg.get("db", "user", fallback="solari-opie"),
         password=db_password(cfg),
         database=cfg.get("db", "name", fallback="solarinet"),
         autocommit=True, connect_timeout=8, cursorclass=pymysql.cursors.DictCursor,
@@ -198,21 +198,22 @@ concrete recommendations — exactly what a good on-call sysadmin does for the t
 {related}
 
 ## How to investigate
-Use ONLY the `opie-probe` tool. It runs vetted READ-ONLY diagnostics on a host and is your entire
-toolbox (you cannot and must not change anything). Invoke it as shell commands, e.g.:
-  opie-probe {host} failed-units
-  opie-probe {host} unit certbot.service
-  opie-probe {host} logs certbot.service
-  opie-probe {host} kernel
-  opie-probe {host} disk
-  opie-probe {host} smart sda
-  opie-probe {host} dmesg-errors
-  opie-probe {host} net
-  opie-probe {host} load
-  opie-probe {host} service-conf <unit>
-Checks: failed-units, unit <u>, logs <u>, kernel, disk, mounts, smart <dev>, net, proc, load,
-dmesg-errors, service-conf <u>, ping. Run as many as you need to reach a confident root cause;
-follow the evidence. Be efficient — a handful of well-chosen probes beats twenty.
+Use ONLY the `probe` MCP tool. It runs one vetted READ-ONLY diagnostic on an explicitly
+allowlisted host. The tool accepts `host`, `check`, and optional `argument`; examples:
+  host={host}, check=failed-units
+  host={host}, check=unit, argument=certbot.service
+  host={host}, check=logs, argument=certbot.service
+  host={host}, check=kernel
+  host={host}, check=disk
+  host={host}, check=smart, argument=sda
+  host={host}, check=dmesg-errors
+  host={host}, check=net
+  host={host}, check=load
+  host={host}, check=service, argument=certbot.service
+Supported checks: failed-units, unit, logs, kernel, disk, mounts, smart, net, proc, load,
+dmesg-errors, service, ping. Supply `argument` only for unit, logs, smart, and service.
+Run as many as needed to reach a confident root cause; follow the evidence. Be efficient —
+a handful of well-chosen probes beats twenty.
 
 ## Output — end your response with EXACTLY these two fenced blocks and nothing after:
 <<<OPIE_SUMMARY>>>
@@ -244,12 +245,23 @@ def build_prompt(conn, ev):
 def investigate(cfg, prompt):
     model = cfg.get("opie", "model", fallback="claude-opus-4-8")
     timeout = cfg.getint("opie", "timeout_sec", fallback=600)
-    probe = cfg.get("opie", "probe_cmd", fallback="opie-probe")
-    allowed = f"Bash({probe}:*) Read Grep Glob"
-    cmd = ["claude", "-p", prompt, "--model", model, "--allowedTools", allowed]
+    mcp_config = cfg.get("opie", "mcp_config", fallback="/etc/solarinet/opie-mcp.json")
+    # The MCP probe is the only allowed tool. Deny Claude Code's shell and
+    # general file tools explicitly; tool permission rules are not a host OS
+    # sandbox, so do not grant Bash as a command-prefix shortcut.
+    denied = ["Bash", "Read", "Grep", "Glob", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Agent"]
+    cmd = ["claude", "-p", prompt, "--model", model, "--setting-sources", "user",
+           "--mcp-config", mcp_config, "--strict-mcp-config", "--tools", "",
+           "--allowedTools", "mcp__opie__probe", "--disallowedTools", *denied]
+    # The CLI launches the Bash tool as a child. Never pass DB or API
+    # credentials into that process tree where a diagnostic command could read
+    # them from its environment. Claude authentication is provisioned in its
+    # private service-account config directory instead.
+    secret_env = {"SOLARI_DB_PASS", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+    child_env = {key: value for key, value in os.environ.items() if key not in secret_env}
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                          cwd=cfg.get("opie", "workdir", fallback=SCRIPT_DIR))
+                          cwd=cfg.get("opie", "workdir", fallback=SCRIPT_DIR), env=child_env)
     dur = int(time.time() - t0)
     out = proc.stdout or ""
     if proc.returncode != 0:

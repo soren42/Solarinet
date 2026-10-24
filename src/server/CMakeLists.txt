@@ -68,10 +68,11 @@ if(SOLARI_WITH_DISCOVERY_TOOLS)
   target_compile_definitions(servercore PRIVATE SOLARI_WITH_DISCOVERY_TOOLS=1)
 endif()
 
-# SNMP polling tier (serverSnmp.c). OFF -> the IF-MIB walk is a no-op (ERR_PLATFORM)
-# and the pure parser is still unit-tested. ON shells out to the net-snmp CLI
-# (snmpbulkwalk) at runtime — no libnetsnmp link, so the core stays dependency-free.
-option(SOLARI_WITH_SNMP "Enable the SNMP gear-polling walk (needs net-snmp CLI at runtime)" OFF)
+# Optional SNMP paths (serverSnmp.c IF-MIB polling and serverTopology.c LLDP
+# topology discovery). OFF -> both fetch paths return ERR_PLATFORM, while pure
+# parsers remain available. ON shells out to net-snmp's snmpbulkwalk at runtime;
+# there is no libnetsnmp build-time dependency.
+option(SOLARI_WITH_SNMP "Enable IF-MIB polling and LLDP topology walks (needs net-snmp CLI at runtime)" OFF)
 if(SOLARI_WITH_SNMP)
   target_compile_definitions(servercore PUBLIC SOLARI_WITH_SNMP=1)
 endif()
@@ -84,24 +85,51 @@ if(MARIADB_INCS)
 endif()
 target_link_libraries(servercore PUBLIC solari ${MARIADB_LIBS})
 
-# Enable real CSR signing (serverCtlSignCsr) when the mbedTLS x509 writer headers
-# are available. solari already links mbedx509/mbedcrypto transitively under
-# SOLARI_WITH_IO; ensure the x509 lib is present for the writer symbols.
+# Enable real CSR signing only when the installed mbedTLS exposes the CSR SAN
+# API used by the identity contract. Older distro packages may provide the
+# headers but omit parsed CSR extensions; those builds must fail closed.
 if(SOLARI_WITH_IO)
-  include(CheckIncludeFile)
-  check_include_file("mbedtls/x509_csr.h" SOLARI_HAVE_X509_HDR)
-  if(SOLARI_HAVE_X509_HDR)
-    target_compile_definitions(servercore PRIVATE SOLARI_HAVE_MBEDTLS_X509=1)
-    find_library(MBEDX509_LIB NAMES mbedx509)
-    if(MBEDX509_LIB)
-      target_link_libraries(servercore PUBLIC ${MBEDX509_LIB})
+  include(CheckCSourceCompiles)
+  find_path(SOLARI_MBEDTLS_INCLUDE_DIR mbedtls/x509_csr.h)
+  if(SOLARI_MBEDTLS_INCLUDE_DIR)
+    set(_SOLARI_TRY_COMPILE_TYPE "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    set(CMAKE_REQUIRED_INCLUDES "${SOLARI_MBEDTLS_INCLUDE_DIR}")
+    set(CMAKE_REQUIRED_FLAGS "-Werror=implicit-function-declaration")
+    check_c_source_compiles("#include <mbedtls/x509.h>
+#include <mbedtls/x509_csr.h>
+int main(void) {
+    mbedtls_x509_csr csr;
+    mbedtls_x509_subject_alternative_name san;
+    const mbedtls_x509_sequence *entry = &csr.subject_alt_names;
+    if (entry && entry->buf.p)
+        (void) mbedtls_x509_parse_subject_alt_name(&entry->buf, &san);
+    mbedtls_x509_free_subject_alt_name(&san);
+    return 0;
+}" SOLARI_HAVE_MBEDTLS_CSR_SAN_API)
+    unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_FLAGS)
+    if(_SOLARI_TRY_COMPILE_TYPE)
+      set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_SOLARI_TRY_COMPILE_TYPE}")
+    else()
+      unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
     endif()
-    message(STATUS "solariServer: CSR signing enabled (mbedTLS x509)")
+  endif()
+  if(SOLARI_HAVE_MBEDTLS_CSR_SAN_API)
+    target_compile_definitions(servercore PRIVATE SOLARI_HAVE_MBEDTLS_X509=1)
+    message(STATUS "solariServer: CSR signing enabled (mbedTLS CSR SAN API)")
+  else()
+    message(STATUS "solariServer: CSR signing disabled; installed mbedTLS lacks CSR SAN support")
   endif()
 endif()
 
 add_executable(solariServer main.c)
 target_link_libraries(solariServer PRIVATE servercore)
+
+# Durable discovery scans run in a separate process with their own MariaDB
+# connection, leaving the server lease/control event loop responsive.
+add_executable(solariScanWorker scanWorkerMain.c)
+target_link_libraries(solariScanWorker PRIVATE servercore)
 
 # solariSnmpPoll — standalone SNMP polling driver (systemd-timer friendly).
 add_executable(solariSnmpPoll snmpPollMain.c)

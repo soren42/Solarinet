@@ -21,8 +21,8 @@ struct Settings {
 
   // MQTT transport (see mqttbus.*). Carries BOTH the push-approval traffic
   // (auth/request, auth/response) and background notifications (notify/#).
-  String mqttHost = "10.5.2.50";  // benzene (Mosquitto); TODO confirm DNS name
-  uint16_t mqttPort = 1883;       // 1883 plaintext for now; 8883 TLS follow-up
+  String mqttHost = "benzene.akoria.net";  // certificate-verified broker name
+  uint16_t mqttPort = 8883;                 // WiFiClientSecure only; no plaintext
   String mqttUser = "solari";
   String mqttPass;                // provisioned
   String notifyTopic = "notify/#";  // background alert toasts (optional)
@@ -81,6 +81,16 @@ class Config {
   bool saveDevicePubHex(const String& hex);  // enrolled pubkey (for display)
   String loadDevicePubHex();
 
+  // Approval trust anchors imported over the physically attached USB serial
+  // console. They are written by firmware into the encrypted `secrets` NVS.
+  bool saveBrokerRequestPubHex(const String& keyId, const String& hex);
+  String loadBrokerRequestPubHex(const String& keyId);
+  std::vector<String> brokerRequestKeyIds();
+  bool removeBrokerRequestKey(const String& keyId);
+  bool saveMqttCaPem(const String& pem);
+  String loadMqttCaPem();
+  bool clearApprovalTrust();
+
   // Panic-wipe: erase only the encrypted secrets partition contents.
   void panicWipeSecrets();
 
@@ -89,6 +99,7 @@ class Config {
   Preferences prefsTotp_;   // secrets partition, namespace "totp"
   Preferences prefsPm_;     // secrets partition, namespace "pm"
   Preferences prefsDev_;    // secrets partition, namespace "dev" (device key)
+  Preferences prefsTrust_;  // secrets partition, namespace "trust"
   Settings s_;
 };
 

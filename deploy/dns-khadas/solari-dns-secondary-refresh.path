@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch Xenon's generated primary zone list
+
+[Path]
+PathChanged=/etc/bind/named.conf.akoria
+PathChanged=/etc/bind/named.conf.bare
+PathChanged=/etc/bind/named.conf.local
+PathChanged=/etc/bind/named.conf.rpz
+PathChanged=/etc/bind/zones/db.rpz.akoria
+Unit=solari-dns-secondary-refresh.service
+
+[Install]
+WantedBy=multi-user.target

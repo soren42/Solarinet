@@ -10,6 +10,7 @@ dotted-quad.
 
 Config via env (same DB the seeder writes):
   SOR_DB_HOST      default 10.1.0.200
+  SOR_DB_PORT      default 3306
   SOR_DB_USER      default solari
   SOR_DB_PASSWORD  required
   SOR_DB_NAME      default sor
@@ -23,6 +24,7 @@ def load_source():
     """Source-of-truth boundary. Returns (domain, hosts, ifaces, cnames)."""
     cn = pymysql.connect(
         host=os.environ.get("SOR_DB_HOST", "10.1.0.200"),
+        port=int(os.environ.get("SOR_DB_PORT", "3306")),
         user=os.environ.get("SOR_DB_USER", "solari"),
         password=os.environ["SOR_DB_PASSWORD"],
         database=os.environ.get("SOR_DB_NAME", "sor"),

@@ -290,18 +290,24 @@ solariStatus solariConnPeerCn(solariConn *c, char *buf, size_t cap)
     if (!c || !buf || cap == 0) return ERR_INVALID_ARG;
     if (c->rxmsg == NULL) return ERR_CONN_RETRY;   /* no frame received yet */
 
-#ifndef NNG_OPT_TLS_PEER_CN
-    /* nng predates the peer-CN option (added after 1.5.x — e.g. Debian bookworm
-     * ships 1.5.2). Only the server tier extracts the peer CN and it is built
-     * against a newer nng; clients never call this, so degrade to "no CN". */
+#if !defined(NNG_OPT_TLS_PEER_CN) || !defined(NNG_OPT_TLS_VERIFIED)
+    /* Fail closed when the nng build lacks either peer verification or CN
+     * introspection; older distros may ship versions without these options. */
     (void)c;
     return ERR_TLS;
 #else
     char *cn = NULL;
     int   rv;
 
-    /* The peer CN is a property of the pipe the last message arrived on. On a
-     * plaintext transport (or an unverified peer) nng has no CN to report. */
+    /* Require the transport's chain-verification result before trusting any
+     * certificate identity, even though TLS listeners also request REQUIRED. */
+    {
+        bool verified = false;
+        rv = nng_pipe_get_bool(c->rxpipe, NNG_OPT_TLS_VERIFIED, &verified);
+        if (rv != 0 || !verified) return ERR_TLS;
+    }
+
+    /* The peer CN is a property of the pipe the last message arrived on. */
     rv = nng_pipe_get_string(c->rxpipe, NNG_OPT_TLS_PEER_CN, &cn);
     if (rv != 0 || cn == NULL) return ERR_TLS;
 
@@ -313,7 +319,10 @@ solariStatus solariConnPeerCn(solariConn *c, char *buf, size_t cap)
         size_t      n;
         if (strncmp(s, "CN=", 3) == 0) s += 3;
         n = strcspn(s, ",");                 /* CN value ends at the first comma */
-        if (n >= cap) n = cap - 1;
+        if (n >= cap) {
+            nng_strfree(cn);
+            return ERR_BUFFER_FULL;
+        }
         memcpy(buf, s, n);
         buf[n] = '\0';
     }

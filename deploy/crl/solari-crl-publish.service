@@ -1,0 +1,44 @@
+[Unit]
+Description=Validate and publish the current SolariNet CRL
+Documentation=https://github.com/soren42/Solarinet
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=solari-crl-publisher
+Group=solari-crl-publisher
+StateDirectory=solari-crl-published
+StateDirectoryMode=0755
+UMask=0027
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/libexec/solarinet/publish_crl.py --source /var/lib/solari-crl/current.pem --issuer-ca /var/lib/solarinet/pki/ca.pem --public-dir /var/lib/solari-crl-published
+
+# This identity can read the generated public CRL and CA certificate but has
+# no access to the CA key or database credentials. Its only writable state is
+# the static publication directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/var/lib/solari-crl /var/lib/solarinet/pki/ca.pem
+InaccessiblePaths=/var/lib/solarinet/pki/ca.key /etc/solarinet/crl-generator.my.cnf
+ReadWritePaths=/var/lib/solari-crl-published

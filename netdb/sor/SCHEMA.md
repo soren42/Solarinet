@@ -3,6 +3,17 @@
 Database: **`sor`** on cesium (10.1.0.200, MariaDB 12.3, InnoDB, utf8mb4).
 DDL: [`schema.sql`](schema.sql) — validated end-to-end against a throwaway
 `sor_val` schema on cesium (full load, idempotent re-run, view smoke test).
+The current fully applied schema snapshot is [`schema.snapshot.sql`](schema.snapshot.sql),
+generated from `schema.sql` plus every SoR migration by
+`python3 tools/export_schema.py --database sor`. Install and upgrade through
+`tools/migrate.py`; the snapshot is not the ledgered migration path.
+Migrations 022–023 own the transactional outbox tables and CDC triggers used by
+`deploy/sorsync`; fresh schemas must not install those objects through the old
+standalone SQL bootstrap.
+Likewise, `schema.sql` may declare the migration-028 association table, but the
+registry is not operational until `tools/migrate.py` applies migration 028 and
+installs its entity synchronization triggers. Never provision a fresh SoR by
+running `schema.sql` alone.
 
 The SoR is the authoritative store for the whole homelab: inventory,
 network, identity, configuration, and current state. It is **never populated
@@ -267,7 +278,8 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 
 ## 7. RackWire additions (`migrations/020_rackwire.sql`)
 
-RackWire is the browser-based connection planner (`dashboard/public/rackwire/`).
+RackWire is the browser-based network, power, and interconnect planner
+(`dashboard/public/rackwire/`); rack layouts are optional.
 Migration 020 gives it plan storage and gives the SoR a power model, per
 CONTRACT-RW v1.0 §1. Power deliberately reuses the existing shape rather than
 opening a parallel domain: **power ports are `interfaces` rows, power cords are
@@ -284,6 +296,8 @@ Changes to existing tables:
 
 - `interconnects.link_kind` gains `'power'` — a power cord is an ordinary
   interconnect between a `power_outlet` and a `power_inlet`.
+- Migration 027 adds `media_standard` and `jacket_color` to `interconnects`;
+  RackWire commits and reads them alongside label, length, and notes.
 - `interfaces.if_kind` gains `'power_inlet'` and `'power_outlet'`.
 - `interfaces` gains nullable `circuit_id` (FK → `power_circuits`, `ON DELETE
   SET NULL`), `watts_rated`, and `poe_class`. Purely network interfaces leave
@@ -305,10 +319,36 @@ Two conventions differ slightly from §6 and are intentional:
   `information_schema.COLUMNS` probe under `PREPARE`/`EXECUTE`, so re-running the
   migration skips the (table-rewriting) alter entirely.
 
-No CDC triggers are attached to the new tables — the sorsync bypass is intended.
-Writes to `interfaces` do still fire the existing CDC triggers; the appliers diff
-before acting.
+No CDC triggers are attached to the new RackWire tables — RackWire writes use a
+dedicated API and the sorsync bypass is intentional. Writes to `interfaces` do
+still fire the existing CDC triggers; appliers diff before acting. Migrations
+022 and 023 create the ledgered transactional outbox and core SoR CDC triggers.
+For the provisioning taxonomy added in migration 021, migration 024 adds
+transactional
+outbox triggers to `sources`, `functions`, `entity_functions`, and
+`function_incompatibility`. Migration 025 adds source-reported network state,
+a default-off allocator gate, and the approving operator/time audit fields. The
+dashboard review endpoint requires an enabled segment with exactly one live
+IPv4 subnet; source configuration changes revoke approval and clear its audit
+fields. Migration 026 adds outbox triggers
+to the UniFi-imported `vlans`, `dhcp_ranges`, and `external_refs`; the existing
+core trigger set already covers `networks` and `subnets`. The append-only
+`inventory_snapshots` table is not tracked. Scratch integration tests verify
+the event stream and roll back fixture rows and outbox entries together. These
+candidate migrations have not been applied to the live SoR.
 
 Applied on cesium only (`sudo mariadb sor < netdb/sor/migrations/020_rackwire.sql`);
 **cesium replicates to benzene**, so never apply it on benzene directly. Validate
 against a scratch schema first — never point tests at live `sor`.
+
+Migration 028 is authored but not yet applied to the live SoR. It adds the
+current one-to-one association registry between physical hardware units and
+network entities. Entity triggers keep the registry consistent with existing
+writers; dashboard association actions are explicitly operator selected and
+audited. The CI scratch migration check applies it twice to verify idempotence.
+Migration 027 adds the RackWire `media_standard` and `jacket_color` values to
+`interconnects`. The operator preflight and recovery sequence for candidate
+migrations 024–028
+is documented in §14 of the [Provisioning Plan](../../docs/SolariNet_Provisioning_Plan.html)
+and its [PDF](../../docs/SolariNet_Provisioning_Plan.pdf); the manual SQL is
+kept under `rollback/`, outside the forward migration stream.

@@ -3,17 +3,26 @@
  * enqueue while "offline", drain in order on "reconnect", honor backoff after a
  * failed send, and survive a process restart (reopen).
  */
+#define _GNU_SOURCE
 #include "unity.h"
 #include "solari/solariSpool.h"
 #include "solari/solariError.h"
+#include "../test_temp_path.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
-#define DBPATH "/tmp/solari_spool_test.db"
+static char dbPath[512];
 
-void setUp(void)   { remove(DBPATH); }
-void tearDown(void){ remove(DBPATH); }
+void setUp(void)
+{
+    char leaf[96];
+    snprintf(leaf, sizeof leaf, "solari_spool_test_%ld.db", (long)getpid());
+    TEST_ASSERT_TRUE(solariTestTempPath(dbPath, sizeof dbPath, leaf));
+    remove(dbPath);
+}
+void tearDown(void){ remove(dbPath); }
 
 static solariStatus pushStr(solariSpool *s, const char *str)
 {
@@ -27,7 +36,7 @@ static void test_open_empty(void)
     const uint8_t *frame = (const uint8_t *)1;
     size_t len = 9;
 
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(DBPATH, &s));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(dbPath, &s));
     TEST_ASSERT_EQUAL_size_t(0, solariSpoolDepth(s));
     /* empty queue: SOLARI_OK with frame == NULL, not an error */
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolPeek(s, &rowId, &frame, &len));
@@ -44,7 +53,7 @@ static void test_push_peek_ack_fifo(void)
     const uint8_t *frame = NULL;
     size_t len = 0;
 
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(DBPATH, &s));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(dbPath, &s));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, pushStr(s, "AAA"));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, pushStr(s, "BBBB"));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, pushStr(s, "CCCCC"));
@@ -77,7 +86,7 @@ static void test_nack_backoff_skips(void)
     const uint8_t *frame = NULL;
     size_t len = 0;
 
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(DBPATH, &s));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(dbPath, &s));
     pushStr(s, "first");
     pushStr(s, "second");
 
@@ -105,12 +114,12 @@ static void test_persistence_across_reopen(void)
     const uint8_t *frame = NULL;
     size_t len = 0;
 
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(DBPATH, &s));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(dbPath, &s));
     pushStr(s, "durable");
     solariSpoolClose(s);
 
     s = NULL;
-    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(DBPATH, &s));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolOpen(dbPath, &s));
     TEST_ASSERT_EQUAL_size_t(1, solariSpoolDepth(s));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariSpoolPeek(s, &id, &frame, &len));
     TEST_ASSERT_EQUAL_MEMORY("durable", frame, 7);

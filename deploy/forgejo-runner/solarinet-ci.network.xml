@@ -1,0 +1,15 @@
+<network>
+  <name>solarinet-ci</name>
+  <uuid>f1efdf16-d89d-4d1c-96f4-6dfeb01a0c0f</uuid>
+  <forward mode='nat'/>
+  <dns>
+    <forwarder domain='akoria.net' addr='10.0.0.20'/>
+    <forwarder addr='10.0.0.1'/>
+  </dns>
+  <bridge name='virbr-ci0' stp='on' delay='0'/>
+  <ip address='192.168.123.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.123.10' end='192.168.123.50'/>
+    </dhcp>
+  </ip>
+</network>

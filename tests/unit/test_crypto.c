@@ -19,6 +19,19 @@ static void test_fnv1a64_vectors(void)
     TEST_ASSERT_EQUAL_UINT64(0x85944171f73967e8ull, solariFnv1a64Str("foobar"));
 }
 
+static void test_node_id_role_vectors_and_invalid_inputs(void)
+{
+    TEST_ASSERT_EQUAL_HEX64(0x96907850e5b4c591ull,
+        solariNodeIdFromFqdnRole("argon.akoria.net", ROLE_CLIENT));
+    TEST_ASSERT_EQUAL_HEX64(0x96907550e5b4c078ull,
+        solariNodeIdFromFqdnRole("argon.akoria.net", ROLE_MONITOR));
+    TEST_ASSERT_EQUAL_HEX64(0x96907650e5b4c22bull,
+        solariNodeIdFromFqdnRole("argon.akoria.net", ROLE_SERVER));
+    TEST_ASSERT_EQUAL_UINT64(0, solariNodeIdFromFqdnRole(NULL, ROLE_CLIENT));
+    TEST_ASSERT_EQUAL_UINT64(0, solariNodeIdFromFqdnRole("", ROLE_CLIENT));
+    TEST_ASSERT_EQUAL_UINT64(0, solariNodeIdFromFqdnRole("node", (solariRole)0));
+}
+
 /* CRC-32 (IEEE) reference values. */
 static void test_crc32_vectors(void)
 {
@@ -102,6 +115,7 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_fnv1a64_vectors);
+    RUN_TEST(test_node_id_role_vectors_and_invalid_inputs);
     RUN_TEST(test_crc32_vectors);
     RUN_TEST(test_crc32_streaming);
     RUN_TEST(test_sha256_vectors);

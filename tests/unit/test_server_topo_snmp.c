@@ -1,18 +1,23 @@
 /* test_server_topo_snmp.c - pure LLDP-over-SNMP walk parsing/decoding of
  * serverTopology.c: the lldpRem/lldpLoc -Onq line parsers, the MAC/id decoder,
  * the lldpRemSysCapEnabled BITS -> TOPO_CAP_* converter, the (localPortNum,
- * remIndex) merge/group, and end-to-end finalize -> topoNormalizeMibRecord. No
- * DB, no SNMP backend (SOLARI_WITH_SNMP need not be defined - only the always-
- * compiled pure helpers are exercised). */
+ * remIndex) merge/group, finalize -> normalize, and the optional CLI fetch
+ * driver against a hermetic fake snmpbulkwalk. No DB or network device. */
 #include "unity.h"
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#define SOLARI_TEST_TOPO_LLDP 1
+#include "../test_temp_path.h"
 
 #include "serverTopology.c"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -192,6 +197,89 @@ static void test_finalize_wireless_ap(void)
     TEST_ASSERT_EQUAL_STRING("wireless", e.linkType);
 }
 
+/* Exercise the optional production fetch driver end to end without an SNMP
+ * device: the fake CLI returns one consistent LLDP neighbor across columns. */
+static void test_fetch_via_fake_snmpbulkwalk(void)
+{
+    char dir[512];
+    char executable[1024];
+    const char *oldPath = getenv("PATH");
+    char *savedPath = oldPath ? strdup(oldPath) : NULL;
+    FILE *fake;
+    topoLldpMibRecord records[4];
+    serverNetGear gear;
+    serverLldpEdge edge;
+    size_t count = 4;
+    size_t failedCount = 4;
+    solariStatus rc;
+    solariStatus failedRc;
+    int pathRc;
+
+    if (!solariTestTempDir(dir, sizeof dir, "solari-topo-snmp")) {
+        TEST_FAIL_MESSAGE("could not create fake SNMP tool directory");
+        return;
+    }
+    snprintf(executable, sizeof executable, "%s/snmpbulkwalk", dir);
+    fake = fopen(executable, "w");
+    if (!fake) {
+        rmdir(dir);
+        TEST_FAIL_MESSAGE("could not create fake snmpbulkwalk");
+        return;
+    }
+    fputs("#!/bin/sh\n"
+          "for arg do oid=$arg; done\n"
+          "if [ \"${SOLARI_SNMP_FAKE_FAIL:-}\" = 1 ] && [ \"$oid\" = .1.0.8802.1.1.2.1.4.1.1.5 ]; then exit 2; fi\n"
+          "case \"$oid\" in\n"
+          "  .1.0.8802.1.1.2.1.4.1.1.5) printf '%s\\n' '.1.0.8802.1.1.2.1.4.1.1.5.99.5.1 aa bb cc dd ee ff' ;;\n"
+          "  .1.0.8802.1.1.2.1.4.1.1.4) printf '%s\\n' '.1.0.8802.1.1.2.1.4.1.1.4.99.5.1 4' ;;\n"
+          "  .1.0.8802.1.1.2.1.4.1.1.7) printf '%s\\n' '.1.0.8802.1.1.2.1.4.1.1.7.99.5.1 \"Gi1/0/24\"' ;;\n"
+          "  .1.0.8802.1.1.2.1.4.1.1.6) printf '%s\\n' '.1.0.8802.1.1.2.1.4.1.1.6.99.5.1 5' ;;\n"
+          "  .1.0.8802.1.1.2.1.4.1.1.9) printf '%s\\n' '.1.0.8802.1.1.2.1.4.1.1.9.99.5.1 \"sw-core-01\"' ;;\n"
+          "  .1.0.8802.1.1.2.1.4.1.1.10) printf '%s\\n' '.1.0.8802.1.1.2.1.4.1.1.10.99.5.1 \"Managed switch\"' ;;\n"
+          "  .1.0.8802.1.1.2.1.4.1.1.12) printf '%s\\n' '.1.0.8802.1.1.2.1.4.1.1.12.99.5.1 \"20 00\"' ;;\n"
+          "  .1.0.8802.1.1.2.1.3.7.1.3) printf '%s\\n' '.1.0.8802.1.1.2.1.3.7.1.3.5 \"eth3\"' ;;\n"
+          "esac\n"
+          "exit 0\n", fake);
+    if (fclose(fake) != 0 || chmod(executable, 0700) != 0) {
+        unlink(executable);
+        rmdir(dir);
+        TEST_FAIL_MESSAGE("could not prepare fake snmpbulkwalk");
+        return;
+    }
+    pathRc = setenv("PATH", dir, 1);
+    if (pathRc == 0)
+        rc = topoSnmpFetchLldp("192.0.2.1", "public", records, &count);
+    else
+        rc = ERR_PLATFORM;
+    setenv("SOLARI_SNMP_FAKE_FAIL", "1", 1);
+    if (pathRc == 0)
+        failedRc = topoSnmpFetchLldp("192.0.2.1", "public", records, &failedCount);
+    else
+        failedRc = ERR_PLATFORM;
+    unsetenv("SOLARI_SNMP_FAKE_FAIL");
+    if (savedPath) setenv("PATH", savedPath, 1);
+    else unsetenv("PATH");
+    free(savedPath);
+    unlink(executable);
+    rmdir(dir);
+
+    TEST_ASSERT_EQUAL_INT(0, pathRc);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, rc);
+    TEST_ASSERT_EQUAL_UINT(1, count);
+    TEST_ASSERT_EQUAL_STRING("sw-core-01", records[0].sysName);
+    TEST_ASSERT_EQUAL_STRING("aa:bb:cc:dd:ee:ff", records[0].chassisId);
+    TEST_ASSERT_EQUAL_STRING("Gi1/0/24", records[0].portId);
+    TEST_ASSERT_EQUAL_STRING("eth3", records[0].localIf);
+    TEST_ASSERT_EQUAL_INT(TOPO_CAP_BRIDGE, records[0].capabilities);
+    TEST_ASSERT_EQUAL_STRING("Managed switch", records[0].sysDesc);
+    TEST_ASSERT_TRUE(topoNormalizeMibRecord(&records[0], 7, "", &gear, &edge));
+    TEST_ASSERT_EQUAL_STRING("switch", gear.kind);
+    TEST_ASSERT_TRUE(edge.viaLldp);
+    TEST_ASSERT_EQUAL_STRING("eth3", edge.localIf);
+    TEST_ASSERT_EQUAL_INT(ERR_PLATFORM, failedRc);
+    TEST_ASSERT_EQUAL_UINT(0, failedCount);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -204,5 +292,6 @@ int main(void)
     RUN_TEST(test_merge_group);
     RUN_TEST(test_finalize_and_normalize);
     RUN_TEST(test_finalize_wireless_ap);
+    RUN_TEST(test_fetch_via_fake_snmpbulkwalk);
     return UNITY_END();
 }

@@ -1,0 +1,12 @@
+# Include inside a TLS VirtualHost whose certificate is trusted by all peers.
+# The CRL publisher directory is public data; do not alias it from HTTP.
+Alias /solarinet/crl/ /var/lib/solari-crl-published/
+
+<Directory /var/lib/solari-crl-published>
+    Options -Indexes -FollowSymLinks
+    AllowOverride None
+    Require all granted
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+</Directory>

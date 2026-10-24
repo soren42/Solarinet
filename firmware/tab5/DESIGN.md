@@ -23,7 +23,7 @@ Everything is in **NVS**, split across two partitions (`partitions.csv`):
 | Partition | Namespace | Contents |
 |-----------|-----------|----------|
 | `nvs` (default) | `cfg` | non-secret: SSID, broker host, device id, PM URL, TZ, KDF params |
-| `secrets` (dedicated) | `totp`, `pm`, `dev` | TOTP seeds, PM key blob, **device signing key + pubkey**, Wi-Fi PSK |
+| `secrets` (dedicated) | `totp`, `pm`, `dev`, `trust` | TOTP seeds, PM key blob, device signing key, broker trust keys, MQTT CA, Wi-Fi PSK |
 
 A **dedicated `secrets` partition** lets us **panic-wipe just the secrets**
 (`Config::panicWipeSecrets` — now also clears `dev`) without erasing app/settings,
@@ -63,9 +63,9 @@ Burn release eFuses only on a finished unit; a mis-burn bricks re-flashing.
   (AES-CBC + HMAC verify before decrypt); wrong-password rejection offline.
 - **Not covered by the device alone:** a live attacker with the *unlocked*
   device in hand (approving on their behalf) — mitigated only by physical
-  possession + optional device unlock; sophisticated eFuse glitching; a
-  malicious MQTT/PM server if cert verification is left off (hence the
-  `setCACert` TODOs — pin the private CA, never ship `setInsecure()`).
+  possession + optional device unlock; sophisticated eFuse glitching; and a
+  compromised CA or broker. MQTT certificate verification uses the CA imported
+  in encrypted NVS; never ship `setInsecure()` or a plaintext fallback.
 
 ---
 
@@ -106,9 +106,17 @@ dashboard (or Keycloak)          authbrokerd                 Tab5
   component), and Python `cryptography` verifies it in three lines — hence chosen
   over Ed25519 (whose on-device mbedTLS support is not guaranteed on the pinned
   core).
-- **Canonical signed bytes** (both sides build identically, UTF-8):
-  `"<v>\n<id>\n<decision>\n<nonce>\n<device_id>"`. Fixed field order, newline
-  delimited, no JSON-canonicalization ambiguity.
+- **Canonical signed bytes** (both sides build identically): request and
+  response payloads use distinct domain separators, then fixed-order UTF-8
+  fields, each preceded by a four-byte unsigned big-endian byte length. The
+  request binds `v,kid,id,ts,ttl,action,subject,detail,source_ip,nonce,device`;
+  the response binds `v,id,decision,nonce,device_id,req_digest`. This avoids
+  delimiter ambiguity and binds the decision to the exact verified prompt.
+- **Broker trust and rotation:** public request-verification keys and the MQTT
+  CA are imported over attached USB serial and stored in encrypted `secrets`
+  NVS. Up to eight broker keys can coexist under key IDs during rotation. The
+  firmware rejects a request whose `kid` is not provisioned or whose signature
+  fails. MQTT uses CA-verified TLS only.
 - **Anti-replay:** the broker generates a 32-byte random `nonce` per request; the
   device echoes it inside the signed bytes. The broker checks the nonce matches
   the outstanding request, the id is still pending (single-use), and the response

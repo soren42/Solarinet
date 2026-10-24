@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SolariNet Status Panel — Developer Reference</title>
+<style>
+:root{color-scheme:light;--ink:#14232e;--muted:#536674;--line:#c9d5dc;--paper:#fff;--wash:#f1f6f8;--accent:#087a96;--warn:#9a5a00;--bad:#a32836;--code:#eaf0f3}
+html[data-theme="dark"]{color-scheme:dark;--ink:#e4edf4;--muted:#a9bac6;--line:#344653;--paper:#101a22;--wash:#182630;--accent:#54c5e4;--warn:#f3bb62;--bad:#ff7f8b;--code:#202e38}
+*{box-sizing:border-box}html{background:#e6edf0;color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}body{max-width:960px;margin:28px auto;padding:44px 58px 60px;background:var(--paper)}header{display:grid;grid-template-columns:68px 1fr;gap:18px;align-items:center;border-bottom:3px solid var(--accent);padding-bottom:24px}header svg{width:64px;height:64px}h1{font-size:2rem;line-height:1.12;letter-spacing:-.03em;margin:0}h2{font-size:1.32rem;line-height:1.2;color:var(--accent);border-bottom:1px solid var(--line);padding-bottom:6px;margin:32px 0 12px}h3{font-size:1rem;margin:20px 0 6px}p{margin:8px 0}.meta,.muted{color:var(--muted)}.meta{margin:5px 0 0}.lede{font-size:1.08rem;margin:22px 0}.note{border-left:4px solid var(--accent);background:var(--wash);padding:12px 15px;margin:16px 0}.warn{border-left-color:var(--warn)}.bad{border-left-color:var(--bad)}table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:.92rem}th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}th{background:var(--wash)}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--code);padding:.08em .28em;border-radius:3px;overflow-wrap:anywhere}pre{white-space:pre-wrap;background:var(--code);padding:12px 14px;border-radius:5px;font-size:.87rem;line-height:1.45;overflow-wrap:anywhere}ul,ol{padding-left:22px}li{margin:5px 0}.flow{display:grid;grid-template-columns:1fr 28px 1fr 28px 1fr;align-items:center;gap:8px;margin:16px 0}.box{border:1px solid var(--line);background:var(--wash);border-radius:7px;padding:12px}.box strong{display:block;color:var(--accent)}.arrow{text-align:center;color:var(--accent);font-size:1.4rem}.tag{font-size:.76rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}.small{font-size:.9rem}footer{border-top:1px solid var(--line);margin-top:34px;padding-top:12px;color:var(--muted);font-size:.82rem}.tools{position:fixed;right:14px;top:14px}.tools button{border:1px solid var(--line);background:var(--paper);color:var(--ink);padding:8px 12px;border-radius:5px;cursor:pointer}
+@media print{@page{size:letter;margin:.55in}.tools{display:none}html{background:#fff;font-size:10pt}body{max-width:none;margin:0;padding:0}h2{break-after:avoid}h3{break-after:avoid}pre,table,.note,.box{break-inside:avoid}#checklist{break-before:page}a{color:inherit;text-decoration:none}footer{margin-top:20px}}
+</style>
+</head>
+<body>
+<div class="tools"><button type="button" id="theme">Dark theme</button></div>
+<header>
+<svg viewBox="0 0 72 72" role="img" aria-label="SolariNet status panel mark"><rect x="2" y="2" width="68" height="68" rx="14" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15 48h42M20 40V27m8 13V18m8 22V31m8 9V22m8 18V14" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><circle cx="54" cy="54" r="4" fill="#087a96"/></svg>
+<div><h1>SolariNet Status Panel</h1><p class="meta">Developer reference · firmware, daemon, protocol, and dashboard integration · 21 October 2026</p></div>
+</header>
+<p class="lede">This guide is for engineers changing the Galactic Unicorn panel or its supporting software. The normative contracts remain <code>status-panel/protocol.h</code>, <code>CONTRACT.md</code>, <code>CONTRACT-CP.md</code>, <code>CONTRACT-AW.md</code>, and <code>CONTRACT-SW.md</code>; this reference explains how those pieces fit and how to verify a change.</p>
+<div class="note"><strong>Observed architecture:</strong> xenon composes fleet data and panel commands in the dashboard API. lithium runs <code>solariPanel</code>, which polls over verified HTTPS and transports snapshots/commands to the RP2350 over USB CDC. The firmware renders locally and reports state. An optional authenticated TLS listener supports the network transport path described by the software contract.</div>
+
+<h2>1. Component boundaries</h2>
+<div class="flow" aria-label="Data flow from dashboard to physical panel and back">
+ <div class="box"><strong>xenon · PHP API + SPA</strong><span class="small">Aggregates monitoring and inventory data; owns command queue and reported panel state.</span></div><div class="arrow" aria-hidden="true">→</div>
+ <div class="box"><strong>lithium · solariPanel</strong><span class="small">Authenticates as the panel service user, polls API, validates state, forwards commands, and uploads STATE/CONFIG.</span></div><div class="arrow" aria-hidden="true">→</div>
+ <div class="box"><strong>Galactic Unicorn · RP2350</strong><span class="small">Maintains display state, history, alarms, configuration, and local controls; renders at 25 Hz.</span></div>
+</div>
+<table><thead><tr><th>Component</th><th>Owns</th><th>Source of truth</th></tr></thead><tbody>
+<tr><td>Dashboard API</td><td>Fleet aggregates, alert episode identity, queued controls, last device-reported state, screen configuration</td><td>SolariNet monitoring/SoR databases and panel tables</td></tr>
+<tr><td>Daemon</td><td>HTTPS session, API validation, link lifecycle, serial/TLS framing, command forwarding, state/config upload</td><td>API for fleet/commands; panel STATE and CONFIG for applied device state</td></tr>
+<tr><td>Firmware</td><td>Physical controls, screen selection, pixel rendering, local history, link status, alarm indication, persisted screen preferences</td><td>Latest accepted snapshot plus locally observed controls/configuration</td></tr>
+</tbody></table>
+<p class="small">Do not duplicate scoring, command completion, or screen configuration authority in another layer. The server computes score and alarm state; the firmware reports consumed command IDs; persistent screen enable/weight values are confirmed by the panel's CONFIG report.</p>
+
+<h2>2. Wire protocol and compatibility</h2>
+<p><code>status-panel/protocol.h</code> is normative and <code>protocol.c</code> is compiled by both daemon and firmware. The frame uses magic bytes <code>A5 53</code>, protocol version <code>01</code>, type, little-endian payload length, payload, and CRC-16/CCITT over version through payload. Maximum payload is 2048 bytes; an incomplete frame expires after 500 ms. Parsers resynchronize on magic and reject bad CRCs without treating partial data as a message.</p>
+<table><thead><tr><th>Direction</th><th>Frames</th><th>Purpose</th></tr></thead><tbody>
+<tr><td>Host → panel</td><td><code>SNAPSHOT 0x01</code>, <code>PING 0x02</code>, <code>HELLOREQ 0x03</code>, <code>CONTROL 0x04</code>, <code>PROVISION 0x05</code></td><td>Fleet snapshot, link keepalive, capability/state request, idempotent control, USB-only provisioning chunks</td></tr>
+<tr><td>Panel → host</td><td><code>HELLO 0x81</code>, <code>EVENT 0x82</code>, <code>LOG 0x83</code>, <code>STATE 0x84</code>, <code>CONFIG 0x85</code>, <code>PROVACK 0x86</code></td><td>Firmware identity, local events, diagnostics, consumed command/device state, persisted preferences, provisioning progress</td></tr>
+</tbody></table>
+<div class="note warn"><strong>Compatibility rule:</strong> use the shared codec and fixed offsets; never cast a C struct onto wire bytes. Keep unknown frame types skippable, preserve additive payload handling, and make rollout order explicit in the relevant contract before changing a payload or command meaning.</div>
+<p>CONTROL commands are re-served until a STATE frame reports <code>lastCmdId</code>. A successful serial write does not complete a command. The firmware consumes IDs in ascending order, including invalid commands it rejects; server-side validation should make rejection unreachable in normal operation. A firmware reboot may replay still-pending idempotent commands during the bounded queue window.</p>
+
+<h2>3. Firmware change map</h2>
+<table><thead><tr><th>Area</th><th>Files</th><th>Change guidance</th></tr></thead><tbody>
+<tr><td>Boot, event loop, alarm and controls</td><td><code>firmware/main.c</code>, <code>panelCtl.c</code>, <code>panelPower.c</code></td><td>Keep input, alarm, power and command state transitions centralized. Hardware-free state logic belongs in testable modules.</td></tr>
+<tr><td>Link and network transport</td><td><code>panelLink.c</code>, <code>panelNet.c</code>, <code>panelNetFsm.c</code></td><td>Retain sequence ordering, timeout, reconnect and transport gating behavior. Do not reimplement link age arithmetic in render code.</td></tr>
+<tr><td>Rendering and histories</td><td><code>panelScreensA/B/C/D.c</code>, <code>panelInlay.c</code>, <code>panelHist.c</code>, <code>panelFont.c</code></td><td>Render from the environment and elapsed time. Histories advance on accepted snapshots, not on every 25 Hz frame.</td></tr>
+<tr><td>Persistent settings and provisioning</td><td><code>panelScreenCfg.c</code>, <code>panelProv.c</code>, <code>panelProvStore.c</code></td><td>Preserve validation, generation, CRC, A/B storage and torn-write behavior; test with fake flash before hardware.</td></tr>
+<tr><td>Physical driver boundary</td><td><code>panelHw.cpp</code></td><td>Keep C++ confined to the Pimoroni driver wrapper; the rest of the firmware is portable C.</td></tr>
+</tbody></table>
+<p>The display is 53×11 pixels. Four themes each contain three screens. The current physical behavior, thresholds and intentional deviations are documented in the operator manual and firmware comments; update both whenever visible meaning changes.</p>
+
+<h2>4. Daemon and API integration</h2>
+<p>The daemon implementation is standard C in <code>status-panel/daemon/</code>. It uses libcurl, OpenSSL, and the vendored cJSON 1.7.19 source. API TLS verification is enabled with the installed CA bundle; HTTP redirects are disabled; requests have bounded connect and total timeouts. The password is read from a dedicated file whose ownership and mode are checked. Keep secrets out of argv, logs, fixtures, and documentation.</p>
+<ul>
+<li>Configuration example: <code>daemon/solari-panel.conf.example</code>. The default serial glob is <code>/dev/serial/by-id/*</code>; a literal device path is also accepted.</li>
+<li>Systemd unit: <code>daemon/solari-panel.service</code>. It runs as <code>jason</code>, uses the <code>dialout</code> group, restarts after failure, and applies filesystem/kernel restrictions.</li>
+<li>Snapshot cadence defaults to two seconds; API polling defaults to five seconds. Transient API and serial failures preserve last valid data and use retry/backoff paths.</li>
+<li>Optional listener configuration requires an explicit bind address, TLS server certificate/key, client CA and allowed SAN. Wildcard binds are rejected by the daemon.</li>
+<li>The API service principal is read-only for fleet data and has narrowly scoped state/config reporting. Dashboard operators control command creation; UI role checks are not the authorization boundary.</li>
+</ul>
+<div class="note bad"><strong>Never claim a hardware rollout from host tests.</strong> Deployment acceptance also requires firmware identity/build checks, physical controls, alarm behavior, disconnect/reconnect, API outage recovery, and the applicable cross-lab review.</div>
+
+<h2>5. Build and test workflow</h2>
+<h3>Portable daemon</h3>
+<pre>cd status-panel/daemon
+make clean
+make
+make test</pre>
+<p>Build flags include C99, <code>-Wall -Wextra -Werror</code>. The listener test creates temporary certificates and exercises valid and invalid client identities, CA, certificate purpose, expiration, denylist, and file permissions.</p>
+<h3>Firmware state machines and rendering</h3>
+<pre>cd status-panel/firmware/test
+make clean
+make</pre>
+<p>This uses the host compiler only; it does not build a flashable UF2. It covers link ordering/liveness, commands, configuration, provisioning, help, network state, power, renderer safety, and framebuffer parity fixtures with sanitizers on selected suites.</p>
+<h3>Hardware firmware build</h3>
+<pre>cmake -S status-panel/firmware -B /tmp/solari-panel-build \
+  -DPICO_SDK_PATH="$HOME/pico/pico-sdk" \
+  -DPIMORONI_PICO_PATH="$HOME/pico/pimoroni-pico" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/solari-panel-build -j4</pre>
+<p>Expected artifact: <code>solari-panel-fw.uf2</code>. The target is Pico 2 W/RP2350. A host test pass is not a substitute for the Pico toolchain build or device verification. Flashing is an operator action and needs its own explicit authorization and evidence.</p>
+
+<h2 id="checklist">6. Change checklist</h2>
+<ol>
+<li>Read the owning contract and inspect the current implementation before editing; contracts outrank this summary.</li>
+<li>For wire changes, update the normative header/codec and both consumers together. Add fixtures that cover old/unknown/malformed cases and sequence behavior.</li>
+<li>For UI or render changes, update the design reference, firmware renderer, virtual dashboard view, and parity fixtures as applicable.</li>
+<li>Run the focused host tests, daemon tests, relevant dashboard/API tests, and firmware build for the touched boundary. Record commands and outcomes.</li>
+<li>Update user/developer manuals and paired PDFs when behavior or operating procedure changes. Keep dated status claims distinct from verified current state.</li>
+<li>Obtain independent cross-lab review for security, protocol, migration, or live rollout changes. Exercise rollback before live changes; do not infer deployment success from candidate tests.</li>
+</ol>
+<h2>7. Source references and verification limits</h2>
+<p>Primary contracts: <code>status-panel/protocol.h</code>, <code>status-panel/CONTRACT.md</code>, <code>status-panel/CONTRACT-CP.md</code>, <code>status-panel/CONTRACT-AW.md</code>, <code>status-panel/CONTRACT-SW.md</code>. Supporting implementation notes: <code>status-panel/firmware/README.md</code> and <code>status-panel/daemon/README.md</code>.</p>
+<p>Related manuals: <a href="SolariNet_Panel_Users_Guide.html">Panel User’s Guide</a> for screen behavior and controls, and <a href="SolariNet_Panel_Standalone_Runbook.html">Standalone Runbook</a> for host setup and recovery.</p>
+<p class="muted small"><strong>Observed:</strong> this reference was written against the named candidate source and contracts in the integration worktree on 2026-10-21. <strong>Inference:</strong> the component boundary summary follows those contracts. <strong>UNVERIFIED:</strong> no device build, flash, or live API behavior was exercised while producing this document; tests must be rerun against the final release candidate.</p>
+<footer>SolariNet Status Panel · Developer Reference · single-file HTML with inline CSS, JavaScript and SVG · PDF companion generated from this file</footer>
+<script>
+(()=>{const button=document.getElementById('theme');button.addEventListener('click',()=>{const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';button.textContent=dark?'Light theme':'Dark theme';});})();
+</script>
+</body></html>

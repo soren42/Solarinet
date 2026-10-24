@@ -1,0 +1,16 @@
+; Xenon off-host backup target: a subdirectory in jason's NAS-X personal share.
+; Provision /SolariNetBackups in the personal_folder share before enabling.
+[Unit]
+Description=Private SolariNet backup share from NAS-X
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=//10.0.0.10/personal_folder
+Where=/mnt/solari-backups
+Type=cifs
+Options=credentials=/etc/cifs-nas-x.cred,vers=3.1.1,uid=0,gid=0,file_mode=0600,dir_mode=0700,soft,prefixpath=SolariNetBackups
+TimeoutSec=30s
+
+[Install]
+WantedBy=remote-fs.target

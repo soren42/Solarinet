@@ -16,7 +16,34 @@
 
 #include <string.h>
 
-void setUp(void) {}
+static uint64_t g_expectedNodeId;
+static const char *g_expectedCertCn;
+static solariStatus g_identityLookupStatus;
+static solariStatus g_crlAckStatus = SOLARI_OK;
+static unsigned g_crlAckCalls;
+
+solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t nodeId,
+                                     const char *certCn, bool *matches)
+{
+    if (!db || !matches) return ERR_INVALID_ARG;
+    *matches = false;
+    if (g_identityLookupStatus != SOLARI_OK) return g_identityLookupStatus;
+    *matches = nodeId == g_expectedNodeId && certCn && g_expectedCertCn &&
+               strcmp(certCn, g_expectedCertCn) == 0;
+    return SOLARI_OK;
+}
+
+solariStatus serverDbCertificateCrlAcknowledge(serverDb *db, uint64_t nodeId,
+                                                const char *issuerFp,
+                                                uint64_t crlNumber,
+                                                const char *crlFp)
+{
+    (void)db; (void)nodeId; (void)issuerFp; (void)crlNumber; (void)crlFp;
+    g_crlAckCalls++;
+    return g_crlAckStatus;
+}
+
+void setUp(void) { g_crlAckStatus = SOLARI_OK; g_crlAckCalls = 0; }
 void tearDown(void) {}
 
 /* ---- CN -> role ---- */
@@ -26,6 +53,9 @@ static void test_role_from_cn(void)
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_CLIENT,  serverIngestRoleFromCn("client.akoria.net"));
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_MONITOR, serverIngestRoleFromCn("monitor.akoria.net"));
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_SERVER,  serverIngestRoleFromCn("server.akoria.net"));
+    /* Enrollment uses the same dotted-role form; colon subjects are rejected. */
+    TEST_ASSERT_EQUAL_INT(INGEST_ROLE_MONITOR, serverIngestRoleFromCn("monitor.beryl.akoria.net"));
+    TEST_ASSERT_EQUAL_INT(INGEST_ROLE_UNKNOWN, serverIngestRoleFromCn("monitor:beryl.akoria.net"));
     /* bare labels (no dot) are honoured */
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_CLIENT,  serverIngestRoleFromCn("client"));
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_MONITOR, serverIngestRoleFromCn("monitor"));
@@ -35,6 +65,28 @@ static void test_role_from_cn(void)
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_UNKNOWN, serverIngestRoleFromCn(NULL));
     /* a prefix that merely starts with "client" but is a different label */
     TEST_ASSERT_EQUAL_INT(INGEST_ROLE_UNKNOWN, serverIngestRoleFromCn("clienthost.x"));
+}
+
+static void test_hello_identity_matches_authenticated_certificate(void)
+{
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "node.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_MONITOR, "monitor-1.akoria.net", "monitor.monitor-1.akoria.net"));
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_SERVER, "xenon.akoria.net", "server.xenon.akoria.net"));
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "NODE.AKORIA.NET", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "other.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_MONITOR, "node.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        (solariRole)99, "node.akoria.net", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "", "client.node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "node.akoria.net", NULL));
 }
 
 /* ---- authorization matrix ---- */
@@ -81,6 +133,132 @@ static void test_matrix_server_and_unknown(void)
     TEST_ASSERT_FALSE(serverIngestRoleMaySend(INGEST_ROLE_UNKNOWN, SCP_MSG_CLIENT_REPORT));
 }
 
+static void test_crl_activation_receipt_parser(void)
+{
+    static const char receipt[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:42:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    uint8_t payload[256];
+    solariTlvWriter writer;
+    char issuerFp[65], crlFp[65];
+    uint64_t number;
+    bool found;
+
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvAppend(&writer, TLV_CRL_ACTIVATION,
+                                                     receipt, sizeof receipt - 1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestParseCrlActivation(payload, writer.len,
+        &found, issuerFp, &number, crlFp));
+    TEST_ASSERT_TRUE(found);
+    TEST_ASSERT_EQUAL_STRING("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                             issuerFp);
+    TEST_ASSERT_EQUAL_UINT64(42, number);
+    TEST_ASSERT_EQUAL_STRING("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                             crlFp);
+
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvAppend(&writer, TLV_CRL_ACTIVATION,
+                                                     "bad", 3));
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverIngestParseCrlActivation(payload, writer.len,
+        &found, issuerFp, &number, crlFp));
+
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestParseCrlActivation(payload, 0,
+        &found, issuerFp, &number, crlFp));
+    TEST_ASSERT_FALSE(found);
+}
+
+static void test_crl_activation_receipt_parser_rejects_invalid_numbers_and_duplicates(void)
+{
+    static const char *invalid[] = {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:0:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:042:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ABCDEF:42:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:18446744073709551616:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    };
+    static const char valid[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:42:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    uint8_t payload[512];
+    solariTlvWriter writer;
+    char issuerFp[65], crlFp[65];
+    uint64_t number;
+    bool found;
+    size_t i;
+
+    for (i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+        solariTlvWriterInit(&writer, payload, sizeof payload);
+        TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvAppend(&writer, TLV_CRL_ACTIVATION,
+                                                         invalid[i], strlen(invalid[i])));
+        TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverIngestParseCrlActivation(payload,
+            writer.len, &found, issuerFp, &number, crlFp));
+    }
+
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvAppend(&writer, TLV_CRL_ACTIVATION,
+                                                     valid, sizeof valid - 1));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvAppend(&writer, TLV_CRL_ACTIVATION,
+                                                     valid, sizeof valid - 1));
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverIngestParseCrlActivation(payload,
+        writer.len, &found, issuerFp, &number, crlFp));
+}
+
+static void test_malformed_optional_crl_receipt_does_not_reject_report(void)
+{
+    uint8_t payload[16];
+    solariTlvWriter writer;
+    serverContext ctx = {0};
+    solariFrameHeader hdr = {0};
+
+    hdr.sourceNodeId = 42;
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvAppend(&writer, TLV_CRL_ACTIVATION,
+                                                     "bad", 3));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestApplyCrlActivation(
+        &ctx, &hdr, payload, writer.len));
+    TEST_ASSERT_EQUAL_UINT(0, g_crlAckCalls);
+}
+
+static void test_crl_acknowledgement_failure_does_not_reject_committed_report(void)
+{
+    static const char receipt[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:42:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    uint8_t payload[256];
+    solariTlvWriter writer;
+    serverContext ctx = {0};
+    solariFrameHeader hdr = {0};
+
+    hdr.sourceNodeId = 42;
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, solariTlvAppend(&writer, TLV_CRL_ACTIVATION,
+                                                     receipt, sizeof receipt - 1));
+
+    g_crlAckStatus = ERR_REJECTED;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestApplyCrlActivation(
+        &ctx, &hdr, payload, writer.len));
+    TEST_ASSERT_EQUAL_UINT(1, g_crlAckCalls);
+
+    g_crlAckStatus = ERR_CONN_RETRY;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestApplyCrlActivation(
+        &ctx, &hdr, payload, writer.len));
+    TEST_ASSERT_EQUAL_UINT(2, g_crlAckCalls);
+
+    g_crlAckStatus = ERR_DB;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestApplyCrlActivation(
+        &ctx, &hdr, payload, writer.len));
+    TEST_ASSERT_EQUAL_UINT(3, g_crlAckCalls);
+
+    g_crlAckStatus = SOLARI_OK;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestApplyCrlActivation(
+        &ctx, &hdr, payload, writer.len));
+    TEST_ASSERT_EQUAL_UINT(4, g_crlAckCalls);
+}
+
 /* ---- dedup ring ---- */
 
 static void test_dedup_basic(void)
@@ -115,14 +293,71 @@ static void test_dedup_window_rolls_over(void)
     TEST_ASSERT_FALSE(serverDedupSeen(0xC0, 0, 9002)); /* evicted -> miss again */
 }
 
+static void test_report_identity_requires_one_complete_session(void)
+{
+    solariFrameHeader header;
+    serverReportReceipt receipt;
+    solariTlvWriter writer;
+    uint8_t payload[128], session[16];
+    memset(&header, 0, sizeof header);
+    memset(session, 0x42, sizeof session);
+    header.msgType = SCP_MSG_CLIENT_REPORT;
+    header.seqNo = 7;
+    solariTlvWriterInit(&writer, payload, sizeof payload);
+    TEST_ASSERT_NOT_EQUAL(SOLARI_OK, serverReportIdentity(&header, payload, 0, &receipt));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariTlvAppend(&writer, TLV_REPORT_SESSION, session, sizeof session));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverReportIdentity(&header, payload, writer.len, &receipt));
+    TEST_ASSERT_EQUAL_MEMORY(session, receipt.session, sizeof session);
+    TEST_ASSERT_EQUAL_UINT32(7, receipt.seqNo);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        solariTlvAppend(&writer, TLV_REPORT_SESSION, session, sizeof session));
+    TEST_ASSERT_NOT_EQUAL(SOLARI_OK,
+        serverReportIdentity(&header, payload, writer.len, &receipt));
+}
+
+static void test_report_validation_never_marks_before_commit(void)
+{
+    serverContext ctx;
+    solariFrameHeader header;
+    memset(&ctx, 0, sizeof ctx);
+    memset(&header, 0, sizeof header);
+    ctx.db = (serverDb *)1; /* test stub models the approved node lookup */
+    header.msgType = SCP_MSG_CLIENT_REPORT;
+    header.sourceNodeId = 42;
+    header.seqNo = 7;
+    g_expectedNodeId = 42;
+    g_expectedCertCn = "client.test";
+    g_identityLookupStatus = SOLARI_OK;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
+    header.sourceNodeId = 43;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &header, "client.test"));
+    header.sourceNodeId = 42;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &header, "client.other"));
+    g_identityLookupStatus = ERR_DB;
+    TEST_ASSERT_EQUAL_INT(ERR_DB,
+        serverIngestValidate(&ctx, &header, "client.test"));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_role_from_cn);
+    RUN_TEST(test_hello_identity_matches_authenticated_certificate);
     RUN_TEST(test_matrix_client);
     RUN_TEST(test_matrix_monitor_is_superset);
     RUN_TEST(test_matrix_server_and_unknown);
+    RUN_TEST(test_crl_activation_receipt_parser);
+    RUN_TEST(test_crl_activation_receipt_parser_rejects_invalid_numbers_and_duplicates);
+    RUN_TEST(test_malformed_optional_crl_receipt_does_not_reject_report);
+    RUN_TEST(test_crl_acknowledgement_failure_does_not_reject_committed_report);
     RUN_TEST(test_dedup_basic);
     RUN_TEST(test_dedup_window_rolls_over);
+    RUN_TEST(test_report_identity_requires_one_complete_session);
+    RUN_TEST(test_report_validation_never_marks_before_commit);
     return UNITY_END();
 }

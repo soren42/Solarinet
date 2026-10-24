@@ -13,6 +13,7 @@ const char *solariStrError(solariStatus st)
     case ERR_FRAME_BAD_MAGIC:   return "bad frame magic";
     case ERR_FRAME_BAD_CRC:     return "bad frame crc";
     case ERR_PROTO_VERSION:     return "unsupported protocol version";
+    case ERR_FRAME_BAD_ENVELOPE:return "invalid frame envelope";
     case ERR_TLV_END:           return "end of tlv payload";
     case ERR_TLV_TRUNCATED:     return "truncated tlv";
     case ERR_CONN_RETRY:        return "transient connection failure";
@@ -22,6 +23,7 @@ const char *solariStrError(solariStatus st)
     case ERR_DB:                return "database error";
     case ERR_LEASE_LOST:        return "server lease lost";
     case ERR_UNKNOWN_MSG:       return "unknown message type";
+    case ERR_REJECTED:          return "operation rejected by current state";
     case ERR_PLATFORM:          return "platform call failed";
     default:                    return "unknown error";
     }

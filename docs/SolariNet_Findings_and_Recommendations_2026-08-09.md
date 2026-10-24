@@ -60,9 +60,15 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 ### F-01 · Node certificates are not bound to frame identity — P0
 
-**[Observed]** `serverIngestValidate()` derives a role from the peer certificate CN but never binds that certificate to `sourceNodeId` (`src/server/serverIngest.c:217-249`). Dispatch then uses the frame-supplied ID for telemetry, liveness, topology, survey, and control-result writes (`serverIngest.c:273-286,315-328,338-377`). HELLO also persists the header ID plus a self-declared FQDN and role (`src/server/serverMaster.c:199-218`). Monitor gossip accepts `sourceNodeId` into HRW membership without certificate-to-node binding (`src/monitor/monitorGossip.c:118-127`).
+**[Baseline observed in reviewed commit `586cac1`]** `serverIngestValidate()` derived a role from the peer certificate CN but did not bind that certificate to `sourceNodeId`. Dispatch then used the frame-supplied ID for telemetry, liveness, topology, survey, and control-result writes. HELLO persisted the header ID plus a self-declared FQDN and role. Monitor gossip accepted `sourceNodeId` into HRW membership without certificate-to-node binding.
 
 **Impact.** A compromised enrolled client can impersonate another client, keep it falsely alive, or falsify its health/topology/convergence. A gossip peer can add invented monitor IDs that win HRW ownership, causing real monitors to relinquish targets to nonexistent owners.
+
+**[Candidate status, observed 2026-10-20]** The enrollment script's CSR CN now uses the dotted `<role>.<fqdn>` form consumed by server role parsing; an executable CSR test checks both CN and DNS SAN. This closes the enrollment-format mismatch only. Certificate-to-node/FQDN binding, certificate fingerprint persistence, stale-certificate handling, and authenticated monitor membership remain open.
+
+**[Candidate status, verified 2026-10-23]** The current server validates every ingested frame's `sourceNodeId` against the enrolled node row and exact registered certificate CN using `serverDbNodeCertMatches()`. HELLO role/FQDN must also match the authenticated CN. Monitor peers bind their deterministic node ID and monitor role to the verified peer CN. `test_server_ingest` and `test_peers` both pass. This closes the frame-ID/CN binding gap for the currently registered identity; it does not identify the exact presented leaf certificate, enforce the stored leaf fingerprint, or establish signed monitor membership. Certificate revocation distribution, activation/freshness, and fleet acknowledgements also remain open, so F-01 remains a release blocker.
+
+**[Revocation lifecycle update, candidate verified 2026-10-23]** The CRL generator, issuer-scoped static publisher, and peer activation updater now exist with passing local OpenSSL-backed tests and systemd unit checks. The candidate publisher exposes CRLs for static hosting under HTTPS but no TLS vhost or endpoint is deployed. Missing-CRL rollout policy, fleet acknowledgement/convergence, and exact leaf-certificate enforcement remain open; F-01 remains a release blocker.
 
 **Recommendation.** Define one canonical identity contract and enforce it on every ingress path: certificate SAN/CN, immutable node ID, role, and registered FQDN must agree. Persist certificate fingerprint/serial against the node. Reject HELLO and gossip mismatches. Add negative tests for cross-node, cross-role, stale-cert, wrong-CA, and wrong-name cases. A server-signed monitor-membership epoch is preferable to trusting peer advertisements as membership authority.
 
@@ -74,6 +80,18 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 **Recommendation.** Make non-GET authorization default-deny in one server-side policy layer. Declare route metadata for required role and service principal; require operator/admin for every human mutation unless an explicit reviewed exception exists. The C side must independently authorize verbs or accept a verifiable authorization envelope rather than a free-form name. Add a generated route × method × role test matrix to CI.
 
+**[Candidate status, observed 2026-10-21]** The API front controller now installs a
+default-deny policy guard before dispatch. The current route audit resolves all
+139 routes and finds every write operator/admin-gated, except the explicit login,
+logout, and enrollment bootstrap exceptions. Live enforcement tests reject a
+viewer even with a valid CSRF token. The hardened C bridge also has a Linux
+`SO_PEERCRED` class ACL and rejects direct privileged verbs from the dashboard
+uid when `enforcePeer=true`; that setting is opt-in and defaults off for
+compatibility. Queued privileged requests still carry the dashboard's
+`requestedBy` name and depend on the PHP role gate, so C does not independently
+verify the human's operator/admin role. The F-02 trust-boundary recommendation
+is not fully closed. Cross-lab review and deployment remain outstanding.
+
 ### F-03 · Cookie-authenticated control requests have no CSRF defense — P0
 
 **[Observed]** State-changing requests use the session cookie with no CSRF token or Origin enforcement. `solari_json_body()` accepts a JSON-looking body without requiring `application/json` (`dashboard/api/lib/bootstrap.php:47-62`). SameSite=Lax is the only browser-layer mitigation (`dashboard/api/lib/Auth.php:79-85`), and the vhost exposes multiple same-site aliases (`deploy/dashboard/apache-solarinet.conf:11-14`).
@@ -82,13 +100,23 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 **Recommendation.** Require a session-bound synchronizer token and strict Origin/Referer validation on every state-changing method. Require the expected Content-Type. Keep SameSite as defense in depth, not as the authority mechanism.
 
+**[Candidate status, observed 2026-10-21]** `Policy::enforce()` now requires a
+same-origin Origin/Referer and session-bound CSRF token on state-changing
+requests. `solari_json_body()` accepts only the exact `application/json` media
+type (with optional parameters); regression coverage rejects lookalikes such as
+`application/jsonp`. A PHP HTTP-SAPI test exercises `php://input`, accepts a
+valid JSON request, and verifies lookalikes receive HTTP 415. Default-deny
+policy, guard dispatch, nine live allow/deny scenarios, and the full route audit
+pass locally. This is candidate evidence; hosted CI, cross-lab review, and
+deployed browser verification remain open.
+
 ### F-04 · The PHP/C “trust boundary” is not isolated — P0
 
-**[Observed]** php-fpm runs as `jason` so it can read the credential file and reach solariCtl (`deploy/dashboard/php-fpm-solarinet.conf:1-18`). `solariServer` also runs as `jason` from a build tree (`deploy/dashboard/solarinet-server.service:20-28`). PHP executes its API directly from the working repository (`deploy/dashboard/apache-solarinet.conf:23-26`). The C socket has no explicit owner/mode setup or `SO_PEERCRED` verification (`src/server/solariCtl.c:1034-1079`).
+**[Historical baseline; candidate state]** The legacy root-level PHP-FPM/server templates still run as `jason` and serve code from the checkout. The candidate now includes a hardened UID split, immutable `/opt/solarinet` release paths, socket `SO_PEERCRED` ACLs, a durable privileged-request queue, scoped dashboard DB grants, and a disposable end-to-end boundary harness. `deploy/dashboard/hardened/CONTRACT-AND-REVIEW.md` records passing C/DB/build and boundary checks plus cross-lab review. These changes have not been applied to Xenon; the deployed boundary is therefore **unverified** and F-04 remains open until the full host cutover passes.
 
 **Impact.** “PHP holds no CA material” is a code convention, not a privilege boundary. Compromised PHP code inherits the operator account’s filesystem, repository, socket, and potentially private-key reach. Serving API code from a writable checkout also turns source write access into persistent production code execution.
 
-**Recommendation.** Deploy immutable release artifacts outside the working tree. Use distinct least-privilege accounts for Apache/php-fpm, the control server, CA signer, and integrations. Put CA signing behind a dedicated minimal service. Give the PHP account only group write access to a mode-controlled socket; verify peer credentials in C. Use canonical hardened systemd units rather than host-specific copies.
+**Recommendation.** Keep the hardened candidate and its release package as the only supported cutover path. F-04 closes only after Xenon is migrated to the separate service identities, immutable package paths, enforced peer ACL and queue, scoped grants, and the verifier passes against the running host. Do not infer deployment from candidate tests.
 
 ### F-05 · A viewer-triggerable scan can starve the leadership lease — P0
 
@@ -98,13 +126,23 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 **Recommendation.** Move discovery, provisioning, deployment, and every other long-running operation to a bounded job runner. The server loop should enqueue, return a job ID, and remain deadline-driven. Accepted Unix clients must be nonblocking with read deadlines; today a connect-and-stall can also block the loop (`src/server/solariCtl.c:1120-1147`). Add a test that continuously renews the lease while slow/malformed operator connections and maximum scans run.
 
+**[Candidate status, observed 2026-10-21]** Active discovery has moved to a
+bounded durable worker with lease-fenced writes, persisted progress, requester-
+scoped status, and the RackWire admission path. The real worker/API/SoR browser
+flow, directly connected `/24`, cancellation, takeover, and lease-renewal tests
+pass against disposable local databases. This closes the synchronous scan
+starvation path in the candidate. Provision/deploy operations, slow or malformed
+Unix control clients, systemd-managed stop behavior, cross-lab review, and
+production deployment remain unverified; F-05 as a whole stays open. Detailed
+acceptance evidence is in [the scan-worker contract](rework/F05-scan-worker-contract.md).
+
 ### F-06 · Tab5 approval display is not cryptographically bound to approval — P0 when enabled
 
-**[Observed]** Authbroker sends unsigned approval requests (`deploy/authbroker/authbrokerd.py:15-24`). The device displays action, subject, detail, source, and timing, but its response signature covers only version, request ID, decision, nonce, and device ID (`authbrokerd.py:216-224,243-257`; `firmware/tab5/src/approvals.cpp:105-167`). The sample broker uses plaintext MQTT (`deploy/authbroker/authbroker.conf.example:11-18`), and firmware CA validation remains TODO (`firmware/tab5/src/mqttbus.cpp:43-48`).
+**[Observed at baseline review]** Authbroker sent unsigned approval requests and the device response did not bind the displayed fields. The local candidate now signs the complete v2 request, verifies it before display, binds the response to the canonical request digest, requires TLS/CA configuration, and imports broker trust by USB serial. Twenty broker unit tests and the C++ host canonical-vector check pass. Full MQTT round-trip, pinned-core firmware build, and hardware acceptance have not been run.
 
 **Impact.** A LAN/MQTT-path attacker can preserve a legitimate ID and nonce while changing the displayed action to something benign; the signed approval then authorizes the broker’s original sensitive request.
 
-**Recommendation.** Keep Tab5 explicitly non-production. Require authenticated MQTT TLS, a broker-signed complete request envelope, device verification, and a response signature over a canonical digest of every security-relevant request field. Add replay, expiry, substitution, wrong-device, and channel-tamper tests.
+**Recommendation.** Keep Tab5 explicitly non-production until the remaining acceptance gates pass. The selected protocol and USB key-provisioning contract, current evidence, and release gates are in [the F-06 approval-binding contract](rework/F06-approval-binding-contract.md).
 
 ### F-07 · PXE provisioning executes unauthenticated artifacts as root — P0 when enabled
 
@@ -112,23 +150,29 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 **Impact.** Provisioning-network tampering yields root on new machines or can alter disk targets and persistent credentials.
 
-**Recommendation.** Sign an immutable manifest containing digests for every kernel, initrd, config, installer, and binary; verify before execution. Prefer pinned HTTPS/signed iPXE, but retain signatures as the trust root. Test the destructive flow in an isolated VM network before enabling it on hardware.
+**[Candidate status]** The [F-07 signed-provisioning contract](rework/F07-signed-provisioning-contract.md) defines the trust chain and acceptance gates. A fail-closed guard blocks the five current provisioning entry points by default. A local CMS signer/verifier stages read-only release trees with a canonical manifest binding paths, sizes, executable modes, hashes, target, validity, and a pinned signer; offline tests cover trust, expiry, target, path, read-only modes, and tampering. It is not wired into iPXE, installer configs, firstboot, or release activation, and the isolated-lab override still permits unsafe provisioning. The end-to-end finding remains open.
+
+**Recommendation.** Keep PXE and firstboot provisioning isolated and disabled until the contract is implemented end to end. The trust root must authenticate the initial loader as well as every later script, kernel, initrd, installer config, and binary; a manifest plus checksum served over the existing HTTP channel is insufficient.
 
 ## 5. High-priority correctness and security findings
 
 ### F-08 · SoR CDC can permanently lose events — P1
 
-**[Observed]** `sor_emitd` advances its DB checkpoint after ordinary `basic_publish()` without publisher confirms (`deploy/sorsync/sor_emitd.py:75-100`). DNS and Pi-hole consumers acknowledge deliveries before applying; if application fails, the loop reconnects and discards its in-memory dirty state although the deliveries were already acknowledged (`deploy/sorsync/sor_apply_dnsd.py:164-174`; `sor_apply_pihole.py:128-138`). They have no periodic full reconcile.
+**[Observed at baseline]** `sor_emitd` advanced its DB checkpoint after ordinary `basic_publish()` without publisher confirms; consumers acknowledged before applying and lacked periodic reconciliation.
 
 **Impact.** Broker or target failures can leave downstream state indefinitely stale while the pipeline appears healthy. The documented “at-least-once” property is false.
 
-**Recommendation.** Use publisher confirms plus mandatory routing before checkpoint advance. Ack consumers only after all required targets succeed; requeue transient failures. Add a periodic authoritative full reconcile and fault-injection tests for broker loss, consumer crash, partial apply, and duplicate delivery.
+**[Candidate status]** The outbox emitter now enables publisher confirms and mandatory routing before checkpoint advancement; DNS, Pi-hole, and AD consumers acknowledge only after successful apply and run periodic full reconciliation. Local boundary tests cover broker failure/replay, delayed ack, failed and partial applies, periodic reconcile, and loss during in-flight apply (11 passed). Disposable RabbitMQ and full DNS-chain integration tests exist, but deployed daemon restart and multi-target recovery remain unverified. See [SoR sync status](../deploy/sorsync/README.md).
+
+**Recommendation.** Preserve the confirm/mandatory, apply-before-ack, and periodic-reconcile invariants. Complete the isolated-broker failure drills and deployed restart/multi-target verification before closing F-08.
 
 ### F-09 · Server HA semantics are internally inconsistent — P1
 
 **[Observed]** The operator bridge is opened and polled even on standby servers (`src/server/main.c:387-395,312-313`), allowing standby writes. Losing standby lease claims increment `leaseEpoch` because the UPSERT changes epoch when the proposed holder differs without first requiring expiry (`src/server/serverDb.c:1804-1814`). A bind failure is retried but the winner can continue renewing while not serving traffic.
 
 **Impact.** Multiple servers can accept conflicting commands; config/failover epochs churn without takeover; lease ownership can say active while endpoints are unavailable.
+
+**[Candidate status]** The standby operator bridge permits only `PING`, scoped request status, and discovery status; every other command is rejected before dispatch. Unit coverage verifies a standby cannot edit asset metadata, and a two-process test verifies standby claims do not change the active holder or epoch. Listener bind failures release the exact owned fencing token and enforce a one-TTL local retry cooldown. The process test passed against a disposable local MariaDB schema: the healthy standby took over after bind failure, remained active across the failed server's cooldown, renewed its lease during slow scan enrichment, and recovered an orphaned scan after the original worker lost its lease. The test database was dropped after the run. Production HA behavior remains unverified.
 
 **Recommendation.** Choose and enforce one model: only the active server exposes authoritative writes, or every command transaction verifies current lease holder and epoch. Make lease acquisition, epoch increment, and endpoint activation one observable state machine. Exercise it with two real DB connections and bind-failure/failover tests.
 
@@ -138,7 +182,9 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 **Impact.** Trend data is distorted, DB load doubles, and the server can report convergence that will disappear on restart or belongs to a stale/spoofed command.
 
-**Recommendation.** Persist monitor reports exactly once. Save/fsync/atomically activate config before advancing the applied epoch. Persist directives keyed by node, correlation, verb, and epoch; require all result fields and consume one matching pending directive.
+**[Candidate status]** Monitor reports are persisted once; reconciliation now updates derived health only. Client control config is staged and saved before its epoch/config become active. Monitor control now follows the same order, writes and fsyncs a unique temporary state file, atomically renames it, syncs the parent directory, and returns a failed result with the prior epoch if persistence fails. Five fault tests cover restart restoration, file/directory sync failure, rename failure, and absent state path. Server-side result handling requires verb, error, epoch, and nonzero correlation fields. Migration 034 persists each published generic directive by node/correlation/verb/target epoch; a matching result consumes it in the same transaction as the convergence update, successful config results must report the target epoch, and duplicate, stale, wrong-verb, or wrong-epoch results are rejected. Migration/export and live MariaDB coverage pass on an isolated scratch schema. Decommission acknowledgements retain their separate generation-matched lifecycle path. F-10 candidate implementation is complete; full platform integration and release remain open.
+
+**Recommendation.** Preserve the one-write report path and durable config-before-ack behavior. Persist directives keyed by node, correlation, verb, and epoch, then consume only one exact matching pending directive before recording convergence.
 
 ### F-11 · The solariCtl wire protocol is unsafe on both ends — P1
 
@@ -158,11 +204,15 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 ### F-13 · Browser freshness mechanisms violate the honesty goal — P1
 
-**[Observed]** The service worker explicitly stores successful authenticated `/api/` GETs and returns them on network failure (`dashboard/public/sw.js:95-137`), overriding API `no-store`; `loadLive()` then labels the result `source: "live"` (`dashboard/public/api.jsx:592-625,766-783,1095-1103`). SSE requests hold php-fpm workers for up to 50 seconds while the pool has eight children (`dashboard/api/routes/stream.php:65-99`; `deploy/dashboard/php-fpm-solarinet.conf:24-28`). The resume cursor can reset to alert ID 0, advance after DB failure, and lose second-granularity rows over its limits (`routes/stream.php:69-75,198-244`).
+**[Historical observation, Aug 2026]** The original reviewed revision stored successful authenticated `/api/` GETs in the service worker and returned them after network failure; `loadLive()` then labeled the response `source: "live"`. SSE requests could hold php-fpm workers and had cursor/replay defects. See the historical line references in that review revision.
+
+**[Candidate status, observed 2026-10-20]** These first three browser-boundary defects have been addressed in the current candidate: `sw.js` sends `/api/*` GETs directly to the network with `cache: no-store` and never reads/writes API cache entries; `api.jsx` marks a retained real snapshot `stale` on failed refresh and blocks mutations; `app.jsx` shows the age and pause state; `/api/stream` immediately returns 204. The service-worker, browser-adapter, and route tests pass locally. The per-endpoint resume cursor is no longer active because the route is retired.
 
 **Impact.** Logged-out or later local users can see cached private state; stale fleet data is presented as live; a few tabs can starve the API; events can be missed or replayed.
 
-**Recommendation.** Cache only the application shell. If offline snapshots are retained, partition them by identity, clear them at logout, display timestamp/age prominently, and fail visibly stale. Replace FPM-held SSE with a dedicated event bridge or poll until one exists. Use one durable monotonic outbox cursor across event types.
+**[Candidate status, observed 2026-10-20]** Core network-only fetch, stale snapshot labeling, mutation pause, and SSE retirement are implemented. Independently tolerated optional endpoints now carry per-source `fresh|stale|unknown` state and `lastSuccess`/`lastAttempt`; the app shows a partial-data banner when any source is stale or unknown and retains each endpoint's last successful payload through an outage. Browser-adapter coverage exercises optional endpoint outage, retained values, and recovery. Service-worker, route, and adapter tests pass locally.
+
+**Remaining recommendation.** Complete authenticated browser acceptance across multiple tabs/sessions and verify the status banner against the deployed session and endpoint configuration. Keep SSE retired until a durable event bridge is available.
 
 ### F-14 · Authentication/session controls are incomplete — P1
 
@@ -171,6 +221,21 @@ The problem is not that the project lacks good ideas. It is that system-level po
 **Impact.** Missing-expiry tokens can be accepted, abandoned auth transactions do not expire, credential guessing/CPU denial is unbounded, and revoked roles persist.
 
 **Recommendation.** Require the standard OIDC claims and bounded state age; use a maintained OIDC/JWT implementation when compatible with project policy. Independently disable the break-glass endpoint when unused, rate-limit by account and source, add idle/absolute session expiry, and revalidate role/revocation.
+
+**[Candidate status, observed 2026-10-23]** OIDC ID-token validation requires
+issuer, audience, subject, `exp`, `iat`, and nonce, and auth transactions have a
+bounded one-shot state. Local password login is opt-in and requires a private
+rate-limit directory; failed attempts are capped per account and source. Idle
+and absolute session limits apply, local sessions reload roles, and disabling
+local login invalidates existing local sessions. OIDC sessions now refresh
+group-derived roles through HTTPS UserInfo every 60 seconds, bind the returned
+subject to the original identity, refresh access tokens, and downgrade to viewer
+when the provider is unavailable. Discovery issuer identity is matched and
+metadata endpoints are restricted to the issuer origin or explicitly configured
+HTTPS origins, and OIDC response bodies are limited to 1 MiB. Subject mismatch
+revokes the session. Focused claim, session, and TLS-backed UserInfo tests pass.
+**Open:** deployed provider
+group claims, refresh-token behavior, and configuration remain unverified.
 
 ### F-15 · Opie’s “read-only” model is not confidentiality-safe — P1
 
@@ -204,6 +269,8 @@ The problem is not that the project lacks good ideas. It is that system-level po
 
 **Recommendation.** Prefer fixed tools/views over arbitrary SQL. Otherwise use a real MariaDB parser with a narrow AST allowlist, a dedicated per-view account, no FILE/routine privileges, read-only transactions, statement timeout, row/byte caps, and concurrency limits.
 
+**2026-10-23 implementation update.** The MCP `DbClient` now accepts only three enum-selected statements (node summary, active alerts, host history); caller-supplied SQL and identifiers have been removed. Host-history values are bound and checked against the `BIGINT UNSIGNED` range. Query and result caps have direct tests. The local MCP suite passed 48 tests. This closes the arbitrary SQL path in application code. **UNVERIFIED:** the deployment's MariaDB account grants and server-side resource/concurrency limits have not been checked, so the broader least-privilege and resource-control recommendation remains open.
+
 ## 6. Structural findings to address next
 
 | ID | Priority | Finding | Recommended direction |
@@ -212,7 +279,7 @@ The problem is not that the project lacks good ideas. It is that system-level po
 | F-20 | P2 | HRW is coded but real multi-monitor membership, identical views, churn, and partition behavior are not proven. The server/DB remains a central authority despite broad “coordinator-free” wording. | Narrow the claim to monitor ownership; run multi-monitor chaos/failure tests before relying on k-of-n. |
 | F-21 | P2 | Spool storage has no quota/age policy, deletes on transport acceptance rather than durable server ack, and reuses sequence numbers after restart. | Quotas and health metrics, boot/session identity, persisted sequence state, and application acknowledgement where durability is required. |
 | F-22 | P2 | Direct SoR commands perform several multi-step authoritative mutations without transactions; per-node epoch allocation occurs in concurrent PHP workers. | Put domain commands and epoch allocation inside authoritative DB/server transactions with idempotency keys and constraints. |
-| F-23 | P2 | Decommission sends before durable confirmation, derives a new token on the confirm call, and has no node-side receiver. | Persist pending intent; send only after separately authenticated token consumption; track acknowledgement and terminal state. |
+| F-23 | P2 | Server confirmation persists a single-use, expiring challenge and publishes the wipe directive only after matching token consumption. The directive now includes its target node ID. There is no client receiver, durable delivery retry, or node acknowledgement; the queued control request also retains the raw confirmation token in its args/result. | Add an authenticated node receiver, durable outbound state and acknowledgements, and redact sensitive queue material after the confirmation exchange. |
 | F-24 | P2 | Tab5 secret-at-rest claims depend on uncommitted secure-boot/flash-encryption state; approval publish requests QoS 1 but the library sends QoS 0. | Keep non-production; commit reproducible security configuration and use a real QoS-1/persistent decision path. |
 | F-25 | P2 | UniFi can leave missing/failed polls falsely green and TLS verification is opt-in. | Explicit freshness/unknown state, integration-health telemetry, and pinned verification by default. |
 | F-26 | P2 | Authbroker fails open when its token is empty and accepts unbounded body/TTL/thread use. | Refuse startup, cap all resources, rate-limit, and prefer a Unix socket. |
@@ -220,7 +287,7 @@ The problem is not that the project lacks good ideas. It is that system-level po
 | F-28 | P2 | Referential integrity is sparse; lifecycle/retention can leave orphan current/config/topology rows. | Add FKs where feasible or transactional cleanup procedures with orphan-count tests. |
 | F-29 | P2 | Fleet mTLS is configurable rather than invariant and transport tests are plaintext. | Make plaintext test-only and add real certificate/identity integration tests. |
 | F-30 | P3 | Full builds emit warning noise; protocol reserved bits/flags/count invariants are not strictly validated. | Warning-clean CI, ASAN/UBSAN, fuzzing, and strict envelope validation while retaining unknown-TLV compatibility. |
-| F-31 | P3 | Apache lacks a defined CSP/HSTS/referrer/permissions policy; in-browser Babel makes a strict CSP difficult. | Document the feasible CSP under the no-build constraint, add remaining headers, and test browser hardening/accessibility. |
+| F-31 | P3 | The deployed Apache policy remains incomplete; in-browser Babel makes a strict CSP difficult. | Candidate config now defines CSP/HSTS/referrer/permissions headers and static tests cover the policy, including same-origin RackWire camera. Candidate-only: full vhost syntax and deployed response behavior remain unverified because an unrelated enabled vhost references a missing Let's Encrypt certificate. |
 
 ## 7. What is missing architecturally
 
@@ -243,7 +310,7 @@ SolariNet does not primarily need more features. It needs explicit, executable d
 1. Disable Tab5 approval authority and root PXE flows until F-06/F-07 are fixed.
 2. Remove arbitrary SQL and generic file tools from LLM-facing integrations.
 3. Make every human mutation operator/admin-only; add CSRF and Origin checks.
-4. Stop API service-worker caching and disable/move SSE if worker starvation is observable.
+4. **Candidate done:** stop API service-worker caching and retire SSE; remaining work is the per-source freshness contract and authenticated browser acceptance.
 5. Restrict dashboard exposure and local login while the boundary is being rebuilt.
 
 **Exit gate:** automated route/role/CSRF tests pass; unsafe prototype features cannot be enabled accidentally.
@@ -290,12 +357,13 @@ Only after these gates should feature work such as first-class topology, broader
 
 ## 9. CI and review gates to add
 
-The current CI is a useful compile gate but not a release gate. Required additions:
+The current CI is a useful compile gate but not a release gate. MCP, alertbridge,
+UniFi, sorsync, and dashboard authorization tests now run in CI; remaining additions:
 
 - Set `SOLARI_TEST_DB=1` against the existing scratch MariaDB; fail if the live DB suite skips.
 - Make TLS loopback required and test certificate identity failures.
 - Run every dashboard test, not only the bridge and RackWire subset.
-- Install locked Python dependencies and run MCP, alertbridge, UniFi, authbroker, sorsync, backup, provisioning, and notification tests.
+- Lock Python dependencies. Build a local broker fixture before running the authbroker loopback test (it currently defaults to the live broker). Add backup, provisioning, and notification suites when those tests exist.
 - Run status-panel host tests under ASAN/UBSAN and compile Tab5 in its supported toolchain.
 - Add shellcheck, static analysis, C sanitizers, protocol fuzzers, PHP security/route-matrix checks, migration clean-install/upgrade checks, and DNS validators.
 - Add RabbitMQ failure injection, two-server MariaDB lease races, partial Unix-socket I/O, concurrent config writes, backup restore, and service-worker offline browser tests.
@@ -307,7 +375,7 @@ The dossier is valuable, but these claims should be corrected in its next revisi
 
 - RackWire migration 020 **is present** at `netdb/sor/migrations/020_rackwire.sql`; it correctly belongs to the SoR migration tree, not `db/migrations`. CI applies it (`.github/workflows/ci.yml:112-123`).
 - No compiled test binaries are tracked in the current git index.
-- Deploy Python is not wholly untested: alertbridge, UniFi, and MCP tests exist. The important defect is that CI does not run them and several other services remain uncovered.
+- Deploy Python is not wholly untested: alertbridge, UniFi, MCP, and sorsync suites now run in CI. Several services remain uncovered; the authbroker smoke test still targets a live broker by default.
 - The duplicate `surveyUrl`/`controlUrl` default does not currently cause two binds: `surveyUrl` is unused. It is dead/misleading configuration, not a demonstrated bind conflict.
 - The lease bind-failure path retries; the defect is a renewable lease-held outage, not a permanent no-reconciliation orphan.
 - Current code does not confirm `node.state` being overloaded with active/standby server role.
@@ -337,7 +405,7 @@ Observed checks during this review:
 - Live MariaDB migration, grant, replication, and concurrent lease behavior.
 - Deployed systemd units, socket/directory permissions, service accounts, and actual TLS configuration.
 - Live RabbitMQ confirms/redelivery, DNS/AD apply and rollback, PXE lifecycle, or backup restoration.
-- Real browser service-worker/SSE behavior under multiple sessions/tabs.
+- Authenticated browser freshness behavior under multiple sessions/tabs; service-worker privacy, stale adapter behavior, and 204 stream retirement have local automated coverage only.
 - Multi-monitor HRW behavior, 300-host capacity, long outage spooling, or network partitions.
 - Tab5 build, flash security, hardware cryptographic flow, MQTT tamper, and firmware update/rollback.
 - Opie prompt-injection exploitability and live secret exposure.

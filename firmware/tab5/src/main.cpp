@@ -13,6 +13,9 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <cstring>
+#include <mbedtls/sha256.h>
+#include <vector>
 
 #include "config.h"
 #include "totp.h"
@@ -24,6 +27,142 @@
 #include "ui.h"
 
 using namespace solari;
+
+namespace {
+String fingerprint(const uint8_t* data, size_t len) {
+  uint8_t hash[32];
+  if (mbedtls_sha256(data, len, hash, 0) != 0) return "";
+  static const char* digits = "0123456789abcdef";
+  String out;
+  out.reserve(64);
+  for (uint8_t b : hash) {
+    out += digits[b >> 4];
+    out += digits[b & 15];
+  }
+  return out;
+}
+
+bool decodeHex(const String& hex, std::vector<uint8_t>& out) {
+  if ((hex.length() & 1) != 0) return false;
+  auto nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  out.clear();
+  for (size_t i = 0; i < hex.length(); i += 2) {
+    int hi = nibble(hex[i]), lo = nibble(hex[i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out.push_back((uint8_t)((hi << 4) | lo));
+  }
+  return true;
+}
+
+void showTrustFingerprints() {
+  const String deviceKey = approvals().publicKeyHex();
+  const auto brokerIds = config().brokerRequestKeyIds();
+  const String ca = config().loadMqttCaPem();
+  std::vector<uint8_t> point, devicePoint;
+  Serial.println("Trust fingerprints (public material only):");
+  if (!deviceKey.isEmpty() && decodeHex(deviceKey, devicePoint))
+    Serial.printf("device_response_key_sha256=%s\n",
+                  fingerprint(devicePoint.data(), devicePoint.size()).c_str());
+  else
+    Serial.println("device_response_key_sha256=missing");
+  if (!brokerIds.empty()) {
+    for (const auto& kid : brokerIds) {
+      const String brokerKey = config().loadBrokerRequestPubHex(kid);
+      if (!decodeHex(brokerKey, point)) continue;
+      Serial.printf("broker_request_key[%s]_sha256=%s\n", kid.c_str(),
+                    fingerprint(point.data(), point.size()).c_str());
+    }
+  } else {
+    Serial.println("broker_request_key_sha256=missing");
+  }
+  if (!ca.isEmpty())
+    Serial.printf("mqtt_ca_pem_sha256=%s\n",
+                  fingerprint((const uint8_t*)ca.c_str(), ca.length()).c_str());
+  else
+    Serial.println("mqtt_ca_pem_sha256=missing");
+  if (!deviceKey.isEmpty())
+    Serial.printf("device_response_public_key_hex=%s\n", deviceKey.c_str());
+}
+
+String s_serialLine;
+String s_caImport;
+bool s_readingCa = false;
+
+void handleSerialLine(const String& line) {
+  if (s_readingCa) {
+    if (line == "SOLARI:CA-END") {
+      s_readingCa = false;
+      if (config().saveMqttCaPem(s_caImport))
+        Serial.println("MQTT CA saved; restart to apply.");
+      else
+        Serial.println("MQTT CA rejected; trust state unchanged.");
+      s_caImport = "";
+    } else if (s_caImport.length() + line.length() + 1 > 4096) {
+      s_readingCa = false;
+      s_caImport = "";
+      Serial.println("MQTT CA too large; import cancelled.");
+    } else {
+      s_caImport += line;
+      s_caImport += '\n';
+    }
+    return;
+  }
+  if (line == "SOLARI:SHOW_KEYS") {
+    showTrustFingerprints();
+  } else if (line == "SOLARI:CA-BEGIN") {
+    s_caImport = "";
+    s_readingCa = true;
+    Serial.println("Paste the PEM certificate, then SOLARI:CA-END.");
+  } else if (line.startsWith("SOLARI:SET_BROKER_KEY:")) {
+    String args = line.substring(strlen("SOLARI:SET_BROKER_KEY:"));
+    const int separator = args.indexOf(':');
+    if (separator < 1) {
+      Serial.println("Use SOLARI:SET_BROKER_KEY:<kid>:<130-char-uncompressed-P256-hex>.");
+      return;
+    }
+    const String kid = args.substring(0, separator);
+    const String hex = args.substring(separator + 1);
+    if (config().saveBrokerRequestPubHex(kid, hex)) {
+      Serial.println("Broker request key saved; restart to apply.");
+      showTrustFingerprints();
+    } else {
+      Serial.println("Broker request key rejected; trust state unchanged.");
+    }
+  } else if (line.startsWith("SOLARI:REMOVE_BROKER_KEY:")) {
+    const String kid = line.substring(strlen("SOLARI:REMOVE_BROKER_KEY:"));
+    Serial.println(config().removeBrokerRequestKey(kid)
+        ? "Broker request key removed; restart to apply."
+        : "Broker request key ID was not found.");
+  } else if (line == "SOLARI:CLEAR_TRUST") {
+    Serial.println(config().clearApprovalTrust()
+        ? "Approval trust cleared; restart to apply."
+        : "Unable to clear approval trust.");
+  }
+}
+
+void serialProvisioningLoop() {
+  while (Serial.available()) {
+    const char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      handleSerialLine(s_serialLine);
+      s_serialLine = "";
+    } else if (s_serialLine.length() < 8192) {
+      s_serialLine += c;
+    } else {
+      s_serialLine = "";
+      s_readingCa = false;
+      s_caImport = "";
+      Serial.println("Serial input too large; command discarded.");
+    }
+  }
+}
+}  // namespace
 
 static void wifiBegin() {
   const auto& s = config().settings();
@@ -75,6 +214,7 @@ void setup() {
 static bool s_ntpStarted = false;
 
 void loop() {
+  serialProvisioningLoop();  // trust imports are accepted only over attached USB
   // Once Wi-Fi is up, start SNTP exactly once (then RTC stays disciplined).
   if (!s_ntpStarted && WiFi.status() == WL_CONNECTED) {
     const auto& s = config().settings();

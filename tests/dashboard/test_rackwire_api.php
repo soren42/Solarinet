@@ -35,6 +35,12 @@ function rw_test_ok(bool $cond, string $label, string $extra = ''): void
     }
 }
 
+function rw_test_plan_hash(string $name, ?string $thumbnail, ?string $notes, string $planJson): string
+{
+    $material = json_encode([$name, $thumbnail, $notes, $planJson], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    return hash('sha256', $material);
+}
+
 /**
  * Run one simulated request in a fresh subprocess.
  *
@@ -66,8 +72,13 @@ function rw_worker_run(string $php, string $worker, array $env): array
     if (preg_match('/STATUS:(\d+)/', $stderr, $m) === 1) {
         $status = (int) $m[1];
     }
+    $capture = null;
+    if (preg_match('/CAPTURE:(\[.*\])/s', $stderr, $m) === 1) {
+        $capture = json_decode($m[1], true);
+    }
     $decoded = json_decode((string) $stdout, true);
-    return ['status' => $status, 'body' => is_array($decoded) ? $decoded : null, 'raw' => (string) $stdout];
+    return ['status' => $status, 'body' => is_array($decoded) ? $decoded : null,
+            'capture' => $capture, 'raw' => (string) $stdout];
 }
 
 $php = PHP_BINARY !== '' ? PHP_BINARY : 'php';
@@ -197,6 +208,9 @@ echo "\n[3] envelope shape\n";
     $r = $run(['RW_METHOD' => 'GET', 'RW_PATH' => '/api/rackwire/plans/5', 'RW_SCENARIO' => 'plan-found']);
     rw_test_ok($r['status'] === 200 && ($r['body']['data']['id'] ?? null) === 5
         && is_array($r['body']['data']['plan'] ?? null), 'found plan -> full row with decoded plan', $r['raw']);
+    $expectedPlanHash = rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}');
+    rw_test_ok(($r['body']['data']['planHash'] ?? null) === $expectedPlanHash,
+        'full plan response carries an optimistic concurrency hash', $r['raw']);
 
     // GET /plans/{id} with a non-numeric id -> 400, never reaches the DB
     // (scenario is deliberately 'plan-not-found' so a pass here proves the
@@ -216,6 +230,14 @@ echo "\n[3] envelope shape\n";
     rw_test_ok($r['status'] === 200 && ($lib0['vendor'] ?? null) === 'Ubiquiti'
         && ($lib0['unitCount'] ?? null) === 2 && array_key_exists('groups', $lib0),
         'library row carries vendor/unitCount/groups', json_encode($lib0));
+
+    $r = $run(['RW_METHOD' => 'GET', 'RW_PATH' => '/api/rackwire/sor/interconnects',
+               'RW_AUTH' => '1', 'RW_SCENARIO' => 'sor-links']);
+    $link = ($r['body']['data'] ?? [])[0] ?? [];
+    rw_test_ok(($link['standard'] ?? null) === 'om3' && ($link['jacket'] ?? null) === 'aqua'
+        && ($link['lengthM'] ?? null) === 2.5
+        && ($link['a']['assetTag'] ?? null) === 'SI-0001' && ($link['b']['assetTag'] ?? null) === 'SI-0002',
+        'SoR overlay returns cable metadata and endpoint asset tags', json_encode($link));
 
     // GET /sor/interconnects with Sor unconfigured -> 503 service_unavailable
     // (migration 020 documented as "not applied" in this failure path).
@@ -257,6 +279,11 @@ echo "\n[4] authenticated mutations\n";
                'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'delete-found']);
     rw_test_ok($r['status'] === 200 && $r['body']['data']['deleted'] === true, 'operator delete of a live plan -> 200 deleted:true', $r['raw']);
 
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/delete',
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'delete-lock-timeout']);
+    rw_test_ok($r['status'] === 503 && ($r['body']['error']['code'] ?? null) === 'busy',
+        'plan delete lock timeout returns retryable 503', $r['raw']);
+
     // POST /plans/{id}/delete, already gone -> 404.
     $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/delete',
                'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'delete-not-found']);
@@ -275,10 +302,43 @@ echo "\n[4] authenticated mutations\n";
     // full "... AND source_id = :src" clause, so a write that lost its
     // ownership scoping would be an unmatched query, not a silent pass.
     $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans',
-               'RW_BODY' => json_encode(['id' => 5, 'name' => 'Rack A2', 'plan' => ['devices' => [], 'cables' => []]]),
-               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'update-plan']);
+               'RW_BODY' => json_encode(['id' => 5, 'name' => 'Rack A2', 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}'), 'plan' => ['devices' => [], 'cables' => []]]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'update-plan', 'RW_CAPTURE' => '1']);
     rw_test_ok($r['status'] === 201 && ($r['body']['data']['name'] ?? null) === 'Rack A2',
         'operator update of an owned plan -> 201, UPDATE scoped by source_id', $r['raw']);
+    $capturedSql = array_map(static fn (array $entry): string => (string) ($entry['sql'] ?? ''), $r['capture'] ?? []);
+    $timeoutAt = array_search('SET SESSION innodb_lock_wait_timeout = 5', $capturedSql, true);
+    $lockAt = false;
+    foreach ($capturedSql as $sqlIndex => $sqlText) {
+        if (str_contains($sqlText, 'FOR UPDATE')) { $lockAt = $sqlIndex; break; }
+    }
+    rw_test_ok($timeoutAt !== false && $lockAt !== false && $timeoutAt < $lockAt,
+        'plan lock wait is bounded before acquiring the row lock', json_encode($capturedSql));
+
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans',
+               'RW_BODY' => json_encode(['id' => 5, 'name' => 'Rack A2', 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}'), 'plan' => ['devices' => [], 'cables' => []]]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'update-plan-lock-timeout']);
+    rw_test_ok($r['status'] === 503 && ($r['body']['error']['code'] ?? null) === 'busy',
+        'row-lock timeout returns retryable 503 instead of outliving the client timeout', $r['raw']);
+
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans',
+               'RW_BODY' => json_encode(['id' => 5, 'name' => 'Rack A2', 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}'), 'plan' => ['devices' => [], 'cables' => []]]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'update-plan-idempotent']);
+    rw_test_ok($r['status'] === 201 && ($r['body']['data']['name'] ?? null) === 'Rack A2'
+        && is_string($r['body']['data']['planHash'] ?? null),
+        'retry after an acknowledged write timeout adopts the already-applied plan and hash', $r['raw']);
+
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans',
+               'RW_BODY' => json_encode(['id' => 5, 'name' => 'Rack A2', 'plan' => ['devices' => [], 'cables' => []]]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'update-plan-no-hash']);
+    rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'plan_hash_required',
+        'update without a loaded base hash is rejected before reading or writing the plan', $r['raw']);
+
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans',
+               'RW_BODY' => json_encode(['id' => 5, 'name' => 'Stale overwrite', 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}'), 'plan' => ['devices' => [], 'cables' => []]]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'update-plan-stale']);
+    rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'plan_conflict',
+        'stale shared-plan update is rejected instead of overwriting a newer plan', $r['raw']);
 }
 
 // ===========================================================================
@@ -290,8 +350,8 @@ echo "\n[5] source ownership on writes\n";
 {
     $foreign = ['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'plan-foreign'];
 
-    $r = $run($foreign + ['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans',
-        'RW_BODY' => json_encode(['id' => 5, 'name' => 'Hijack', 'plan' => ['devices' => [], 'cables' => []]])]);
+    $r = $run(['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'plan-for-write-foreign'] + ['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans',
+        'RW_BODY' => json_encode(['id' => 5, 'name' => 'Hijack', 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}'), 'plan' => ['devices' => [], 'cables' => []]])]);
     rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'conflict',
         'update of a foreign-owned plan -> 409 conflict', $r['raw']);
 
@@ -299,10 +359,41 @@ echo "\n[5] source ownership on writes\n";
     rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'conflict',
         'delete of a foreign-owned plan -> 409 conflict', $r['raw']);
 
-    $r = $run($foreign + ['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/restore',
-        'RW_BODY' => json_encode(['versionId' => 1])]);
+    $r = $run(['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'restore-plan-foreign', 'RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/restore',
+        'RW_BODY' => json_encode(['versionId' => 1, 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}')])]);
     rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'conflict',
         'restore onto a foreign-owned plan -> 409 conflict', $r['raw']);
+
+    $r = $run(['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/restore',
+        'RW_BODY' => json_encode(['versionId' => 77]), 'RW_SCENARIO' => 'sor-disabled']);
+    rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'plan_hash_required',
+        'restore without a loaded base hash is rejected before DB access', $r['raw']);
+
+    $r = $run(['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/restore',
+        'RW_BODY' => json_encode(['versionId' => 77, 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}')]),
+        'RW_SCENARIO' => 'restore-plan-stale']);
+    rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'plan_conflict',
+        'stale snapshot restore is rejected instead of overwriting a newer plan', $r['raw']);
+
+    $r = $run(['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/restore',
+        'RW_BODY' => json_encode(['versionId' => 77, 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}')]),
+        'RW_SCENARIO' => 'restore-plan-deadlock']);
+    rw_test_ok($r['status'] === 503 && ($r['body']['error']['code'] ?? null) === 'busy',
+        'row deadlock during snapshot restore returns retryable 503', $r['raw']);
+
+    $r = $run(['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/restore',
+        'RW_BODY' => json_encode(['versionId' => 77, 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}')]),
+        'RW_SCENARIO' => 'restore-plan-success']);
+    rw_test_ok($r['status'] === 200 && (($r['body']['data']['plan']['devices'][0]['uid'] ?? null) === 'restored')
+        && is_string($r['body']['data']['planHash'] ?? null),
+        'snapshot restore applies under the loaded plan hash and returns the new hash', $r['raw']);
+
+    $r = $run(['RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/restore',
+        'RW_BODY' => json_encode(['versionId' => 77, 'expectedHash' => rw_test_plan_hash('Rack A', null, null, '{"devices":[],"cables":[]}')]),
+        'RW_SCENARIO' => 'restore-plan-idempotent']);
+    rw_test_ok($r['status'] === 200 && (($r['body']['data']['plan']['devices'][0]['uid'] ?? null) === 'restored')
+        && is_string($r['body']['data']['planHash'] ?? null),
+        'retry after a committed snapshot restore returns the already-applied snapshot and hash', $r['raw']);
 
     $r = $run($foreign + ['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/versions',
         'RW_BODY' => json_encode([])]);
@@ -314,6 +405,16 @@ echo "\n[5] source ownership on writes\n";
         'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'groups-foreign']);
     rw_test_ok($r['status'] === 409 && ($r['body']['error']['code'] ?? null) === 'conflict',
         'groups upsert over foreign-owned port geometry -> 409 conflict', $r['raw']);
+
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/library/3/groups',
+        'RW_BODY' => json_encode(['name' => 'Acme Switch S1', 'kind' => 'switch', 'drawW' => 18,
+            'groups' => [['k' => 'ethernet', 'label' => 'Ethernet ×8', 'glyph' => 'rj45', 'count' => 8,
+                'rows' => 1, 'role' => 'lan', 'gbps' => 1, 'domain' => 'net', 'conn' => 'rj45']]]),
+        'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'groups-create']);
+    $profile = $r['body']['data'] ?? [];
+    rw_test_ok($r['status'] === 201 && ($profile['id'] ?? null) === '3'
+        && ($profile['groups'][0]['count'] ?? null) === 8 && ($profile['drawW'] ?? null) === 18,
+        'operator can save and read back a SoR device connection profile', $r['raw']);
 }
 
 // ===========================================================================
@@ -327,6 +428,19 @@ echo "\n[6] snapshot save\n";
     rw_test_ok($r['status'] === 201 && ($r['body']['data']['id'] ?? null) === 77
         && ($r['body']['data']['name'] ?? null) === 'before rewire',
         'snapshot save -> 201 with the new version row', $r['raw']);
+
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/plans/5/versions',
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'save-version-lock-timeout', 'RW_CAPTURE' => '1']);
+    rw_test_ok($r['status'] === 503 && ($r['body']['error']['code'] ?? null) === 'busy',
+        'snapshot row-lock timeout returns retryable 503', $r['raw']);
+    $capturedSql = array_map(static fn (array $entry): string => (string) ($entry['sql'] ?? ''), $r['capture'] ?? []);
+    $timeoutAt = array_search('SET SESSION innodb_lock_wait_timeout = 5', $capturedSql, true);
+    $lockAt = false;
+    foreach ($capturedSql as $sqlIndex => $sqlText) {
+        if (str_contains($sqlText, 'FOR UPDATE')) { $lockAt = $sqlIndex; break; }
+    }
+    rw_test_ok($timeoutAt !== false && $lockAt !== false && $timeoutAt < $lockAt,
+        'snapshot lock wait is bounded before acquiring the row lock', json_encode($capturedSql));
 
     // 27 on file: the prune must fire. Its DELETE has no stub in any other
     // scenario, so reaching 201 here proves the cap logic ran inside the txn.
@@ -387,6 +501,103 @@ echo "\n[7] commit link_kind from port domain\n";
     rw_test_ok(str_contains($committed, 'c-unknown: copper')
         && str_contains($committed, 'no endpoint port resolved'),
         'unresolvable port -> text heuristic, labelled as the fallback', $committed);
+    rw_test_ok(str_contains($committed, 'entity-level fallback'),
+        'missing SoR ports remain visible as an entity-level commit', $committed);
+}
+
+// A duplicate entity name must never select an arbitrary SoR entity.
+echo "[8] commit identity ambiguity\n";
+{
+    $ports = [['k' => 'lan', 'n' => 'LAN', 'domain' => 'net', 'conn' => 'rj45', 'count' => 1]];
+    $plan = [
+        'devices' => [
+            ['uid' => 'd1', 'name' => 'duplicate switch', 'groups' => $ports],
+            ['uid' => 'd2', 'name' => 'duplicate switch', 'groups' => $ports],
+        ],
+        'cables' => [[
+            'uid' => 'ambiguous-cable',
+            'a' => ['dev' => 'd1', 'port' => 'lan-1'],
+            'b' => ['dev' => 'd2', 'port' => 'lan-1'],
+            'standard' => 'cat6',
+        ]],
+    ];
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/commit',
+               'RW_BODY' => json_encode(['dryRun' => true, 'plan' => $plan]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'commit-ambiguous-name']);
+    $d = $r['body']['data'] ?? [];
+    $skipped = implode(' | ', $d['skipped'] ?? []);
+    rw_test_ok($r['status'] === 200 && ($d['created'] ?? null) === 0
+        && str_contains($skipped, 'endpoint device did not resolve'),
+        'duplicate entity names are refused instead of choosing the first row', $r['raw']);
+}
+
+echo "[9] commit preserves asset, port and cable fields\n";
+{
+    $ports = [['k' => 'lan', 'n' => 'LAN', 'domain' => 'net', 'conn' => 'rj45', 'count' => 1]];
+    $plan = [
+        'devices' => [
+            ['uid' => 'd1', 'name' => 'switch-a', 'assetId' => 'SI-0001',
+             'ifMap' => ['Ethernet1/0/1' => 'lan-1'], 'groups' => $ports],
+            ['uid' => 'd2', 'name' => 'switch-b', 'assetId' => 'SI-0002',
+             'ifMap' => ['Ethernet1/0/1' => 'lan-1'], 'groups' => $ports],
+        ],
+        'cables' => [[
+            'uid' => 'mapped-cable',
+            'a' => ['dev' => 'd1', 'port' => 'lan-1'],
+            'b' => ['dev' => 'd2', 'port' => 'lan-1'],
+            'standard' => 'cat6', 'label' => 'rack patch 1', 'lengthM' => 2.5,
+            'jacket' => 'blue', 'notes' => 'uplink',
+        ]],
+    ];
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/commit',
+               'RW_BODY' => json_encode(['dryRun' => false, 'plan' => $plan]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'commit-port', 'RW_CAPTURE' => '1']);
+    $d = $r['body']['data'] ?? [];
+    $calls = $r['capture'] ?? [];
+    $writes = array_values(array_filter($calls, static fn ($q) => str_starts_with($q['sql'] ?? '', 'INSERT INTO interconnects')));
+    $params = $writes[0]['params'] ?? [];
+    $tagLookups = array_values(array_filter($calls, static fn ($q) => str_contains($q['sql'] ?? '', 'hu.asset_tag = :tag')));
+    $ifLookups = array_values(array_filter($calls, static fn ($q) => str_contains($q['sql'] ?? '', 'FROM interfaces')
+        && str_contains($q['sql'] ?? '', 'entity_id = :eid')));
+    rw_test_ok($r['status'] === 200 && ($d['created'] ?? null) === 1
+        && str_contains(implode(' | ', $d['committed'] ?? []), 'port-level identity'),
+        'scanner asset tags and ifMap port identifiers resolve to a port-level link', $r['raw']);
+    rw_test_ok(count($tagLookups) === 2 && ($tagLookups[0]['params'][':tag'] ?? null) === 'SI-0001'
+        && ($tagLookups[1]['params'][':tag'] ?? null) === 'SI-0002'
+        && count($ifLookups) === 2 && ($ifLookups[0]['params'][':name'] ?? null) === 'Ethernet1/0/1',
+        'commit queries exact scanner tags and reverses ifMap to SoR interface names', json_encode($calls));
+    rw_test_ok(($params[':aif'] ?? null) === 500 && ($params[':bif'] ?? null) === 500
+        && array_key_exists(':ae', $params) && $params[':ae'] === null
+        && array_key_exists(':be', $params) && $params[':be'] === null,
+        'persisted endpoints use interface foreign keys', json_encode($params));
+    rw_test_ok(($params[':lbl'] ?? null) === 'rack patch 1' && ($params[':len'] ?? null) === 2.5
+        && ($params[':notes'] ?? null) === 'uplink' && ($params[':standard'] ?? null) === 'cat6'
+        && ($params[':jacket'] ?? null) === 'blue',
+        'label, length, standard, jacket and notes survive the commit', json_encode($params));
+}
+
+echo "[10] known physical units require an explicit entity association\n";
+{
+    $plan = [
+        'devices' => [
+            ['uid' => 'known', 'name' => 'human-readable-switch', 'assetId' => 'SI-UNLINKED',
+             'groups' => [['k' => 'lan', 'n' => 'LAN', 'domain' => 'net', 'conn' => 'rj45', 'count' => 1]]],
+        ],
+        'cables' => [[
+            'uid' => 'unresolved', 'a' => ['dev' => 'known', 'port' => 'lan-1'],
+            'b' => ['dev' => 'unknown', 'port' => 'lan-1'],
+        ]],
+    ];
+    $r = $run(['RW_METHOD' => 'POST', 'RW_PATH' => '/api/rackwire/commit',
+               'RW_BODY' => json_encode(['dryRun' => false, 'plan' => $plan]),
+               'RW_AUTH' => '1', 'RW_ROLE' => 'operator', 'RW_SCENARIO' => 'commit-known-unit-unlinked', 'RW_CAPTURE' => '1']);
+    $calls = $r['capture'] ?? [];
+    $nameLookups = array_values(array_filter($calls, static fn ($q) => str_contains($q['sql'] ?? '', 'LOWER(name) = LOWER(:n)')));
+    $writes = array_values(array_filter($calls, static fn ($q) => str_starts_with($q['sql'] ?? '', 'INSERT INTO interconnects')));
+    rw_test_ok($r['status'] === 200 && ($r['body']['data']['created'] ?? null) === 0
+        && str_contains(implode(' | ', $r['body']['data']['skipped'] ?? []), 'endpoint device did not resolve')
+        && $nameLookups === [] && $writes === [],
+        'asset tag of a known but unlinked unit never resolves to an unrelated entity by name', $r['raw']);
 }
 
 echo "\n" . $pass . " passed, " . $fail . " failed\n";

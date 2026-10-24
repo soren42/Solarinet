@@ -42,13 +42,13 @@ declare(strict_types=1);
  *
  * Routes:
  *   GET    /api/inventory/components            list (filters: stock_status,
- *                                                location_id, model_id, q, limit)
+ *                                                location_id, model_id, q, limit, offset)
  *   GET    /api/inventory/components/{id}        one component
  *   POST   /api/inventory/components              create
  *   PUT    /api/inventory/components/{id}         update (partial)
  *   DELETE /api/inventory/components/{id}         soft-delete
  *
- *   GET    /api/inventory/models                 list (filters: hw_type, q)
+ *   GET    /api/inventory/models                 list (filters: hw_type, q, limit, offset)
  *   GET    /api/inventory/models/{id}             one model
  *   POST   /api/inventory/models                  create
  *
@@ -58,18 +58,19 @@ declare(strict_types=1);
  *   POST   /api/inventory/locations                create (numbered drawer/tray/bin, etc.)
  *   PUT    /api/inventory/locations/{id}           update (partial)
  *
- *   GET    /api/inventory/receipts                list (filters: vendor, q)
+ *   GET    /api/inventory/receipts                list (filters: vendor, q, limit, offset)
  *   GET    /api/inventory/receipts/{id}            one receipt (metadata only)
  *   POST   /api/inventory/receipts                 create
  *   POST   /api/inventory/receipts/{id}/scan       upload scan (multipart field "file")
  *   GET    /api/inventory/receipts/{id}/scan       stream the scan back
  *
- *   GET    /api/inventory/projects                list (filters: status, q)
+ *   GET    /api/inventory/projects                list (filters: status, q, limit, offset)
  *   GET    /api/inventory/projects/{id}            one project + its allocations
  *   POST   /api/inventory/projects                 create
  *   PUT    /api/inventory/projects/{id}            update (partial)
  *   DELETE /api/inventory/projects/{id}            soft-delete (+ its allocations)
  *
+ *   GET    /api/inventory/allocations             list (filters: project_id, allocation, limit, offset)
  *   POST   /api/inventory/projects/{id}/allocations                add (needed/committed/installed)
  *   PUT    /api/inventory/projects/{id}/allocations/{allocId}      commit/install/return/edit
  *   DELETE /api/inventory/projects/{id}/allocations/{allocId}      cancel (soft-delete)
@@ -91,8 +92,64 @@ declare(strict_types=1);
 require_once __DIR__ . '/../lib/Sor.php';
 require_once __DIR__ . '/../lib/Operator.php';
 require_once __DIR__ . '/../lib/Coerce.php';
+require_once __DIR__ . '/../lib/ScannerImport.php';
 
 return static function (Router $router): void {
+
+    // Combined read used by the dashboard bootstrap and Inventory screen.
+    // Legacy shape for integrations with small inventories. Bounded per list;
+    // larger inventories must use the paginated collection endpoints.
+    $router->get('/api/inventory', static function (): void {
+        $models = inv_legacy_rows(inv_model_sql() . ' WHERE deleted_at IS NULL ORDER BY make, model, id', 'models');
+        $units = inv_legacy_rows(inv_component_sql() . ' WHERE hu.deleted_at IS NULL AND hm.deleted_at IS NULL ORDER BY hu.id DESC', 'components');
+        $locationRows = inv_legacy_rows(inv_location_sql() . ' WHERE deleted_at IS NULL ORDER BY name, id', 'locations');
+        $receipts = inv_legacy_rows(inv_receipt_sql() . ' WHERE deleted_at IS NULL ORDER BY purchased_on DESC, id DESC', 'receipts');
+        $projects = inv_legacy_rows(inv_project_sql() . ' WHERE deleted_at IS NULL ORDER BY id DESC', 'projects');
+        $allocations = inv_legacy_rows(inv_allocation_sql() . ' WHERE pa.deleted_at IS NULL ORDER BY pa.id DESC', 'allocations');
+
+        Response::ok([
+            'models' => array_map('inv_model_row', $models),
+            'units' => array_map('inv_component_row', $units),
+            'locations' => inv_location_tree($locationRows),
+            'receipts' => array_map('inv_receipt_row', $receipts),
+            'projects' => array_map('inv_project_row', $projects),
+            'allocations' => array_map('inv_allocation_row', $allocations),
+        ]);
+    });
+
+    // Import a portable scanner-ingest snapshot through the authenticated SoR
+    // boundary. Both paths require an operator and same-origin CSRF via Policy.
+    foreach (['preview' => false, 'apply' => true] as $mode => $apply) {
+        $router->post('/api/inventory/scanner-import/' . $mode, static function () use ($apply): void {
+            $length = filter_var($_SERVER['CONTENT_LENGTH'] ?? null, FILTER_VALIDATE_INT);
+            if (is_int($length) && $length > ScannerImport::MAX_REQUEST_BYTES) Response::error('payload_too_large', 'Scanner snapshot exceeds 4 MiB.', 413);
+            $operator = Operator::requireOperator();
+            $body = solari_json_body(ScannerImport::MAX_REQUEST_BYTES);
+            $snapshot = $body['snapshot'] ?? null;
+            $mapping = $body['mapping'] ?? [];
+            if (!is_array($snapshot) || !is_array($mapping)) Response::error('bad_request', 'Provide a scanner snapshot and mapping object.', 400);
+            $expectedFingerprint = $body['expectedFingerprint'] ?? null;
+            if ($apply && (!is_string($expectedFingerprint) || !preg_match('/\A[a-f0-9]{64}\z/', $expectedFingerprint))) {
+                Response::error('bad_request', 'Preview the import again before applying it.', 400);
+            }
+            try {
+                $report = ScannerImport::run(Sor::db(), $operator, $snapshot, $mapping, $apply,
+                    isset($body['repairStatus']) && $body['repairStatus'] !== '' ? (string) $body['repairStatus'] : null,
+                    isset($body['unmappedLocation']) ? (string) $body['unmappedLocation'] : 'error', $expectedFingerprint);
+            } catch (InvalidArgumentException $e) {
+                Response::error('bad_request', $e->getMessage(), 400);
+            } catch (PDOException $e) {
+                error_log('[scanner-import] database error: ' . $e->getMessage());
+                Response::error('scanner_import_failed', 'Scanner import could not reach the SoR; no partial transaction was committed.', 503);
+            } catch (RuntimeException $e) {
+                Response::error('scanner_import_conflict', $e->getMessage(), 409);
+            } catch (Throwable $e) {
+                error_log('[scanner-import] ' . $e->getMessage());
+                Response::error('scanner_import_failed', 'Scanner import failed; no partial transaction was committed.', 500);
+            }
+            Response::ok($report, 200);
+        });
+    }
 
     // ==================================================================
     // components (hardware_units)
@@ -125,12 +182,22 @@ return static function (Router $router): void {
             $params[':q']     = '%' . trim($_GET['q']) . '%';
         }
 
-        $limit = Inv::clampLimit($_GET['limit'] ?? null, 500, 5000);
+        $page = inv_page_request();
+        $limit = $page['limit'] ?? Inv::clampLimit($_GET['limit'] ?? null, 500, 5000);
+        $offset = $page['offset'] ?? 0;
         $rows  = Inv::rows(
-            inv_component_sql() . ' WHERE ' . implode(' AND ', $where) . " ORDER BY hu.id DESC LIMIT $limit",
+            inv_component_sql() . ' WHERE ' . implode(' AND ', $where) . " ORDER BY hu.id DESC LIMIT $limit OFFSET $offset",
             $params
         );
-        Response::ok(array_map('inv_component_row', $rows));
+        $items = array_map('inv_component_row', $rows);
+        if ($page !== null) {
+            $total = (int) Inv::scalar(
+                'SELECT COUNT(*) FROM hardware_units hu JOIN hardware_models hm ON hm.id=hu.model_id WHERE ' . implode(' AND ', $where),
+                $params
+            );
+            Response::ok(inv_page_result($items, $total, $page));
+        }
+        Response::ok($items);
     });
 
     $router->get('/api/inventory/components/{id}', static function (array $p): void {
@@ -140,6 +207,156 @@ return static function (Router $router): void {
             Response::error('not_found', "No component $id", 404);
         }
         Response::ok(inv_component_row($row));
+    });
+
+    // Explicit physical inventory ↔ network/service entity association. This
+    // is always an operator decision: entity names are returned as candidates,
+    // never used to infer a relationship on the server.
+    $router->get('/api/inventory/components/{id}/entity-link', static function (array $p): void {
+        $id = Inv::idParam($p['id']);
+        $unit = Inv::row('SELECT id, asset_tag, serial FROM hardware_units WHERE id=:id AND deleted_at IS NULL', [':id' => $id]);
+        if ($unit === null) Response::error('not_found', "No component $id", 404);
+
+        $linked = Inv::row(
+            'SELECT id, name, entity_type, lifecycle FROM entities WHERE hardware_unit_id=:id AND deleted_at IS NULL',
+            [':id' => $id]
+        );
+        $query = isset($_GET['q']) ? trim((string) $_GET['q']) : '';
+        $where = '(hardware_unit_id IS NULL OR hardware_unit_id=:unit) AND deleted_at IS NULL';
+        $params = [':unit' => $id];
+        if ($query !== '') {
+            $where .= " AND (name LIKE :q_name ESCAPE '!' OR role LIKE :q_role ESCAPE '!')";
+            $escapedQuery = '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $query) . '%';
+            $params[':q_name'] = $escapedQuery;
+            $params[':q_role'] = $escapedQuery;
+        }
+        $candidates = Inv::rows(
+            "SELECT id, name, entity_type, lifecycle FROM entities WHERE $where ORDER BY name, id LIMIT 200",
+            $params
+        );
+        Response::ok([
+            'unit' => ['id' => (int) $unit['id'], 'assetTag' => $unit['asset_tag'], 'serial' => $unit['serial']],
+            'entity' => $linked === null ? null : [
+                'id' => (int) $linked['id'], 'name' => $linked['name'],
+                'entityType' => $linked['entity_type'], 'lifecycle' => $linked['lifecycle'],
+            ],
+            'candidates' => array_map(static fn(array $row): array => [
+                'id' => (int) $row['id'], 'name' => $row['name'],
+                'entityType' => $row['entity_type'], 'lifecycle' => $row['lifecycle'],
+            ], $candidates),
+        ]);
+    });
+
+    $router->post('/api/inventory/components/{id}/entity-link', static function (array $p): void {
+        $operator = Operator::requireOperator();
+        $id = Inv::idParam($p['id']);
+        $body = solari_json_body();
+        $rawEntityId = $body['entity_id'] ?? null;
+        if (!(is_int($rawEntityId) || (is_string($rawEntityId) && ctype_digit($rawEntityId)))
+            || (int) $rawEntityId < 1) {
+            Response::error('bad_request', 'entity_id must be a positive integer.', 400);
+        }
+        $entityId = (int) $rawEntityId;
+        $note = isset($body['note']) ? trim((string) $body['note']) : 'Operator associated physical inventory with SoR entity';
+        if (strlen($note) > 255) Response::error('bad_request', 'note must not exceed 255 bytes.', 400);
+
+        $db = Sor::db();
+        try {
+            $db->beginTransaction();
+            $unitStmt = $db->prepare('SELECT id FROM hardware_units WHERE id=:id AND deleted_at IS NULL FOR UPDATE');
+            $unitStmt->execute([':id' => $id]);
+            if (!$unitStmt->fetchColumn()) {
+                $db->rollBack();
+                Response::error('not_found', "No component $id", 404);
+            }
+            $entityStmt = $db->prepare('SELECT id, hardware_unit_id FROM entities WHERE id=:id AND deleted_at IS NULL FOR UPDATE');
+            $entityStmt->execute([':id' => $entityId]);
+            $entity = $entityStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$entity) {
+                $db->rollBack();
+                Response::error('not_found', "No live entity $entityId", 404);
+            }
+            if ($entity['hardware_unit_id'] !== null && (int) $entity['hardware_unit_id'] !== $id) {
+                $db->rollBack();
+                Response::error('entity_already_linked', 'That entity is already associated with another physical unit.', 409);
+            }
+            $existingStmt = $db->prepare('SELECT id FROM entities WHERE hardware_unit_id=:id AND deleted_at IS NULL FOR UPDATE');
+            $existingStmt->execute([':id' => $id]);
+            $existingEntityId = $existingStmt->fetchColumn();
+            if ($existingEntityId !== false && (int) $existingEntityId !== $entityId) {
+                $db->rollBack();
+                Response::error('unit_already_linked', 'That physical unit is already associated with another entity. Unlink it first.', 409);
+            }
+            if ((int) ($entity['hardware_unit_id'] ?? 0) === $id) {
+                $db->commit();
+                Response::ok(['unitId' => $id, 'entityId' => $entityId, 'unchanged' => true]);
+            }
+
+            $update = $db->prepare("UPDATE entities SET hardware_unit_id=:unit, asserted_kind='human', asserted_at=NOW() WHERE id=:entity");
+            $update->execute([':unit' => $id, ':entity' => $entityId]);
+            $sourceId = Sor::dashboardSourceId();
+            $audit = $db->prepare("INSERT INTO audit_log (table_name,row_id,action,actor_label,source_id,asserted_kind,old_values,new_values,note) VALUES ('entities',:id,'update',:actor,:source,'human',:old,:new,:note)");
+            $audit->execute([
+                ':id' => $entityId, ':actor' => 'dashboard:' . $operator, ':source' => $sourceId,
+                ':old' => json_encode(['hardware_unit_id' => null], JSON_THROW_ON_ERROR),
+                ':new' => json_encode(['hardware_unit_id' => $id], JSON_THROW_ON_ERROR), ':note' => $note,
+            ]);
+            $db->commit();
+        } catch (PDOException $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $driverCode = $e->errorInfo[1] ?? null;
+            if ($driverCode === 1062 || ($driverCode === 1644
+                && str_contains($e->getMessage(), 'physical unit is already linked to another live entity'))) {
+                Response::error('unit_already_linked', 'That physical unit is already associated with another live entity.', 409);
+            }
+            error_log('[inventory-entity-link] database error: ' . $e->getMessage());
+            Response::error('entity_link_failed', 'The entity association could not be saved.', 503);
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            error_log('[inventory-entity-link] ' . $e->getMessage());
+            Response::error('entity_link_failed', 'The entity association could not be saved.', 500);
+        }
+        Response::ok(['unitId' => $id, 'entityId' => $entityId, 'unchanged' => false]);
+    });
+
+    $router->add('DELETE', '/api/inventory/components/{id}/entity-link', static function (array $p): void {
+        $operator = Operator::requireOperator();
+        $id = Inv::idParam($p['id']);
+        $body = solari_json_body();
+        $note = isset($body['note']) ? trim((string) $body['note']) : 'Operator removed physical inventory to SoR entity association';
+        if (strlen($note) > 255) Response::error('bad_request', 'note must not exceed 255 bytes.', 400);
+        $db = Sor::db();
+        try {
+            $db->beginTransaction();
+            $unitStmt = $db->prepare('SELECT id FROM hardware_units WHERE id=:unit AND deleted_at IS NULL FOR UPDATE');
+            $unitStmt->execute([':unit' => $id]);
+            if (!$unitStmt->fetchColumn()) {
+                $db->rollBack();
+                Response::error('not_found', "No component $id", 404);
+            }
+            $stmt = $db->prepare('SELECT e.id FROM entities e JOIN hardware_units hu ON hu.id=e.hardware_unit_id WHERE hu.id=:unit AND hu.deleted_at IS NULL AND e.deleted_at IS NULL FOR UPDATE');
+            $stmt->execute([':unit' => $id]);
+            $entityId = $stmt->fetchColumn();
+            if ($entityId === false) {
+                $db->rollBack();
+                Response::ok(['unitId' => $id, 'entityId' => null, 'unchanged' => true]);
+            }
+            $entityId = (int) $entityId;
+            $update = $db->prepare("UPDATE entities SET hardware_unit_id=NULL, asserted_kind='human', asserted_at=NOW() WHERE id=:entity");
+            $update->execute([':entity' => $entityId]);
+            $audit = $db->prepare("INSERT INTO audit_log (table_name,row_id,action,actor_label,source_id,asserted_kind,old_values,new_values,note) VALUES ('entities',:id,'update',:actor,:source,'human',:old,:new,:note)");
+            $audit->execute([
+                ':id' => $entityId, ':actor' => 'dashboard:' . $operator, ':source' => Sor::dashboardSourceId(),
+                ':old' => json_encode(['hardware_unit_id' => $id], JSON_THROW_ON_ERROR),
+                ':new' => json_encode(['hardware_unit_id' => null], JSON_THROW_ON_ERROR), ':note' => $note,
+            ]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            error_log('[inventory-entity-unlink] ' . $e->getMessage());
+            Response::error('entity_unlink_failed', 'The entity association could not be removed.', 500);
+        }
+        Response::ok(['unitId' => $id, 'entityId' => $entityId, 'unchanged' => false]);
     });
 
     $router->post('/api/inventory/components', static function (): void {
@@ -257,11 +474,15 @@ return static function (Router $router): void {
             $where[]        = '(make LIKE :q OR model LIKE :q)';
             $params[':q']   = '%' . trim($_GET['q']) . '%';
         }
-        $rows = Inv::rows(
-            inv_model_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY make, model',
-            $params
-        );
-        Response::ok(array_map('inv_model_row', $rows));
+        $page = inv_page_request();
+        $sql = inv_model_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY make, model, id';
+        $rows = Inv::rows($page === null ? $sql : $sql . " LIMIT {$page['limit']} OFFSET {$page['offset']}", $params);
+        $items = array_map('inv_model_row', $rows);
+        if ($page !== null) {
+            $total = (int) Inv::scalar('SELECT COUNT(*) FROM hardware_models WHERE ' . implode(' AND ', $where), $params);
+            Response::ok(inv_page_result($items, $total, $page));
+        }
+        Response::ok($items);
     });
 
     $router->get('/api/inventory/models/{id}', static function (array $p): void {
@@ -303,6 +524,18 @@ return static function (Router $router): void {
     // ==================================================================
 
     $router->get('/api/inventory/locations', static function (): void {
+        if (array_key_exists('flat', $_GET)) {
+            if ($_GET['flat'] !== '1' || isset($_GET['parent_id'])) {
+                Response::error('bad_request', 'flat must be 1 and cannot be combined with parent_id.', 400);
+            }
+            $page = inv_page_request() ?? ['limit' => 500, 'offset' => 0];
+            $rows = Inv::rows(
+                inv_location_sql() . ' WHERE deleted_at IS NULL ORDER BY name, id LIMIT ' . $page['limit'] . ' OFFSET ' . $page['offset']
+            );
+            $items = array_map('inv_location_row', $rows);
+            $total = (int) Inv::scalar('SELECT COUNT(*) FROM locations WHERE deleted_at IS NULL');
+            Response::ok(inv_page_result($items, $total, $page));
+        }
         if (isset($_GET['parent_id']) && $_GET['parent_id'] !== '') {
             if (!ctype_digit((string) $_GET['parent_id'])) {
                 Response::error('bad_request', 'parent_id must be an integer.', 400);
@@ -413,11 +646,15 @@ return static function (Router $router): void {
             $where[]        = '(vendor LIKE :q OR order_ref LIKE :q OR notes LIKE :q)';
             $params[':q']   = '%' . trim($_GET['q']) . '%';
         }
-        $rows = Inv::rows(
-            inv_receipt_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY purchased_on DESC, id DESC',
-            $params
-        );
-        Response::ok(array_map('inv_receipt_row', $rows));
+        $page = inv_page_request();
+        $sql = inv_receipt_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY purchased_on DESC, id DESC';
+        $rows = Inv::rows($page === null ? $sql : $sql . " LIMIT {$page['limit']} OFFSET {$page['offset']}", $params);
+        $items = array_map('inv_receipt_row', $rows);
+        if ($page !== null) {
+            $total = (int) Inv::scalar('SELECT COUNT(*) FROM receipts WHERE ' . implode(' AND ', $where), $params);
+            Response::ok(inv_page_result($items, $total, $page));
+        }
+        Response::ok($items);
     });
 
     $router->get('/api/inventory/receipts/{id}', static function (array $p): void {
@@ -560,11 +797,15 @@ return static function (Router $router): void {
             $where[]        = '(name LIKE :q OR code LIKE :q)';
             $params[':q']   = '%' . trim($_GET['q']) . '%';
         }
-        $rows = Inv::rows(
-            inv_project_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY id DESC',
-            $params
-        );
-        Response::ok(array_map('inv_project_row', $rows));
+        $page = inv_page_request();
+        $sql = inv_project_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY id DESC';
+        $rows = Inv::rows($page === null ? $sql : $sql . " LIMIT {$page['limit']} OFFSET {$page['offset']}", $params);
+        $items = array_map('inv_project_row', $rows);
+        if ($page !== null) {
+            $total = (int) Inv::scalar('SELECT COUNT(*) FROM projects WHERE ' . implode(' AND ', $where), $params);
+            Response::ok(inv_page_result($items, $total, $page));
+        }
+        Response::ok($items);
     });
 
     // GET /api/inventory/projects/{id} — project + its live allocations.
@@ -582,6 +823,35 @@ return static function (Router $router): void {
             'project'     => inv_project_row($proj),
             'allocations' => array_map('inv_allocation_row', $allocs),
         ]);
+    });
+
+    $router->get('/api/inventory/allocations', static function (): void {
+        $where = [
+            'pa.deleted_at IS NULL',
+            'EXISTS (SELECT 1 FROM projects p WHERE p.id=pa.project_id AND p.deleted_at IS NULL)',
+        ];
+        $params = [];
+        if (isset($_GET['project_id']) && $_GET['project_id'] !== '') {
+            if (!is_string($_GET['project_id']) || !ctype_digit($_GET['project_id']) || (int) $_GET['project_id'] < 1) {
+                Response::error('bad_request', 'project_id must be a positive integer.', 400);
+            }
+            $where[] = 'pa.project_id = :project_id';
+            $params[':project_id'] = (int) $_GET['project_id'];
+        }
+        if (isset($_GET['allocation']) && $_GET['allocation'] !== '') {
+            $where[] = 'pa.allocation = :allocation';
+            $params[':allocation'] = Inv::requireEnum('project_allocations', 'allocation', $_GET['allocation'], 'allocation');
+        }
+
+        $page = inv_page_request();
+        $sql = inv_allocation_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY pa.id DESC';
+        $rows = Inv::rows($page === null ? $sql : $sql . " LIMIT {$page['limit']} OFFSET {$page['offset']}", $params);
+        $items = array_map('inv_allocation_row', $rows);
+        if ($page !== null) {
+            $total = (int) Inv::scalar('SELECT COUNT(*) FROM project_allocations pa WHERE ' . implode(' AND ', $where), $params);
+            Response::ok(inv_page_result($items, $total, $page));
+        }
+        Response::ok($items);
     });
 
     $router->post('/api/inventory/projects', static function (): void {
@@ -923,6 +1193,71 @@ final class Inv
     }
 }
 
+/**
+ * Parse opt-in inventory list pagination. Legacy requests without either
+ * parameter retain their existing array response. Page sizes are capped so
+ * integrations can bound one database result and HTTP payload.
+ *
+ * @return array{limit:int,offset:int}|null
+ */
+function inv_page_request(): ?array
+{
+    if (!array_key_exists('limit', $_GET) && !array_key_exists('offset', $_GET)) {
+        return null;
+    }
+    $limitRaw = $_GET['limit'] ?? '500';
+    $offsetRaw = $_GET['offset'] ?? '0';
+    if (!is_string($limitRaw) || preg_match('/\\A[0-9]+\\z/', $limitRaw) !== 1
+        || !is_string($offsetRaw) || preg_match('/\\A[0-9]+\\z/', $offsetRaw) !== 1) {
+        Response::error('bad_request', 'limit and offset must be non-negative integers.', 400);
+    }
+    $limit = filter_var($limitRaw, FILTER_VALIDATE_INT);
+    $offset = filter_var($offsetRaw, FILTER_VALIDATE_INT);
+    if ($limit === false || $limit < 1 || $limit > 5000) {
+        Response::error('bad_request', 'limit must be between 1 and 5000.', 400);
+    }
+    if ($offset === false || $offset < 0 || $offset > 2147483647) {
+        Response::error('bad_request', 'offset must be between 0 and 2147483647.', 400);
+    }
+    return ['limit' => $limit, 'offset' => $offset];
+}
+
+/** @param array<int,mixed> $items @param array{limit:int,offset:int} $page */
+function inv_page_result(array $items, int $total, array $page): array
+{
+    $hasMore = $page['offset'] + count($items) < $total;
+    return [
+        'items' => $items,
+        'page' => [
+            'limit' => $page['limit'],
+            'offset' => $page['offset'],
+            'total' => $total,
+            'hasMore' => $hasMore,
+            'nextOffset' => $hasMore ? $page['offset'] + count($items) : null,
+        ],
+    ];
+}
+
+/**
+ * Keep the compatibility aggregate bounded. 500 rows per collection retain
+ * the legacy shape for ordinary inventories; callers with larger inventories
+ * must use the individually paginated endpoints.
+ *
+ * @return array<int,array<string,mixed>>
+ */
+function inv_legacy_rows(string $sql, string $collection): array
+{
+    $rows = Inv::rows($sql . ' LIMIT 501');
+    if (count($rows) > 500) {
+        Response::error(
+            'inventory_page_required',
+            'The combined inventory response is limited to 500 rows per collection. Use the paginated inventory list endpoint for ' . $collection . '.',
+            413
+        );
+    }
+    return $rows;
+}
+
 /* ========================================================================
  * body-field validation helpers (shared by every create/update handler)
  * ==================================================================== */
@@ -1039,10 +1374,13 @@ function inv_component_sql(): string
                    hu.quantity, hu.unit_cost_cents, hu.stock_status, hu.receipt_id, hu.notes,
                    hu.source_id, hu.created_at, hu.updated_at,
                    hm.make, hm.model, hm.hw_type,
-                   l.name AS location_name, l.code AS location_code, l.loc_type AS location_type
+                   l.name AS location_name, l.code AS location_code, l.loc_type AS location_type,
+                   e.id AS entity_id, e.name AS entity_name, e.entity_type AS entity_type
               FROM hardware_units hu
               JOIN hardware_models hm ON hm.id = hu.model_id
-              LEFT JOIN locations l ON l.id = hu.location_id AND l.deleted_at IS NULL";
+              LEFT JOIN locations l ON l.id = hu.location_id AND l.deleted_at IS NULL
+              LEFT JOIN entity_hardware_unit_links lnk ON lnk.hardware_unit_id = hu.id
+              LEFT JOIN entities e ON e.id = lnk.entity_id AND e.deleted_at IS NULL";
 }
 
 function inv_component_row(array $r): array
@@ -1058,6 +1396,9 @@ function inv_component_row(array $r): array
         'locationId'    => Coerce::int($r['location_id']),
         'locationName'  => $r['location_name'] ?? null,
         'locationCode'  => $r['location_code'] ?? null,
+        'entityId'      => Coerce::int($r['entity_id'] ?? null),
+        'entityName'    => $r['entity_name'] ?? null,
+        'entityType'    => $r['entity_type'] ?? null,
         'acquiredOn'    => $r['acquired_on'] ?? null,
         'quantity'      => Coerce::int($r['quantity']),
         'unitCostCents' => Coerce::int($r['unit_cost_cents']),
@@ -1188,7 +1529,7 @@ function inv_uploads_dir(): string
     if (is_string($dir) && $dir !== '') {
         return rtrim($dir, '/') . '/receipts';
     }
-    return '/var/www/solarinet/uploads/receipts';
+    return '/var/lib/solarinet-dashboard/uploads/receipts';
 }
 
 function inv_project_sql(): string

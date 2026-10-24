@@ -39,6 +39,7 @@ class MqttBus {
 
   std::vector<Sub> subs_;
   uint32_t nextReconnectMs_ = 0;
+  bool tlsConfigured_ = false;
 };
 
 MqttBus& mqttBus();

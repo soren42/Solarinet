@@ -1,0 +1,3 @@
+; Xenon-only dependency for the NAS-X target.
+[Unit]
+RequiresMountsFor=/mnt/solari-backups

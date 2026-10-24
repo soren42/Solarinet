@@ -11,7 +11,10 @@
 --      FKs; probeCurrent/probeHistory are keyed by targetId, not nodeId, so
 --      they are pruned by the partition roller (roll_history.sql) on time.
 --
---   2. Prune append-only history rows older than the retention window. The bulk
+--   2. Expire unanswered control directives older than the supported rollout
+--      window. These are operator delivery bookkeeping, not durable history.
+--
+--   3. Prune append-only history rows older than the retention window. The bulk
 --      drop happens at the partition level (roll_history.sql, fast DDL); this
 --      procedure is the row-level safety net for any history not yet rolled off
 --      a partition boundary, and for installs that disabled partition rolling.
@@ -21,9 +24,10 @@
 
 DELIMITER //
 
--- Purge retired nodes (and, by FK cascade, their current-state rows) whose last
--- contact predates the retention window. The node row itself is kept until then
--- so the fleet's recent past is never silently rewritten (Handoff §5).
+-- Purge retired nodes (and, by FK cascade, their current-state rows and
+-- disposable CRL acknowledgements) whose last contact predates the retention
+-- window. The node row itself is kept until then so the fleet's recent past is
+-- never silently rewritten (Handoff §5).
 DROP PROCEDURE IF EXISTS solari_purge_retired //
 CREATE PROCEDURE solari_purge_retired(IN retentionDays INT)
 BEGIN
@@ -58,6 +62,19 @@ BEGIN
   SELECT ROW_COUNT() AS purgedNodes, retentionDays AS retentionDays;
 END //
 
+-- Clear abandoned correlations during scheduled maintenance. This must not be
+-- on the synchronous operator-send path: database cleanup delays must not block
+-- delivery of a new control directive.
+DROP PROCEDURE IF EXISTS solari_purge_pending_controls //
+CREATE PROCEDURE solari_purge_pending_controls(IN retentionDays INT)
+BEGIN
+  IF retentionDays IS NULL OR retentionDays < 1 THEN
+    SET retentionDays = 7;
+  END IF;
+  DELETE FROM pendingControlDirective
+   WHERE issuedAt < (UTC_TIMESTAMP(6) - INTERVAL retentionDays DAY);
+END //
+
 -- Row-level history prune safety net (partition rolling does the bulk work).
 DROP PROCEDURE IF EXISTS solari_purge_history //
 CREATE PROCEDURE solari_purge_history(IN retentionDays INT)
@@ -81,6 +98,7 @@ DROP PROCEDURE IF EXISTS solari_retention_run //
 CREATE PROCEDURE solari_retention_run(IN retentionDays INT)
 BEGIN
   CALL solari_purge_retired(retentionDays);
+  CALL solari_purge_pending_controls(7);
   CALL solari_purge_history(retentionDays);
 END //
 

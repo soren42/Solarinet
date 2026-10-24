@@ -202,6 +202,109 @@
     );
   }
 
+  const CRL_STATUS = {
+    current: { label: "Current", tone: "var(--ok)" },
+    stale: { label: "Stale receipt", tone: "var(--warn)" },
+    pending: { label: "No receipt", tone: "var(--unknown)" },
+    offline: { label: "Offline", tone: "var(--ink-faint)" },
+    expired: { label: "Expired generation", tone: "var(--crit)" },
+  };
+
+  function CrlRollout({ crl }) {
+    const generations = (crl && crl.generations) || [];
+    return (
+      <section className="crl-rollout" aria-labelledby="crl-rollout-title">
+        <div className="crl-rollout__head">
+          <div>
+            <h2 id="crl-rollout-title">CRL distribution</h2>
+            <p>Latest generated revocation list and agent receipts.</p>
+          </div>
+          <span className="crl-rollout__scope">Client + monitor · matching current issuer</span>
+        </div>
+        {!crl || !crl.available ? (
+          <div className="crl-rollout__notice" role="status">
+            <strong>Acknowledgement data unavailable</strong>
+            <span>{(crl && crl.reason) || "The CRL status endpoint is not available."}</span>
+          </div>
+        ) : generations.length === 0 ? (
+          <div className="crl-rollout__notice" role="status">
+            <strong>No CRL generation recorded</strong>
+            <span>A revocation ledger entry is not effective until a fresh CRL is generated and activated by peers.</span>
+          </div>
+        ) : (
+          <div className="crl-rollout__list">
+            {generations.map(function (g) {
+              const counts = g.counts || {};
+              const total = Number(g.peerCount) || 0;
+              const current = Number(counts.current) || 0;
+              const fill = total > 0 ? Math.max(0, Math.min(100, Math.round(current * 100 / total))) : 0;
+              return (
+                <article className="crl-generation" key={g.issuerFp}>
+                  <div className="crl-generation__top">
+                    <div className="crl-generation__id">
+                      <span className="crl-generation__number">CRL <b>#{g.crlNumber}</b></span>
+                      <code title={g.issuerFp}>issuer {g.issuerFp ? String(g.issuerFp).slice(0, 12) + "…" : "unavailable"}</code>
+                    </div>
+                    <time dateTime={g.nextUpdate || undefined} title={g.nextUpdate || ""}
+                      className={"crl-generation__freshness" + (g.expired ? " is-expired" : "")}>
+                      {g.expired ? "Expired" : "Expires " + (g.nextUpdate ? new Date(g.nextUpdate).toLocaleString() : "unknown")}
+                    </time>
+                  </div>
+                  <div className="crl-generation__rail" role="img" aria-label={current + " of " + total + " reporting agents have a current receipt"}>
+                    <span style={{ width: fill + "%" }} />
+                  </div>
+                  <div className="crl-generation__counts" aria-label="Acknowledgement summary">
+                    <span><b>{current}</b> current</span>
+                    <span><b>{Number(counts.stale) || 0}</b> stale</span>
+                    <span><b>{Number(counts.pending) || 0}</b> pending</span>
+                    <span><b>{Number(counts.offline) || 0}</b> offline</span>
+                    <span><b>{Number(counts.expired) || 0}</b> expired</span>
+                    <span className="crl-generation__total">{total} agents</span>
+                  </div>
+                  {Number(g.excludedPeerCount) > 0 && <details className="crl-generation__details crl-generation__excluded">
+                    <summary>Excluded agents <span>{Number(g.unknownIssuerCount) || 0} unknown · {Number(g.otherIssuerCount) || 0} different issuer</span></summary>
+                    <ul className="crl-generation__excluded-list">{(g.excludedPeers || []).map(function (peer) {
+                      return <li key={peer.nodeId}><code>{peer.hostFqdn}</code> — {peer.reason === "unknown_issuer" ? "current leaf issuer not recorded" : "current leaf issuer differs"}</li>;
+                    })}</ul>
+                  </details>}
+                  <div className="crl-generation__meta">
+                    <time dateTime={g.generatedAt || undefined} title={g.generatedAt || ""}>Generated {agoLabel(g.generatedAt)}</time>
+                    <code title={g.crlFp}>CRL SHA-256 {g.crlFp ? String(g.crlFp).slice(0, 12) + "…" : "unavailable"}</code>
+                  </div>
+                  {g.expired && <p className="crl-generation__warning" role="alert">This CRL is expired or its expiry is unavailable. New acknowledgements are not accepted for this generation.</p>}
+                  <details className="crl-generation__details">
+                    <summary>Peer receipts <span>{total}</span></summary>
+                    {total === 0 ? <p className="muted">No client or monitor agents currently use this issuer.</p> : (
+                      <div className="tablewrap crl-generation__table">
+                        <table className="grid">
+                          <thead><tr><th>Host</th><th>Role</th><th>Receipt</th><th>Last seen</th></tr></thead>
+                          <tbody>{(g.peers || []).map(function (peer) {
+                            const status = CRL_STATUS[peer.status] || CRL_STATUS.pending;
+                            return (
+                              <tr key={peer.nodeId}>
+                                <td className="crl-peer__host">{peer.hostFqdn}</td>
+                                <td>{peer.role}</td>
+                                <td><span className="crl-status" style={{ color: status.tone }}><i aria-hidden="true" />{status.label}</span>
+                                  {peer.acknowledgedNumber != null && <span className="crl-peer__number"> #{peer.acknowledgedNumber}</span>}
+                                </td>
+                                <td className="td-mono" title={peer.lastSeenAt || "No report recorded"}>{agoLabel(peer.lastSeenAt)}</td>
+                              </tr>
+                            );
+                          })}</tbody>
+                        </table>
+                      </div>
+                    )}
+                  </details>
+                </article>
+              );
+            })}
+          </div>
+        )}
+        <p className="crl-rollout__footnote">A receipt confirms only the reporting agent's local bundle marker. Agents without a recorded matching current leaf issuer are listed separately; server peers and other services on a host are outside this status view.</p>
+      </section>
+    );
+  }
+
   function CaScreen() {
     const [ca, setCa] = useState(function () { return S.ca || null; });
     const [loading, setLoading] = useState(!S.ca);
@@ -221,6 +324,7 @@
     const roots = (ca && ca.roots) || [];
     const provisioners = (ca && ca.provisioners) || [];
     const nodeCerts = (ca && ca.nodeCerts) || [];
+    const crl = ca && ca.crl;
     const caUp = !!(stepCa && stepCa.available && (stepCa.status === "ok" || stepCa.status === "unknown"));
     const flagged = roots.filter(function (r) { return r.severity === "expiring" || r.severity === "expired"; }).length;
 
@@ -250,6 +354,8 @@
               <div className="kpi violet"><div className="kpi__k">Provisioners</div><div className="kpi__v">{provisioners.length}</div><div className="kpi__sub">step-ca</div><div className="kpi__bar" /></div>
               <div className="kpi"><div className="kpi__k">Node certs</div><div className="kpi__v">{nodeCerts.length}</div><div className="kpi__sub">fleet mTLS</div><div className="kpi__bar" /></div>
             </div>
+
+            <CrlRollout crl={crl} />
 
             {/* CA / root certificates */}
             <div className="filters"><div className="page-sub" style={{ margin: 0 }}>CA certificates</div></div>

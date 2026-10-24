@@ -193,6 +193,7 @@ solariStatus monitorConfigFromFile(const char *path, monitorConfig *out)
 
     strncpy(out->primaryUrl,  solariConfigGetStr(c, "server", "primaryUrl", ""),  sizeof out->primaryUrl - 1);
     strncpy(out->failoverUrl, solariConfigGetStr(c, "server", "failoverUrl", ""), sizeof out->failoverUrl - 1);
+    strncpy(out->reportAckUrl, solariConfigGetStr(c, "server", "reportAckUrl", ""), sizeof out->reportAckUrl - 1);
     strncpy(out->subUrl,      solariConfigGetStr(c, "server", "subUrl", ""),      sizeof out->subUrl - 1);
     strncpy(out->ctrlStateFile, solariConfigGetStr(c, "control", "stateFile", ""),
             sizeof out->ctrlStateFile - 1);

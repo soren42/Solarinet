@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """loopback_test.py — live round-trip test of authbrokerd against real Mosquitto.
 
-Exercises the whole approval path over the REAL broker (default 10.5.2.50:1883,
-user 'solari') with a simulated Tab5:
+Exercises the whole approval path over a broker supplied by the operator, using
+a simulated Tab5. Defaults are loopback and anonymous MQTT so the test cannot
+silently contact the live broker:
 
   1. mint an ephemeral ECDSA-P256 "device" keypair
   2. start a Broker that trusts that device's public key
@@ -12,15 +13,14 @@ user 'solari') with a simulated Tab5:
 No dashboard, no HTTP, no real Tab5 needed — it proves the MQTT contract and the
 signature scheme end to end. Run twice (approve + deny) to check both verdicts.
 
-    python3 loopback_test.py                       # approve, default broker
-    python3 loopback_test.py --decision deny
-    python3 loopback_test.py --host 10.5.2.50 --port 1883 \
-        --username solari --password '...'
+    python3 loopback_test.py --host 127.0.0.1 --port 18883  # approve
+    python3 loopback_test.py --host 127.0.0.1 --port 18883 --decision deny
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import sys
 import threading
@@ -31,7 +31,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 import authbrokerd
-from authbrokerd import Broker, canonical_response, PROTO_VERSION
+from authbrokerd import (
+    Broker, canonical_request, canonical_response, verify_request_signature,
+    PROTO_VERSION,
+)
 
 
 class DeviceSim:
@@ -59,13 +62,17 @@ class DeviceSim:
 
     def _on_message(self, client, userdata, msg):
         req = json.loads(msg.payload.decode())
+        broker_pubkey = self.cfg["request_signing_key"].public_key()
+        if not verify_request_signature(broker_pubkey, req):
+            return
         self.saw_request.set()
         req_id = req["id"]
         print(f"  [device] got request {req_id}: "
               f"{req.get('action')} '{req.get('subject')}' "
               f"from {req.get('source_ip')} -> answering {self.decision.upper()}")
+        req_digest = hashlib.sha256(canonical_request(req)).hexdigest()
         canonical = canonical_response(PROTO_VERSION, req_id, self.decision,
-                                       req["nonce"], self.device_id)
+                                       req["nonce"], self.device_id, req_digest)
         sig = self.privkey.sign(canonical, ec.ECDSA(hashes.SHA256()))
         resp = {
             "v": PROTO_VERSION,
@@ -74,6 +81,7 @@ class DeviceSim:
             "decision": self.decision,
             "device_id": self.device_id,
             "nonce": req["nonce"],
+            "req_digest": req_digest,
             "sig": base64.b64encode(sig).decode(),
         }
         client.publish(f"{self.prefix}/response/{req_id}",
@@ -88,21 +96,26 @@ class DeviceSim:
         self.c.disconnect()
 
 
-def main() -> int:
+def parse_args(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="10.5.2.50")
+    ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=1883)
-    ap.add_argument("--username", default="solari")
-    ap.add_argument("--password", default="Mqtt-solari-n136hko4!9")
+    ap.add_argument("--username", default="")
+    ap.add_argument("--password", default="")
     ap.add_argument("--decision", default="approve", choices=["approve", "deny"])
     ap.add_argument("--device-id", default="tab5-loopback")
-    args = ap.parse_args()
+    return ap.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
 
     if authbrokerd.ec is None or mqtt is None:
         print("need paho-mqtt + cryptography installed", file=sys.stderr)
         return 2
 
     priv = ec.generate_private_key(ec.SECP256R1())
+    request_signer = ec.generate_private_key(ec.SECP256R1())
     pub_pem = priv.public_key().public_bytes(
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -113,6 +126,9 @@ def main() -> int:
         "username": args.username, "password": args.password,
         "topic_prefix": "auth", "request_ttl_sec": "15",
         "client_id": "authbrokerd-loopback",
+        "allow_plaintext_dev": True,
+        "request_signing_key": request_signer,
+        "request_signing_key_id": "test-key",
         "devices": {args.device_id: serialization.load_pem_public_key(pub_pem.encode())},
     }
 

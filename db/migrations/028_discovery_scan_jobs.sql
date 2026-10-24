@@ -1,0 +1,22 @@
+CREATE TABLE discoveryScanJob (
+  scanId BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  requestedBy VARCHAR(128) NOT NULL,
+  ownerNodeId BIGINT UNSIGNED NOT NULL,
+  leaseEpoch BIGINT UNSIGNED NOT NULL,
+  cidr VARCHAR(32) NOT NULL,
+  ports VARCHAR(255) NOT NULL DEFAULT '',
+  status ENUM('queued','running','completed','failed','cancelled') NOT NULL DEFAULT 'queued',
+  hostsTotal INT UNSIGNED NOT NULL,
+  hostsDone INT UNSIGNED NOT NULL DEFAULT 0,
+  hostsFound INT UNSIGNED NOT NULL DEFAULT 0,
+  errorCode INT NULL,
+  errorText VARCHAR(255) NULL,
+  createdAt DATETIME(3) NOT NULL,
+  startedAt DATETIME(3) NULL,
+  updatedAt DATETIME(3) NOT NULL,
+  completedAt DATETIME(3) NULL,
+  PRIMARY KEY (scanId),
+  KEY ix_discoveryScanJob_status (status, scanId),
+  KEY ix_discoveryScanJob_requester (requestedBy, scanId),
+  KEY ix_discoveryScanJob_owner (ownerNodeId, leaseEpoch, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh chlorine's authoritative secondary zones from xenon
+After=network-online.target named.service
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=jason
+Group=jason
+ExecStart=/usr/bin/python3 /usr/local/libexec/solari-dns-secondary-refresh --primary-config /etc/bind/named.conf.akoria --additional-config /etc/bind/named.conf.bare --additional-config /etc/bind/named.conf.local --additional-config /etc/bind/named.conf.rpz
+TimeoutStartSec=120
+Restart=on-failure
+RestartSec=30

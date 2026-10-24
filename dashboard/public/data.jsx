@@ -619,10 +619,50 @@
     seq: { unit: 100, location: 100, receipt: 100, project: 100, allocation: 100, model: 100 },
   };
 
+  // Single feature-to-maturity map from Integration I0. Maturity describes
+  // release readiness, not operational health. Routes point to one capability;
+  // frozen controls have their own entries so their containment is explicit.
+  const capabilityMaturity = {
+    levels: {
+      prototype: "Prototype",
+      lab: "Lab",
+      production: "Production",
+      authoritative: "Authoritative",
+    },
+    levelDescriptions: {
+      prototype: "Experimental behavior; treat results as provisional.",
+      lab: "Restricted to the SolariNet lab; not cleared for production use.",
+      production: "Release gates passed for production use.",
+      authoritative: "Source of truth for the named records.",
+    },
+    capabilities: [
+      { id: "monitoring-console", name: "Monitoring console", maturity: "lab", routes: ["fleet", "assets", "node", "asset", "service", "alerts", "reachability", "topology", "maintenance", "git", "dns"] },
+      { id: "inventory-sor", name: "Inventory system of record", maturity: "authoritative", routes: ["inventory"], note: "Authoritative inventory records are held in the SoR." },
+      { id: "scanner-import", name: "Scanner intake", maturity: "lab", routes: ["codes"], note: "Scanner observations remain staged until an operator reviews and applies an import." },
+      { id: "rackwire-integration", name: "RackWire integration", maturity: "lab", routes: ["rackwire"] },
+      { id: "discovery-intake", name: "Discovery intake", maturity: "lab", routes: ["discovery"] },
+      { id: "provisioning", name: "Provisioning", maturity: "lab", routes: ["provision"] },
+      { id: "opie-analysis", name: "Opie analysis", maturity: "prototype", routes: ["opie"] },
+      { id: "certificate-operations", name: "Certificate operations", maturity: "lab", routes: ["certificates"] },
+      { id: "configuration", name: "Configuration", maturity: "lab", routes: ["settings"] },
+      { id: "panel", name: "Panel integration", maturity: "lab", routes: ["panel"] },
+      { id: "arbitrary-mcp-sql", name: "Arbitrary MCP SQL", maturity: "lab", routes: ["opie"], note: "The generic SQL tool is removed; fixed read-only DB tools remain." },
+      { id: "tab5-approvals", name: "Tab5 approvals", maturity: "lab", routes: ["panel"], note: "Approval authority stays disabled until its release gates close." },
+      { id: "one-button-pxe", name: "One-button PXE", maturity: "lab", routes: ["provision"], note: "PXE provisioning remains operator-gated and lab-only." },
+      { id: "opie-automation", name: "Opie automation", maturity: "prototype", routes: ["opie"], note: "Automated actions remain unavailable pending sandbox and authorization gates." },
+      { id: "remote-ca-automation", name: "Remote CA automation", maturity: "lab", routes: ["certificates"], note: "Remote CA changes remain lab-only." },
+      { id: "directory-writes", name: "LDAP/AD write paths", maturity: "lab", routes: ["settings"], note: "Directory write paths beyond current use remain lab-only." },
+    ],
+    routes: {
+      fleet: "monitoring-console", assets: "monitoring-console", node: "monitoring-console", asset: "monitoring-console", service: "monitoring-console", alerts: "monitoring-console", reachability: "monitoring-console", topology: "monitoring-console", maintenance: "monitoring-console", git: "monitoring-console", dns: "monitoring-console",
+      inventory: "inventory-sor", codes: "scanner-import", rackwire: "rackwire-integration", discovery: "discovery-intake", provision: "provisioning", opie: "opie-analysis", certificates: "certificate-operations", settings: "configuration", panel: "panel",
+    },
+  };
+
   window.SOLARI = {
     nodes, segments: SEGMENTS, segRollups, fleetRoll, summary,
     probes, rules, alerts, opie, discovered, builds, enrollments, config, netgear: NETGEAR,
-    monitors, inventory,
+    monitors, inventory, capabilityMaturity,
     // DNS screen fixture — the screen renders its own empty states; live data
     // is always lazy (screen-mounted), never part of the loadLive() bundle.
     dns: { health: null },
