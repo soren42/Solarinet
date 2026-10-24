@@ -10,6 +10,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { performance } = require('node:perf_hooks');
 const { pathToFileURL } = require('node:url');
 const { chromium } = require('playwright');
 
@@ -236,6 +237,7 @@ async function main() {
   let failure = null;
   let phpErrors = '';
   let browserDiagnostics = '';
+  const uiLatencyMs = {};
 
   try {
     for (const locationName of sourceLocations) {
@@ -335,11 +337,14 @@ async function main() {
     await page.getByRole('heading', { name: 'Import a scanner-ingest export' }).waitFor();
 
     const scannerExportName = exportPath ? path.basename(exportPath) : 'scanner-fixture.json';
+    const scannerExportBuffer = exportPath ? fs.readFileSync(exportPath) : Buffer.from(JSON.stringify(snapshot));
+    let actionStartedAt = performance.now();
     await page.getByLabel('Scanner JSON export').setInputFiles({
       name: scannerExportName, mimeType: 'application/json',
-      buffer: exportPath ? fs.readFileSync(exportPath) : Buffer.from(JSON.stringify(snapshot)),
+      buffer: scannerExportBuffer,
     });
     await page.getByText(`${scannerExportName}: ${snapshot.items.length} catalog items, ${snapshot.assets.length} assets.`).waitFor();
+    uiLatencyMs.scannerExportSelectToSummaryVisible = Math.round(performance.now() - actionStartedAt);
     const duplicateLocationNote = page.getByRole('note').getByText('Some SoR locations share a name');
     await duplicateLocationNote.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
     const duplicateNoteVisible = await duplicateLocationNote.isVisible().catch(() => false);
@@ -356,19 +361,24 @@ async function main() {
     const beforeData = (await before.json()).data;
     assert(!beforeData.units.some((unit) => importedTags.includes(unit.assetTag)), 'preview fixture assets must not exist before apply');
 
+    actionStartedAt = performance.now();
     await page.getByRole('button', { name: 'Preview import' }).click();
     const preview = page.getByRole('status').filter({ hasText: 'Preview ready' });
     await preview.waitFor();
+    uiLatencyMs.scannerPreviewClickToReadyStatusVisible = Math.round(performance.now() - actionStartedAt);
     await preview.getByText(`insert hardware units`, { exact: false }).waitFor();
     for (const locationName of sourceLocations) {
       await preview.getByText(`#${locationChoices[locationName][1]} · ${locationName}`, { exact: false }).waitFor();
     }
+    uiLatencyMs.scannerPreviewClickToDestinationMapVisible = Math.round(performance.now() - actionStartedAt);
     const afterPreview = await context.request.get(`${base}/api/inventory`);
     const afterPreviewData = (await afterPreview.json()).data;
     assert(!afterPreviewData.units.some((unit) => importedTags.includes(unit.assetTag)), 'preview must leave SoR inventory unchanged');
 
+    actionStartedAt = performance.now();
     await page.getByRole('button', { name: 'Apply import' }).click();
     await page.getByRole('status').filter({ hasText: 'Import complete' }).waitFor();
+    uiLatencyMs.scannerApplyClickToCompleteVisible = Math.round(performance.now() - actionStartedAt);
     const afterApply = await context.request.get(`${base}/api/inventory`);
     assert.equal(afterApply.status(), 200);
     const appliedData = (await afterApply.json()).data;
@@ -411,6 +421,7 @@ async function main() {
     await page.getByLabel('Port group 1 count').fill('8');
     const profileResponseWait = page.waitForResponse((response) =>
       response.url().includes(`/api/rackwire/library/${imported.modelId}/groups`) && response.request().method() === 'POST');
+    actionStartedAt = performance.now();
     await page.getByRole('button', { name: 'Save RackWire profile', exact: true }).click();
     const profileResponse = await profileResponseWait;
     assert.equal(profileResponse.status(), 201, 'the inventory profile editor must save through the guarded RackWire SoR API');
@@ -420,6 +431,7 @@ async function main() {
     assert(typeof profileHeaders['x-solari-csrf'] === 'string' && profileHeaders['x-solari-csrf'].length > 20,
       'RackWire profile write must carry the dashboard CSRF token');
     await page.getByRole('status').filter({ hasText: 'Profile saved' }).waitFor();
+    uiLatencyMs.rackwireProfileSaveClickToSuccessVisible = Math.round(performance.now() - actionStartedAt);
     await page.getByRole('button', { name: 'Open RackWire planner', exact: true }).click();
 
     // The embedded planner has a separate document and its own CSRF cache.
@@ -500,14 +512,14 @@ async function main() {
       element.contentWindow.eval('rwPlanCsrf = ""; rwPlanCsrfPromise = null;');
     });
     csrfRetry.active = true;
+    actionStartedAt = performance.now();
     const barcodeLookupWait = page.waitForResponse((response) =>
       response.url().includes('/api/inventory/codes/lookup') && response.request().method() === 'POST'
         && response.status() === 200);
     await rackwireFrame.getByRole('button', { name: 'Look up', exact: true }).click();
     const barcodeLookup = await barcodeLookupWait;
+    uiLatencyMs.rackwireBarcodeLookupCsrfRefreshClickToSuccessResponse = Math.round(performance.now() - actionStartedAt);
     assert.equal(barcodeLookup.status(), 200, 'RackWire barcode scan must resolve a scanner-imported inventory unit');
-    assert(Number(sql(`SELECT COUNT(*) FROM barcode_scans WHERE code=${quote(tag)} AND operator=${quote(sessionUser)} AND action='lookup'`)) > 0,
-      'successful RackWire lookup must append its barcode audit event');
     assert.equal(csrfRetry.firstExpired, true, 'the first barcode request must receive a simulated expired-token rejection');
     assert.equal(csrfRetry.lookupAttempts, 2, 'RackWire must issue exactly one lookup retry');
     assert.equal(csrfRetry.whoamiRefreshes, 2,
@@ -522,6 +534,9 @@ async function main() {
       try { return frame && frame.contentWindow.RackWire && frame.contentWindow.RackWire.getPlan().devices.some((device) => device.assetId === assetTag && device.serial === serial); }
       catch (_) { return false; }
     }, { assetTag: tag, serial }, { timeout: 10000 });
+    uiLatencyMs.rackwireBarcodeLookupCsrfRefreshClickToDeviceInPlan = Math.round(performance.now() - actionStartedAt);
+    assert(Number(sql(`SELECT COUNT(*) FROM barcode_scans WHERE code=${quote(tag)} AND operator=${quote(sessionUser)} AND action='lookup'`)) > 0,
+      'successful RackWire lookup must append its barcode audit event');
     let scannerPlanSaved = false;
     for (let attempt = 0; attempt < 40 && !scannerPlanSaved; attempt += 1) {
       const saved = JSON.parse(sql(`SELECT plan_json FROM rw_plans WHERE id=${rackwirePlanId}`));
@@ -867,6 +882,9 @@ async function main() {
   } catch (error) {
     failure = failure || error;
   } finally {
+    if (Object.keys(uiLatencyMs).length) {
+      console.log(`UI integration latency (ms; single-run diagnostic): ${JSON.stringify(uiLatencyMs)}`);
+    }
     if (browser) await browser.close();
     if (child && child.exitCode === null) child.kill('SIGTERM');
     if (child) await new Promise((resolve) => child.once('exit', resolve));
