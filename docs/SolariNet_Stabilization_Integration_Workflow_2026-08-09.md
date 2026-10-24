@@ -3264,7 +3264,23 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   protected no-follow config reads, and current test counts.
 - A same-lab static review rechecked the descriptor-based config open and the
   generic error/redaction changes and found no remaining issue. Cross-lab
-  review is unavailable here; no remote CI or broker-delivery test has run for
-  this uncommitted candidate.
+  review was unavailable; remote CI and broker-delivery checks were pending at
+  the time of that review.
+- Committed the reviewed first candidate as `11f56bf` and pushed the
+  integration branch to Forgejo, whose ref now resolves to that commit. At
+  00:06 EDT on Benzene the supervisor reported a Forgejo job start and the
+  runner VM was running at 00:08 EDT with no exit marker. At 00:11 EDT the VM
+  was absent, the one-job runner service remained failed from its prior
+  `virsh` error, and no exit marker was present. The timing suggests a run may
+  have been dispatched, but its association with this commit and final result
+  are unverified. Later documentation/status notes remain local and are not
+  part of `11f56bf`.
 - **UNVERIFIED:** current remote CI, Forgejo runner reachability, cross-lab
   review, actual Xenon notifier dependency installation, and RabbitMQ delivery.
+- GitHub run `40061060017` confirmed the notification test failure on Python
+  3.12.15: two successful-config fixtures inherited mode `0644` under the hosted
+  runner's umask, while production intentionally requires mode `0600`. Updated
+  those fixtures to set `0600`; local Python 3.14.4 run passes 11 tests (two
+  root-only checks skipped because this run is unprivileged). A focused peer
+  review found no issue. **UNVERIFIED:** rerun on Python 3.12 and full remote
+  workflow, which is still in progress at this note.

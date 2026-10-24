@@ -32,6 +32,7 @@ class NotifySendTests(unittest.TestCase):
         with self._tempdir() as directory:
             config = pathlib.Path(directory) / "notify.conf"
             config.write_text("[amqp]\nurl=amqp://example.invalid/vhost\nexchange=notify.custom\n", encoding="utf-8")
+            config.chmod(0o600)
             module = self._load(types.SimpleNamespace())
             self.assertEqual(module.amqp_url(str(config)), ("amqp://example.invalid/vhost", "notify.custom"))
 
@@ -136,6 +137,7 @@ class NotifySendTests(unittest.TestCase):
         with self._tempdir() as directory:
             config = pathlib.Path(directory) / "notify.conf"
             config.write_text("[amqp]\nurl=amqp://example.invalid/vhost\nexchange=notify.events\n", encoding="utf-8")
+            config.chmod(0o600)
             argv = ["notify-send.py", "--config", str(config), "--severity", "crit",
                     "--title", "expiry alert", "--body", "expires soon", "--source", "solarinet-pki"]
             with patch.object(sys, "argv", argv):
