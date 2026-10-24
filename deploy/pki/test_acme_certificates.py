@@ -274,6 +274,18 @@ class AcmeCertificateTests(unittest.TestCase):
             acme.deploy(config, self._env(), fail_reload)
         self.assertEqual(os.readlink(self.target / "current"), old_current)
 
+    def test_failed_first_reload_reports_unknown_service_state(self) -> None:
+        config = acme.load_registry(self.registry)
+        return_codes = iter((0, 1))
+
+        def fail_first_activation(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args, next(return_codes), "", "reload failed")
+
+        with self.assertRaisesRegex(acme.AcmeError, "no previous release existed and service state may be unknown"):
+            acme.deploy(config, self._env(), fail_first_activation)
+        self.assertFalse((self.target / "current").exists())
+        self.assertFalse((self.target / "current").is_symlink())
+
     def test_failed_service_check_restores_previous_pointer(self) -> None:
         config = acme.load_registry(self.registry)
         acme.deploy(config, self._env(), self._ok)
@@ -282,9 +294,11 @@ class AcmeCertificateTests(unittest.TestCase):
         archive = self.certbot_root / "archive" / "test.internal"
         self._install_lineage(archive, generation=2)
         self._link_live_lineage(self.certbot_root / "live" / "test.internal", generation=2)
-        return_codes = iter((1, 0))
+        return_codes = iter((1,))
+        calls: list[tuple[object, ...]] = []
 
         def fail_check(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
             code = next(return_codes)
             return subprocess.CompletedProcess(
                 args, code, "", (
@@ -297,6 +311,7 @@ class AcmeCertificateTests(unittest.TestCase):
         with self.assertRaisesRegex(acme.AcmeError, "check failed.*invalid certificate path"):
             acme.deploy(config, self._env(), fail_check)
         self.assertEqual(os.readlink(self.target / "current"), old_current)
+        self.assertEqual(len(calls), 1, "failed config check must not trigger a service reload")
 
     def test_failed_restore_reload_reports_degraded_service_state(self) -> None:
         config = acme.load_registry(self.registry)
@@ -363,6 +378,7 @@ class AcmeCertificateTests(unittest.TestCase):
             acme.load_registry(self.registry), "/usr/bin/certbot", self.registry, force=True
         )
         self.assertEqual(command[command.index("renew")], "renew")
+        self.assertIn("--no-random-sleep-on-renew", command)
         self.assertIn("--no-directory-hooks", command)
         self.assertEqual(command[command.index("--pre-hook") + 1], "")
         self.assertEqual(command[command.index("--post-hook") + 1], "")

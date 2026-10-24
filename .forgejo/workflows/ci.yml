@@ -111,6 +111,27 @@ jobs:
           python -m pip install -r deploy/opie/requirements.txt
           python -m unittest discover -s deploy/opie -p 'test_*.py' -v
 
+  acme-integration:
+    name: Private ACME issuance, renewal, and rollback
+    runs-on: solarinet-ci-host
+    timeout-minutes: 30
+    env:
+      SOLARINET_ACME_RUN_ID: ${{ github.run_id }}-acme-integration
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the disposable step-ca and Apache lifecycle test
+        run: sudo env SOLARINET_ACME_INTEGRATION=1 RUNNER_TEMP=/dev/shm python3 deploy/pki/acme_integration.py
+      - name: Remove disposable ACME containers, networks, and key material
+        if: always()
+        run: |
+          resource_filter="label=solarinet.acme-ci=${SOLARINET_ACME_RUN_ID}"
+          docker ps -aq --filter "$resource_filter" | xargs -r sudo docker rm --force
+          docker network ls -q --filter "$resource_filter" | xargs -r sudo docker network rm
+          sudo docker image rm --force "solarinet-acme-certbot-apache:${SOLARINET_ACME_RUN_ID}" >/dev/null 2>&1 || true
+          find /dev/shm -mindepth 1 -maxdepth 1 -type d \
+            -name "solarinet-acme-integration-${SOLARINET_ACME_RUN_ID}-*" \
+            -exec sudo rm -rf -- {} +
+
   sorsync:
     name: SoR outbox delivery boundary (RabbitMQ ${{ matrix.rabbitmq_release }})
     runs-on: solarinet-ci-host

@@ -210,6 +210,12 @@ The supplied systemd unit grants write access to the documented private store,
 certificate root, and challenge webroot. If a host uses different paths, add
 matching reviewed `ReadWritePaths` before enabling its timer.
 
+The systemd timer supplies the randomized start delay. The renewal command
+passes `--no-random-sleep-on-renew` so Certbot does not add a second delay;
+this keeps the systemd service's 45-minute start limit aligned with the
+helper's 30-minute Certbot execution limit. Do not remove either bound without
+rechecking the renewal timeout and alerting behavior.
+
 The renewal command requires the private Certbot renewal file set to match the
 registry exactly. Enroll each new service before adding it to the timer's
 registry; a pending registry addition intentionally makes renewal fail closed.
@@ -217,6 +223,22 @@ For service retirement, stop the timer, remove the service from the registry,
 delete its lineage with Certbot using the private `--config-dir`, `--work-dir`,
 and `--logs-dir`, then verify the remaining registry and renewal files match
 before restarting the timer.
+
+The opt-in integration test `deploy/pki/acme_integration.py` builds a disposable
+Certbot 4.0.0/Apache client image from a digest-pinned Certbot base and pinned
+Alpine packages, then runs step-ca v0.30.2 and the client on an internal,
+egress-disabled Docker network. The image build downloads those packages before
+the test starts. The test checks HTTP-01 issuance, an exact CA name policy
+(including rejection of an unapproved but challengeable name), trusted HTTPS,
+forced renewal, and rollback after an injected service-check failure. It does
+not contact Chlorine, expose ports on the host, or alter host service
+configuration. On a disposable Docker runner, invoke it with:
+
+```sh
+sudo env SOLARINET_ACME_INTEGRATION=1 TMPDIR=/dev/shm \
+  python3 deploy/pki/acme_integration.py
+```
+
 Deployment also refuses unexpected entries under a service's `releases/`
 directory. Investigate unexpected files before changing them; do not remove
 release directories while they may be needed for rollback.

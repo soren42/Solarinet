@@ -3079,3 +3079,32 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   invocation was guessed. **OPEN:** independent Fable review of these changes,
   current-candidate hosted CI, live account/config cutover and rollback, the
   remaining platform release gates, and deployment.
+
+## 2026-10-24 — ACME client trust scope and lifecycle gate
+
+- Jason confirmed browser/client trust is sufficient; device management is not
+  in scope. The Apple Developer key is unnecessary for CA trust and was not
+  accessed or used. The certificate manual documents client-side trust paths
+  for Safari, Zen, and Firefox and explicitly says MDM is not required.
+- Added a disposable `step-ca` + Certbot + Apache lifecycle test. It verifies
+  HTTP-01 issuance, exact hostname policy rejection, HTTPS, forced renewal,
+  activation rollback, and recovery. All test containers run on an internal
+  Docker network; CA initialization uses `--network none`. The integration
+  test passed locally after review fixes, with ephemeral CA material removed.
+- Claude Fable reviewed the helper and integration diff read-only and approved
+  it with no High/Medium findings. Its Low observations were addressed:
+  per-run Docker image tags and cleanup, fail-fast bootstrap commands, temp
+  cleanup on setup errors, stderr handling, and surfacing the initial reload
+  diagnostic when there is no prior release. Added coverage for that failed
+  initial activation, which now reports service state as unknown. CI's
+  unconditional cleanup also removes a run-scoped image tag after interruption.
+- Verification: PKI suite 65/65; Python compilation; systemd unit verification;
+  generated Forgejo workflow parity; `git diff --check`; isolated ACME
+  integration all pass. The HTML/PDF certificate operations manual is paired
+  and records the same evidence.
+- Current candidate remains `cfff1e2` on Forgejo and GitHub; GitHub PR #38 is
+  open as a draft, and its last 15-job green run predates these local ACME
+  changes. This work is uncommitted and unpublished. **OPEN:** hosted CI on the
+  current diff, real issuance and browser trust verification, expiry alerting,
+  peer activation, platform release gates, and deployment. No live CA, DNS,
+  production service, or network state was changed.

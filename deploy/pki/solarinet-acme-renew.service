@@ -9,6 +9,7 @@ Type=oneshot
 User=root
 Group=root
 UMask=0022
+TimeoutStartSec=45min
 ExecStart=/usr/bin/python3 /usr/local/libexec/solarinet-pki/acme_certificates.py --registry /etc/solarinet/pki/acme_services.json --renew
 NoNewPrivileges=true
 PrivateTmp=true

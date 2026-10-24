@@ -552,8 +552,11 @@ def deploy(config: dict[str, Any], env: dict[str, str], runner: Callable[..., An
         if previous == release:
             return f"{service['id']} already uses certificate {release_id}"
         _atomic_link(target, "current", relative, uid, gid)
+        reload_attempted = False
         try:
             for command_name in ("check_command", "reload_command"):
+                if command_name == "reload_command":
+                    reload_attempted = True
                 completed = runner(service[command_name], check=False, capture_output=True,
                                    text=True, timeout=60)
                 if completed.returncode != 0:
@@ -561,7 +564,7 @@ def deploy(config: dict[str, Any], env: dict[str, str], runner: Callable[..., An
                     raise AcmeError(f"{action} failed for {service['id']}: {_result_diagnostic(completed)}")
         except (OSError, subprocess.TimeoutExpired, AcmeError) as exc:
             pointer_restored = False
-            service_restored = previous is None
+            service_restored = not reload_attempted
             restore_diagnostic = ""
             try:
                 if previous is None:
@@ -571,7 +574,7 @@ def deploy(config: dict[str, Any], env: dict[str, str], runner: Callable[..., An
                 else:
                     _atomic_link(target, "current", pathlib.Path("releases") / previous.name, uid, gid)
                     pointer_restored = True
-                if previous is not None:
+                if previous is not None and reload_attempted:
                     restored = runner(service["reload_command"], check=False, capture_output=True,
                                       text=True, timeout=60)
                     service_restored = restored.returncode == 0
@@ -582,6 +585,10 @@ def deploy(config: dict[str, Any], env: dict[str, str], runner: Callable[..., An
             if not pointer_restored:
                 raise AcmeError(f"deployment failed for {service['id']}; the previous certificate pointer could not be restored") from exc
             if not service_restored:
+                if previous is None:
+                    raise AcmeError(
+                        f"deployment failed for {service['id']}; no previous release existed and "
+                        f"service state may be unknown after the failed reload: {exc}") from exc
                 raise AcmeError(f"deployment failed for {service['id']}; the previous pointer is active but the service reload failed: {restore_diagnostic or 'command could not complete'}") from exc
             if isinstance(exc, AcmeError):
                 raise
@@ -689,7 +696,8 @@ def enrollment_command(config: dict[str, Any], service_id: str, certbot: str,
 def renewal_command(config: dict[str, Any], certbot: str, registry: pathlib.Path,
                     *, create_paths: bool = False, force: bool = False) -> tuple[list[str], dict[str, str]]:
     root, work, logs = _certbot_paths(config, create=create_paths)
-    argv = [certbot, "renew", "--non-interactive", "--pre-hook", "",
+    argv = [certbot, "renew", "--non-interactive", "--no-random-sleep-on-renew",
+            "--pre-hook", "",
             "--post-hook", "", "--no-directory-hooks", "--config-dir", str(root),
             "--work-dir", str(work), "--logs-dir", str(logs),
             "--deploy-hook", _certbot_hook(registry, require_safe=create_paths)]
