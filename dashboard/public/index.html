@@ -16,32 +16,32 @@
 <!-- Fonts (self-hosted, no-cloud) -->
 <link rel="stylesheet" href="fonts/plex.css?v=20260809a" />
 
-<link rel="stylesheet" href="styles.css?v=20261023d" />
+<link rel="stylesheet" href="styles.css?v=20261024a" />
 
-<!-- React + Babel (vendored locally, production builds; same-origin so no SRI/crossorigin) -->
-<script src="vendor/react.production.min.js?v=20260809a"></script>
-<script src="vendor/react-dom.production.min.js?v=20260809a"></script>
-<script src="vendor/babel.min.js?v=20260809a"></script>
+<!-- React is deferred; boot.js compiles JSX in a worker on a transform-cache miss. -->
+<script defer src="vendor/react.production.min.js?v=20260809a"></script>
+<script defer src="vendor/react-dom.production.min.js?v=20260809a"></script>
+<script defer src="boot.js?v=20261024d"></script>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div id="boot-status" class="boot-status" role="status" aria-live="polite">Loading SolariNet dashboard…</div></div>
 
-<script type="text/babel" src="data.jsx?v=20260809a"></script>
-<script type="text/babel" src="api.jsx?v=20261023d"></script>
-<script type="text/babel" src="icons.jsx?v=20260809a"></script>
-<script type="text/babel" src="components.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens.jsx?v=20260809a"></script>
-<script type="text/babel" src="layout.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens2.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens3.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens4.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens5.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens6.jsx?v=20261023d"></script>
-<script type="text/babel" src="screens7.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens8.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens-panel.jsx?v=20260809a"></script>
-<script type="text/babel" src="screens-rackwire.jsx?v=20261023a"></script>
-<script type="text/babel" src="app.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="data.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="api.jsx?v=20261024b"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="icons.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="components.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="layout.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens2.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens3.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens4.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens5.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens6.jsx?v=20261023d"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens7.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens8.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens-panel.jsx?v=20260809a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="screens-rackwire.jsx?v=20261023a"></script>
+<script type="application/x-solarinet-jsx" data-presets="react,env" data-plugins="transform-class-properties,transform-object-rest-spread,transform-flow-strip-types" src="app.jsx?v=20260809a"></script>
 
 <!-- thumbnail for offline bundling -->
 <template id="__bundler_thumbnail">

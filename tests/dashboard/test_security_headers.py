@@ -49,6 +49,7 @@ class DashboardSecurityHeaderTests(unittest.TestCase):
         self.assertIn("'self'", directives["script-src"])
         self.assertIn("'unsafe-eval'", directives["script-src"])
         self.assertNotIn("'unsafe-inline'", directives["script-src"])
+        self.assertIn("'self'", directives["worker-src"])
         self.assertIn("'unsafe-inline'", directives["style-src"])
         self.assertIn("frame-ancestors", directives)
         self.assertIn("connect-src", directives)

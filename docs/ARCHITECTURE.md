@@ -1,10 +1,10 @@
 # SolariNet — Architecture &amp; Design Rationale
 
 *A rationale document: **why** SolariNet is built the way it is. It records the reasoning behind the load-bearing
-decisions — not a history of rejected alternatives. For current operational state see `SolariNet_RC_Handoff.md`; for
+decisions — not a history of rejected alternatives. Last updated 2026-10-24. For current operational state see `SolariNet_RC_Handoff.md`; for
 the health-monitoring contract see `docs/design/HOST_HEALTH_CONTRACT.md`.*
 
-Standard C control plane + PHP/JSX dashboard, per `CLAUDE.md`. Last updated 2026-07-09.
+Standard C control plane + PHP/JSX dashboard, per `CLAUDE.md`.
 
 ---
 
@@ -103,7 +103,7 @@ dead watcher is itself an alert rather than a silent blind spot.
 | **SQLite on nodes** | Local, zero-config, crash-safe buffering of samples on the client with no server round-trip per metric. |
 | **MariaDB for the SoR** | The System of Record is relational truth (entities, IPs, DNS, hardware, inventory) that many consumers read; a real RDBMS with replication is the right tool. Replica on benzene gives a promotable copy. |
 | **RabbitMQ (+ Mosquitto)** | The change-data-capture bus: SoR writes emit to an outbox → `sor.events` → fan-out to DNS/AD/Pi-hole appliers and notifications. AMQP for services, MQTT for lightweight/IoT. |
-| **PHP-on-Apache dashboard** | Deliberately boring and ubiquitous; a thin `Router/Db/Response` API over the two databases. The SPA is React/JSX transpiled in-browser (Babel) — **no build step**, so the dashboard is editable and deployable by copying files, which suits a solo operator. |
+| **PHP-on-Apache dashboard** | Deliberately boring and ubiquitous; a thin `Router/Db/Response` API over the two databases. The SPA is React/JSX with no build step: vendored Babel transforms source in the browser on a cache miss, and a SHA-256/preset-keyed CacheStorage cache reuses the compiled classic scripts on warm loads. Babel remains the fallback when WebCrypto or CacheStorage is unavailable. The dashboard stays editable and deployable by copying files. |
 | **Keycloak (OIDC) + local login** | Standards-based SSO federated with AD; the dashboard is an OIDC client, so family/operator identity lives in one place. |
 
 ---

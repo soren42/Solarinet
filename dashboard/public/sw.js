@@ -13,21 +13,27 @@
      - vendored libs + fonts + icons: cache-first (immutable; rarely change).
      - /api/* reads: network only. Authenticated data must never be served from
        a prior session's cache or presented as fresh during a network outage.
+     - compiled JSX: source-hash CacheStorage entries survive worker upgrades;
+       the page loader removes stale transforms as each source changes.
      - everything else: network, falling back to cache.
 
-   Bump CACHE_VERSION on any vendor/asset change to evict the old set.
+   Bump CACHE_VERSION on shell/vendor changes. The independent JSX transform
+   cache is retained because its keys include a source digest and preset.
    ============================================================ */
 "use strict";
 
 // Bump the version to evict API responses cached by earlier service workers.
-const CACHE_VERSION = "solari-v10";
+const CACHE_VERSION = "solari-v14";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
+const TRANSFORM_CACHE = "solari-jsx-transform-v2";
 
 // App shell: everything index.html pulls in to render the last view.
 // Paths are relative to the SW scope (dashboard/public/).
 const SHELL_ASSETS = [
   "./",
   "index.html",
+  "boot.js?v=20261024d",
+  "transform-worker.js?v=20261024d",
   "manifest.webmanifest",
   "styles.css",
   // self-hosted fonts (on-prem / air-gapped — §8.1)
@@ -37,7 +43,7 @@ const SHELL_ASSETS = [
   "fonts/ibm-plex-mono-500.woff2",
   "fonts/ibm-plex-mono-600.woff2",
   "fonts/ibm-plex-mono-700.woff2",
-  // app source (transpiled in-browser by Babel)
+  // editable app source; compiled responses live in TRANSFORM_CACHE
   "data.jsx",
   "api.jsx",
   "icons.jsx",
@@ -85,9 +91,13 @@ self.addEventListener("activate", function (event) {
   event.waitUntil(
     caches.keys().then(function (keys) {
       return Promise.all(
-        keys.filter(function (k) { return k.indexOf(CACHE_VERSION) !== 0; })
+        keys.filter(function (k) { return k.indexOf(CACHE_VERSION) !== 0 && k !== TRANSFORM_CACHE; })
             .map(function (k) { return caches.delete(k); })
       );
+    }).catch(function (error) {
+      // Cache enumeration/cleanup failures are non-fatal. Keeping stale shell
+      // entries is safe because shell reads are network-first.
+      console.warn("[sw] cache activation cleanup incomplete; retaining caches:", error && error.message);
     }).then(function () { return self.clients.claim(); })
   );
 });
@@ -127,7 +137,10 @@ function networkFirst(req, cacheName) {
       if (resp && resp.ok && resp.type === "basic") cache.put(req, resp.clone());
       return resp;
     }).catch(function () {
-      return cache.match(req).then(function (hit) {
+      // The shell precache stores canonical paths while index.html may add
+      // deployment query tokens. This shell cache contains only one active
+      // release, so ignoring search here selects that release's fallback.
+      return cache.match(req, { ignoreSearch: true }).then(function (hit) {
         if (hit) return hit;
         if (req.mode === "navigate") return caches.match("index.html");
         return new Response(
@@ -140,7 +153,9 @@ function networkFirst(req, cacheName) {
 }
 
 function cacheFirst(req) {
-  return caches.match(req).then(function (hit) {
+  // The active release cache is replaced on worker activation; ignore the
+  // page's deploy token when matching its canonical precached vendor path.
+  return caches.match(req, { ignoreSearch: true }).then(function (hit) {
     if (hit) return hit;
     return fetch(req).then(function (resp) {
       if (resp && resp.ok && resp.type === "basic") {

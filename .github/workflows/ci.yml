@@ -595,6 +595,12 @@ jobs:
           node tests/dashboard/test_layout.js
           node tests/dashboard/test_scanner_import_ui.js
           node tests/dashboard/test_capability_maturity.js
+      - name: Dashboard cold/warm JSX cache profile
+        env:
+          NODE_PATH: /tmp/dashboard-playwright/node_modules
+        run: |
+          node tests/dashboard/profile_startup.cjs
+          node tests/dashboard/test_sw_cache_failure.cjs
       - name: Service worker authenticated-cache boundary
         run: node tests/dashboard/test_sw_cache.js
       - name: Live-data freshness and worker release

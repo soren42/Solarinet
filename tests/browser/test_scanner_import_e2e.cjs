@@ -289,7 +289,11 @@ async function main() {
       args: ['--no-sandbox'],
       ...(process.env.SOLARI_CHROMIUM_EXECUTABLE ? { executablePath: process.env.SOLARI_CHROMIUM_EXECUTABLE } : {}),
     });
-    const context = await browser.newContext();
+    // This E2E installs Playwright route handlers for selected authenticated
+    // requests. A controlling service worker would move GET whoami fetches into
+    // the worker and hide them from page.route(); SW privacy is covered by the
+    // dedicated service-worker contract test.
+    const context = await browser.newContext({ serviceWorkers: 'block' });
     const page = await context.newPage();
     const pageErrors = [];
     const browserConsole = [];
@@ -458,6 +462,7 @@ async function main() {
       active: false,
       lookupAttempts: 0,
       whoamiRefreshes: 0,
+      whoamiFrames: [],
       firstToken: '',
       retryToken: '',
       firstExpired: false,
@@ -465,7 +470,10 @@ async function main() {
     await page.route('**/api/auth/whoami', async (route) => {
       let frameUrl = '';
       try { frameUrl = route.request().frame().url(); } catch (_) {}
-      if (csrfRetry.active && frameUrl.includes('/rackwire/')) csrfRetry.whoamiRefreshes += 1;
+      if (csrfRetry.active) {
+        csrfRetry.whoamiFrames.push(frameUrl);
+        if (frameUrl.includes('/rackwire/')) csrfRetry.whoamiRefreshes += 1;
+      }
       await route.continue();
     });
     await page.route('**/api/inventory/codes/lookup', async (route) => {
@@ -502,7 +510,8 @@ async function main() {
       'successful RackWire lookup must append its barcode audit event');
     assert.equal(csrfRetry.firstExpired, true, 'the first barcode request must receive a simulated expired-token rejection');
     assert.equal(csrfRetry.lookupAttempts, 2, 'RackWire must issue exactly one lookup retry');
-    assert.equal(csrfRetry.whoamiRefreshes, 2, 'RackWire must fetch identity once for the stale token and once to refresh it');
+    assert.equal(csrfRetry.whoamiRefreshes, 2,
+      `RackWire must fetch identity twice from its frame to refresh the stale token (frames=${JSON.stringify(csrfRetry.whoamiFrames)})`);
     assert(csrfRetry.firstToken.length > 20 && csrfRetry.retryToken.length > 20,
       'both the initial and refreshed barcode requests must carry a session CSRF token');
     const lookupHeaders = await barcodeLookup.request().allHeaders();

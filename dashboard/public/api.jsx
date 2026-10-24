@@ -1400,14 +1400,17 @@
 
   // ---------------------------------------------------------------------
   // service worker registration (§8.4). sw.js lives next to index.html.
-  // index.html is owned by another agent; if it registers the SW there,
-  // this is a harmless no-op (re-register resolves to the same worker).
+  // The JSX loader evaluates this adapter asynchronously, after window.load
+  // may already have fired. Wait until all modules are ready so shell
+  // precaching does not compete with cold-start transforms.
   // ---------------------------------------------------------------------
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", function () {
+  if (navigator.serviceWorker && typeof navigator.serviceWorker.register === "function") {
+    var registerServiceWorker = function () {
       navigator.serviceWorker.register("sw.js").catch(function (e) {
         console.warn("[SolariNet] service worker registration failed:", e && e.message);
       });
-    });
+    };
+    if (window.__solariBootReady) registerServiceWorker();
+    else window.addEventListener("solari:boot-ready", registerServiceWorker, { once: true });
   }
 })();

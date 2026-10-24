@@ -86,7 +86,7 @@ console.log("[1] Babel parse — " + SCREEN);
       ok("embedded planner is labeled for network, power, and interconnect work",
         /title="RackWire network, power, and interconnect planner"/.test(src));
       var revisionMatch = /const RW_V = "([^"]+)";/.exec(src);
-      var dashboardRevision = /<script type="text\/babel" src="screens-rackwire\.jsx\?v=([^"]+)"/.exec(dashboardSource);
+      var dashboardRevision = /<script type="application\/x-solarinet-jsx" data-presets="[^"]+" data-plugins="[^"]+" src="screens-rackwire\.jsx\?v=([^"]+)"/.exec(dashboardSource);
       var expectedRuntimeAssets = ["./support.js", "device-library.js", "devices/generic.js", "devices/ubiquiti.js", "devices/netgear.js", "devices/netool.js", "devices/apple.js", "devices/samsung.js", "devices/raspberry-pi.js", "devices/qualcomm-arduino.js", "devices/m5stack.js", "devices/eos.js", "devices/minisforum.js", "live-adapter.js"];
       if (rackwireSource !== null) {
         ok("pinned RackWire client sends the compare-and-save hash required by the API",
