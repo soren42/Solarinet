@@ -85,6 +85,12 @@ verified file descriptors or a private verified snapshot. Any future consumer
 must close this verify/use race before it is allowed to install or execute
 artifacts; a successful CLI verification alone is not deployment authorization.
 
+The current verifier requires OpenSSL 3.0 or later. It checks the signer's
+code-signing EKU, digital-signature key usage, and non-CA constraint directly,
+then validates the chain against only the supplied trust root. OpenSSL 3.0's
+`-no-CAstore` option prevents host trust stores from extending that trust path;
+older versions fail closed and are unsupported by this candidate tool.
+
 Example from the isolated release workstation (key and certificates remain
 outside the repository):
 

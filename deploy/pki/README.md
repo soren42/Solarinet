@@ -54,12 +54,35 @@ openssl x509 -in "$portal_out/root_ca.pem" \
 ```
 
 Compare the fingerprint with the independently published value before
-transferring the profile. For a first iPhone/iPad installation, verify the
-root on a trusted computer, transfer `akoria-root.mobileconfig` using AirDrop
-or a cable, install it in Settings, then explicitly enable full trust under
-Certificate Trust Settings. Later visits to the portal require an HTTPS
-certificate the device already trusts; the portal cannot establish its own
-initial trust.
+installing the root on any device. The first portal visit must be bootstrapped
+through a trusted transfer: send `akoria-root.mobileconfig` to iPhone/iPad with
+AirDrop or open it from Files after a trusted transfer; send `root_ca.pem` to
+macOS/Android using AirDrop, cable, USB, or another already trusted path. For
+iPhone/iPad, install the profile in Settings, then explicitly
+enable full trust under Settings → General → About → Certificate Trust Settings.
+Manually downloaded
+profiles do not enable TLS trust automatically. This workflow is user initiated
+and does not require Apple device management or an Apple Developer key. Later
+visits to the portal require an HTTPS certificate the device already trusts;
+the portal cannot establish its own initial trust.
+
+For macOS Safari, verify the fingerprint on a trusted channel, then install the
+root into the System keychain and explicitly trust it for TLS. Firefox 120 and
+later can use roots from the macOS system store; Zen is Firefox based, so enable
+Firefox's third-party system-root trust setting and verify the installed Zen
+build separately. Limit macOS trust to TLS and basic X.509 validation:
+
+```sh
+sudo security add-trusted-cert -d -r trustRoot -p ssl -p basic \
+  -k /Library/Keychains/System.keychain root_ca.pem
+```
+
+To remove it, locate the certificate by its SHA-256 fingerprint in Keychain
+Access and delete it from the System keychain. For Android, install the root as
+a CA certificate in Android Settings after verifying its fingerprint. Firefox
+120 and later can use third-party roots in the Android system store by default. Restart each browser
+and test against a known HTTPS host. Device labels and browser builds can
+change; use the vendor references embedded in the generated portal page.
 
 For Linux Firefox, install the public root and policy, then restart Firefox:
 

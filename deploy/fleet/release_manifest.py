@@ -177,6 +177,42 @@ def certificateFingerprint(certificate: pathlib.Path) -> str:
     return match.group(1).replace(":", "").lower()
 
 
+def requireCodeSigningEku(certificate: pathlib.Path) -> None:
+    """Check the signer EKU separately from chain verification.
+
+    OpenSSL releases do not agree on the `codesign` verify-purpose alias. Read
+    the X.509 EKU directly, then use `openssl verify` for chain and validity.
+    """
+    def extensionTokens(name: str) -> set[str]:
+        try:
+            result = subprocess.run(
+                ["openssl", "x509", "-in", str(certificate), "-noout", "-ext", name],
+                check=False, capture_output=True, text=True,
+            )
+        except OSError as error:
+            raise ReleaseError("OpenSSL could not inspect the CMS signer certificate") from error
+        if result.returncode != 0:
+            return set()
+        lines = result.stdout.splitlines()
+        return {
+            token.strip().casefold()
+            for line in lines[1:]
+            for token in line.split(",")
+            if token.strip()
+        }
+
+    extendedUsage = extensionTokens("extendedKeyUsage")
+    keyUsage = extensionTokens("keyUsage")
+    basicConstraints = extensionTokens("basicConstraints")
+    if ("code signing" not in extendedUsage and
+            "1.3.6.1.5.5.7.3.3" not in extendedUsage):
+        raise ReleaseError("CMS signer certificate is missing the required code-signing EKU")
+    if "digital signature" not in keyUsage:
+        raise ReleaseError("CMS signer certificate lacks the required digitalSignature key usage")
+    if "ca:false" not in basicConstraints:
+        raise ReleaseError("CMS signer certificate must not be a CA certificate")
+
+
 def verifyCms(content: pathlib.Path, signature: pathlib.Path,
               trustRoot: pathlib.Path, expectedSigner: str,
               workDir: pathlib.Path) -> None:
@@ -189,14 +225,17 @@ def verifyCms(content: pathlib.Path, signature: pathlib.Path,
         raise ReleaseError("CMS signature or trust root is missing") from error
     signer = workDir / "cms-signer.pem"
     embedded = workDir / "cms-certs.pem"
-    # First prove the detached CMS signature over these exact bytes. Chain
-    # purpose is checked separately because CMS defaults to S/MIME signing.
+    # First prove the detached CMS signature over these exact bytes. The
+    # signer's code-signing EKU is checked explicitly because OpenSSL versions
+    # differ on the `codesign` verify-purpose alias.
     runOpenSsl(["openssl", "cms", "-verify", "-binary", "-inform", "DER",
                 "-in", str(signature), "-content", str(content), "-noverify",
                 "-signer", str(signer), "-certsout", str(embedded),
                 "-out", os.devnull])
+    requireCodeSigningEku(signer)
     runOpenSsl(["openssl", "verify", "-CAfile", str(trustRoot),
-                "-purpose", "codesign", "-untrusted", str(embedded), str(signer)])
+                "-no-CApath", "-no-CAstore",
+                "-untrusted", str(embedded), str(signer)])
     if certificateFingerprint(signer) != expectedSigner:
         raise ReleaseError("CMS signer certificate does not match the pinned signer")
 

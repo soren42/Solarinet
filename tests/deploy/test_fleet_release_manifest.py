@@ -263,9 +263,27 @@ class FleetReleaseManifestTests(unittest.TestCase):
                                          self.expires, ["debian/x86_64"], wrongCert)
         release.createRelease(self.source, self.output, manifest, wrongCert,
                               wrongKey, self.ca)
-        with self.assertRaisesRegex(release.ReleaseError, "OpenSSL operation failed"):
+        with self.assertRaisesRegex(release.ReleaseError, "code-signing EKU"):
             self.verify(expectedSignerFingerprint=
                         release.certificateFingerprint(wrongCert))
+
+    def test_requires_specific_code_signing_eku_and_leaf_constraints(self) -> None:
+        for label, eku in (("missing-eku", None), ("any-eku", "anyExtendedKeyUsage")):
+            with self.subTest(eku=label):
+                certificate = self.base / f"{label}.pem"
+                key = self.base / f"{label}.key"
+                args = [
+                    "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(key), "-out", str(certificate), "-days", "2",
+                    "-subj", f"/CN={label}",
+                    "-addext", "basicConstraints=critical,CA:FALSE",
+                    "-addext", "keyUsage=critical,digitalSignature",
+                ]
+                if eku:
+                    args.extend(("-addext", f"extendedKeyUsage={eku}"))
+                openssl(*args)
+                with self.assertRaisesRegex(release.ReleaseError, "code-signing EKU"):
+                    release.requireCodeSigningEku(certificate)
 
     def test_rejects_other_code_signer_under_same_ca(self) -> None:
         manifest = release.buildManifest(self.source, "candidate-1", self.notBefore,
