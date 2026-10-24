@@ -38,7 +38,7 @@ summary { min-height:44px; display:flex; align-items:center; cursor:pointer; fon
 summary:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
 footer { margin-top:30px; padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:.82rem; }
 @page { size:Letter; margin:.5in .55in; }
-@media print { html { background:white; font-size:9.5pt; } body { max-width:none; padding:0; } .copy,footer { display:none; } h2 { margin-top:18px; } pre,table,.flow,.notice,.callout { break-inside:avoid; } a { color:inherit; text-decoration:none; } }
+@media print { html { background:white; font-size:9.5pt; } body { max-width:none; padding:0; } .copy,footer { display:none; } h2 { margin-top:18px; } #verification-gates { break-before:page; } pre,table,.flow,.notice,.callout { break-inside:avoid; } a { color:inherit; text-decoration:none; } }
 </style>
 </head>
 <body>
@@ -166,8 +166,8 @@ sudo systemctl enable --now solari-crl-activate@client.timer</pre>
 <p>Use the documented systemd paths or add matching reviewed write paths. The timer supplies a 20-minute randomized start; Certbot's extra delay is disabled. The service allows 45 minutes for the helper's 30-minute Certbot limit. CA policy must enforce key size, signature algorithm, and the 825-day ceiling; the helper does not. Unexpected release files block deployment. For rollback, stop the timer, atomically point <code>TARGET/current</code> to a verified release, then run the service check and reload. The renewal post-check will fail until the Certbot lineage is restored with <code>--deploy-service</code> or successfully renewed; keep unattended renewal disabled during recovery.</p>
 <p>See <a href="../deploy/pki/README.md">deploy/pki/README.md</a> for server snippets, timer settings, and recovery steps. The 30 ACME helper unit tests cover validation and path safety. The isolated integration test exercises step-ca, HTTP-01, Apache, renewal, name-policy rejection, HTTPS, and rollback. Real issuance against Chlorine, browser/device trust, expiry alerts, and rollout remain <strong>unverified</strong>.</p>
 
-<h2>10. Current verification and release gates</h2>
-<p>Candidate checks: all 65 PKI tests, Python compilation, systemd unit verification, Forgejo workflow parity, and the isolated ACME lifecycle integration pass. Claude Fable independently approved the helper and integration diff with no High or Medium findings; its optional low findings were addressed. GitHub run <code>40053353528</code> passed 15 jobs on <code>cfff1e2</code> before these latest changes. Hosted CI for this candidate, Chlorine issuance, browser/device trust, expiry alerts, peer activation, production-service cutover, and rollout remain <strong>unverified</strong>.</p>
+<h2 id="verification-gates">10. Current verification and release gates</h2>
+<p>Checks pass: PKI 65/65, Python compilation, systemd verification, Forgejo workflow parity, and isolated ACME lifecycle integration. Claude Fable approved with no High/Medium findings; optional Low notes are resolved. GitHub run <code>40056882739</code> passed all 16 jobs on <code>6705335</code>, including ACME and scanner/RackWire acceptance. Forgejo hosted CI is unavailable because Cesium has no runner/container engine. Real Chlorine issuance, browser trust, expiry alerts, peer activation, service cutover, and rollout remain <strong>unverified</strong>.</p>
 
 <footer>Standalone HTML manual with inline CSS, JavaScript, and SVG. Matching Letter PDF is generated from this file. No external assets are required. Candidate-only state as of 24 October 2026.</footer>
 <script>

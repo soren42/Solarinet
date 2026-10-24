@@ -3102,9 +3102,11 @@ The Cesium acceptance found that the separated PHP CLI image lacked both `ctype`
   generated Forgejo workflow parity; `git diff --check`; isolated ACME
   integration all pass. The HTML/PDF certificate operations manual is paired
   and records the same evidence.
-- Current candidate remains `cfff1e2` on Forgejo and GitHub; GitHub PR #38 is
-  open as a draft, and its last 15-job green run predates these local ACME
-  changes. This work is uncommitted and unpublished. **OPEN:** hosted CI on the
-  current diff, real issuance and browser trust verification, expiry alerting,
-  peer activation, platform release gates, and deployment. No live CA, DNS,
-  production service, or network state was changed.
+- Committed as `6705335` and pushed to the existing integration branch on both
+  Forgejo and GitHub; GitHub PR #38 remains open as a draft. GitHub run
+  `40056882739` passed all 16 jobs, including the ACME lifecycle and authenticated
+  scanner/RackWire flows. Cesium currently has no Forgejo runner or container
+  engine, so Forgejo-hosted CI remains unavailable. **OPEN:** real issuance and
+  browser trust verification, expiry alerting, peer activation, platform
+  release gates, and deployment. No live CA, DNS, production service, or network
+  state was changed.
