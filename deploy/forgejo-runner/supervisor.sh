@@ -192,6 +192,7 @@ run_one_cycle() {
           echo "Forgejo one-job runner exited with status $guest_rc" >&2
           return 1
         fi
+        echo 'Forgejo one-job runner completed successfully'
         return 0
         ;;
       'crashed') echo 'runner VM crashed' >&2; return 1 ;;
