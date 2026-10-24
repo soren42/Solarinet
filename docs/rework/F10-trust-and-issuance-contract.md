@@ -21,10 +21,14 @@ Certbot ACME enrollment/deploy helper, a dedicated private-CA renewal
 service/timer, and Apache/nginx HTTP-01 webroot examples. Its focused tests
 cover exact SAN and domain checks, Certbot-style lineage validation,
 certificate/key/chain checks, path and file permissions, atomic activation,
-and rollback after reload failure. The helper
-has not been run against a real ACME server or installed on a web host. Browser
-trust on devices, server cutover, forced renewal, and fleet rollout remain
-undone.
+and rollback after reload failure. On 2026-10-24, the complete opt-in
+step-ca/Certbot/Apache integration passed locally: HTTP-01 issuance, HTTPS,
+denial of an unapproved challengeable name, forced renewal, service reload,
+rollback after an injected config-test failure, and recovery. GitHub Actions
+run `40117491695` also passed the code candidate's full matrix. This is
+disposable-CA evidence only: the helper has not been enrolled against
+Chlorine or installed on a live web host. Browser trust on devices, real
+service cutover, external expiry alerts, and fleet rollout remain undone.
 
 ## Observed current state
 
@@ -40,11 +44,12 @@ undone.
 - The Apple Developer key is not needed to trust this private root. Signing a
   configuration profile may establish profile provenance, but does not
   establish TLS root trust and cannot replace fingerprint verification.
-- The live CA runs Smallstep CA 0.30.2. Its authority has no X.509 name policy
-  and no authority claims. Provisioners include `admin@akoria.net` (JWK),
-  `acme` (ACME), `sshpop` (SSHPOP), and `smime` (JWK); `smime` has explicit
-  six-month default / one-year maximum TLS claims. No ACME-specific claims or
-  challenge list is configured. A broad authority policy therefore needs an
+- The live CA runs Smallstep CA 0.30.2. A read-only recheck on 2026-10-24
+  confirmed its authority has no X.509 name policy. Its provisioners are
+  `admin@akoria.net` (JWK), `acme` (ACME), `sshpop` (SSHPOP), and `smime`
+  (JWK); `smime` has explicit
+  six-month default / one-year maximum TLS claims. The live ACME provisioner
+  has no claims or challenge list. A broad authority policy therefore needs an
   audit of existing non-ACME identities before it can be applied.
 - The live CA endpoint's `Step Online CA` TLS leaf was valid through
   2026-10-24 18:58 UTC. No separate renewal timer is installed; Smallstep
@@ -141,8 +146,9 @@ separate user-facing paths around it:
    then activates a versioned certificate/key pair through an atomic symlink
    and explicit service check/reload hooks. Apache and nginx HTTP-01 webroot
    examples and a generic argv-based custom-service hook are included. The
-   host registry and renewal timer must be installed only after a restricted
-   disposable CA pilot passes; they are not yet installed or enabled.
+   host registry and renewal timer remain uninstalled and disabled. The
+   restricted disposable CA pilot has passed, but live policy and alert gates
+   still apply.
    Require Certbot 4.0.0 or later and OpenSSL 3.0 or later. Certbot 4.0 uses a
    lifetime-based renewal threshold (half the lifetime for certificates of
    ten days or less, one third for longer certificates). Configure the pilot
@@ -160,8 +166,22 @@ separate user-facing paths around it:
    the dedicated store. The helper clears global pre/post hooks, disables hook
    directory executables, and supplies its own deploy hook; review other CLI
    settings before pilot use. A legacy `renew-hook` conflicts with the helper
-   deploy hook. On a disposable pilot, verify a harmless default pre/post hook
-   is suppressed; do not edit an existing host's public Certbot config.
+   deploy hook. The current disposable integration does not verify suppression
+   of harmless global pre/post hooks; that remains a test gap. Do not edit an
+   existing host's public Certbot config for that test.
+
+### CA policy containment decision
+
+Do not add a web-host allowlist to Chlorine's current self-hosted authority
+without a complete identity and SAN inventory: its X.509 policy is authority-
+wide and would also constrain existing JWK and S/MIME issuance. The preliminary
+architecture recommendation is a dedicated web-only CA with an explicit DNS
+allowlist and HTTP-01 only. This isolates the web certificate scope and keeps
+Chlorine unchanged. Whether a separate root adds client setup depends on which
+roots browsers already trust; that trust inventory is **UNVERIFIED**. If clients
+already trust Chlorine or need its other certificates, account for the added
+root or test a constrained intermediate path before selecting the deployment
+design. This recommendation is a design inference, not live CA verification.
 
 Do not place CA signing keys, provisioner JWK secrets, ACME account private
 keys, or leaf private keys in the portal, database, or shared repository.
@@ -301,7 +321,7 @@ versions.
 - Zen Browser, [desktop code structure](https://docs.zen-browser.app/contribute/desktop/code-structure-and-prefs) (Firefox fork).
 - Smallstep, [Certificate issuance policies](https://smallstep.com/docs/step-ca/policies/) and [certificate renewal options](https://smallstep.com/docs/step-ca/renewal/).
 
-## UNVERIFIED
+## Remaining UNVERIFIED gates
 
 On 2026-10-24, the issuance helper was tightened to enforce the leaf profile
 locally as well as relying on CA policy: RSA keys must be at least 2048 bits,
@@ -309,8 +329,10 @@ EC keys must use NIST P-256/P-384/P-521, signatures must use SHA-256 or stronger
 SHA-2, and validity must not exceed 825 days. Rejection tests cover weak RSA,
 SHA-1, and excessive lifetime; an acceptance test covers P-256. All 34 focused
 PKI tests and the disposable step-ca/Certbot/Apache integration passed after
-the change. GitHub hosted checks and Forgejo execution for this new commit are
-not yet run.
+the change. GitHub Actions run `40117491695` passed all jobs for code commit
+`defb7f1`; documentation-only updates through `b6d58ff` are undergoing the
+same CI matrix. Forgejo hosted execution remains unavailable because Cesium
+has no Forgejo runner service.
 
 The candidate also now includes an expiry watcher that checks exact configured
 SANs and expiry, deduplicates events by status and leaf fingerprint, and
@@ -375,6 +397,11 @@ root was generated and published into a disposable local directory; no host
 publication path was used. Actual host publication and rollback remain
 unverified.
 The candidate has not yet tested profile installation or browser trust on a
-device, portal HTTPS/bootstrap, ACME issuance for a SolariNet server,
-renewal/reload, or hostname policy. The CA live-state observations above were
-read-only checks made on 2026-10-23.
+device, portal HTTPS/bootstrap, issuance for a real SolariNet server, renewal
+and reload of a real service, expiry notification delivery, or a reviewed
+hostname/challenge policy on Chlorine. Disposable issuance, forced renewal,
+HTTPS, reload, and rollback passed, but do not establish those live gates. A
+read-only inspection of browser trust stores and the extant X.509 issuance
+inventory is still needed to choose between a new web-only root and a
+constrained intermediate path. The latest CA configuration and certificate
+observations above were read-only checks made on 2026-10-24.

@@ -131,10 +131,14 @@ symlink. The key is stored as mode `0600` unless a service group is explicitly
 configured, in which case it is `0640` and readable only by that group.
 
 The live CA's ACME provisioner still lacks an audited name restriction and an
-explicit challenge allowlist. **Do not issue against the live CA yet.** First
-run the isolated, name-restricted ACME pilot described in [F-10](../../docs/rework/F10-trust-and-issuance-contract.md),
-confirm the issuing policy cannot broaden identities, and test one disposable
-web service end to end. Smallstep warns that unrestricted ACME provisioners
+explicit challenge allowlist. **Do not issue against the live CA yet.** The
+isolated, name-restricted step-ca/Certbot/Apache pilot described in
+[F-10](../../docs/rework/F10-trust-and-issuance-contract.md) passed on
+2026-10-24, including denial of an unapproved but challengeable name, forced
+renewal, and rollback. That validates the client helper and disposable CA only;
+it does not constrain Chlorine. Before any live issuance, audit all identities
+affected by policy and confirm the chosen live policy cannot broaden them.
+Smallstep warns that unrestricted ACME provisioners
 can issue for any name whose challenge can be satisfied and recommends
 explicit name policies and challenge controls ([provisioner guidance](https://smallstep.com/docs/step-ca/provisioners/),
 [production considerations](https://smallstep.com/docs/step-ca/certificate-authority-server-production/)).
@@ -148,7 +152,10 @@ ACME provisioner has no explicit challenge list or claims. Before changing it,
 inventory every current and planned step-ca certificate SAN/subject across
 S/MIME, CA endpoints, CRL publication, and web services. Then either define a
 complete tested authority-wide allowlist or design a separate web-only CA
-trust path. Do not
+trust path. A separate web CA is the current architectural recommendation to
+contain its strict DNS allowlist and HTTP-01-only policy; determine first
+whether target browsers already trust Chlorine's root, because a second root
+could add client setup. No live CA policy or provisioner was changed. Do not
 assume that a per-provisioner name policy is available in self-hosted step-ca;
 the [policy reference](https://smallstep.com/docs/step-ca/policies/) documents
 the authority-wide limit.
