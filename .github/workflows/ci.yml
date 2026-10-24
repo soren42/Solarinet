@@ -764,7 +764,7 @@ jobs:
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --check
           echo 'ledger-gate: SoR migration check passed'
           monitoring_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read monitoring migration count' >&2; exit 1; }
-          test "$monitoring_migration_count" = 36 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 36" >&2; exit 1; }
+          test "$monitoring_migration_count" = 37 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 37" >&2; exit 1; }
           echo "ledger-gate: monitoring applied-migration count is $monitoring_migration_count"
           sor_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read SoR migration count' >&2; exit 1; }
           test "$sor_migration_count" = 13 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 13" >&2; exit 1; }
