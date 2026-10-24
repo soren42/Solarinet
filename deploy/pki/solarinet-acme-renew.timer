@@ -1,0 +1,10 @@
+[Unit]
+Description=Twice-daily SolariNet private CA certificate renewal check
+
+[Timer]
+OnCalendar=*-*-* 03,15:17:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

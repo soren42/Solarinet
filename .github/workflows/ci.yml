@@ -45,8 +45,8 @@ jobs:
         run: python tests/test_systemd_unit_sections.py
       - name: Validate CRL publisher system identity declaration
         run: sudo systemd-sysusers --dry-run "$GITHUB_WORKSPACE/deploy/crl/solari-crl-publisher.sysusers.conf"
-      - name: Verify CRL systemd units
-        run: sudo systemd-analyze verify deploy/crl/solari-crl-generate.service deploy/crl/solari-crl-generate.timer deploy/crl/solari-crl-publish.service deploy/crl/solari-crl-publish.timer deploy/crl/solari-crl-activate@.service deploy/crl/solari-crl-activate@.timer
+      - name: Verify CRL and ACME renewal systemd units
+        run: sudo systemd-analyze verify deploy/crl/solari-crl-generate.service deploy/crl/solari-crl-generate.timer deploy/crl/solari-crl-publish.service deploy/crl/solari-crl-publish.timer deploy/crl/solari-crl-activate@.service deploy/crl/solari-crl-activate@.timer deploy/pki/solarinet-acme-renew.service deploy/pki/solarinet-acme-renew.timer
       - name: CRL generation, publication, and activation cryptographic tests
         run: |
           TMPDIR="${RUNNER_TEMP:-/dev/shm}" python3 deploy/crl/test_generate_crl.py

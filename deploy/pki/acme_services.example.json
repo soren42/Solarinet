@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "acme": {
+    "directory_url": "https://ca.example.invalid/acme/solarinet-web/directory",
+    "root_ca": "/etc/ssl/solarinet/test-root.pem",
+    "webroot": "/var/lib/solarinet/acme-webroot",
+    "certbot_root": "/etc/letsencrypt-solarinet",
+    "target_root": "/etc/ssl/solarinet"
+  },
+  "services": [
+    {
+      "id": "example_web",
+      "lineage": "example.invalid",
+      "domains": ["example.invalid"],
+      "target": "/etc/ssl/solarinet/example-web",
+      "check_command": ["/usr/sbin/nginx", "-t"],
+      "reload_command": ["/usr/bin/systemctl", "reload", "nginx"],
+      "group": null
+    }
+  ]
+}

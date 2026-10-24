@@ -1,0 +1,17 @@
+[Unit]
+Description=Renew SolariNet private CA web certificates
+Documentation=file:/usr/local/share/doc/solarinet-pki/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+ExecStart=/usr/bin/python3 /usr/local/libexec/solarinet-pki/acme_certificates.py --registry /etc/solarinet/pki/acme_services.json --renew
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/etc/letsencrypt-solarinet /etc/ssl/solarinet /var/lib/solarinet/acme-webroot

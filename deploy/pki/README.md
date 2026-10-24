@@ -99,6 +99,173 @@ absolute path in the policy and confirm it is active in `about:policies`.
 Check the [Mozilla policy installation guide](https://support.mozilla.org/en-US/kb/customizing-firefox-using-policiesjson)
 for the installed build's supported location.
 
+## Private CA issuance and renewal for web servers
+
+`acme_certificates.py` is the candidate host-side automation for Apache,
+nginx, and custom HTTPS services. It enrolls with Certbot against a private
+ACME directory using HTTP-01 and a dedicated Certbot store, so private-root
+trust settings and renewal records cannot alter the host's public ACME
+lineages. The host must provide Python 3.10 or later, Certbot 4.0.0 or later,
+and OpenSSL 3.0 or later. Use an apt-packaged Certbot rather than a snap build;
+the hook, webroot, and CA trust paths must be visible to the Certbot process.
+Certbot 4.0 is required for lifetime-based renewal
+windows that work with the short-lived certificates in the pilot. The helper
+checks both tool versions; isolated chain verification uses OpenSSL 3's
+`-no-CAstore` option. Certbot still reads its default `/etc/letsencrypt/cli.ini`
+and per-user XDG `letsencrypt/cli.ini` files when given a dedicated
+`--config-dir`; command-line options take precedence. The helper explicitly
+clears global pre/post hooks, disables hook-directory executables, and supplies
+its own deploy hook. Review both default CLI files for other settings before
+use. A legacy `renew-hook` setting conflicts with the helper's deploy hook and
+can make Certbot reject the run; remove such a setting before the pilot. A
+global `server` setting must match the registered private ACME endpoint and
+its root bundle. On a disposable pilot only, verify that a harmless default
+pre/post hook is suppressed; do not edit an existing host's public Certbot
+configuration for this rehearsal. The deploy hook checks the exact
+registered domain set, leaf SANs, server-auth EKU, key usage, at least six
+days of certificate lifetime, private-key match, and chain to the
+configured private root. It stages a versioned certificate/key directory,
+switches one symlink atomically, runs a service-specific configuration check,
+and reloads the service. A failed check or reload restores the previous
+symlink. The key is stored as mode `0600` unless a service group is explicitly
+configured, in which case it is `0640` and readable only by that group.
+
+The live CA's ACME provisioner still lacks an audited name restriction and an
+explicit challenge allowlist. **Do not issue against the live CA yet.** First
+run the isolated, name-restricted ACME pilot described in [F-10](../../docs/rework/F10-trust-and-issuance-contract.md),
+confirm the issuing policy cannot broaden identities, and test one disposable
+web service end to end. Smallstep warns that unrestricted ACME provisioners
+can issue for any name whose challenge can be satisfied and recommends
+explicit name policies and challenge controls ([provisioner guidance](https://smallstep.com/docs/step-ca/provisioners/),
+[production considerations](https://smallstep.com/docs/step-ca/certificate-authority-server-production/)).
+
+The checked-in [example registry](acme_services.example.json) uses the reserved
+`example.invalid` DNS name and a non-routable `ca.example.invalid` CA address.
+Replace both names and every certificate path before any issuance. Copy it to a root-owned,
+mode-`0600` host file only after replacing every value from an approved service
+inventory. Each service entry has an exact DNS SAN allowlist, a distinct
+Certbot lineage, a target directory, a key-reader group, and explicit argv
+arrays for configuration validation and service reload. The registry is
+trusted root configuration because its commands execute as root; do not make
+it writable by a service account. The private Certbot store must remain outside
+the host's normal `/etc/letsencrypt` store, and every certificate target must
+be a direct child of the configured `target_root`.
+
+For a disposable test host, prepare the webroot and private CA trust file,
+install the helper into a root-owned path, and copy the registry:
+
+```sh
+sudo install -d -o root -g root -m 0755 \
+  /usr/local/libexec/solarinet-pki /usr/local/share/doc/solarinet-pki \
+  /var/lib/solarinet/acme-webroot/.well-known/acme-challenge \
+  /etc/solarinet/pki /etc/ssl/solarinet
+sudo install -o root -g root -m 0755 deploy/pki/acme_certificates.py \
+  /usr/local/libexec/solarinet-pki/acme_certificates.py
+sudo install -o root -g root -m 0644 deploy/pki/README.md \
+  /usr/local/share/doc/solarinet-pki/README.md
+sudo install -o root -g root -m 0644 /path/to/verified/test-root.pem \
+  /etc/ssl/solarinet/test-root.pem
+sudo install -o root -g root -m 0600 /path/to/reviewed-test-registry.json \
+  /etc/solarinet/pki/acme_services.json
+sudo install -d -o root -g root -m 0700 /etc/letsencrypt-solarinet
+sudo /usr/bin/python3 /usr/local/libexec/solarinet-pki/acme_certificates.py \
+  --registry /etc/solarinet/pki/acme_services.json --plan-service example_web
+```
+
+Configure the intended HTTP virtual host with the matching
+[Apache](apache-acme-webroot.conf.example) or
+[nginx](nginx-acme-webroot.conf.example) snippet. The challenge URL must reach
+the exact webroot from the CA host on port 80 without an authentication gate,
+rewrite, or redirect that changes the challenge response. Validate the
+complete server configuration before enabling the route. Then issue only the
+registered service certificate:
+
+```sh
+sudo /usr/bin/python3 /usr/local/libexec/solarinet-pki/acme_certificates.py \
+  --registry /etc/solarinet/pki/acme_services.json --issue-service example_web
+```
+
+Certbot's hook is saved with the lineage so a successful first issuance and
+future renewals use the same validation and rollback path. The dedicated
+`solarinet-acme-renew.service` and `.timer` templates invoke renewal only in
+`/etc/letsencrypt-solarinet`, with the private root supplied to Certbot as
+`REQUESTS_CA_BUNDLE`. Install and enable the timer only after a test issuance,
+web-server configuration cutover, forced-renewal rehearsal, default CLI file
+review, and an external expiry-monitoring check pass. The
+pilot provisioner should issue a default lifetime of at least seven days and
+cap certificates at 30 days so a twice-daily renewal timer has room to
+recover from transient CA or host outages. Certbot 4.0.0 and later uses a
+lifetime-based renewal threshold: one half of lifetime for certificates of ten
+days or less, and one third for longer certificates. The timer may check twice
+daily, but Certbot only issues inside that window. Confirm the installed
+Certbot version and observed threshold during the disposable pilot. Certbot HTTP-01 challenge files
+must be readable by the web server; the supplied renewal service uses
+`UMask=0022` for public challenge files while Certbot keeps account and leaf
+private keys mode `0600`. Its systemd sandbox uses `ProtectSystem=full`:
+`/etc` is read-only except the private Certbot store and certificate root,
+while `/var` remains writable so Apache/nginx syntax checks can open configured
+logs. The challenge webroot is explicitly writable in `/var/lib`. Public
+Let's Encrypt certificates remain in the host's normal Certbot store.
+The supplied systemd unit grants write access to the documented private store,
+certificate root, and challenge webroot. If a host uses different paths, add
+matching reviewed `ReadWritePaths` before enabling its timer.
+
+The renewal command requires the private Certbot renewal file set to match the
+registry exactly. Enroll each new service before adding it to the timer's
+registry; a pending registry addition intentionally makes renewal fail closed.
+For service retirement, stop the timer, remove the service from the registry,
+delete its lineage with Certbot using the private `--config-dir`, `--work-dir`,
+and `--logs-dir`, then verify the remaining registry and renewal files match
+before restarting the timer.
+Deployment also refuses unexpected entries under a service's `releases/`
+directory. Investigate unexpected files before changing them; do not remove
+release directories while they may be needed for rollback.
+
+To recover after an issued certificate could not be deployed, correct the
+service check/reload configuration and retry the registered lineage without
+requesting another certificate:
+
+```sh
+sudo /usr/bin/python3 /usr/local/libexec/solarinet-pki/acme_certificates.py \
+  --registry /etc/solarinet/pki/acme_services.json --deploy-service example_web
+```
+
+Rehearse renewal and the complete service deploy path with a disposable CA
+using `--renew --force-renewal`. The command forces every registered lineage
+in the private store, then verifies that every current symlink and deployed
+certificate matches Certbot's active lineage. The renewal service returns a
+failure if a deploy hook logged an error or left an old certificate active.
+
+Point Apache or nginx at `TARGET/current/fullchain.pem` and
+`TARGET/current/privkey.pem` only after the active symlink exists. For a custom
+server, configure those same stable paths, set a reader group in the registry
+if it does not load keys as root, and supply its syntax check and reload/restart
+commands as argument arrays. Keep old version directories until rollback is
+no longer required. The tool does not copy key material to a dashboard, CA, or
+shared repository.
+
+For an operator-directed rollback, stop the renewal timer and record the current
+link target. Select a previously verified release directory under
+`TARGET/releases/`. As root, create a temporary symlink and atomically replace
+`current`, then run the service check and reload commands from that service's
+reviewed registry entry. If either command fails, atomically restore the
+recorded link target and reload again. Keep this action inside the service's
+declared target; do not edit or copy certificate/key files by hand. A manual
+rollback intentionally makes `--renew` fail its post-check until the Certbot
+lineage is restored to `current` (for example, with `--deploy-service`) or
+successfully renewed. Keep unattended renewal disabled during recovery.
+
+Certificate key size, signature algorithm, and maximum validity remain CA
+policy requirements. The helper validates SANs, TLS server usage, validity at
+the time of deployment, chain, and key correspondence, but does not enforce
+the Apple key-size/signature profile or the 825-day validity ceiling. Test
+those constraints in the isolated CA policy before the pilot is accepted.
+
+Focused tests cover valid chain/SAN/key acceptance, domain and fullchain
+mismatch rejection, key permissions, atomic activation, rollback after reload
+failure, and inert planning. They do not replace the required live ACME pilot,
+host-specific challenge routing test, forced renewal, or browser handshake.
+
 ## Publish and rotate
 
 Run this on the HTTPS host as root after the trust portal's virtual host has

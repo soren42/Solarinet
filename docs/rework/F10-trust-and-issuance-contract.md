@@ -1,7 +1,7 @@
 # F-10 browser trust and managed TLS issuance contract
 
-**Status (2026-10-23):** the candidate now contains a static public-root
-artifact generator (17 focused tests) and a release publisher (11 focused
+**Status (2026-10-24):** the candidate now contains a static public-root
+artifact generator (17 focused tests) and a release publisher (18 focused
 tests). The publisher regenerates every artifact from the validated PEM bytes,
 so a valid checksum file cannot make a profile/page for a different root
 acceptable. It generates a PEM, Apple root
@@ -16,8 +16,15 @@ disposable release tree, including owner/mode checks and an atomic `current`
 switch. Apache configuration syntax passed with the candidate mapping included.
 The live `step-ca`
 on `chlorine` is healthy and exposes an ACME directory, verified over HTTPS
-using its configured root certificate. Browser trust on devices, ACME client
-deployment, server certificate automation, and fleet rollout remain undone.
+using its configured root certificate. The candidate now also contains a
+Certbot ACME enrollment/deploy helper, a dedicated private-CA renewal
+service/timer, and Apache/nginx HTTP-01 webroot examples. Its focused tests
+cover exact SAN and domain checks, Certbot-style lineage validation,
+certificate/key/chain checks, path and file permissions, atomic activation,
+and rollback after reload failure. The helper
+has not been run against a real ACME server or installed on a web host. Browser
+trust on devices, server cutover, forced renewal, and fleet rollout remain
+undone.
 
 ## Observed current state
 
@@ -115,11 +122,30 @@ separate user-facing paths around it:
    trusted computer, transfer the profile by AirDrop or cable, install it in
    Settings, then enable full trust. The dashboard trust page is for later
    visits after the root has been installed.
-2. A documented ACME service enrollment path lets each server obtain and renew
-   its own key and certificate. Use supported ACME clients with narrowly
-   scoped DNS-01 or HTTP-01 validation, atomic file replacement, and an
-   explicit service reload hook. A custom web server uses the same ACME
-   certificate/key files and a documented renew/deploy hook.
+2. A candidate ACME service enrollment path now lets each server obtain and
+   renew its own key and certificate through a dedicated Certbot store. The
+   deploy helper validates the exact host allowlist and certificate chain,
+   then activates a versioned certificate/key pair through an atomic symlink
+   and explicit service check/reload hooks. Apache and nginx HTTP-01 webroot
+   examples and a generic argv-based custom-service hook are included. The
+   host registry and renewal timer must be installed only after a restricted
+   disposable CA pilot passes; they are not yet installed or enabled.
+   Require Certbot 4.0.0 or later and OpenSSL 3.0 or later. Certbot 4.0 uses a
+   lifetime-based renewal threshold (half the lifetime for certificates of
+   ten days or less, one third for longer certificates). Configure the pilot
+   for a seven-day default certificate lifetime and a 30-day maximum. The
+   helper rejects leaves with less than six days of measured lifetime. A
+   manual rollback intentionally makes the renewal post-check fail until the
+   current Certbot lineage is restored; keep unattended renewal disabled
+   while recovering. The
+   twice-daily timer checks frequently but does not itself force issuance.
+   Connect external pre-expiry alerting before unattended renewal is enabled.
+   Certbot still reads the host and per-user default `cli.ini` files even with
+   the dedicated store. The helper clears global pre/post hooks, disables hook
+   directory executables, and supplies its own deploy hook; review other CLI
+   settings before pilot use. A legacy `renew-hook` conflicts with the helper
+   deploy hook. On a disposable pilot, verify a harmless default pre/post hook
+   is suppressed; do not edit an existing host's public Certbot config.
 
 Do not place CA signing keys, provisioner JWK secrets, ACME account private
 keys, or leaf private keys in the portal, database, or shared repository.
@@ -159,14 +185,19 @@ versions.
   profile payload before publication. Never export a CA key.
 - Include the generated Firefox Linux certificate-install policy beside the
   PEM, and verify its path and trust behavior on each supported distribution.
-- Add tested, host-scoped ACME examples for Apache, nginx, and Caddy, plus a
-  generic client/deploy/reload hook for custom services. Document the verified
-  CA bundle needed by ACME clients to connect to the private ACME endpoint.
+- Test the candidate host-scoped ACME flow against a disposable,
+  explicitly name-restricted step-ca provisioner. Then complete the first real
+  host issuance, service config cutover, and forced renewal with the verified
+  CA bundle. The candidate has Apache/nginx examples and a custom-service
+  hook; Caddy has not been inventoried or tested.
 - Inventory each web endpoint, owner, SANs, challenge route, ACME client,
   certificate/key paths, reload command, and renewal health check before
   enrolling it. Start with an isolated development service.
 - Verify issuance and unattended renewal end to end, including key permissions,
   SANs, chain presentation, service reload, expiry alerting, and rollback.
+  The current helper delegates key-size, signature-algorithm, and maximum
+  validity requirements to the tested CA policy; it does not enforce those
+  three properties on each issued leaf.
 
 ### Stage 2 — reduce repeated device and service work
 
@@ -267,7 +298,7 @@ The unprivileged config test could not traverse `/etc/letsencrypt`; a privileged
 read confirmed that the configured certificate files exist and that the
 `akoria.net` leaf expired 2026-07-19. The mapping remains an uninstalled
 example; the host vhost integration and intended-client HTTPS reachability are
-not yet verified. The publisher's eleven isolated tests pass, and a live public
+not yet verified. The publisher's eighteen isolated tests pass, and a live public
 root was generated and published into a disposable local directory; no host
 publication path was used. Actual host publication and rollback remain
 unverified.
