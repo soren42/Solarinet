@@ -29,8 +29,8 @@ StartLimitBurst=5
 Type=simple
 User=jason
 Group=jason
-WorkingDirectory=/home/jason/Code/Solarinet/deploy/notify
-ExecStart=/home/jason/Code/Solarinet/deploy/notify/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/notify/notifyd.py --config /home/jason/Code/Solarinet/deploy/notify/notify.conf
+WorkingDirectory=/opt/solarinet/current/apps/notify
+ExecStart=/opt/solarinet/current/.venv/bin/python3 /opt/solarinet/current/apps/notify/notifyd.py --config /home/jason/Code/Solarinet/deploy/notify/notify.conf
 Restart=on-failure
 RestartSec=5
 

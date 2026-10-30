@@ -6,6 +6,6 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=jason
-WorkingDirectory=/home/jason/Code/Solarinet
+WorkingDirectory=/opt/solarinet/current
 # DB password comes from $SOLARI_DB_PASS (run/db.env uses `export`, so source it).
-ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec build-io/src/server/solariSnmpPoll --config run/server.conf --community public --once'
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /opt/solarinet/current/bin/solariSnmpPoll --config /home/jason/Code/Solarinet/run/server.conf --community public --once'

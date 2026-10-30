@@ -19,10 +19,10 @@ StartLimitBurst=5
 Type=simple
 User=jason
 Group=jason
-WorkingDirectory=/home/jason/Code/Solarinet/deploy/alertbridge
+WorkingDirectory=/opt/solarinet/current/apps/alertbridge
 Environment=ALERTBRIDGE_CONF=/home/jason/Code/Solarinet/deploy/alertbridge/alertbridge.conf
 ; Source run/db.env (exports SOLARI_DB_PASS) then exec the bridge.
-ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /home/jason/Code/Solarinet/deploy/alertbridge/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/alertbridge/alertbridge.py'
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /opt/solarinet/current/.venv/bin/python3 /opt/solarinet/current/apps/alertbridge/alertbridge.py'
 Restart=on-failure
 RestartSec=5
 

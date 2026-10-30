@@ -21,10 +21,10 @@ StartLimitBurst=5
 Type=oneshot
 User=jason
 Group=jason
-WorkingDirectory=/home/jason/Code/Solarinet/deploy/discovery
+WorkingDirectory=/opt/solarinet/current/apps/discovery
 Environment=MDNS_INSPECT_CONF=/home/jason/Code/Solarinet/deploy/discovery/mdns_inspect.conf
 ; Source run/db.env (exports SOLARI_DB_PASS) then run one pass and exit.
-ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /home/jason/Code/Solarinet/deploy/discovery/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/discovery/mdns_inspect.py --once'
+ExecStart=/bin/bash -lc 'source /home/jason/Code/Solarinet/run/db.env && exec /opt/solarinet/current/.venv/bin/python3 /opt/solarinet/current/apps/discovery/mdns_inspect.py --once'
 TimeoutStartSec=60
 
 [Install]

@@ -14,9 +14,9 @@ StartLimitBurst=5
 Type=simple
 User=jason
 Group=jason
-WorkingDirectory=/home/jason/Code/Solarinet/deploy/sorsync
+WorkingDirectory=/opt/solarinet/current/apps/sorsync
 Environment=SORSYNC_CONF=/home/jason/Code/Solarinet/deploy/sorsync/sorsync.conf
-ExecStart=/home/jason/Code/Solarinet/deploy/sorsync/.venv/bin/python3 /home/jason/Code/Solarinet/deploy/sorsync/sor_reconcile_discovery.py
+ExecStart=/opt/solarinet/current/.venv/bin/python3 /opt/solarinet/current/apps/sorsync/sor_reconcile_discovery.py
 Restart=on-failure
 RestartSec=5
 

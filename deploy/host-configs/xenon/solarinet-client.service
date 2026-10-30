@@ -8,8 +8,8 @@ Wants=network-online.target
 Type=simple
 User=jason
 Group=jason
-WorkingDirectory=/home/jason/Code/Solarinet
-ExecStart=/home/jason/Code/Solarinet/build-io/src/client/solariClient --config /home/jason/Code/Solarinet/run/client.conf --loop
+WorkingDirectory=/opt/solarinet/current
+ExecStart=/opt/solarinet/current/bin/solariClient --config /home/jason/Code/Solarinet/run/client.conf --loop
 Restart=on-failure
 RestartSec=3
 

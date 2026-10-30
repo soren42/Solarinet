@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import subprocess
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -17,6 +18,15 @@ from pathlib import Path, PurePosixPath
 
 VERSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\Z")
 MAX_FILE_BYTES = 256 * 1024 * 1024
+PYTHON_RUNTIME_FILES = {
+    "apps/requirements.txt",
+    "apps/sorsync/db_config.py", "apps/sorsync/delivery.py",
+    "apps/sorsync/sor_emitd.py", "apps/sorsync/sor_apply_dnsd.py",
+    "apps/sorsync/sor_apply_pihole.py", "apps/sorsync/sor_reconcile_discovery.py",
+    "apps/notify/notifyd.py", "apps/notify/senders/__init__.py",
+    "apps/alertbridge/alertbridge.py", "apps/unifi/unifipolld.py",
+    "apps/discovery/avahi_import.py", "apps/discovery/mdns_inspect.py",
+}
 
 
 def sha256(path: Path) -> str:
@@ -44,8 +54,13 @@ def load_archive(bundle: Path, destination: Path, *, allow_dirty: bool = False) 
             name = path.as_posix()
             if any(part in {".git", ".gitignore", ".pytest_cache", "__pycache__"} for part in path.parts):
                 raise ValueError(f"repository or cache metadata is not permitted: {name}")
-            if not (name in {"RELEASE.json", "bin", "bin/solariServer", "bin/solariScanWorker", "dashboard", "dashboard/api", "dashboard/public"}
-                    or name.startswith("dashboard/api/") or name.startswith("dashboard/public/")):
+            if ".venv" in path.parts:
+                raise ValueError(f"generated Python environments are not permitted in the archive: {name}")
+            if not (name in {"RELEASE.json", "bin", "bin/solariServer", "bin/solariScanWorker",
+                            "bin/solariClient", "bin/solariMonitor", "bin/solariSnmpPoll",
+                            "dashboard", "dashboard/api", "dashboard/public", "apps"}
+                    or name.startswith("dashboard/api/") or name.startswith("dashboard/public/")
+                    or name.startswith("apps/")):
                 raise ValueError(f"path is outside the release allowlist: {name}")
             lower_name = path.name.lower()
             if lower_name.startswith(".env") or lower_name == "solari-auth.json" or path.suffix.lower() in {".key", ".pem"}:
@@ -106,9 +121,38 @@ def load_archive(bundle: Path, destination: Path, *, allow_dirty: bool = False) 
     required = {"bin/solariServer", "bin/solariScanWorker",
                 "dashboard/api/index.php", "dashboard/public/index.html",
                 "dashboard/public/rackwire/index.html"}
+    new_runtime_present = bool(set(actual) & (set(PYTHON_RUNTIME_FILES) | {
+        "bin/solariClient", "bin/solariMonitor", "bin/solariSnmpPoll",
+    }))
+    if new_runtime_present:
+        required.update({"bin/solariClient", "bin/solariMonitor", "bin/solariSnmpPoll"})
+        required.update(PYTHON_RUNTIME_FILES)
+        required.update({
+            "apps/notify/senders/apple.py", "apps/notify/senders/log.py",
+            "apps/notify/senders/mail.py", "apps/notify/senders/mqtt.py",
+            "apps/notify/senders/push.py", "apps/notify/senders/sms_tachyon.py",
+            "apps/notify/senders/webpush.py",
+        })
     if not required.issubset(actual):
         raise ValueError("release is missing a required runtime entry")
     return version, metadata
+
+
+def ensure_python_venv(release: Path) -> None:
+    """Create a host-native release-local environment from the bundled pins."""
+    requirements = release / "apps" / "requirements.txt"
+    if not requirements.is_file():
+        return
+    venv = release / ".venv"
+    try:
+        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([str(venv / "bin/python3"), "-m", "pip", "install", "--no-input",
+                        "--disable-pip-version-check", "-r", str(requirements)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        shutil.rmtree(venv, ignore_errors=True)
+        raise ValueError("could not create the release Python environment") from exc
 
 
 def validate_installed(release: Path, *, allow_dirty: bool = False) -> str:
@@ -131,6 +175,7 @@ def validate_installed(release: Path, *, allow_dirty: bool = False) -> str:
         path.relative_to(release).as_posix()
         for path in release.rglob("*")
         if path.is_file() and path.name != "RELEASE.json"
+        and ".venv" not in path.relative_to(release).parts
     }
     if actual != set(declared):
         raise ValueError("installed release tree does not match its manifest")
@@ -140,6 +185,8 @@ def validate_installed(release: Path, *, allow_dirty: bool = False) -> str:
             raise ValueError(f"unsafe installed manifest path: {name!r}")
         if not isinstance(expected, str) or sha256(release.joinpath(*path.parts)) != expected:
             raise ValueError(f"installed release hash mismatch: {name}")
+    if "apps/requirements.txt" in declared and not (release / ".venv/bin/python3").is_file():
+        raise ValueError("installed release Python environment is missing")
     return version
 
 
@@ -180,6 +227,7 @@ def main() -> int:
             destination = root / "releases" / version
             if destination.exists():
                 raise ValueError(f"release already exists and is immutable: {version}")
+            ensure_python_venv(stage)
             os.rename(stage, destination)
         activate(root, version, allow_dirty=args.allow_dirty)
         print(f"installed and activated release: {version}")

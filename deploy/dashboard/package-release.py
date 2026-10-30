@@ -19,6 +19,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 VERSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\Z")
 REQUIRED_SUBMODULES = ("dashboard/public/rackwire",)
+PYTHON_APPS = {
+    "sorsync": ("deploy/sorsync/db_config.py", "deploy/sorsync/delivery.py",
+                "deploy/sorsync/sor_emitd.py", "deploy/sorsync/sor_apply_dnsd.py",
+                "deploy/sorsync/sor_apply_pihole.py", "deploy/sorsync/sor_reconcile_discovery.py"),
+    "notify": ("deploy/notify/notifyd.py", "deploy/notify/senders/__init__.py",
+               "deploy/notify/senders/apple.py", "deploy/notify/senders/log.py",
+               "deploy/notify/senders/mail.py", "deploy/notify/senders/mqtt.py",
+               "deploy/notify/senders/push.py", "deploy/notify/senders/sms_tachyon.py",
+               "deploy/notify/senders/webpush.py"),
+    "alertbridge": ("deploy/alertbridge/alertbridge.py",),
+    "unifi": ("deploy/unifi/unifipolld.py",),
+    "discovery": ("deploy/discovery/avahi_import.py", "deploy/discovery/mdns_inspect.py"),
+}
 
 
 def digest(path: Path) -> str:
@@ -75,12 +88,27 @@ def copy_tree(source: Path, destination: Path, files: dict[str, str]) -> None:
         files[relative] = digest(target)
 
 
+def copy_file(source: Path, destination: Path, name: str, files: dict[str, str]) -> None:
+    if source.is_symlink() or not source.is_file():
+        raise ValueError(f"required release input is missing or a symlink: {source}")
+    if source.name.lower().startswith(".env") or source.name.lower() == "solari-auth.json" or source.suffix.lower() in {".key", ".pem"}:
+        raise ValueError(f"secret-like file is not permitted in release input: {source}")
+    target = destination / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    target.chmod(0o755 if os.access(source, os.X_OK) else 0o644)
+    files[name] = digest(target)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="immutable release directory name")
     parser.add_argument("--binary", type=Path, default=ROOT / "build-server/src/server/solariServer")
     parser.add_argument("--scan-worker-binary", type=Path,
                         default=ROOT / "build-server/src/server/solariScanWorker")
+    parser.add_argument("--client-binary", type=Path, default=ROOT / "build-release/src/client/solariClient")
+    parser.add_argument("--monitor-binary", type=Path, default=ROOT / "build-release/src/monitor/solariMonitor")
+    parser.add_argument("--snmp-binary", type=Path, default=ROOT / "build-release/src/server/solariSnmpPoll")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--allow-dirty", action="store_true",
                         help="allow a source-dirty preflight bundle; never use for production")
@@ -90,9 +118,15 @@ def main() -> int:
     binary = args.binary.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         parser.error(f"server binary is missing or not executable: {binary}")
-    scan_worker = args.scan_worker_binary.resolve()
-    if not scan_worker.is_file() or not os.access(scan_worker, os.X_OK):
-        parser.error(f"scan worker binary is missing or not executable: {scan_worker}")
+    binaries = {
+        "bin/solariScanWorker": args.scan_worker_binary.resolve(),
+        "bin/solariClient": args.client_binary.resolve(),
+        "bin/solariMonitor": args.monitor_binary.resolve(),
+        "bin/solariSnmpPoll": args.snmp_binary.resolve(),
+    }
+    for name, path in binaries.items():
+        if not path.is_file() or not os.access(path, os.X_OK):
+            parser.error(f"{name} binary is missing or not executable: {path}")
 
     output = (args.output or ROOT / "deploy/dist" / f"solarinet-dashboard-{args.version}.tar.gz").resolve()
     try:
@@ -123,12 +157,19 @@ def main() -> int:
         shutil.copyfile(binary, server)
         server.chmod(0o755)
         files["bin/solariServer"] = digest(server)
-        worker = bin_dir / "solariScanWorker"
-        shutil.copyfile(scan_worker, worker)
-        worker.chmod(0o755)
-        files["bin/solariScanWorker"] = digest(worker)
+        for name, source in binaries.items():
+            target = stage / name
+            shutil.copyfile(source, target)
+            target.chmod(0o755)
+            files[name] = digest(target)
         copy_tree(ROOT / "dashboard/api", stage, files)
         copy_tree(ROOT / "dashboard/public", stage, files)
+        for sources in PYTHON_APPS.values():
+            for source_name in sources:
+                copy_file(ROOT / source_name, stage,
+                          source_name.replace("deploy/", "apps/", 1), files)
+        copy_file(ROOT / "deploy/release/requirements.txt", stage,
+                  "apps/requirements.txt", files)
         required = {
             "dashboard/api/index.php",
             "dashboard/public/index.html",
@@ -139,7 +180,8 @@ def main() -> int:
             raise ValueError(f"required dashboard runtime entries are missing: {missing}")
         unexpected = [
             name for name in files
-            if not (name in {"bin/solariServer", "bin/solariScanWorker"}
+            if not (name in {"bin/solariServer", *binaries.keys(), "apps/requirements.txt"}
+                    or name.startswith("apps/")
                     or name.startswith("dashboard/api/") or name.startswith("dashboard/public/"))
         ]
         if unexpected:

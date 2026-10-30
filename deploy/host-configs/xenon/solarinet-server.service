@@ -8,9 +8,9 @@ Wants=network-online.target mariadb.service
 Type=simple
 User=jason
 Group=jason
-WorkingDirectory=/home/jason/Code/Solarinet
+WorkingDirectory=/opt/solarinet/current
 EnvironmentFile=/home/jason/Code/Solarinet/run/server.env
-ExecStart=/home/jason/Code/Solarinet/build-io/src/server/solariServer --config /home/jason/Code/Solarinet/run/server.conf
+ExecStart=/opt/solarinet/current/bin/solariServer --config /home/jason/Code/Solarinet/run/server.conf
 Restart=on-failure
 RestartSec=2
 
