@@ -92,7 +92,7 @@ console.log("[1] Babel parse — " + SCREEN);
         ok("pinned RackWire client sends the compare-and-save hash required by the API",
           /if \(this\._planServerHash\) body\.expectedHash = this\._planServerHash/.test(rackwireSource));
         ok("the embedded RackWire source pin contains the current compare-and-save protocol",
-          !!revisionMatch && revisionMatch[1] === "20261030b" && rackwireSource.indexOf("support.js?v=20261030b") !== -1);
+          !!revisionMatch && revisionMatch[1] === "20261030c" && rackwireSource.indexOf("support.js?v=20261030c") !== -1);
         var rackwireMarkup = rackwireSource.replace(/<!--[\s\S]*?-->/g, "");
         var runtimeAssets = Array.from(rackwireMarkup.matchAll(/<script\b([^>]*)>/gi)).map(function (m) {
           var source = /(?:^|\s)src="([^"]+)"/i.exec(m[1]);
@@ -1390,49 +1390,101 @@ async function testSorComparison() {
     vm.createContext(sandbox);
     vm.runInContext(inline[1] + "\nwindow.TestComponent = Component;", sandbox, { filename: "rackwire-sor-compare.js" });
     var app = new sandbox.TestComponent({});
-    var domains = { "sw|p1-1": "net", "sw|p1-2": "net", "fw|p1-1": "net", "sw|pw-1": "power", "pdu|o-1": "power" };
-    app.port = function (dev, pid) { var d = domains[dev + "|" + pid]; return d ? { id: pid, domain: d } : null; };
+    var ports = {
+      sw: [{ id: "p1-1", domain: "net", conn: "rj45" }, { id: "p1-2", domain: "net", conn: "rj45" }, { id: "pw-1", domain: "power", conn: "iec" }, { id: "sfp-1", domain: "net", conn: "sfp" }],
+      fw: [{ id: "p1-1", domain: "net", conn: "rj45" }, { id: "sfp-1", domain: "net", conn: "sfp" }],
+      pdu: [{ id: "o-1", domain: "power", conn: "iec" }],
+      dup1: [], dup2: []
+    };
+    app.geo = function (d) { return { ports: ports[d.uid] || [] }; };
     app.std = function (id) { return sandbox.RW.CABLES.find(function (c) { return c.id === id; }) || { id: id, name: id, domain: "net" }; };
     app.guessStd = function () { return "cat6"; };
     var uidN = 0;
     app.uid = function (p) { uidN += 1; return p + uidN; };
+    sandbox.RW.CABLES = [
+      { id: "cat6", name: "Cat6", domain: "net", conn: "rj45", gbps: 1 },
+      { id: "c13", name: "C13", domain: "power", conn: "iec", amps: 10 },
+      { id: "dac10", name: "DAC 10G", domain: "net", conn: "sfp", gbps: 10 },
+      { id: "om4", name: "OM4 LC", domain: "net", conn: "sfp", gbps: 10 }
+    ];
     app.state.devices = [
-      { uid: "sw", name: "Switch", assetId: "AK-SW1", ifMap: { eth1: "p1-1", eth2: "p1-2", psu: "pw-1" } },
-      { uid: "fw", name: "Firewall", assetId: "ak-fw1", ifMap: { wan: "p1-1" } },
+      { uid: "sw", name: "Switch", assetId: "AK-SW1", ifMap: { eth1: "p1-1", eth2: "p1-2", psu: "pw-1", sfp1: "sfp-1" } },
+      { uid: "fw", name: "Firewall", assetId: "ak-fw1", ifMap: { wan: "p1-1", sfp1: "sfp-1" } },
       { uid: "pdu", name: "PDU", assetId: "AK-PDU", ifMap: { out1: "o-1" } },
       { uid: "dup1", name: "Dup A", assetId: "AK-DUP", ifMap: {} },
       { uid: "dup2", name: "Dup B", assetId: "AK-DUP", ifMap: {} }
     ];
     app.state.cables = [
-      { uid: "c1", a: { dev: "fw", port: "p1-1" }, b: { dev: "sw", port: "p1-1" }, standard: "cat6" },
-      { uid: "c2", a: { dev: "sw", port: "pw-1" }, b: { dev: "pdu", port: "o-1" }, standard: "c13" },
-      { uid: "c3", a: { dev: "sw", port: "p1-2" }, b: { dev: "fw", port: "p1-1" }, standard: "cat6" }
+      { uid: "c1", a: { dev: "fw", port: "p1-1" }, b: { dev: "sw", port: "p1-1" }, standard: "cat6", category: "Cat6" },
+      { uid: "c2", a: { dev: "sw", port: "pw-1" }, b: { dev: "pdu", port: "o-1" }, standard: "c13", category: "C13" },
+      { uid: "c3", a: { dev: "sw", port: "p1-2" }, b: { dev: "fw", port: "p1-1" }, standard: "cat6", category: "Cat6" },
+      { uid: "c4", a: { dev: "sw", port: "sfp-1" }, b: { dev: "fw", port: "sfp-1" }, standard: "dac10", category: "DAC 10G" }
     ];
     var end = function (tag, ifName) { return { entity: tag, assetTag: tag, ifName: ifName }; };
     app.state.sorInterconnects = [
       { id: 1, linkKind: "copper", a: end("AK-SW1", "ETH1"), b: end("AK-FW1", "wan") },
       { id: 2, linkKind: "copper", a: end("AK-SW1", "psu"), b: end("AK-PDU", "out1") },
-      { id: 3, linkKind: "fiber", a: end("AK-SW1", "eth2"), b: end("AK-PDU", "out1"), standard: "nope", label: "uplink", lengthM: 2.5 },
+      { id: 3, linkKind: "power", a: end("AK-SW1", "eth2"), b: end("AK-PDU", "out1"), standard: "nope", label: "feed", lengthM: 2.5 },
       { id: 4, linkKind: "copper", a: end("AK-DUP", "x"), b: end("AK-SW1", "eth1") },
-      { id: 5, linkKind: "copper", a: end("AK-SW1", "eth9"), b: end("AK-FW1", "wan") }
+      { id: 5, linkKind: "copper", a: end("AK-SW1", "eth9"), b: end("AK-FW1", "wan") },
+      { id: 6, linkKind: "fiber", a: end("AK-SW1", "sfp1"), b: end("AK-FW1", "sfp1") },
+      { id: 7, linkKind: "copper", a: end("AK-FW1", "sfp1"), b: end("AK-SW1", "sfp1") },
+      { id: 8, linkKind: "lldp_adjacency", a: end("AK-FW1", "wan"), b: end("AK-SW1", "eth2") },
+      { id: 9, linkKind: "virtual", a: end("AK-SW1", "eth1"), b: end("AK-FW1", "wan") },
+      { id: 10, linkKind: "copper", a: end("AK-SW1", "eth1"), b: end("AK-FW1", "wan") }
     ];
     var diffs = app.sorDiff();
     var st = function (id) { return diffs.find(function (r) { return r.id === id; }); };
     ok("SoR link matches a plan cable in either direction, case-insensitively", st(1).state === "planned" && st(1).matchedCableUid === "c1");
     ok("kind mismatch across domains is not a match", st(2).state === "sor-only");
-    ok("resolvable SoR link without a plan cable is SoR only", st(3).state === "sor-only" && st(3).endpoints[0].dev === "sw" && st(3).endpoints[1].port === "o-1");
     ok("ambiguous asset tag is unresolved with a reason", st(4).state === "unmatched" && /AK-DUP/.test(st(4).reason));
     ok("unmapped interface is unresolved with a reason", st(5).state === "unmatched" && /eth9/.test(st(5).reason));
-    ok("plan-only count covers resolvable unmatched cables only", app.sorPlannedOnlyCount(diffs) === 2);
-    app.addSorCable(st(3));
+    ok("a fiber SoR link is not satisfied by a twinax (copper) cable on SFP ports", st(6).state === "sor-only");
+    ok("the twinax cable matches the copper SoR link on the same ports", st(7).state === "planned" && st(7).matchedCableUid === "c4");
+    ok("an LLDP adjacency is satisfied by any network cable on its ports", st(8).state === "planned" && st(8).matchedCableUid === "c3");
+    ok("virtual links read as not cabled", st(9).state === "logical");
+    ok("one plan cable satisfies only one of two duplicate SoR rows", st(10).state === "sor-only");
+    ok("diff is memoized while plan and SoR rows are unchanged", app.sorDiff() === diffs);
+    ok("plan-only count covers committable, resolvable unmatched cables only", app.sorPlannedOnlyCount(diffs) === 1);
+
+    var before = app.state.cables.length;
+    app.addSorCable(st(6));
     var added = app.state.cables[app.state.cables.length - 1];
-    ok("Add to plan appends an installed cable traced to the SoR row",
-      app.state.cables.length === 4 && added.sourceSoRId === 3 && added.status === "installed" && added.standard === "cat6" && added.lengthM === 2.5 && added.label === "uplink");
+    ok("Add to plan picks a standard that commits as the SoR link's kind",
+      app.state.cables.length === before + 1 && added.standard === "om4" && added.sourceSoRId === 6 && added.status === "installed");
+    ok("the added fiber cable resolves as fiber on the server's rules",
+      app.sorCableKind(added, app.sorIndex().byUid) === "fiber");
+    app.addSorCable(st(3));
+    ok("Add to plan refuses when no standard on the ports commits as the link kind",
+      app.state.cables.length === before + 1 && /power/.test(app.state.sorNotice));
     app.addSorCable(st(1));
-    ok("Add to plan ignores rows already in the plan", app.state.cables.length === 4);
-    var rendered = true;
+    ok("Add to plan ignores rows already in the plan", app.state.cables.length === before + 1);
+
+    var phpSrc = fs.readFileSync(path.join(__dirname, "..", "..", "dashboard", "api", "routes", "rackwire.php"), "utf8");
+    var jsRe = function (name) { var m = html.match(new RegExp("const " + name + " = /(.*)/;")); return m && m[1]; };
+    var phpFiber = phpSrc.match(/function rw_is_fiber[\s\S]*?preg_match\('\/(.*?)\/', \$text\)[\s\S]*?preg_match\('\/(.*?)\/', \$text\)/);
+    var phpFallback = phpSrc.match(/function rw_cable_link_kind\(array[\s\S]*?preg_match\('\/(.*?)\/', \$text\)[\s\S]*?preg_match\('\/(.*?)\/', \$text\)/);
+    ok("RackWire's kind regexes match the server's rw_is_fiber/rw_cable_link_kind",
+      !!phpFiber && !!phpFallback && jsRe("RW_SOR_DAC_RE") === phpFiber[1] && jsRe("RW_SOR_FIBER_RE") === phpFiber[2]
+        && jsRe("RW_SOR_FALLBACK_POWER_RE") === phpFallback[1] && jsRe("RW_SOR_FALLBACK_FIBER_RE") === phpFallback[2]);
+
+    var big = new sandbox.TestComponent({});
+    big.geo = app.geo; big.std = app.std; big.guessStd = app.guessStd;
+    var bigDevices = [], bigCables = [], bigRows = [];
+    for (var i = 0; i < 5000; i++) {
+      bigDevices.push({ uid: "d" + i, name: "D" + i, assetId: "AK-" + i, ifMap: { eth1: "p1-1", eth2: "p1-2" } });
+      ports["d" + i] = ports.sw;
+      if (i > 0) bigCables.push({ uid: "k" + i, a: { dev: "d" + (i - 1), port: "p1-2" }, b: { dev: "d" + i, port: "p1-1" }, standard: "cat6", category: "Cat6" });
+      if (i > 0) bigRows.push({ id: i, linkKind: "copper", a: end("AK-" + i, "eth1"), b: end("AK-" + (i - 1), "eth2") });
+    }
+    big.state.devices = bigDevices; big.state.cables = bigCables; big.state.sorInterconnects = bigRows;
+    var t0 = Date.now(), bigDiff = big.sorDiff(), count = big.sorPlannedOnlyCount(bigDiff), took = Date.now() - t0;
+    ok("5,000 SoR rows against 5,000 devices diff in under a second",
+      took < 1000 && bigDiff.every(function (r) { return r.state === "planned"; }) && count === 0, took + " ms");
+
     app.T = new Proxy({}, { get: function () { return "#000"; } });
     app.state.live = { on: false };
+    var rendered = true;
     try { app.renderSorInterconnects(); } catch (e) { rendered = String(e); }
     ok("SoR links tab renders the comparison", rendered === true, rendered);
     app.openHostInventory();
