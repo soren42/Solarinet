@@ -37,6 +37,9 @@ url = amqp://solari:CHANGEME-rabbitmq-pw@10.5.2.50:5672/solari
 exchange = sor.events
 poll_interval_sec = 2
 reconnect_delay_sec = 5
+# CDC tables with no bound consumer; published without the mandatory flag so
+# they cannot stall the outbox. Remove a table once an applier binds it.
+# optional_tables = vlans,dhcp_ranges,external_refs
 # Optional isolated/test queue override; production defaults to sor.apply.dns.
 # dns_queue = sor.apply.dns
 

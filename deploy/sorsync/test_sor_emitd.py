@@ -108,6 +108,21 @@ name = emitter_db
             sor_emitd.publish_batch(FakeChannel(), db, ROWS, "sor.events", 10)
         self.assertEqual(10, db.checkpoint)
 
+    def test_optional_tables_publish_unmandatory_and_advance(self):
+        rows = ROWS + [{"id": 13, "table_name": "vlans", "row_id": 2, "action": "insert", "ts": 3}]
+        db, ch = FakeDb(), FakeChannel()
+        optional = sor_emitd.optional_tables(configparser.ConfigParser())
+        self.assertEqual(13, sor_emitd.publish_batch(ch, db, rows, "sor.events", 10, optional))
+        self.assertEqual([True, True, False], [p["mandatory"] for p in ch.published])
+        self.assertEqual([13], db.writes)
+
+    def test_optional_tables_config_override(self):
+        config = configparser.ConfigParser()
+        config.read_string("[amqp]\noptional_tables = vlans , \n")
+        self.assertEqual(frozenset({"vlans"}), sor_emitd.optional_tables(config))
+        config.read_string("[amqp]\noptional_tables =\n")
+        self.assertEqual(frozenset(), sor_emitd.optional_tables(config))
+
     def test_empty_batch_keeps_checkpoint(self):
         db = FakeDb()
         self.assertEqual(10, sor_emitd.publish_batch(FakeChannel(), db, [], "sor.events", 10))

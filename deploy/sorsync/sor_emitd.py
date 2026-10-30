@@ -9,6 +9,10 @@ routed persistent message. Broker outages, negative acknowledgments, and missing
 routes leave the checkpoint behind for retry. Consumers must separately
 acknowledge only after applying.
 
+Tables listed in `[amqp] optional_tables` have CDC triggers but no consumer
+yet; their events are still confirmed by the broker but published without the
+mandatory flag, so an unbound route cannot stall the whole outbox.
+
 Config: sorsync.conf  ([sor] db creds, [amqp] url/exchange/poll).
 """
 import configparser
@@ -25,6 +29,8 @@ from db_config import database_options
 CONF = os.environ.get("SORSYNC_CONF",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "sorsync.conf"))
 _run = True
+# CDC tables with no applier bound today (migration 026). Override in config.
+DEFAULT_OPTIONAL_TABLES = "vlans,dhcp_ranges,external_refs"
 
 
 def log(msg):
@@ -65,7 +71,12 @@ def set_checkpoint(db, v):
             "ON DUPLICATE KEY UPDATE v=GREATEST(v,VALUES(v))", (v,))
 
 
-def publish_batch(ch, db, rows, exchange, checkpoint):
+def optional_tables(c):
+    raw = c.get("amqp", "optional_tables", fallback=DEFAULT_OPTIONAL_TABLES)
+    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+
+
+def publish_batch(ch, db, rows, exchange, checkpoint, optional=frozenset()):
     """Confirm every route before moving the durable outbox checkpoint.
 
     Any failure raises and leaves the DB checkpoint unchanged. Already-confirmed
@@ -80,9 +91,11 @@ def publish_batch(ch, db, rows, exchange, checkpoint):
         })
         # BlockingChannel in confirm mode returns None on success and raises
         # UnroutableError or NackError on failure. A missing bound queue is a
-        # failure, including during startup before consumers declare theirs.
+        # failure, including during startup before consumers declare theirs,
+        # except for tables explicitly declared consumerless.
         ch.basic_publish(
-            exchange=exchange, routing_key=rk, body=body, mandatory=True,
+            exchange=exchange, routing_key=rk, body=body,
+            mandatory=r["table_name"] not in optional,
             properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"))
         confirmed = r["id"]
     if rows:
@@ -96,6 +109,7 @@ def run():
     poll = c.getfloat("amqp", "poll_interval_sec", fallback=2.0)
     batch = c.getint("amqp", "batch", fallback=500)
     reconnect = c.getfloat("amqp", "reconnect_delay_sec", fallback=5.0)
+    optional = optional_tables(c)
 
     while _run:
         db = mq = ch = None
@@ -116,7 +130,7 @@ def run():
                         "WHERE id > %s ORDER BY id LIMIT %s", (cp, batch))
                     rows = cur.fetchall()
                 if rows:
-                    cp = publish_batch(ch, db, rows, exchange, cp)
+                    cp = publish_batch(ch, db, rows, exchange, cp, optional)
                     log(f"published {len(rows)} event(s); checkpoint={cp}")
                 else:
                     mq.process_data_events(0)  # keep heartbeats alive

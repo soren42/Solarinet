@@ -37,6 +37,7 @@ def admin_command():
 
 
 EXPECTED = {
+    "audit_log": {"INSERT"},
     "barcode_scans": {"SELECT", "INSERT"},
     "barcodes": {"SELECT", "INSERT", "UPDATE"},
     "dhcp_ranges": {"SELECT"},
@@ -65,7 +66,7 @@ EXPECTED = {
     "v_dns_ifaces": {"SELECT"},
     "v_project_shopping": {"SELECT"},
 }
-DENIED = {"audit_log", "certificates", "config_items", "external_refs", "secrets", "users", "groups", "relationships"}
+DENIED = {"certificates", "config_items", "external_refs", "secrets", "users", "groups", "relationships"}
 
 
 def apply_grants():
@@ -181,9 +182,17 @@ def main():
         assert global_privileges <= {"USAGE"}, f"unexpected global privileges: {global_privileges}"
         print("  ok  no global privileges")
 
-        for table in EXPECTED:
+        readable = [table for table, privileges in EXPECTED.items() if "SELECT" in privileges]
+        for table in readable:
             cur.execute(f"SELECT * FROM `{table}` LIMIT 0")
-        print(f"  ok  SELECT access for {len(EXPECTED)} used tables/views")
+        print(f"  ok  SELECT access for {len(readable)} used tables/views")
+        try:
+            cur.execute("SELECT * FROM `audit_log` LIMIT 0")
+        except pymysql.err.OperationalError as exc:
+            assert exc.args[0] == 1142, f"unexpected audit_log read error: {exc!r}"
+        else:
+            raise AssertionError("audit_log must be append-only for the dashboard")
+        print("  ok  audit_log is append-only")
 
         for table, privileges in EXPECTED.items():
             if "INSERT" in privileges:
