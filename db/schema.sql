@@ -40,6 +40,7 @@
 --   034_pending_control_directives sha256=8db3d2344579412603ad9636d762950ecb327ab052d392b96032acaaa1e751c8
 --   035_certificate_crl_acknowledgements sha256=537b56d27b9101989735e42793edfcbcecc2af30d9bb2c530ec36f15884d3c70
 --   036_crl_acknowledgement_node_cascade sha256=a6c7462b422fcf39137f4c585934ac620963c7384e22b614e90d08c4f41c4ffc
+--   037_node_certcn_role_prefix sha256=ef27b40ecc5d5300d43d8885fc5db5f31eccce703ebafe30382446f0df8f9eb0
 
 /*M!999999\- enable the sandbox mode */
 

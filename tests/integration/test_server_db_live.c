@@ -11,7 +11,7 @@
  *   SOLARI_DB_HOST  (default 127.0.0.1)   SOLARI_DB_PORT (default 13306)
  *   SOLARI_DB_NAME  (default solarinet)   SOLARI_DB_USER (default solari)
  *   SOLARI_DB_PASS  (default empty)   SOLARI_DB_SOCKET (optional)
- * The target schema must include the complete monitoring stream through 036.
+ * The target schema must include the complete monitoring stream through 037.
  */
 #include "unity.h"
 #include "solari/solariCommon.h"
