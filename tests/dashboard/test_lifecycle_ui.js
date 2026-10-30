@@ -598,6 +598,56 @@ function giveUpBlock() {
   });
 }
 
+console.log("\n[12] per-page freshness badge — alerts + nodes pages (F-13/I3)");
+{
+  const env = load("operator");
+  const S = env.win.SOLARI;
+  S.summary = { systems: 0, applications: 0 };
+  S.segments = [];
+  const badgeOf = (tree) => findAll(tree, (n) => n.props && typeof n.props.className === "string" && n.props.className.indexOf("fresh-badge ") === 0);
+  const pages = {
+    nodes: () => env.React.createElement(env.win.FleetOverview, { fleet: [], view: "table", setView: () => {}, onOpenNode: () => {}, onNav: () => {} }),
+    alerts: () => env.React.createElement(env.win.AlertsScreen, { rules: [], setRules: () => {}, toast: () => {}, onOpenNode: () => {}, onOpenOpie: () => {} }),
+  };
+  const now = Date.now();
+  const scenarios = [
+    { name: "fresh", setup: () => { S.source = "live"; S.lastLiveAt = now - 12000; S.lastAttemptAt = now - 12000;
+        S.freshness = { assets: { label: "Monitored assets", state: "fresh", lastSuccess: now - 5000, lastAttempt: now - 5000 } }; },
+      state: "fresh", text: /^Data freshness: ●Liveupdated 1[2-4]s ago$/ },
+    { name: "stale (core outage)", setup: () => { S.source = "stale"; S.lastLiveAt = now - 180000; S.lastAttemptAt = now - 2000; },
+      state: "stale", text: /^Data freshness: ⚠Stalelast update 3m ago$/ },
+    { name: "unknown (offline fixture)", setup: () => { S.source = "offline"; S.lastLiveAt = undefined; S.lastAttemptAt = undefined; },
+      state: "unknown", text: /^Data freshness: \?Unknownnot yet loaded$/ },
+    { name: "overdue fresh poll", setup: () => { S.source = "live"; S.lastLiveAt = now - 300000; S.lastAttemptAt = now - 300000;
+        S.freshness = { assets: { label: "Monitored assets", state: "fresh", lastSuccess: now - 300000, lastAttempt: now - 300000 } }; },
+      state: "stale", text: /^Data freshness: ⚠Stalelast update 5m ago$/ },
+  ];
+  scenarios.forEach((sc) => {
+    sc.setup();
+    Object.keys(pages).forEach((page) => {
+      const b = badgeOf(mount(env, pages[page]()).tree);
+      ok(page + " page renders one freshness badge [" + sc.name + "]", b.length === 1, String(b.length));
+      if (!b.length) return;
+      ok(page + " badge state = " + sc.state + " [" + sc.name + "]", b[0].props["data-fresh-state"] === sc.state && b[0].props.className.indexOf("is-" + sc.state) > 0, b[0].props.className);
+      ok(page + " badge text [" + sc.name + "]", sc.text.test(textOf(b[0])), textOf(b[0]));
+      ok(page + " badge state word is a polite live region", findAll(b[0], (n) => n.props && n.props.role === "status" && n.props["aria-live"] === "polite").length === 1);
+      ok(page + " badge tooltip carries last attempt [" + sc.name + "]", /last attempt /.test(b[0].props.title), b[0].props.title);
+    });
+  });
+  // nodes page also reflects its optional assets feed; alerts page does not read it
+  S.source = "live"; S.lastLiveAt = now - 1000; S.lastAttemptAt = now - 1000;
+  S.freshness = { assets: { label: "Monitored assets", state: "stale", lastSuccess: now - 120000, lastAttempt: now - 1000 } };
+  const nb = badgeOf(mount(env, pages.nodes()).tree)[0];
+  const ab = badgeOf(mount(env, pages.alerts()).tree)[0];
+  ok("nodes badge goes stale when the assets feed is stale (oldest success shown)", nb.props["data-fresh-state"] === "stale" && /last update 2m ago/.test(textOf(nb)), textOf(nb));
+  ok("nodes tooltip names each source", /Core fleet data: live/.test(nb.props.title) && /Monitored assets: stale/.test(nb.props.title), nb.props.title);
+  ok("alerts badge stays live (core only)", ab.props["data-fresh-state"] === "fresh", ab.props.className);
+  S.freshness = {};
+  const nu = badgeOf(mount(env, pages.nodes()).tree)[0];
+  ok("never-loaded assets feed reads unknown with no age", nu.props["data-fresh-state"] === "unknown" && !/ago/.test(textOf(nu)), textOf(nu));
+  ok("fleet subtitle no longer hard-codes 'live'", !/· live/.test(textOf(mount(env, pages.nodes()).tree)));
+}
+
 failureBlock().then(giveUpBlock).then(assetDetailBlock).then(enrollmentQueueBlock).then(done);
 
 function done() {

@@ -395,6 +395,25 @@ body {
 .page-sub { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); margin-top: 3px; }
 .page-head__right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
+/* per-page data freshness badge (F-13/I3). Quiet when live; stale is a filled
+   warn pill with a glyph + word so it never reads as live; unknown is dashed
+   and carries no age. State is always spelled out, never colour-only. */
+.fresh-badge {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 20px; background: transparent;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-faint); white-space: nowrap; cursor: default;
+}
+.fresh-badge__mark { font-size: 9px; line-height: 1; }
+.fresh-badge__state { font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.fresh-badge.is-fresh .fresh-badge__mark { color: var(--ok); }
+.fresh-badge.is-fresh .fresh-badge__state { color: var(--ink-dim); }
+.fresh-badge.is-stale { border-color: var(--warn); background: var(--warn-bg); color: var(--ink); }
+.fresh-badge.is-stale .fresh-badge__mark { color: var(--warn); }
+.fresh-badge.is-stale .fresh-badge__state { color: var(--ink); }
+.fresh-badge.is-unknown { border-style: dashed; border-color: var(--unknown); background: var(--unknown-bg); color: var(--ink-dim); }
+.fresh-badge.is-unknown .fresh-badge__mark,
+.fresh-badge.is-unknown .fresh-badge__state { color: var(--unknown); }
+
 /* ===================== KPI STRIP ===================== */
 /* Rev2 §14: metric row is a FIXED 4-column grid (2-up on tablet portrait) so
    the last card never orphans at auto-fit widths. */

@@ -22,6 +22,90 @@
     return !n.isAsset && n.state !== "down" && n.state !== "retired" && n.lastSeenMin != null && n.lastSeenMin > staleThresholdMin();
   }
 
+  /* ===================== PER-PAGE FRESHNESS (F-13 / I3) =====================
+     A page names the data sources it renders: "core" is the loadLive snapshot
+     (S.source / S.lastLiveAt / S.lastAttemptAt — alerts, nodes, rules); any
+     other key is an optional integration in S.freshness (api.jsx
+     getOptionalJSON). The badge shows the WORST state across them and the
+     OLDEST last success, so a page never looks fresher than its weakest input.
+     Unknown (never loaded, or the offline demo fixture) shows no age at all.
+     A "fresh" source whose last success is older than maxAgeMs (a hung or
+     suspended poll) is downgraded to stale — stale must never look live. */
+  const FRESH_RANK = { fresh: 0, unknown: 1, stale: 2 };
+  const FRESH_LABEL = { fresh: "Live", stale: "Stale", unknown: "Unknown" };
+  const FRESH_MAX_AGE_MS = 60000;   // 6× the 10 s app poll
+  function coreFreshness() {
+    const src = S.source;
+    return {
+      label: "Core fleet data",
+      state: src === "live" ? "fresh" : src === "stale" ? "stale" : "unknown",
+      lastSuccess: src === "live" || src === "stale" ? (S.lastLiveAt || null) : null,
+      lastAttempt: S.lastAttemptAt || null,
+      note: src === "offline" ? "offline demo fixture, not your fleet" : null,
+    };
+  }
+  function freshnessSources(keys) {
+    return (keys || ["core"]).map(function (k) {
+      if (k === "core") return coreFreshness();
+      const f = (S.freshness && S.freshness[k]) || null;
+      return f ? Object.assign({ label: k }, f) : { label: k, state: "unknown", lastSuccess: null, lastAttempt: null };
+    });
+  }
+  function freshAge(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h";
+    return Math.floor(s / 86400) + "d";
+  }
+  function freshClock(t) {
+    if (!t) return "never";
+    const d = new Date(t);
+    const p = (n) => (n < 10 ? "0" : "") + n;
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+  function summarizeFreshness(sources, now, maxAgeMs) {
+    let state = "fresh";
+    let oldest = null;
+    const rows = sources.map(function (src) {
+      let st = FRESH_RANK[src.state] != null ? src.state : "unknown";
+      const overdue = st === "fresh" && (!src.lastSuccess || now - src.lastSuccess > maxAgeMs);
+      if (overdue) st = src.lastSuccess ? "stale" : "unknown";
+      if (FRESH_RANK[st] > FRESH_RANK[state]) state = st;
+      if (src.lastSuccess && (oldest == null || src.lastSuccess < oldest)) oldest = src.lastSuccess;
+      return Object.assign({}, src, { effective: st, overdue: overdue });
+    });
+    return { state: state, lastSuccess: state === "unknown" ? null : oldest, rows: rows };
+  }
+  function FreshnessBadge({ sources, maxAgeMs }) {
+    const [, tick] = useState(0);
+    // Tick once a second so the age reads true between 10 s polls.
+    useEffect(function () {
+      const iv = setInterval(function () { tick((x) => x + 1); }, 1000);
+      return function () { clearInterval(iv); };
+    }, []);
+    const now = Date.now();
+    const sum = summarizeFreshness(freshnessSources(sources), now, maxAgeMs || FRESH_MAX_AGE_MS);
+    const label = FRESH_LABEL[sum.state];
+    const detail = sum.state === "unknown" ? "not yet loaded"
+      : sum.lastSuccess == null ? "last update unknown"
+      : (sum.state === "fresh" ? "updated " : "last update ") + freshAge(now - sum.lastSuccess) + " ago";
+    const tip = sum.rows.map(function (r) {
+      return r.label + ": " + FRESH_LABEL[r.effective].toLowerCase() +
+        " — last success " + freshClock(r.lastSuccess) + ", last attempt " + freshClock(r.lastAttempt) +
+        (r.overdue ? " (no successful refresh within " + freshAge(maxAgeMs || FRESH_MAX_AGE_MS) + ")" : "") +
+        (r.note ? " (" + r.note + ")" : "");
+    }).join("\n");
+    return (
+      <span className={"fresh-badge is-" + sum.state} title={tip} data-fresh-state={sum.state}>
+        <span className="sr-only">Data freshness: </span>
+        <span className="fresh-badge__mark" aria-hidden="true">{sum.state === "fresh" ? "●" : sum.state === "stale" ? "⚠" : "?"}</span>
+        <span className="fresh-badge__state" role="status" aria-live="polite">{label}</span>
+        <span className="fresh-badge__age">{detail}</span>
+      </span>
+    );
+  }
+
   /* ===================== LIFECYCLE + CRITICALITY =====================
      CONTRACT-LC §3.1/§3.2. Criticality is an ENTITY setting (asset/node row)
      composed with the rule severity at fire time — never a rule edit, so the
@@ -513,9 +597,11 @@
         <div className="page-head">
           <div>
             <h1 className="page-title">Fleet Overview</h1>
-            <div className="page-sub">{S.summary.systems} systems · {S.summary.applications} applications · {S.segments.length} segments · live</div>
+            <div className="page-sub">{S.summary.systems} systems · {S.summary.applications} applications · {S.segments.length} segments</div>
           </div>
           <div className="page-head__right">
+            {/* nodes come from the core snapshot; adopted systems from the optional assets feed */}
+            <FreshnessBadge sources={["core", "assets"]} />
             <div className="seg">
               <button className={view === "heat" ? "on" : ""} onClick={() => setView("heat")}><Icon name="grid" size={14} />Heatmap</button>
               <button className={view === "table" ? "on" : ""} onClick={() => setView("table")}><Icon name="table" size={14} />Table</button>
@@ -1269,6 +1355,8 @@
         <div className="page-head">
           <div><h1 className="page-title">Alerts & Tolerances</h1><div className="page-sub">{crit + warn + info} active · {rules.filter((r) => r.enabled).length}/{rules.length} rules armed</div></div>
           <div className="page-head__right">
+            {/* alert events and rules both ride the core snapshot */}
+            <FreshnessBadge sources={["core"]} />
             {tab === "active" && (
               confirmAll ? (
                 <div className="ackall-confirm">
@@ -1403,6 +1491,8 @@
 
   Object.assign(window, {
     FleetOverview, NodeDetail, AlertsScreen, AttentionPanel,
+    // per-page data freshness (F-13/I3) — reusable by any screen
+    FreshnessBadge, solariFreshness: { summarize: summarizeFreshness, sources: freshnessSources, age: freshAge },
     // CONTRACT-LC shared surface (screens3 consumes these)
     TierChip, LifecycleChip, CriticalityControl, LifecycleActions,
     SolariLC, solariCanOperate: canOperate, solariWithGiveUp: withGiveUp,

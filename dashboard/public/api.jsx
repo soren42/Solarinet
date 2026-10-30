@@ -1262,14 +1262,19 @@
     // refresh the whole model in place (re-runs loadLive, keeps fmt/api). Mutates
     // window.SOLARI in place so captured `const S = window.SOLARI` refs stay live.
     refresh: function () {
+      // lastAttemptAt is the core snapshot's "last tried" stamp (lastLiveAt is
+      // "last succeeded"); the per-page freshness badge shows both.
+      var attemptedAt = Date.now();
       return loadLive().then(function (live) {
         Object.keys(live).forEach(function (k) { window.SOLARI[k] = live[k]; });
+        window.SOLARI.lastAttemptAt = attemptedAt;
         window.SOLARI.source = "live";
         window.SOLARI.lastLiveAt = Date.now();
         window.SOLARI.staleReason = null;
         window.SOLARI.api = API;
         return window.SOLARI;
       }).catch(function (err) {
+        if (window.SOLARI) window.SOLARI.lastAttemptAt = attemptedAt;
         if (window.SOLARI && window.SOLARI.source !== "offline") {
           window.SOLARI.source = "stale";
           window.SOLARI.staleReason = err && err.message ? err.message : "refresh failed";
@@ -1350,6 +1355,7 @@
     Object.keys(live).forEach(function (k) { target[k] = live[k]; });
     target.source = "live";
     target.lastLiveAt = Date.now();
+    target.lastAttemptAt = target.lastLiveAt;
     target.staleReason = null;
     target.api = API;
     return target;

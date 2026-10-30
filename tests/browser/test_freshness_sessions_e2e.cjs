@@ -160,6 +160,8 @@ async function main() {
     });
     await pages[0].waitForFunction(() => window.SOLARI.source === 'stale', null, { timeout: 3000 });
     await pages[0].getByRole('status').filter({ hasText: 'DATA STALE' }).waitFor({ timeout: 15000 });
+    // F-13/I3: the per-page badge on the nodes page (default route) flips to Stale.
+    await pages[0].locator('.fresh-badge[data-fresh-state="stale"]').filter({ hasText: /Stale.*last update/ }).waitFor({ timeout: 5000 });
     await pages[0].evaluate(async () => {
       await window.SOLARI.api.survey('all').then(
         () => { throw new Error('stale session unexpectedly sent a mutation'); },
@@ -173,6 +175,7 @@ async function main() {
     await affected.request.get(`${base}/__fixture_control?mode=online`);
     await pages[0].evaluate(async () => { await window.SOLARI.api.refresh(); });
     assert.equal(await pages[0].evaluate(() => window.SOLARI.source), 'live', 'the affected session should recover after API service returns');
+    await pages[0].locator('.fresh-badge[data-fresh-state="fresh"]').filter({ hasText: /Live.*updated/ }).waitFor({ timeout: 5000 });
 
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     const keys = await Promise.all(contexts.map(async (context) => {
