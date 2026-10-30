@@ -123,7 +123,9 @@
 /* Largest single operator request line. The PHP layer
  * frames one request per line; anything larger is a malformed/abusive caller. */
 #define CTL_REQ_CAP   16384
+#ifndef CTL_READ_TIMEOUT_MS
 #define CTL_READ_TIMEOUT_MS 2000
+#endif
 /* Largest reply line we assemble. */
 #define CTL_REPLY_CAP 32768   /* enrollment reply may carry a leaf + CA PEM */
 /* Max accepted-but-unserviced backlog on the listening socket. */
@@ -1831,6 +1833,35 @@ static ssize_t ctlReadLine(int fd, char *out, size_t cap)
     return -1;
 }
 
+/* Write a complete reply under an absolute deadline. The service path uses
+ * the same two-second budget as request reads; tests pass a shorter budget. */
+static int ctlWriteReply(int fd, const char *reply, size_t len, int timeoutMs)
+{
+    struct timespec ts;
+    int64_t deadline;
+    size_t off = 0;
+    if (timeoutMs <= 0 || clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+    deadline = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + timeoutMs;
+    while (off < len) {
+        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+        int64_t now, remaining;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+        now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        remaining = deadline - now;
+        if (remaining <= 0) return -1;
+        int ready = poll(&pfd, 1, (int)remaining);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready <= 0 || (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) return -1;
+        ssize_t written = send(fd, reply + off, len - off,
+                               MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (written < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
+            continue;
+        if (written <= 0) return -1;
+        off += (size_t)written;
+    }
+    return 0;
+}
+
 /* Accept and service exactly one ready connection: read one request line,
  * dispatch it, write the reply, close. Returns SOLARI_OK if a request was
  * serviced, ERR_CONN_RETRY if nothing was ready, or a platform error. The
@@ -1884,18 +1915,8 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
 
     replyLen = ctlHandleLine(ctl, req, peerClass, peerUid, reply, sizeof reply);
 
-    /* Best-effort reply; a closed peer is not the server's problem. */
-    {
-        size_t off = 0;
-        while (off < replyLen) {
-            ssize_t w = send(cfd, reply + off, replyLen - off, MSG_NOSIGNAL);
-            if (w <= 0) {
-                if (w < 0 && errno == EINTR) continue;
-                break;
-            }
-            off += (size_t)w;
-        }
-    }
+    /* A peer that stops draining cannot stall the server indefinitely. */
+    (void)ctlWriteReply(cfd, reply, replyLen, CTL_READ_TIMEOUT_MS);
     close(cfd);
     return SOLARI_OK;
 }

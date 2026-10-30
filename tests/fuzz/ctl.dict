@@ -1,0 +1,7 @@
+"PING"
+"REQUEST_GET request=1 op=test"
+"REQUEST_SUBMIT verb=PING"
+"DISCOVER_STATUS"
+"ENROLL_TOKEN"
+"\x00"
+"\x0d\x0a"

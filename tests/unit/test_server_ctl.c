@@ -9,11 +9,16 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#define CTL_READ_TIMEOUT_MS 150
 
 #include "solariCtl.c"
 
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
 
 static unsigned gDecommissionIssueCalls;
 static unsigned gDecommissionConfirmCalls;
@@ -118,6 +123,66 @@ solariStatus serverDbDiscoveryScanGet(serverDb *db, uint64_t scanId,
 
 void setUp(void) {}
 void tearDown(void) {}
+
+static long elapsed_ms(struct timespec a, struct timespec b)
+{
+    return (b.tv_sec - a.tv_sec) * 1000L + (b.tv_nsec - a.tv_nsec) / 1000000L;
+}
+
+static void test_ctl_read_eof_and_stall_deadline(void)
+{
+    int fd[2]; char out[32]; struct timespec a, b;
+    TEST_ASSERT_EQUAL_INT(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fd));
+    (void)write(fd[0], "PING", 4); close(fd[0]);
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    TEST_ASSERT_TRUE(ctlReadLine(fd[1], out, sizeof out) < 0);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    TEST_ASSERT_TRUE(elapsed_ms(a, b) < 500); close(fd[1]);
+
+    TEST_ASSERT_EQUAL_INT(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fd));
+    (void)write(fd[0], "PING", 4);
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    TEST_ASSERT_TRUE(ctlReadLine(fd[1], out, sizeof out) < 0);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    TEST_ASSERT_TRUE(elapsed_ms(a, b) >= 100 && elapsed_ms(a, b) < 500);
+    close(fd[0]); close(fd[1]);
+}
+
+typedef struct { int fd; size_t expected; } drainArgs;
+static void *drain_slowly(void *opaque)
+{
+    drainArgs *args = opaque; size_t total = 0; char buf[37];
+    while (total < args->expected) {
+        ssize_t n = read(args->fd, buf, sizeof buf);
+        if (n <= 0) break;
+        total += (size_t)n;
+        usleep(500);
+    }
+    return (void *)(uintptr_t)(total == args->expected);
+}
+
+static void test_ctl_write_partial_and_deadline(void)
+{
+    int fd[2], sndbuf = 1024; char payload[16384]; pthread_t thread;
+    drainArgs args; void *result = NULL; struct timespec a, b;
+    memset(payload, 'R', sizeof payload);
+    TEST_ASSERT_EQUAL_INT(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fd));
+    TEST_ASSERT_EQUAL_INT(0, setsockopt(fd[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf));
+    args.fd = fd[1]; args.expected = sizeof payload;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&thread, NULL, drain_slowly, &args));
+    TEST_ASSERT_EQUAL_INT(0, ctlWriteReply(fd[0], payload, sizeof payload, 1500));
+    TEST_ASSERT_EQUAL_INT(0, pthread_join(thread, &result));
+    TEST_ASSERT_EQUAL_PTR((void *)(uintptr_t)1, result);
+    close(fd[0]); close(fd[1]);
+
+    TEST_ASSERT_EQUAL_INT(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fd));
+    TEST_ASSERT_EQUAL_INT(0, setsockopt(fd[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf));
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    TEST_ASSERT_TRUE(ctlWriteReply(fd[0], payload, sizeof payload, 150) < 0);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    TEST_ASSERT_TRUE(elapsed_ms(a, b) >= 100 && elapsed_ms(a, b) < 500);
+    close(fd[0]); close(fd[1]);
+}
 
 static void test_trim_line(void)
 {
@@ -672,5 +737,7 @@ int main(void)
     RUN_TEST(test_looks_like_csr);
     RUN_TEST(test_request_stream_requires_complete_bounded_line);
     RUN_TEST(test_ctl_line_byte_boundaries);
+    RUN_TEST(test_ctl_read_eof_and_stall_deadline);
+    RUN_TEST(test_ctl_write_partial_and_deadline);
     return UNITY_END();
 }

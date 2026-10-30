@@ -11,6 +11,29 @@ function assert_true(bool $cond, string $message): void
     }
 }
 
+/* Deterministic stream fixture: each stream_read() returns at most the next
+ * requested fragment, so a single fread() cannot hide a split boundary. */
+final class CtlChunkStream
+{
+    public $context;
+    public static string $data = '';
+    public static array $chunks = [];
+    private int $offset = 0;
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
+    public function stream_read(int $count): string
+    {
+        $limit = array_shift(self::$chunks) ?? $count;
+        $n = min($count, $limit, strlen(self::$data) - $this->offset);
+        $part = substr(self::$data, $this->offset, $n);
+        $this->offset += $n;
+        return $part;
+    }
+    public function stream_eof(): bool { return $this->offset >= strlen(self::$data); }
+    public function stream_stat(): array { return []; }
+}
+assert_true(stream_wrapper_register('ctlchunks', CtlChunkStream::class),
+    'deterministic chunk stream wrapper should register');
+
 $rc = new ReflectionClass(SolariCtl::class);
 assert_true($rc->getConstant('REPLY_CAP') === 32768,
     'SolariCtl::REPLY_CAP must match src/server/solariCtl.c CTL_REPLY_CAP');
@@ -39,24 +62,31 @@ $readStream = $rc->getMethod('readReplyStream');
 $readStream->setAccessible(true);
 $reply = "OK cert=abc\n";
 for ($split = 1; $split < strlen($reply); $split++) {
-    $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
-    assert_true(is_array($pair), 'socket pair should be created');
-    fwrite($pair[0], substr($reply, 0, $split));
-    fwrite($pair[0], substr($reply, $split));
-    fclose($pair[0]);
-    assert_true($readStream->invoke(null, $pair[1]) === $reply,
+    CtlChunkStream::$data = $reply;
+    CtlChunkStream::$chunks = [$split, strlen($reply) - $split];
+    $stream = fopen('ctlchunks://reply', 'r');
+    assert_true($readStream->invoke(null, $stream) === $reply,
         'reply should be read across every byte split');
-    fclose($pair[1]);
+    fclose($stream);
 }
-$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
-fwrite($pair[0], str_repeat('x', 32768)); fclose($pair[0]);
-assert_true(strpos($readStream->invoke(null, $pair[1]), "\n") === false,
+$byteCount = strlen($reply);
+CtlChunkStream::$data = $reply;
+CtlChunkStream::$chunks = array_fill(0, $byteCount, 1);
+$stream = fopen('ctlchunks://reply', 'r');
+assert_true($readStream->invoke(null, $stream) === $reply,
+    'reply should be read when delivered one byte per read');
+fclose($stream);
+CtlChunkStream::$data = str_repeat('x', 32768);
+CtlChunkStream::$chunks = [];
+$stream = fopen('ctlchunks://reply', 'r');
+assert_true(strpos($readStream->invoke(null, $stream), "\n") === false,
     'over-cap reply should remain incomplete and be rejected by transact');
-fclose($pair[1]);
-$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
-fwrite($pair[0], 'OK truncated'); fclose($pair[0]);
-assert_true(strpos($readStream->invoke(null, $pair[1]), "\n") === false,
+fclose($stream);
+CtlChunkStream::$data = 'OK truncated';
+CtlChunkStream::$chunks = [];
+$stream = fopen('ctlchunks://reply', 'r');
+assert_true(strpos($readStream->invoke(null, $stream), "\n") === false,
     'truncated reply should be rejected');
-fclose($pair[1]);
+fclose($stream);
 
 echo "SolariCtl parser/cap tests passed\n";

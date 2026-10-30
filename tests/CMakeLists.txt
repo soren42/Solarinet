@@ -17,6 +17,14 @@ if(SOLARI_BUILD_FUZZERS)
   add_test(NAME fuzz_protocol_smoke COMMAND fuzz_protocol
     -runs=20000 -seed=20261020 -max_len=4096
     -dict=${CMAKE_CURRENT_SOURCE_DIR}/fuzz/protocol.dict)
+  add_executable(fuzz_ctl fuzz/fuzz_ctl.c)
+  target_link_libraries(fuzz_ctl PRIVATE solari)
+  target_compile_options(fuzz_ctl PRIVATE
+    -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
+  target_link_options(fuzz_ctl PRIVATE -fsanitize=fuzzer,address,undefined)
+  add_test(NAME fuzz_ctl_smoke COMMAND fuzz_ctl
+    -runs=20000 -seed=20261030 -max_len=16384
+    -dict=${CMAKE_CURRENT_SOURCE_DIR}/fuzz/ctl.dict)
 endif()
 
 set(SOLARI_UNIT_TESTS
