@@ -71,10 +71,13 @@ function fixtureSession(string $baseUrl, string $role): array
 $db = new PDO("mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4", getenv('SOR_DB_USER') ?: '', getenv('SOR_DB_PASS') ?: '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
 $suffix = bin2hex(random_bytes(6)); $make = 'HTTP fixture '.$suffix; $model = 'RackWire '.$suffix;
 $tag = 'HTTP-'.$suffix; $serial = 'SER-'.$suffix; $loc = 'HTTP location '.$suffix; $vendor = 'HTTP receipt '.$suffix; $user = 'inventory-http-test';
-$ids = ['location'=>null,'model'=>null,'unit'=>null,'barcode'=>null,'receipt'=>null,'entity'=>null,'conflict'=>null];
+$receiveCode = 'F22-' . $suffix; $receiveFailTrigger = 'f22_receive_fail_' . $suffix;
+$ids = ['location'=>null,'model'=>null,'unit'=>null,'barcode'=>null,'receipt'=>null,'entity'=>null,'conflict'=>null,'receivedUnit'=>null];
 $work = sys_get_temp_dir().'/solarinet-inventory-http-'.bin2hex(random_bytes(8)); $sessions=$work.'/sessions'; $server=null; $failure=null;
-$cleanup = static function () use ($db,&$ids,$tag,$vendor,$make,$model,$loc): void {
-    foreach (['barcode_scans'=>"code=".$db->quote($tag),'receipts'=>"vendor=".$db->quote($vendor)] as $table=>$where) { try {$db->exec("DELETE FROM $table WHERE $where");} catch (Throwable $e) {} }
+$cleanup = static function () use ($db,&$ids,$tag,$receiveCode,$receiveFailTrigger,$vendor,$make,$model,$loc): void {
+    try { $db->exec("DROP TRIGGER IF EXISTS `$receiveFailTrigger`"); } catch (Throwable $e) {}
+    foreach (['barcode_scans'=>"code IN (".$db->quote($tag).','.$db->quote($receiveCode).')','receipts'=>"vendor=".$db->quote($vendor)] as $table=>$where) { try {$db->exec("DELETE FROM $table WHERE $where");} catch (Throwable $e) {} }
+    if ($ids['receivedUnit']) { try {$db->prepare('DELETE FROM barcodes WHERE subject_table=\'hardware_units\' AND subject_id=?')->execute([$ids['receivedUnit']]);$db->prepare('DELETE FROM hardware_units WHERE id=?')->execute([$ids['receivedUnit']]);} catch (Throwable $e) {} }
     foreach ([['entity_hardware_unit_links','hardware_unit_id',$ids['unit']], ['entities','id',$ids['entity']], ['entities','id',$ids['conflict']], ['barcodes','id',$ids['barcode']], ['hardware_units','id',$ids['unit']], ['hardware_models','id',$ids['model']], ['locations','id',$ids['location']]] as [$table,$column,$id]) { if ($id) { try {$q=$db->prepare("DELETE FROM $table WHERE $column=?");$q->execute([$id]);}catch(Throwable $e){} } }
     try { if ($ids['model']) $db->prepare('DELETE FROM rw_model_groups WHERE hardware_model_id=?')->execute([$ids['model']]); if ($ids['unit']) $db->prepare("DELETE FROM audit_log WHERE (table_name='hardware_units' AND row_id=?) OR (table_name='hardware_models' AND row_id=?) OR (table_name='entities' AND row_id IN (?,?))")->execute([$ids['unit'],$ids['model'],$ids['entity'] ?: 0,$ids['conflict'] ?: 0]); $db->prepare('DELETE FROM receipts WHERE vendor=?')->execute([$vendor]);$db->prepare('DELETE FROM hardware_units WHERE asset_tag=?')->execute([$tag]);$db->prepare('DELETE FROM hardware_models WHERE make=? AND model=?')->execute([$make,$model]);$db->prepare('DELETE FROM locations WHERE name=?')->execute([$loc]);}catch(Throwable $e){}
 };
@@ -113,10 +116,34 @@ try {
     $unlinked=httpRequest($base.$path,'DELETE',['note'=>'HTTP test'],$cookie,$csrf);check($unlinked['status']===200,'entity unlink failed');
     $profile=[['k'=>'ethernet','label'=>'Ethernet x8','glyph'=>'rj45','count'=>8,'rows'=>1,'role'=>'lan','gbps'=>1,'domain'=>'net','conn'=>'rj45']];$save=httpRequest($base.'/api/rackwire/library/'.$ids['model'].'/groups','POST',['name'=>$make.' '.$model,'kind'=>'switch','drawW'=>18,'groups'=>$profile],$cookie,$csrf);check($save['status']===201,'RackWire profile save failed');$library=httpRequest($base.'/api/rackwire/library','GET',null,$cookie);$found=null;foreach($library['body']['data']??[] as $r)if((int)($r['id']??0)===$ids['model'])$found=$r;check(($found['groups'][0]['conn']??null)==='rj45'&&($found['drawW']??null)===18,'RackWire profile readback failed');
     $look=httpRequest($base.'/api/inventory/codes/lookup','POST',['code'=>$tag],$cookie,$csrf);check($look['status']===200&&($look['body']['data']['found']??false)===true&&($look['body']['data']['subject']['id']??null)===$ids['unit'],'barcode resolution failed');
+    $countStmt=$db->prepare("SELECT COUNT(*) FROM barcodes WHERE subject_table='hardware_units' AND subject_id=? AND code_type='asset_tag' AND deleted_at IS NULL");$countStmt->execute([$ids['unit']]);$barcodeCount=(int)$countStmt->fetchColumn();
+    $autoBody=['code_type'=>'asset_tag','subject_table'=>'hardware_units','subject_id'=>$ids['unit']];
+    $autoFirst=httpRequest($base.'/api/inventory/codes','POST',$autoBody,$cookie,$csrf);
+    $autoRetry=httpRequest($base.'/api/inventory/codes','POST',$autoBody,$cookie,$csrf);
+    check($autoFirst['status']===201&&$autoRetry['status']===201&&($autoFirst['body']['data']['id']??null)===($autoRetry['body']['data']['id']??null),'auto-generated barcode retry did not reuse its subject/type natural key');
+    $countStmt->execute([$ids['unit']]);
+    check((int)$countStmt->fetchColumn()===$barcodeCount,'auto-generated barcode retry created a duplicate label');
+    $db->exec("CREATE TRIGGER `$receiveFailTrigger` BEFORE INSERT ON barcodes FOR EACH ROW BEGIN IF NEW.code = ".$db->quote($receiveCode)." THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected F-22 receive failure'; END IF; END");
+    $outboxBefore = (int)$db->query('SELECT COALESCE(MAX(id),0) FROM sor_outbox')->fetchColumn();
+    $barcodesBefore = (int)$db->query('SELECT COUNT(*) FROM barcodes')->fetchColumn();
+    $scansBefore = (int)$db->query('SELECT COUNT(*) FROM barcode_scans')->fetchColumn();
+    $receiveBody=['code'=>$receiveCode,'code_type'=>'serial','model_id'=>$ids['model']];
+    $failedReceive=httpRequest($base.'/api/inventory/codes/receive','POST',$receiveBody,$cookie,$csrf);check($failedReceive['status']>=500,'injected barcode receive failure unexpectedly succeeded');
+    check((int)$db->query('SELECT COUNT(*) FROM hardware_units WHERE serial='.$db->quote($receiveCode))->fetchColumn()===0,'failed barcode receive left a hardware unit');
+    check((int)$db->query('SELECT COUNT(*) FROM barcodes')->fetchColumn()===$barcodesBefore,'failed barcode receive left a partial barcode row');
+    check((int)$db->query('SELECT COUNT(*) FROM barcode_scans')->fetchColumn()===$scansBefore,'failed barcode receive left a partial scan audit row');
+    check((int)$db->query('SELECT COUNT(*) FROM sor_outbox WHERE id > '.$outboxBefore)->fetchColumn()===0,'failed barcode receive emitted an outbox event');
+    $db->exec("DROP TRIGGER `$receiveFailTrigger`");
+    $received=httpRequest($base.'/api/inventory/codes/receive','POST',$receiveBody,$cookie,$csrf);check($received['status']===200||$received['status']===201,'retry of barcode receive failed');
+    $ids['receivedUnit']=(int)($received['body']['data']['unit']['id']??0);
+    $replayed=httpRequest($base.'/api/inventory/codes/receive','POST',$receiveBody,$cookie,$csrf);check($replayed['status']===409,'replayed scan did not resolve through the scanned-code natural key');
+    check($ids['receivedUnit']>0&&(int)$db->query('SELECT COUNT(*) FROM hardware_units WHERE serial='.$db->quote($receiveCode))->fetchColumn()===1,'receive retry did not create exactly one hardware unit');
+    check((int)$db->query('SELECT COUNT(*) FROM barcodes WHERE code='.$db->quote($receiveCode))->fetchColumn()===1,'receive retry did not create exactly one scanned barcode');
+    check((int)$db->query('SELECT COUNT(*) FROM barcode_scans WHERE code='.$db->quote($receiveCode).' AND action=\'receive\'')->fetchColumn()===1,'receive retry did not create exactly one scan audit row');
     foreach(['/api/inventory/models','/api/inventory/components','/api/inventory/receipts','/api/inventory/projects','/api/inventory/locations','/api/inventory/allocations'] as $p){$r=httpRequest($base.$p.($p==='/api/inventory/locations'?'?flat=1&':'?').'limit=1&offset=0','GET',null,$cookie);check($r['status']===200&&is_array($r['body']['data']['items']??null)&&isset($r['body']['data']['page']['total']),"paged endpoint failed: $p");}
     check(httpRequest($base.'/api/inventory/models?limit=0','GET',null,$cookie)['status']===400,'limit=0 was accepted');
     $aggregate=httpRequest($base.'/api/inventory','GET',null,$cookie);$d=$aggregate['body']['data']??[];check($aggregate['status']===200&&is_array($d['models']??null)&&is_array($d['units']??null)&&!isset($d['page']),'combined inventory shape changed');
     $overflow=$db->prepare("INSERT INTO receipts(vendor,currency) VALUES(?,'USD')");for($i=0;$i<501;$i++)$overflow->execute([$vendor]);$tooBig=httpRequest($base.'/api/inventory','GET',null,$cookie);check($tooBig['status']===413&&($tooBig['body']['error']['code']??null)==='inventory_page_required','501 receipts did not require paginated inventory');
-    echo "inventory HTTP entity linking, paging, aggregate bound, RackWire profile, barcode lookup, and retired-route assertions passed\n";
+    echo "inventory HTTP transactions, entity linking, paging, aggregate bound, RackWire profile, barcode lookup, and retired-route assertions passed\n";
 } catch(Throwable $e){fwrite(STDERR,'Inventory HTTP test failed: '.$e->getMessage()."\n");$failure=$e;} finally {if(is_resource($server)){proc_terminate($server);proc_close($server);} $cleanup();if(is_dir($work)){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($work,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);foreach($it as $p)$p->isDir()?rmdir($p->getPathname()):unlink($p->getPathname());rmdir($work);}}
 if($failure!==null)exit(1);

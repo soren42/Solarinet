@@ -904,8 +904,10 @@ return static function (Router $router): void {
         if (Inv::row('SELECT id FROM projects WHERE id = :i AND deleted_at IS NULL', [':i' => $id]) === null) {
             Response::error('not_found', "No project $id", 404);
         }
-        Inv::exec('UPDATE projects SET deleted_at = NOW() WHERE id = :i', [':i' => $id]);
-        Inv::exec('UPDATE project_allocations SET deleted_at = NOW() WHERE project_id = :i AND deleted_at IS NULL', [':i' => $id]);
+        Inv::transaction(static function () use ($id): void {
+            Inv::exec('UPDATE projects SET deleted_at = NOW() WHERE id = :i AND deleted_at IS NULL', [':i' => $id]);
+            Inv::exec('UPDATE project_allocations SET deleted_at = NOW() WHERE project_id = :i AND deleted_at IS NULL', [':i' => $id]);
+        });
         Response::ok(['id' => $id, 'status' => 'deleted']);
     });
 
@@ -990,21 +992,23 @@ return static function (Router $router): void {
             Response::error('bad_request', 'No updatable fields supplied.', 400);
         }
 
-        Inv::exec('UPDATE project_allocations SET ' . implode(', ', $sets) . ' WHERE id = :id', $params);
+        Inv::transaction(static function () use ($sets, $params, $nextAllocation, $nextUnitId, $projectId): void {
+            Inv::exec('UPDATE project_allocations SET ' . implode(', ', $sets) . ' WHERE id = :id', $params);
 
-        // trg_alloc_tray_move only fires AFTER INSERT (see migration 014); mirror
-        // its "grab the tray" side effect here so PUT-driven commit/install
-        // transitions behave identically to the POST-time (insert) path.
-        if (in_array($nextAllocation, ['committed', 'installed'], true) && $nextUnitId !== null) {
-            Inv::exec(
-                "UPDATE hardware_units hu
-                   JOIN projects pr ON pr.id = :pid
-                    SET hu.location_id  = COALESCE(pr.tray_location_id, hu.location_id),
-                        hu.stock_status = IF(:alloc = 'installed', 'deployed', 'allocated')
-                 WHERE hu.id = :uid",
-                [':pid' => $projectId, ':alloc' => $nextAllocation, ':uid' => $nextUnitId]
-            );
-        }
+            // trg_alloc_tray_move only fires AFTER INSERT (see migration 014); mirror
+            // its "grab the tray" side effect here so PUT-driven commit/install
+            // transitions behave identically to the POST-time (insert) path.
+            if (in_array($nextAllocation, ['committed', 'installed'], true) && $nextUnitId !== null) {
+                Inv::exec(
+                    "UPDATE hardware_units hu
+                       JOIN projects pr ON pr.id = :pid
+                        SET hu.location_id  = COALESCE(pr.tray_location_id, hu.location_id),
+                            hu.stock_status = IF(:alloc = 'installed', 'deployed', 'allocated')
+                     WHERE hu.id = :uid",
+                    [':pid' => $projectId, ':alloc' => $nextAllocation, ':uid' => $nextUnitId]
+                );
+            }
+        });
 
         Response::ok(inv_allocation_row(Inv::row(inv_allocation_sql() . ' WHERE pa.id = :i', [':i' => $allocId])));
     });
@@ -1057,6 +1061,23 @@ return static function (Router $router): void {
  * ==================================================================== */
 final class Inv
 {
+    /** Run a related SoR mutation set and its trigger-written outbox atomically. */
+    public static function transaction(callable $work)
+    {
+        $db = Sor::db();
+        $db->beginTransaction();
+        try {
+            $result = $work($db);
+            $db->commit();
+            return $result;
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
     /** @param array<string,mixed> $params @return array<int,array<string,mixed>> */
     public static function rows(string $sql, array $params = []): array
     {

@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 // This test only runs against the disposable CI SoR schema. It intentionally
-// exercises the public fail-soft mirror methods while injecting mid-operation
+// exercises the public SoR-first mirror methods while injecting mid-operation
 // SQL failures to prove the related writes and their retries are atomic.
 if (getenv('SOLARI_TEST_SOR_DB') !== '1') {
     fwrite(STDERR, "SOLARI_TEST_SOR_DB=1 is required\n");
@@ -77,6 +77,7 @@ if ($ip === '') {
 }
 $insertTrigger = 'f22_fail_ip_' . $suffix;
 $deleteTrigger = 'f22_fail_entity_' . $suffix;
+$outboxBeforeFailure = (int) $db->query('SELECT COALESCE(MAX(id), 0) FROM sor_outbox')->fetchColumn();
 $cleanup = static function () use ($db, $entityName, $ip, $insertTrigger, $deleteTrigger): void {
     $db->exec("DROP TRIGGER IF EXISTS `{$insertTrigger}`");
     $db->exec("DROP TRIGGER IF EXISTS `{$deleteTrigger}`");
@@ -91,23 +92,35 @@ $cleanup = static function () use ($db, $entityName, $ip, $insertTrigger, $delet
 
 try {
     $db->exec("CREATE TRIGGER `{$insertTrigger}` BEFORE INSERT ON ip_addresses FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected F-22 insert failure'");
-    Sor::upsertHost($ip, $entityName);
+    expect(Sor::upsertHost($ip, $entityName) === false, 'upsert did not report the injected failure to its caller');
     $st = $db->prepare('SELECT COUNT(*) FROM entities WHERE name = :name');
     $st->execute([':name' => $entityName]);
     expect((int) $st->fetchColumn() === 0, 'failed address insert left an orphan entity');
+    $st = $db->prepare('SELECT COUNT(*) FROM sor_outbox WHERE id > :id');
+    $st->execute([':id' => $outboxBeforeFailure]);
+    expect((int) $st->fetchColumn() === 0, 'failed host insert emitted a partial SoR outbox event');
     $db->exec("DROP TRIGGER `{$insertTrigger}`");
 
     concurrentUpserts($ip, $entityName); // first insert and retries race on one address
-    Sor::upsertHost($ip, $entityName); // replay of the same desired state
+    expect(Sor::upsertHost($ip, $entityName) === true, 'same-state host replay did not succeed');
     $st = $db->prepare('SELECT e.id, e.deleted_at, COUNT(ip.id) AS address_count FROM entities e LEFT JOIN ip_addresses ip ON ip.entity_id = e.id AND ip.deleted_at IS NULL WHERE e.name = :name GROUP BY e.id, e.deleted_at');
     $st->execute([':name' => $entityName]);
     $row = $st->fetch();
     expect(is_array($row) && $row['deleted_at'] === null && (int) $row['address_count'] === 1,
         'successful/retried upsert did not converge to one live entity and address');
     $entityId = (int) $row['id'];
+    $st = $db->prepare('SELECT COUNT(*) FROM sor_outbox WHERE table_name = \'entities\' AND row_id = :id');
+    $st->execute([':id' => $entityId]);
+    expect((int) $st->fetchColumn() === 1, 'same-state host replay emitted more than one entity outbox event');
+    $st = $db->prepare('SELECT id FROM ip_addresses WHERE entity_id = :id AND deleted_at IS NULL');
+    $st->execute([':id' => $entityId]);
+    $ipId = (int) $st->fetchColumn();
+    $st = $db->prepare('SELECT COUNT(*) FROM sor_outbox WHERE table_name = \'ip_addresses\' AND row_id = :id');
+    $st->execute([':id' => $ipId]);
+    expect($ipId > 0 && (int) $st->fetchColumn() === 1, 'host retry produced other than one live address and insert event');
 
     $db->exec("CREATE TRIGGER `{$deleteTrigger}` BEFORE UPDATE ON entities FOR EACH ROW BEGIN IF OLD.id = {$entityId} AND OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected F-22 remove failure'; END IF; END");
-    Sor::removeHost($ip);
+    expect(Sor::removeHost($ip) === false, 'remove did not report the injected failure to its caller');
     $st = $db->prepare('SELECT e.deleted_at AS entity_deleted, ip.deleted_at AS address_deleted FROM entities e JOIN ip_addresses ip ON ip.entity_id = e.id WHERE e.id = :id');
     $st->execute([':id' => $entityId]);
     $row = $st->fetch();
@@ -115,8 +128,8 @@ try {
         'failed entity soft-delete left the address partially removed');
     $db->exec("DROP TRIGGER `{$deleteTrigger}`");
 
-    Sor::removeHost($ip);
-    Sor::removeHost($ip); // replay of a completed remove
+    expect(Sor::removeHost($ip) === true, 'host removal retry did not succeed');
+    expect(Sor::removeHost($ip) === true, 'replay of a completed remove did not remain idempotent');
     $st = $db->prepare('SELECT e.deleted_at AS entity_deleted, ip.deleted_at AS address_deleted FROM entities e JOIN ip_addresses ip ON ip.entity_id = e.id WHERE e.id = :id');
     $st->execute([':id' => $entityId]);
     $row = $st->fetch();

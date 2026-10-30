@@ -111,8 +111,13 @@ return static function (Router $router): void {
         ];
         $op = Operator::name();
         if ($op !== '') $args['op'] = $op;
+        // SoR commits first; SolariCtl then derives the local solarinet asset
+        // mirror. If the second write fails, replaying this desired state by IP
+        // is safe and converges both stores without cross-database 2PC.
+        if (!Sor::upsertHost((string) $cur['ip'], $name)) {
+            Response::error('service_unavailable', 'The SoR host change could not be saved; the asset was not changed.', 503);
+        }
         SolariCtl::call('ASSET_SET', $args);
-        Sor::upsertHost((string) $cur['ip'], $name);   // mirror edit/rename into the SoR (fail-soft)
         Response::ok(['assetId' => $aid, 'status' => 'updated']);
     });
 
@@ -128,9 +133,14 @@ return static function (Router $router): void {
             Response::error('confirm_required',
                 'Asset removal deletes its probe targets and history; resend with {"confirm":true}.', 409);
         }
+        // Commit the authoritative SoR removal before updating the derived
+        // solarinet asset. A failed/pending SolariCtl write can be replayed with
+        // the same request key; the IP-keyed SoR removal is already complete.
+        if (!Sor::removeHost((string) $cur['ip'])) {
+            Response::error('service_unavailable', 'The SoR host could not be removed; the asset was not changed.', 503);
+        }
         $reply = SolariCtl::callQueued('ASSET_REMOVE', ['asset' => (string) $aid],
                                        $op, ctrl_idem_key(), 15.0);
-        Sor::removeHost((string) $cur['ip']);   // soft-delete the SoR host (fail-soft) -> drops from DNS
         Response::ok([
             'assetId' => $aid,
             'status'  => 'removed',

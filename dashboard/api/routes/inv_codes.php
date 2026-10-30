@@ -141,77 +141,81 @@ return static function (Router $router): void {
             $serial = substr($code, 0, 128);
         }
 
-        Inv::exec(
-            'INSERT INTO hardware_units
-                (model_id, serial, asset_tag, location_id, acquired_on, quantity, unit_cost_cents,
-                 stock_status, receipt_id, notes, source_id, asserted_kind, asserted_at)
-             VALUES
-                (:model_id, :serial, NULL, :location_id, :acquired_on, :quantity, :unit_cost_cents,
-                 \'in_stock\', :receipt_id, :notes, :source_id, \'human\', NOW())',
-            [
-                ':model_id'        => $modelId,
-                ':serial'          => $serial,
-                ':location_id'     => inv_optional_fk('locations', $b['location_id'] ?? null, 'location_id'),
-                ':acquired_on'     => inv_date($b['acquired_on'] ?? null),
-                ':quantity'        => inv_quantity($b),
-                ':unit_cost_cents' => inv_cents($b, 'unit_cost_cents'),
-                ':receipt_id'      => inv_optional_fk('receipts', $b['receipt_id'] ?? null, 'receipt_id'),
-                ':notes'           => inv_str($b, 'notes'),
-                ':source_id'       => Sor::dashboardSourceId(),
-            ]
-        );
-        $unitId = (int) Inv::lastInsertId();
+        [$unitId, $tagId, $scanId, $tag] = Inv::transaction(static function () use ($modelId, $serial, $b, $code, $codeType, $operator): array {
+            Inv::exec(
+                'INSERT INTO hardware_units
+                    (model_id, serial, asset_tag, location_id, acquired_on, quantity, unit_cost_cents,
+                     stock_status, receipt_id, notes, source_id, asserted_kind, asserted_at)
+                 VALUES
+                    (:model_id, :serial, NULL, :location_id, :acquired_on, :quantity, :unit_cost_cents,
+                     \'in_stock\', :receipt_id, :notes, :source_id, \'human\', NOW())',
+                [
+                    ':model_id'        => $modelId,
+                    ':serial'          => $serial,
+                    ':location_id'     => inv_optional_fk('locations', $b['location_id'] ?? null, 'location_id'),
+                    ':acquired_on'     => inv_date($b['acquired_on'] ?? null),
+                    ':quantity'        => inv_quantity($b),
+                    ':unit_cost_cents' => inv_cents($b, 'unit_cost_cents'),
+                    ':receipt_id'      => inv_optional_fk('receipts', $b['receipt_id'] ?? null, 'receipt_id'),
+                    ':notes'           => inv_str($b, 'notes'),
+                    ':source_id'       => Sor::dashboardSourceId(),
+                ]
+            );
+            $unitId = (int) Inv::lastInsertId();
 
-        // 3. Mint + mirror the AKO asset tag onto the unit.
-        $tag = inv_next_code('AKO');
-        Inv::exec('UPDATE hardware_units SET asset_tag = :tag WHERE id = :id', [':tag' => $tag, ':id' => $unitId]);
+            // 3. Mint + mirror the AKO asset tag onto the unit.
+            $tag = inv_next_code('AKO');
+            Inv::exec('UPDATE hardware_units SET asset_tag = :tag WHERE id = :id', [':tag' => $tag, ':id' => $unitId]);
 
-        // 4. Barcode A: the AKO asset tag.
-        $tagId = inv_code_insert([
-            'code'          => $tag,
-            'code_type'     => 'asset_tag',
-            'symbology'     => 'both',
-            'subject_table' => 'hardware_units',
-            'subject_id'    => $unitId,
-            'notes'         => null,
-            'auto'          => true,
-            'prefix'        => 'AKO',
-        ]);
-
-        // 4b. inv_code_insert may have regenerated the tag on a concurrent
-        // collision; re-read the stored code and re-mirror it so the unit's
-        // asset_tag, the audit detail, and the log code all match the barcode.
-        $stored = inv_code_stored_code($tagId);
-        if ($stored !== $tag) {
-            Inv::exec('UPDATE hardware_units SET asset_tag = :tag WHERE id = :id', [':tag' => $stored, ':id' => $unitId]);
-            $tag = $stored;
-        }
-
-        // 5. Barcode B: the scanned code (skip only if identical to the tag).
-        $scanId = null;
-        if ($code !== $tag) {
-            $scanId = inv_code_insert([
-                'code'          => $code,
-                'code_type'     => $codeType,
+            // 4. Barcode A: the AKO asset tag.
+            $tagId = inv_code_insert([
+                'code'          => $tag,
+                'code_type'     => 'asset_tag',
                 'symbology'     => 'both',
                 'subject_table' => 'hardware_units',
                 'subject_id'    => $unitId,
-                'notes'         => inv_str($b, 'notes'),
-                'auto'          => false,
-                'prefix'        => null,
+                'notes'         => null,
+                'auto'          => true,
+                'prefix'        => 'AKO',
             ]);
-        }
 
-        // 6. Audit against barcode B (or A if B was skipped).
-        inv_code_log(
-            $scanId !== null ? $code : $tag,
-            $scanId ?? $tagId,
-            'hardware_units',
-            $unitId,
-            'receive',
-            $operator,
-            ['unitId' => $unitId, 'modelId' => $modelId, 'assetTag' => $tag]
-        );
+            // 4b. inv_code_insert may have regenerated the tag on a concurrent
+            // collision; re-read the stored code and re-mirror it so the unit's
+            // asset_tag, the audit detail, and the log code all match the barcode.
+            $stored = inv_code_stored_code($tagId);
+            if ($stored !== $tag) {
+                Inv::exec('UPDATE hardware_units SET asset_tag = :tag WHERE id = :id', [':tag' => $stored, ':id' => $unitId]);
+                $tag = $stored;
+            }
+
+            // 5. Barcode B: the scanned code (skip only if identical to the tag).
+            $scanId = null;
+            if ($code !== $tag) {
+                $scanId = inv_code_insert([
+                    'code'          => $code,
+                    'code_type'     => $codeType,
+                    'symbology'     => 'both',
+                    'subject_table' => 'hardware_units',
+                    'subject_id'    => $unitId,
+                    'notes'         => inv_str($b, 'notes'),
+                    'auto'          => false,
+                    'prefix'        => null,
+                ]);
+            }
+
+            // 6. Audit against barcode B (or A if B was skipped).
+            inv_code_log(
+                $scanId !== null ? $code : $tag,
+                $scanId ?? $tagId,
+                'hardware_units',
+                $unitId,
+                'receive',
+                $operator,
+                ['unitId' => $unitId, 'modelId' => $modelId, 'assetTag' => $tag]
+            );
+
+            return [$unitId, $tagId, $scanId, $tag];
+        });
 
         $unitRow  = inv_component_row(Inv::row(inv_component_sql() . ' WHERE hu.id = :i', [':i' => $unitId]));
         $tagRow   = inv_code_row(Inv::row(inv_code_sql() . ' WHERE id = :i', [':i' => $tagId]));
@@ -239,20 +243,16 @@ return static function (Router $router): void {
             Response::error('bad_request', 'location_id is required.', 400);
         }
 
-        $cur  = Inv::row('SELECT location_id FROM hardware_units WHERE id = :i AND deleted_at IS NULL', [':i' => $unitId]);
-        $from = $cur !== null ? Coerce::int($cur['location_id']) : null;
-
-        Inv::exec('UPDATE hardware_units SET location_id = :loc WHERE id = :id', [':loc' => $locId, ':id' => $unitId]);
-
-        inv_code_log(
-            inv_unit_code_label($unitId),
-            null,
-            'hardware_units',
-            $unitId,
-            'move',
-            $operator,
-            ['fromLocationId' => $from, 'toLocationId' => $locId]
-        );
+        Inv::transaction(static function () use ($unitId, $locId, $operator): void {
+            $cur = Inv::row('SELECT location_id FROM hardware_units WHERE id = :i AND deleted_at IS NULL FOR UPDATE', [':i' => $unitId]);
+            $from = $cur !== null ? Coerce::int($cur['location_id']) : null;
+            if ($from === $locId) {
+                return;
+            }
+            Inv::exec('UPDATE hardware_units SET location_id = :loc WHERE id = :id', [':loc' => $locId, ':id' => $unitId]);
+            inv_code_log(inv_unit_code_label($unitId), null, 'hardware_units', $unitId, 'move', $operator,
+                ['fromLocationId' => $from, 'toLocationId' => $locId]);
+        });
 
         Response::ok(inv_component_row(Inv::row(inv_component_sql() . ' WHERE hu.id = :i', [':i' => $unitId])));
     });
@@ -278,32 +278,30 @@ return static function (Router $router): void {
         // ---- Bin variant: attach a bin/location to the project. ----------
         if ($hasLoc) {
             $locId = inv_optional_fk('locations', $b['location_id'], 'location_id');
-            $proj  = Inv::row('SELECT id, tray_location_id FROM projects WHERE id = :i AND deleted_at IS NULL', [':i' => $projectId]);
-            $tray  = $proj !== null ? Coerce::int($proj['tray_location_id']) : null;
-
-            if ($tray === null) {
-                // First bin becomes the project tray.
-                Inv::exec('UPDATE projects SET tray_location_id = :loc WHERE id = :id', [':loc' => $locId, ':id' => $projectId]);
-                $mode = 'tray';
-            } else {
-                // Reparent the bin under the tray, guarding against a cycle.
-                if ($locId === $tray) {
-                    Response::error('bad_request', 'The tray cannot be nested under itself.', 400);
+            $mode = Inv::transaction(static function () use ($locId, $projectId, $operator): string {
+                $tray = Coerce::int(Inv::scalar('SELECT tray_location_id FROM projects WHERE id = :i AND deleted_at IS NULL FOR UPDATE', [':i' => $projectId]));
+                if ($tray === null) {
+                    Inv::exec('UPDATE projects SET tray_location_id = :loc WHERE id = :id AND tray_location_id IS NULL', [':loc' => $locId, ':id' => $projectId]);
+                    $mode = 'tray';
+                } elseif ($tray === $locId) {
+                    return 'tray';
+                } else {
+                    if ($locId === $tray) {
+                        Response::error('bad_request', 'The tray cannot be nested under itself.', 400);
+                    }
+                    inv_guard_no_cycle($tray, $locId);
+                    $current = Inv::scalar('SELECT parent_id FROM locations WHERE id = :loc FOR UPDATE', [':loc' => $locId]);
+                    if (Coerce::int($current) !== $tray) {
+                        Inv::exec('UPDATE locations SET parent_id = :tray WHERE id = :loc', [':tray' => $tray, ':loc' => $locId]);
+                        $mode = 'nested';
+                    } else {
+                        return 'nested';
+                    }
                 }
-                inv_guard_no_cycle($tray, $locId);
-                Inv::exec('UPDATE locations SET parent_id = :tray WHERE id = :loc', [':tray' => $tray, ':loc' => $locId]);
-                $mode = 'nested';
-            }
-
-            inv_code_log(
-                inv_loc_code_label($locId),
-                null,
-                'locations',
-                $locId,
-                'associate',
-                $operator,
-                ['projectId' => $projectId, 'locationId' => $locId, 'mode' => $mode]
-            );
+                inv_code_log(inv_loc_code_label($locId), null, 'locations', $locId, 'associate', $operator,
+                    ['projectId' => $projectId, 'locationId' => $locId, 'mode' => $mode]);
+                return $mode;
+            });
 
             Response::ok([
                 'project'  => inv_project_row(Inv::row(inv_project_sql() . ' WHERE id = :i', [':i' => $projectId])),
@@ -317,22 +315,17 @@ return static function (Router $router): void {
         // The DB's double-commit trigger SIGNALs 45000 → Inv::exec → 409, and
         // trg_alloc_tray_move (AFTER INSERT) parks the unit on the tray + flips
         // stock_status, so no manual mirror is needed here.
-        Inv::exec(
-            'INSERT INTO project_allocations (project_id, hardware_unit_id, allocation, quantity, source_id)
-             VALUES (:pid, :uid, \'committed\', 1, :src)',
-            [':pid' => $projectId, ':uid' => $unitId, ':src' => Sor::dashboardSourceId()]
-        );
-        $allocId = (int) Inv::lastInsertId();
-
-        inv_code_log(
-            inv_unit_code_label($unitId),
-            null,
-            'hardware_units',
-            $unitId,
-            'allocate',
-            $operator,
-            ['projectId' => $projectId, 'hardwareUnitId' => $unitId, 'allocationId' => $allocId]
-        );
+        $allocId = Inv::transaction(static function () use ($projectId, $unitId, $operator): int {
+            Inv::exec(
+                'INSERT INTO project_allocations (project_id, hardware_unit_id, allocation, quantity, source_id)
+                 VALUES (:pid, :uid, \'committed\', 1, :src)',
+                [':pid' => $projectId, ':uid' => $unitId, ':src' => Sor::dashboardSourceId()]
+            );
+            $allocId = (int) Inv::lastInsertId();
+            inv_code_log(inv_unit_code_label($unitId), null, 'hardware_units', $unitId, 'allocate', $operator,
+                ['projectId' => $projectId, 'hardwareUnitId' => $unitId, 'allocationId' => $allocId]);
+            return $allocId;
+        });
 
         Response::ok(inv_allocation_row(Inv::row(inv_allocation_sql() . ' WHERE pa.id = :i', [':i' => $allocId])), 201);
     });
@@ -415,31 +408,64 @@ return static function (Router $router): void {
             Response::error('bad_request', 'asset_tag codes must be at most 64 characters.', 400);
         }
 
-        $id = inv_code_insert([
-            'code'          => $code,
-            'code_type'     => $codeType,
-            'symbology'     => $symbology,
-            'subject_table' => $table,
-            'subject_id'    => $subjectId,
-            'notes'         => inv_str($b, 'notes', 255),
-            'auto'          => $auto,
-            'prefix'        => $prefix,
-        ]);
+        $id = Inv::transaction(static function () use ($code, $codeType, $symbology, $table, $subjectId, $b, $auto, $prefix, $operator): int {
+            if ($auto) {
+                // The subject/type pair is the natural key for generated labels.
+                // Lock the subject so concurrent retries cannot mint two labels.
+                Inv::row("SELECT id FROM `$table` WHERE id = :id AND deleted_at IS NULL FOR UPDATE", [':id' => $subjectId]);
+                $existing = Inv::row(
+                    'SELECT id, code FROM barcodes WHERE subject_table = :st AND subject_id = :sid AND code_type = :ct AND deleted_at IS NULL LIMIT 1',
+                    [':st' => $table, ':sid' => $subjectId, ':ct' => $codeType]
+                );
+                if ($existing !== null) {
+                    if ($table === 'hardware_units' && $codeType === 'asset_tag') {
+                        Inv::exec("UPDATE hardware_units SET asset_tag = :tag WHERE id = :id AND (asset_tag IS NULL OR asset_tag = '')",
+                            [':tag' => $existing['code'], ':id' => $subjectId]);
+                    }
+                    return (int) $existing['id'];
+                }
+            } else {
+                $existing = Inv::row('SELECT id, code_type, symbology, subject_table, subject_id FROM barcodes WHERE code = :code AND deleted_at IS NULL FOR UPDATE', [':code' => $code]);
+                if ($existing !== null) {
+                    if ($existing['code_type'] === $codeType && $existing['symbology'] === $symbology
+                        && $existing['subject_table'] === $table && (int) $existing['subject_id'] === $subjectId) {
+                        if ($table === 'hardware_units' && $codeType === 'asset_tag') {
+                            Inv::exec("UPDATE hardware_units SET asset_tag = :tag WHERE id = :id AND (asset_tag IS NULL OR asset_tag = '')",
+                                [':tag' => $code, ':id' => $subjectId]);
+                        }
+                        return (int) $existing['id'];
+                    }
+                    Response::error('conflict', 'code already in use.', 409);
+                }
+            }
 
-        // Mirror an AKO asset tag onto the unit's asset_tag when appropriate.
-        if ($table === 'hardware_units' && $codeType === 'asset_tag') {
-            $stored = inv_code_stored_code($id);
-            Inv::exec(
-                "UPDATE hardware_units SET asset_tag = :tag WHERE id = :id AND (asset_tag IS NULL OR asset_tag = '')",
-                [':tag' => $stored, ':id' => $subjectId]
-            );
-        }
+            $id = inv_code_insert([
+                'code'          => $code,
+                'code_type'     => $codeType,
+                'symbology'     => $symbology,
+                'subject_table' => $table,
+                'subject_id'    => $subjectId,
+                'notes'         => inv_str($b, 'notes', 255),
+                'auto'          => $auto,
+                'prefix'        => $prefix,
+            ]);
 
-        inv_code_log(inv_code_stored_code($id), $id, $table, $subjectId, 'create', $operator, [
-            'subjectTable' => $table,
-            'subjectId'    => $subjectId,
-            'codeType'     => $codeType,
-        ]);
+            // Mirror an AKO asset tag onto the unit's asset_tag when appropriate.
+            if ($table === 'hardware_units' && $codeType === 'asset_tag') {
+                $stored = inv_code_stored_code($id);
+                Inv::exec(
+                    "UPDATE hardware_units SET asset_tag = :tag WHERE id = :id AND (asset_tag IS NULL OR asset_tag = '')",
+                    [':tag' => $stored, ':id' => $subjectId]
+                );
+            }
+
+            inv_code_log(inv_code_stored_code($id), $id, $table, $subjectId, 'create', $operator, [
+                'subjectTable' => $table,
+                'subjectId'    => $subjectId,
+                'codeType'     => $codeType,
+            ]);
+            return $id;
+        });
 
         Response::ok(inv_code_row(Inv::row(inv_code_sql() . ' WHERE id = :i', [':i' => $id])), 201);
     });
@@ -499,8 +525,12 @@ return static function (Router $router): void {
         if ($row === null) {
             Response::error('not_found', "No code $id", 404);
         }
-        Inv::exec('UPDATE barcodes SET label_printed_at = NOW() WHERE id = :i', [':i' => $id]);
-        inv_code_log((string) $row['code'], $id, (string) $row['subject_table'], (int) $row['subject_id'], 'print', $operator, []);
+        Inv::transaction(static function () use ($row, $id, $operator): void {
+            $changed = Inv::exec('UPDATE barcodes SET label_printed_at = NOW() WHERE id = :i AND label_printed_at IS NULL', [':i' => $id]);
+            if ($changed > 0) {
+                inv_code_log((string) $row['code'], $id, (string) $row['subject_table'], (int) $row['subject_id'], 'print', $operator, []);
+            }
+        });
         Response::ok(inv_code_row(Inv::row(inv_code_sql() . ' WHERE id = :i', [':i' => $id])));
     });
 
@@ -530,8 +560,10 @@ return static function (Router $router): void {
         if ($row === null) {
             Response::error('not_found', "No code $id", 404);
         }
-        Inv::exec('UPDATE barcodes SET deleted_at = NOW() WHERE id = :i', [':i' => $id]);
-        inv_code_log((string) $row['code'], $id, (string) $row['subject_table'], (int) $row['subject_id'], 'delete', $operator, []);
+        Inv::transaction(static function () use ($row, $id, $operator): void {
+            Inv::exec('UPDATE barcodes SET deleted_at = NOW() WHERE id = :i AND deleted_at IS NULL', [':i' => $id]);
+            inv_code_log((string) $row['code'], $id, (string) $row['subject_table'], (int) $row['subject_id'], 'delete', $operator, []);
+        });
         Response::ok(['id' => $id, 'status' => 'deleted']);
     });
 
@@ -718,24 +750,20 @@ function inv_scanlog_row(array $r): array
  */
 function inv_code_log(string $code, ?int $barcodeId, ?string $table, ?int $subjectId, string $action, string $operator, array $detail): void
 {
-    try {
-        $st = Sor::db()->prepare(
-            'INSERT INTO barcode_scans (code, barcode_id, subject_table, subject_id, action, operator, detail, source_id)
-             VALUES (:code, :bid, :st, :sid, :action, :op, :detail, :src)'
-        );
-        $st->execute([
-            ':code'   => substr($code, 0, 128),
-            ':bid'    => $barcodeId,
-            ':st'     => $table,
-            ':sid'    => $subjectId,
-            ':action' => $action,
-            ':op'     => substr($operator, 0, 64),
-            ':detail' => $detail === [] ? null : json_encode($detail, JSON_UNESCAPED_SLASHES),
-            ':src'    => Sor::dashboardSourceId(),
-        ]);
-    } catch (\Throwable $e) {
-        error_log('inv_code_log soft-fail (' . $action . ' ' . $code . '): ' . $e->getMessage());
-    }
+    $st = Sor::db()->prepare(
+        'INSERT INTO barcode_scans (code, barcode_id, subject_table, subject_id, action, operator, detail, source_id)
+         VALUES (:code, :bid, :st, :sid, :action, :op, :detail, :src)'
+    );
+    $st->execute([
+        ':code'   => substr($code, 0, 128),
+        ':bid'    => $barcodeId,
+        ':st'     => $table,
+        ':sid'    => $subjectId,
+        ':action' => $action,
+        ':op'     => substr($operator, 0, 64),
+        ':detail' => $detail === [] ? null : json_encode($detail, JSON_UNESCAPED_SLASHES),
+        ':src'    => Sor::dashboardSourceId(),
+    ]);
 }
 
 /**

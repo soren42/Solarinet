@@ -8,11 +8,9 @@ declare(strict_types=1);
  * remove flows onward through the sorsync subsystem (MQ → DNS, and future render
  * targets) automatically.
  *
- * FAIL-SOFT by contract: every method swallows and logs its own errors. The
- * primary mutation already succeeded over solariCtl before we are called, and the
- * sor_reconcile_discovery daemon is a catch-all safety net — so a SoR hiccup must
- * never surface to the operator or abort the request. If SOR_DB_* is unset the
- * helper is simply inert.
+ * SoR host mutations commit here before SolariCtl updates the derived
+ * solarinet asset mirror. Callers must stop before changing that mirror when
+ * this method returns false; replaying the requested state is safe by IP.
  *
  * Connection: SOR_DB_HOST/PORT/NAME/USER/PASS (php-fpm pool env, alongside
  * SOLARI_DB_*). Provenance: the `dashboard` source, human-asserted. Correlation
@@ -153,17 +151,17 @@ final class Sor
      * host entity + primary IP so it becomes a first-class SoR inventory row
      * (and, being named + primary, a DNS A/PTR record).
      */
-    public static function upsertHost(string $ip, ?string $name): void
+    public static function upsertHost(string $ip, ?string $name): bool
     {
         if (!self::enabled() || $ip === '') {
-            return;
+            return false;
         }
         $db = null;
         $lock = null;
         try {
             $db = self::pdo();
             if ($db === null) {
-                return;
+                return false;
             }
             $lock = self::acquireIpLock($db, $ip);
             $db->beginTransaction();
@@ -172,8 +170,8 @@ final class Sor
             $eid   = self::entityIdForIp($db, $ip);
             if ($eid !== null) {
                 if ($label !== null) {
-                    $db->prepare("UPDATE entities SET name = :n, source_id = :s, asserted_kind = 'human', asserted_at = NOW() WHERE id = :e AND deleted_at IS NULL")
-                       ->execute([':n' => $label, ':s' => $src, ':e' => $eid]);
+                    $db->prepare("UPDATE entities SET name = :n, source_id = :s, asserted_kind = 'human', asserted_at = NOW() WHERE id = :e AND deleted_at IS NULL AND (name <> :check_name OR NOT (source_id <=> :check_source) OR asserted_kind <> 'human')")
+                       ->execute([':n' => $label, ':s' => $src, ':e' => $eid, ':check_name' => $label, ':check_source' => $src]);
                 }
             } elseif ($label !== null) {
                 $db->prepare("INSERT INTO entities (name, entity_type, source_id, asserted_kind) VALUES (:n, 'other', :s, 'human')")
@@ -183,6 +181,7 @@ final class Sor
                    ->execute([':e' => $eid, ':a' => self::aton($ip), ':s' => $src]);
             }
             $db->commit();
+            return true;
         } catch (\Throwable $e) {
             if ($db instanceof PDO && $db->inTransaction()) {
                 try {
@@ -191,7 +190,8 @@ final class Sor
                     error_log('Sor::upsertHost rollback failed: ' . $rollbackError->getMessage());
                 }
             }
-            error_log('Sor::upsertHost soft-fail (' . $ip . '): ' . $e->getMessage());
+            error_log('Sor::upsertHost failed (' . $ip . '): ' . $e->getMessage());
+            return false;
         } finally {
             if ($db instanceof PDO && $lock !== null) {
                 try {
@@ -208,28 +208,29 @@ final class Sor
      * deleted_at); v_dns_hosts filters deleted_at IS NULL, so the host drops out
      * of DNS on the next sync. No-op if the IP is not in the SoR.
      */
-    public static function removeHost(string $ip): void
+    public static function removeHost(string $ip): bool
     {
         if (!self::enabled() || $ip === '') {
-            return;
+            return false;
         }
         $db = null;
         $lock = null;
         try {
             $db = self::pdo();
             if ($db === null) {
-                return;
+                return false;
             }
             $lock = self::acquireIpLock($db, $ip);
             $db->beginTransaction();
             $eid = self::entityIdForIp($db, $ip);
             if ($eid === null) {
                 $db->commit();
-                return;
+                return true;
             }
             $db->prepare('UPDATE ip_addresses SET deleted_at = NOW() WHERE entity_id = :e AND deleted_at IS NULL')->execute([':e' => $eid]);
             $db->prepare('UPDATE entities SET deleted_at = NOW() WHERE id = :e AND deleted_at IS NULL')->execute([':e' => $eid]);
             $db->commit();
+            return true;
         } catch (\Throwable $e) {
             if ($db instanceof PDO && $db->inTransaction()) {
                 try {
@@ -238,7 +239,8 @@ final class Sor
                     error_log('Sor::removeHost rollback failed: ' . $rollbackError->getMessage());
                 }
             }
-            error_log('Sor::removeHost soft-fail (' . $ip . '): ' . $e->getMessage());
+            error_log('Sor::removeHost failed (' . $ip . '): ' . $e->getMessage());
+            return false;
         } finally {
             if ($db instanceof PDO && $lock !== null) {
                 try {
