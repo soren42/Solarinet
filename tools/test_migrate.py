@@ -177,6 +177,48 @@ class MigrationPreflightTests(unittest.TestCase):
             self.assertIn("information_schema.SCHEMATA", calls[0])
             self.assertIn("information_schema.TABLES", calls[1])
 
+    def test_verify_live_rejects_pending_migrations(self) -> None:
+        with tempfile.TemporaryDirectory() as tempDir:
+            paths = self.makeFiles(tempDir)
+            calls = []
+
+            def fakeMysqlCommand(_args, sql):
+                calls.append(sql)
+                if "information_schema.SCHEMATA" in sql:
+                    return "utf8mb4\tutf8mb4_unicode_ci\n"
+                if "information_schema.TABLES" in sql:
+                    return "solari_migration_ledger\n"
+                if "SELECT migration_id,checksum,state" in sql:
+                    return f"001_first\t{paths[0][2]}\tapplied\n"
+                raise AssertionError("verification must not mutate the database")
+
+            args = SimpleNamespace(database="monitoring", check=True, verifyLive=True)
+            with patch.object(migrate, "migrationFiles", return_value=paths), \
+                    patch.object(migrate, "mysqlCommand", side_effect=fakeMysqlCommand):
+                with self.assertRaisesRegex(
+                        RuntimeError, "live ledger has pending migrations: 002_second, 003_third"):
+                    migrate.migrate(args)
+
+            self.assertEqual(3, len(calls))
+            self.assertTrue(all(sql.startswith("SELECT") for sql in calls))
+
+    def test_verify_live_requires_existing_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tempDir:
+            paths = self.makeFiles(tempDir)
+
+            def fakeMysqlCommand(_args, sql):
+                if "information_schema.SCHEMATA" in sql:
+                    return "utf8mb4\tutf8mb4_unicode_ci\n"
+                if "information_schema.TABLES" in sql:
+                    return ""
+                raise AssertionError("verification must not mutate the database")
+
+            args = SimpleNamespace(database="monitoring", check=True, verifyLive=True)
+            with patch.object(migrate, "migrationFiles", return_value=paths), \
+                    patch.object(migrate, "mysqlCommand", side_effect=fakeMysqlCommand):
+                with self.assertRaisesRegex(RuntimeError, "requires an existing migration ledger"):
+                    migrate.migrate(args)
+
     def test_untracked_routine_and_event_only_database_refuses_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tempDir:
             paths = self.makeFiles(tempDir)

@@ -111,6 +111,8 @@ def migrate(args):
         raise RuntimeError("untracked nonempty database; audit and adopt its migration "
                            "history before applying any SQL")
     if LEDGER not in tables and args.check:
+        if getattr(args, "verifyLive", False):
+            raise RuntimeError("live verification requires an existing migration ledger")
         for fileId, _path, checksum in files:
             print(f"PENDING {fileId} {checksum[:12]}")
         return
@@ -131,18 +133,28 @@ def migrate(args):
         if checksum != correct or state != "applied":
             raise RuntimeError(f"checksum mismatch or interrupted migration: {fileId}")
     pendingSeen = False
-    for fileId, _path, _checksum in files:
+    pending = []
+    for fileId, _path, checksum in files:
         if fileId in existing:
             if pendingSeen:
                 raise RuntimeError(f"out-of-order migration history before {fileId}")
         else:
             pendingSeen = True
+            pending.append((fileId, checksum))
+
+    if args.check:
+        if pending and getattr(args, "verifyLive", False):
+            entries = ", ".join(fileId for fileId, _checksum in pending)
+            raise RuntimeError(f"live ledger has pending migrations: {entries}")
+        if pending:
+            for fileId, checksum in pending:
+                print(f"PENDING {fileId} {checksum[:12]}")
+        else:
+            print(f"LEDGER MATCH: {len(existing)} applied migration files")
+        return
 
     for fileId, path, checksum in files:
         if fileId in existing:
-            continue
-        if args.check:
-            print(f"PENDING {fileId} {checksum[:12]}")
             continue
         mysqlCommand(args, f"INSERT INTO {LEDGER} (migration_id,checksum,state) "
                            f"VALUES ({quote(fileId)},{quote(checksum)},'applying');")
@@ -166,11 +178,19 @@ def main():
     parser.add_argument("--port", type=int, help="MariaDB TCP port")
     parser.add_argument("--user", help="MariaDB account; password belongs in an option file")
     parser.add_argument("--check", action="store_true", help="report pending files only")
+    parser.add_argument("--verify-live", dest="verifyLive", action="store_true",
+                        help="require a complete matching ledger and compare live schema to its snapshot")
     args = parser.parse_args()
     if not NAME_RE.fullmatch(args.dbName):
         parser.error("database name must be alphanumeric or underscore")
     try:
+        if args.verifyLive:
+            args.check = True
         migrate(args)
+        if args.verifyLive:
+            from audit_schema import audit
+            if not audit(args):
+                return 1
     except (OSError, RuntimeError, ValueError) as error:
         print(f"migration blocked: {error}", file=sys.stderr)
         return 1
