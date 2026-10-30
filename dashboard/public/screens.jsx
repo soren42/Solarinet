@@ -69,7 +69,10 @@
     let oldest = null;
     const rows = sources.map(function (src) {
       let st = FRESH_RANK[src.state] != null ? src.state : "unknown";
-      const overdue = st === "fresh" && (!src.lastSuccess || now - src.lastSuccess > maxAgeMs);
+      // A future lastSuccess means the wall clock moved backward; its age is
+      // unknowable, so it cannot vouch for liveness.
+      const age = src.lastSuccess ? now - src.lastSuccess : null;
+      const overdue = st === "fresh" && (age == null || age >= maxAgeMs || age < 0);
       if (overdue) st = src.lastSuccess ? "stale" : "unknown";
       if (FRESH_RANK[st] > FRESH_RANK[state]) state = st;
       if (src.lastSuccess && (oldest == null || src.lastSuccess < oldest)) oldest = src.lastSuccess;

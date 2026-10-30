@@ -621,6 +621,9 @@ console.log("\n[12] per-page freshness badge — alerts + nodes pages (F-13/I3)"
     { name: "overdue fresh poll", setup: () => { S.source = "live"; S.lastLiveAt = now - 300000; S.lastAttemptAt = now - 300000;
         S.freshness = { assets: { label: "Monitored assets", state: "fresh", lastSuccess: now - 300000, lastAttempt: now - 300000 } }; },
       state: "stale", text: /^Data freshness: ⚠Stalelast update 5m ago$/ },
+    { name: "clock moved backward (future success)", setup: () => { S.source = "live"; S.lastLiveAt = now + 30000; S.lastAttemptAt = now + 30000;
+        S.freshness = { assets: { label: "Monitored assets", state: "fresh", lastSuccess: now + 30000, lastAttempt: now + 30000 } }; },
+      state: "stale", text: /^Data freshness: ⚠Stale/ },
   ];
   scenarios.forEach((sc) => {
     sc.setup();
