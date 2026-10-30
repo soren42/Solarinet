@@ -128,10 +128,8 @@ return static function (Router $router): void {
             Response::error('confirm_required',
                 'Asset removal deletes its probe targets and history; resend with {"confirm":true}.', 409);
         }
-        $reply = SolariCtl::call('ASSET_REMOVE', [
-            'asset' => (string) $aid,
-            'op'    => $op,
-        ]);
+        $reply = SolariCtl::callQueued('ASSET_REMOVE', ['asset' => (string) $aid],
+                                       $op, ctrl_idem_key(), 15.0);
         Sor::removeHost((string) $cur['ip']);   // soft-delete the SoR host (fail-soft) -> drops from DNS
         Response::ok([
             'assetId' => $aid,
@@ -155,7 +153,8 @@ return static function (Router $router): void {
         if (!is_string($action) || !isset($states[$action])) {
             Response::error('bad_request', 'action must be decommission, delete, or restore.', 400);
         }
-        SolariCtl::call('LIFECYCLE_SET', ['asset' => $aid, 'to' => $states[$action], 'op' => $op]);
+        SolariCtl::callQueued('LIFECYCLE_SET', ['asset' => $aid, 'to' => $states[$action]],
+                              $op, ctrl_idem_key(), 15.0);
         Response::ok(['assetId' => $aid, 'status' => $states[$action]]);
     });
 
@@ -177,7 +176,8 @@ return static function (Router $router): void {
         if (!is_string($confirmName) || $confirmName === '' || $confirmName !== $expectedName) {
             Response::error('confirm_required', 'confirmName must match the current asset name.', 409);
         }
-        SolariCtl::call('ASSET_PURGE', ['asset' => $aid, 'confirm' => $confirmName, 'op' => $op]);
+        SolariCtl::callQueued('ASSET_PURGE', ['asset' => $aid, 'confirm' => $confirmName],
+                              $op, ctrl_idem_key(), 15.0);
         Response::ok(['assetId' => $aid, 'status' => 'purged']);
     });
 
@@ -213,10 +213,8 @@ return static function (Router $router): void {
             Response::error('confirm_required',
                 'Target removal deletes current and historical probe state; resend with {"confirm":true}.', 409);
         }
-        SolariCtl::call('TARGET_REMOVE', [
-            'target' => $targetId,
-            'op'     => $op,
-        ]);
+        SolariCtl::callQueued('TARGET_REMOVE', ['target' => $targetId],
+                              $op, ctrl_idem_key(), 15.0);
         Response::ok(['assetId' => $aid, 'targetId' => $targetId, 'status' => 'removed']);
     });
 };

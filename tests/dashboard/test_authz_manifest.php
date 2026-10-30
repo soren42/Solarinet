@@ -22,6 +22,37 @@ $manifest = json_decode((string) file_get_contents($manifestPath), true);
 if (!is_array($manifest) || !is_array($manifest['phpRoutes'] ?? null)) {
     fail_manifest('manifest JSON/phpRoutes missing or invalid');
 }
+$privileged = [];
+foreach (($manifest['ctlVerbs'] ?? []) as $verb) {
+    if (($verb['class'] ?? '') === 'privileged') $privileged[] = (string) ($verb['verb'] ?? '');
+}
+$routeFiles = glob($API . '/routes/*.php') ?: [];
+$directPattern = '/SolariCtl::(?:call|send)\s*\(\s*[\'\"]([A-Z_]+)[\'\"]/';
+foreach ($routeFiles as $routeFile) {
+    $source = (string) file_get_contents($routeFile);
+    if (preg_match_all($directPattern, $source, $matches)) {
+        foreach ($matches[1] as $verb) {
+            if (in_array($verb, $privileged, true)) {
+                fail_manifest(basename($routeFile) . " calls privileged $verb directly; use REQUEST_SUBMIT");
+            }
+        }
+    }
+}
+$queuedRoutes = [
+    'config.php' => ['CONFIG_SET', 'PROVISION', 'RULE_DEL'],
+    'pools.php' => ['POOL_DEL'],
+    'assets.php' => ['ASSET_REMOVE', 'LIFECYCLE_SET', 'ASSET_PURGE', 'TARGET_REMOVE'],
+];
+foreach ($queuedRoutes as $file => $verbs) {
+    $source = (string) file_get_contents($API . '/routes/' . $file);
+    foreach ($verbs as $verb) {
+        if (!preg_match('/SolariCtl::callQueued\s*\(\s*[\'\"]' . preg_quote($verb, '/') . '[\'\"]/', $source)) {
+            fail_manifest("$file must submit $verb through callQueued / REQUEST_SUBMIT");
+        }
+    }
+}
+$directSites = $manifest['behavior']['privilegedDirectCallSites'] ?? null;
+if ($directSites !== []) fail_manifest('privilegedDirectCallSites must be empty after queue conversion');
 $router = solari_router();
 (require $API . '/routes/auth.php')($router);
 (require $API . '/routes.php')($router);

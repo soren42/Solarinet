@@ -902,7 +902,7 @@
       "destructive": true,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/assets/{assetId}/purge"
+        "POST /api/assets/{assetId}/purge (callQueued poll)"
       ]
     },
     {
@@ -912,7 +912,7 @@
       "destructive": true,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/assets/{assetId}/remove"
+        "POST /api/assets/{assetId}/remove (callQueued poll)"
       ]
     },
     {
@@ -932,7 +932,7 @@
       "destructive": false,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/config"
+        "POST /api/config (callQueued poll)"
       ]
     },
     {
@@ -1059,7 +1059,7 @@
       "destructive": true,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/assets/{assetId}/lifecycle"
+        "POST /api/assets/{assetId}/lifecycle (callQueued poll)"
       ]
     },
     {
@@ -1079,7 +1079,7 @@
       "destructive": true,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/pools/{poolId}/delete"
+        "POST /api/pools/{poolId}/delete (callQueued poll)"
       ]
     },
     {
@@ -1109,8 +1109,8 @@
       "destructive": false,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/control/provision",
-        "POST /api/nodes/{id}/config"
+        "POST /api/control/provision (callQueued poll)",
+        "POST /api/nodes/{id}/config (callQueued poll)"
       ]
     },
     {
@@ -1138,7 +1138,15 @@
         "POST /api/nodes/{nodeId}/retire (callQueued poll)",
         "POST /api/control/deploy (callQueued poll)",
         "POST /api/control/fleet-provision (callQueued poll)",
-        "POST /api/control/fleet-image (callQueued poll)"
+        "POST /api/control/fleet-image (callQueued poll)",
+        "POST /api/assets/{assetId}/purge (callQueued poll)",
+        "POST /api/assets/{assetId}/remove (callQueued poll)",
+        "POST /api/config (callQueued poll)",
+        "POST /api/assets/{assetId}/lifecycle (callQueued poll)",
+        "POST /api/pools/{poolId}/delete (callQueued poll)",
+        "POST /api/rules/{ruleId}/delete (callQueued poll)",
+        "POST /api/assets/{assetId}/targets/{targetId}/remove (callQueued poll)",
+        "POST /api/nodes/{id}/config (callQueued poll)"
       ]
     },
     {
@@ -1156,7 +1164,15 @@
         "POST /api/nodes/{nodeId}/retire",
         "POST /api/control/deploy",
         "POST /api/control/fleet-provision",
-        "POST /api/control/fleet-image"
+        "POST /api/control/fleet-image",
+        "POST /api/assets/{assetId}/purge",
+        "POST /api/assets/{assetId}/remove",
+        "POST /api/config",
+        "POST /api/assets/{assetId}/lifecycle",
+        "POST /api/pools/{poolId}/delete",
+        "POST /api/rules/{ruleId}/delete",
+        "POST /api/assets/{assetId}/targets/{targetId}/remove",
+        "POST /api/nodes/{id}/config"
       ]
     },
     {
@@ -1184,7 +1200,7 @@
       "destructive": true,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/rules/{ruleId}/delete"
+        "POST /api/rules/{ruleId}/delete (callQueued poll)"
       ]
     },
     {
@@ -1224,7 +1240,7 @@
       "destructive": true,
       "mayRunOnStandby": false,
       "phpCallers": [
-        "POST /api/assets/{assetId}/targets/{targetId}/remove"
+        "POST /api/assets/{assetId}/targets/{targetId}/remove (callQueued poll)"
       ]
     }
   ],
@@ -1288,7 +1304,7 @@
     "queue": "Dashboard submits privileged actions with REQUEST_SUBMIT and polls requester-scoped results with REQUEST_GET; the server queue worker executes the inner privileged verb.",
     "standby": "Only PING, REQUEST_GET, and DISCOVER_STATUS may run on standby.",
     "scp": "SCP role is derived from verified certificate CN and message types are checked against that role. Enrollment bearer routes are public at HTTP auth layer but require token validation in the C bridge.",
-    "privilegedDirectCallSites": "Current PHP handlers also attempt privileged direct verbs CONFIG_SET, PROVISION, ASSET_REMOVE, TARGET_REMOVE, LIFECYCLE_SET, ASSET_PURGE, POOL_DEL and RULE_DEL. SO_PEERCRED classifies these as privileged and the dashboard peer is denied; these paths fail closed rather than execute. They are recorded in phpCallers for the corresponding verbs.",
+    "privilegedDirectCallSites": [],
     "contentType": "Routes that parse non-empty JSON request bodies require application/json (optional MIME parameters accepted); other media types receive HTTP 415 before route operations proceed.",
     "sessionRevalidation": "Session age/idle limits revoke expired sessions. Local principals are reloaded from the local account store on each request, and deleted/invalid users are revoked while role changes take effect immediately. OIDC sessions periodically revalidate subject and role claims."
   }

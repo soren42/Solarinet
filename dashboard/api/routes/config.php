@@ -37,10 +37,9 @@ return static function (Router $router): void {
         config_validate($merged);                       // emits 400 on bad ranges
         unset($merged['epoch']);                        // derived; not part of the doc
 
-        $args = ['cfg' => json_encode($merged)];
         $op = Operator::name();
-        if ($op !== '') $args['op'] = $op;
-        $reply = SolariCtl::call('CONFIG_SET', $args);  // C writes; returns epoch=
+        $reply = SolariCtl::callQueued('CONFIG_SET', ['cfg' => json_encode($merged)],
+                                       $op, ctrl_idem_key(), 15.0); // C writes; returns epoch=
 
         Response::ok($merged + ['epoch' => isset($reply['epoch']) ? (int) $reply['epoch'] : null]);
     });
@@ -91,8 +90,7 @@ return static function (Router $router): void {
 
         $op   = Operator::name();
         $args = ['node' => (string) $nodeId, 'epoch' => (string) $epoch, 'cfg' => json_encode($cfg)];
-        if ($op !== '') $args['op'] = $op;
-        SolariCtl::call('PROVISION', $args);            // persists nodeConfig + emits
+        SolariCtl::callQueued('PROVISION', $args, $op, ctrl_idem_key(), 15.0); // persists + emits
 
         Response::ok(['nodeId' => $nodeId, 'config' => $cfg, 'targetEpoch' => $epoch, 'status' => 'pushed']);
     });
@@ -192,10 +190,8 @@ return static function (Router $router): void {
             Response::error('confirm_required',
                 'Rule deletion is permanent; resend with {"confirm":true}.', 409);
         }
-        SolariCtl::call('RULE_DEL', [
-            'rule' => (string) $ruleId,
-            'op'   => $op,
-        ]);
+        SolariCtl::callQueued('RULE_DEL', ['rule' => (string) $ruleId],
+                              $op, ctrl_idem_key(), 15.0);
         Response::ok(['ruleId' => $ruleId, 'status' => 'deleted']);
     });
 };

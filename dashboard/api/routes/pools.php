@@ -91,10 +91,8 @@ return static function (Router $router): void {
             Response::error('confirm_required',
                 'Pool deletion reassigns its assets to Unassigned; resend with {"confirm":true}.', 409);
         }
-        $reply = SolariCtl::call('POOL_DEL', [
-            'pool' => (string) $poolId,
-            'op'   => $op,
-        ]);
+        $reply = SolariCtl::callQueued('POOL_DEL', ['pool' => (string) $poolId],
+                                       $op, ctrl_idem_key(), 15.0);
         Response::ok([
             'poolId'     => $poolId,
             'status'     => 'deleted',
