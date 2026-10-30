@@ -579,6 +579,73 @@ static void test_request_stream_requires_complete_bounded_line(void)
     close(fds[1]);
 }
 
+static ssize_t read_fragmented(const char *bytes, size_t len, size_t split,
+                               int bytewise, char *out, size_t cap)
+{
+    int fds[2];
+    pid_t child;
+    ssize_t got;
+    TEST_ASSERT_EQUAL_INT(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
+    child = fork();
+    TEST_ASSERT_TRUE(child >= 0);
+    if (child == 0) {
+        size_t off = 0;
+        (void)signal(SIGPIPE, SIG_IGN);
+        close(fds[1]);
+        while (off < len) {
+            size_t n = bytewise ? 1 : (off == 0 ? split : len - off);
+            if (n > len - off) n = len - off;
+            {
+                ssize_t wrote = write(fds[0], bytes + off, n);
+                if (wrote < 0 && errno == EPIPE) break;
+                if (wrote != (ssize_t)n) _exit(2);
+            }
+            off += n;
+            (void)usleep(1000); /* keep each test fragment independently readable */
+        }
+        shutdown(fds[0], SHUT_WR);
+        close(fds[0]);
+        _exit(0);
+    }
+    close(fds[0]);
+    got = ctlReadLine(fds[1], out, cap);
+    close(fds[1]);
+    { int status = 0; waitpid(child, &status, 0); TEST_ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0); }
+    return got;
+}
+
+static void test_ctl_line_byte_boundaries(void)
+{
+    static const char valid[] = "PING\r\n";
+    char out[CTL_REQ_CAP];
+    size_t split;
+    for (split = 1; split < sizeof valid - 1; split++) {
+        TEST_ASSERT_EQUAL_INT(sizeof valid - 1,
+            read_fragmented(valid, sizeof valid - 1, split, 0, out, sizeof out));
+        TEST_ASSERT_EQUAL_MEMORY(valid, out, sizeof valid - 1);
+    }
+    TEST_ASSERT_EQUAL_INT(sizeof valid - 1,
+        read_fragmented(valid, sizeof valid - 1, 1, 1, out, sizeof out));
+
+    {
+        char oversized[CTL_REQ_CAP + 2];
+        memset(oversized, 'x', sizeof oversized);
+        oversized[sizeof oversized - 1] = '\n';
+        TEST_ASSERT_EQUAL_INT(-1, read_fragmented(oversized, sizeof oversized,
+            1, 1, out, sizeof out));
+    }
+    {
+        const char nul_line[] = {'P','I','N','G','\0','x','\n'};
+        TEST_ASSERT_EQUAL_INT(-1, read_fragmented(nul_line, sizeof nul_line,
+            2, 0, out, sizeof out));
+    }
+    {
+        const char partial[] = "PING";
+        TEST_ASSERT_EQUAL_INT(-1, read_fragmented(partial, sizeof partial - 1,
+            2, 0, out, sizeof out));
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -604,5 +671,6 @@ int main(void)
     RUN_TEST(test_reply_format);
     RUN_TEST(test_looks_like_csr);
     RUN_TEST(test_request_stream_requires_complete_bounded_line);
+    RUN_TEST(test_ctl_line_byte_boundaries);
     return UNITY_END();
 }

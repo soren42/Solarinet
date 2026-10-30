@@ -1816,6 +1816,9 @@ static ssize_t ctlReadLine(int fd, char *out, size_t cap)
         if (got < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
             continue;
         if (got <= 0) return -1;
+        /* The protocol is textual; accepting NUL would let downstream C
+         * string parsing silently ignore the suffix of a request. */
+        if (memchr(out + used, '\0', (size_t)got) != NULL) return -1;
         if (memchr(out + used, '\n', (size_t)got) != NULL) {
             char *end = memchr(out + used, '\n', (size_t)got);
             size_t line_len = (size_t)(end - out) + 1;

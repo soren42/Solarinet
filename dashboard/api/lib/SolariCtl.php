@@ -266,6 +266,18 @@ final class SolariCtl
         }
 
         // The bridge replies with exactly one '\n'-terminated line then closes.
+        $reply = self::readReplyStream($fp);
+        fclose($fp);
+
+        if ($reply === '' || strpos($reply, "\n") === false) {
+            Response::error('control_unavailable', 'Incomplete reply from operator bridge.', 502);
+        }
+        return $reply;
+    }
+
+    /** Read one bounded newline-terminated reply from an already-open stream. */
+    private static function readReplyStream($fp): string
+    {
         $reply = '';
         while (!feof($fp) && strlen($reply) < self::REPLY_CAP) {
             $chunk = fread($fp, self::REPLY_CAP - strlen($reply));
@@ -280,11 +292,6 @@ final class SolariCtl
             if (strpos($reply, "\n") !== false) {
                 break;
             }
-        }
-        fclose($fp);
-
-        if ($reply === '' || strpos($reply, "\n") === false) {
-            Response::error('control_unavailable', 'Incomplete reply from operator bridge.', 502);
         }
         return $reply;
     }

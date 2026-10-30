@@ -35,4 +35,28 @@ $statusForCode->setAccessible(true);
 assert_true($statusForCode->invoke(null, -1, 'active server required for discovery adoption') === 503,
     'standby/lease role failures should be exposed as retryable service-unavailable responses');
 
+$readStream = $rc->getMethod('readReplyStream');
+$readStream->setAccessible(true);
+$reply = "OK cert=abc\n";
+for ($split = 1; $split < strlen($reply); $split++) {
+    $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+    assert_true(is_array($pair), 'socket pair should be created');
+    fwrite($pair[0], substr($reply, 0, $split));
+    fwrite($pair[0], substr($reply, $split));
+    fclose($pair[0]);
+    assert_true($readStream->invoke(null, $pair[1]) === $reply,
+        'reply should be read across every byte split');
+    fclose($pair[1]);
+}
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+fwrite($pair[0], str_repeat('x', 32768)); fclose($pair[0]);
+assert_true(strpos($readStream->invoke(null, $pair[1]), "\n") === false,
+    'over-cap reply should remain incomplete and be rejected by transact');
+fclose($pair[1]);
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+fwrite($pair[0], 'OK truncated'); fclose($pair[0]);
+assert_true(strpos($readStream->invoke(null, $pair[1]), "\n") === false,
+    'truncated reply should be rejected');
+fclose($pair[1]);
+
 echo "SolariCtl parser/cap tests passed\n";
