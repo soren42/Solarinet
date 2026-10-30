@@ -519,7 +519,7 @@ async function main() {
     await rackwireFrame.getByRole('button', { name: 'Look up', exact: true }).click();
     const barcodeLookup = await barcodeLookupWait;
     uiLatencyMs.rackwireBarcodeLookupCsrfRefreshClickToSuccessResponse = Math.round(performance.now() - actionStartedAt);
-    assert.equal(barcodeLookup.status(), 200, 'RackWire barcode scan must resolve a scanner-imported inventory unit');
+    assert.equal(barcodeLookup.status(), 200, 'RackWire barcode scan must resolve a fixture-seeded inventory unit');
     assert.equal(csrfRetry.firstExpired, true, 'the first barcode request must receive a simulated expired-token rejection');
     assert.equal(csrfRetry.lookupAttempts, 2, 'RackWire must issue exactly one lookup retry');
     assert.equal(csrfRetry.whoamiRefreshes, 2,

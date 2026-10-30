@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Exercise the scanner import panel's file, mapping, preview, and apply flow. */
+/* Exercise inventory paging, RackWire profiles, and identity association. */
 "use strict";
 const fs = require("fs");
 const vm = require("vm");
@@ -71,12 +71,10 @@ async function main() {
     ],
     assets: [{ id: "asset-1", item_id: "item-1", tag: "TAG-1", location: "Nook", status: "in_stock", archived: 0 }],
   };
-  const calls = [];
   const profileCalls = [];
   const entityLinkCalls = [];
   const entityLinkReads = [];
   const navigation = [];
-  const report = { mode: "preview", counts: { "insert.hardware_units": 1 }, warnings: [], fingerprint: "a".repeat(64), locations: { Nook: { id: 9104, name: "Painted Fern" } } };
   const React = reactShim();
   const env = {
     console, Promise, Date, Number, Math, JSON, Object, Array, Set, String,
@@ -85,7 +83,6 @@ async function main() {
         inventory: () => Promise.resolve({ models: [{ id: 1, make: "Acme", model: "Test switch", hw_type: "switch" }],
           units: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, model_id: 1, stock_status: "in_stock" })),
           locations: [{ id: 9103, name: "Painted Fern" }, { id: 9104, name: "Painted Fern" }], receipts: [], projects: [], allocations: [] }),
-        scannerImport: (mode, body) => { calls.push({ mode, body }); return Promise.resolve(mode === "preview" ? report : { mode: "applied", counts: { "insert.hardware_units": 1 }, warnings: [] }); },
         inventoryEntityLink: (unitId, query) => { entityLinkReads.push({ unitId, query }); return Promise.resolve({
           unit: { id: unitId, assetTag: "SCAN-1", serial: "SER-1" }, entity: null,
           candidates: [{ id: 501, name: "chlorine", entityType: "server", lifecycle: "active" }],
@@ -128,39 +125,11 @@ async function main() {
   if (projectCards().length !== 100) throw new Error("project list should render only one 100-entry page");
   all(tree, (n) => n.tag === "button" && text(n) === "Next")[0].props.onClick(); tree = draw();
   if (projectCards().length !== 1) throw new Error("project pagination did not render the final page");
-  const open = all(tree, (n) => n.tag === "button" && n.props && n.props["aria-pressed"] === false && text(n).includes("Scanner import"))[0];
-  if (!open) throw new Error("scanner import section button is missing");
-  open.props.onClick(); tree = draw();
-  const file = all(tree, (n) => n.tag === "input" && n.props && n.props.type === "file")[0];
-  if (!file) throw new Error("JSON export input is missing");
-  file.props.onChange({ target: { files: [{ name: "snapshot.json", size: 1500000 }] } }); tree = draw();
-  if (all(tree, (n) => n.tag === "p" && text(n).includes("no larger than")).length) throw new Error("valid scanner export larger than 1 MiB was rejected");
-  if (!all(tree, (n) => n.tag === "p" && n.props && n.props.role === "note" && text(n).includes("Some SoR locations share a name" )).length) throw new Error("duplicate-location destination warning is missing");
-  const automaticCategory = all(tree, (n) => n.tag === "label" && text(n).startsWith("switch") && all(n, (child) => child.tag === "select").length)[0];
-  if (!automaticCategory || !all(automaticCategory, (n) => n.tag === "option" && text(n) === "Automatic · switch").length) throw new Error("recognized categories do not explain their automatic SoR type");
-  const categoryLabel = all(tree, (n) => n.tag === "label" && text(n).includes("Wi-Fi device") && all(n, (child) => child.tag === "select").length)[0];
-  if (!categoryLabel) throw new Error("unrecognized source category mapping control is missing");
-  const category = all(categoryLabel, (n) => n.tag === "select")[0];
-  if (!all(category, (n) => n.tag === "option" && text(n) === "Automatic · other").length) throw new Error("unrecognized categories do not explain their fallback SoR type");
-  category.props.onChange({ target: { value: "ap" } }); tree = draw();
-  const location = all(tree, (n) => n.tag === "select")[0];
-  if (!location) throw new Error("location mapping control is missing");
-  const locationChoices = all(location, (n) => n.tag === "option").map(text);
-  if (!locationChoices.some((label) => label.includes("#9103 · Painted Fern")) || !locationChoices.some((label) => label.includes("#9104 · Painted Fern"))) throw new Error("duplicate location names are not distinguishable by ID");
-  location.props.onChange({ target: { value: "9104" } }); tree = draw();
-  const preview = all(tree, (n) => n.tag === "button" && text(n).includes("Preview import"))[0];
-  if (!preview) throw new Error("preview action is missing");
-  preview.props.onClick(); await Promise.resolve(); await Promise.resolve(); tree = draw();
-  if (calls.length !== 1 || calls[0].mode !== "preview" || calls[0].body.mapping.locations.Nook !== 9104 || calls[0].body.mapping.categories["Wi-Fi device"] !== "ap") throw new Error("preview did not send the selected location and category mappings");
-  if (!all(tree, (n) => n.tag === "strong" && text(n).includes("Resolved locations")).length || !all(tree, (n) => n.tag === "li" && text(n).includes("#9104 · Painted Fern")).length) throw new Error("preview did not show the selected duplicate-name SoR location");
-  const apply = all(tree, (n) => n.tag === "button" && text(n).includes("Apply import"))[0];
-  if (!apply) throw new Error("apply action is not shown after preview");
-  apply.props.onClick(); await Promise.resolve(); await Promise.resolve(); tree = draw();
-  if (calls.length !== 2 || calls[1].mode !== "apply" || calls[1].body.expectedFingerprint !== report.fingerprint || !all(tree, (n) => n.tag === "strong" && text(n).includes("Import complete")).length) throw new Error("apply did not send the reviewed fingerprint and complete through the API");
-  const configureRackwire = all(tree, (n) => n.tag === "button" && text(n) === "Configure RackWire profiles")[0];
-  if (!configureRackwire) throw new Error("completed scanner import does not offer the RackWire profile handoff");
-  configureRackwire.props.onClick(); tree = draw();
-  if (!all(tree, (n) => n.tag === "h3" && text(n) === "RackWire device profile").length) throw new Error("RackWire profile editor did not open");
+  const componentsTab = all(tree, (n) => n.tag === "button" && text(n) === "Components")[0];
+  componentsTab.props.onClick(); tree = draw();
+  const openProfiles = all(tree, (n) => n.tag === "button" && text(n) === "RackWire device profiles")[0];
+  if (!openProfiles) throw new Error("RackWire profile editor entry is missing");
+  openProfiles.props.onClick(); tree = draw();
   const modelSelect = all(tree, (n) => n.tag === "select" && n.props["aria-label"] === "SoR hardware model")[0];
   if (!modelSelect) throw new Error("RackWire profile editor is missing its SoR model selector");
   modelSelect.props.onChange({ target: { value: "1" } }); tree = draw();
@@ -196,6 +165,6 @@ async function main() {
       || !all(tree, (n) => n.tag === "p" && n.props.role === "status" && text(n).includes("association saved")).length) {
     throw new Error("entity association did not save its selected SoR entity and announce success");
   }
-  console.log("inventory paging, scanner import review/apply, RackWire profile editing, identity association, and handoff flows passed");
+  console.log("inventory paging, RackWire profile editing, identity association, and handoff flows passed");
 }
 main().catch((e) => { console.error(e.message); process.exitCode = 1; });

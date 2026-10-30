@@ -190,8 +190,7 @@
       }).then(function (j) {
         if (!r.ok && !(j && "ok" in j)) throw ApiError("HTTP_" + r.status, "HTTP " + r.status);
         var value = unwrap(j);
-        if (isWrite && typeof path === "string" && path.indexOf("/api/inventory/") === 0
-            && path.indexOf("/scanner-import/preview") < 0) invalidateInventorySnapshot();
+        if (isWrite && typeof path === "string" && path.indexOf("/api/inventory/") === 0) invalidateInventorySnapshot();
         return value;
       });
     });
@@ -329,7 +328,6 @@
 
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // bounded legacy aggregate; browser adapter reads pages below
-    scannerImport: function (mode) { return "/api/inventory/scanner-import/" + (mode === "apply" ? "apply" : "preview"); },
     invUnits:     "/api/inventory/units",    // GET list / POST create
     invComponents:"/api/inventory/components", // paginated hardware-unit list
     invEntityLink: function (id) { return "/api/inventory/components/" + encodeURIComponent(id) + "/entity-link"; },
@@ -1198,7 +1196,6 @@
     // ---- inventory (SoR migration 014) ----
     // Combined read → {models,units,locations,receipts,projects,allocations}.
     inventory:        function (force) { return fetchInventorySnapshot(!!force); },
-    scannerImport:    function (mode, body) { return post(EP.scannerImport(mode), body || {}); },
     inventoryEntityLink: function (unitId, query) {
       var path = EP.invEntityLink(unitId);
       if (query) path += "?q=" + encodeURIComponent(query);

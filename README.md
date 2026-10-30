@@ -16,24 +16,7 @@ freezes new feature work until authorization, identity, durable delivery,
 schema, freshness, and fault-injection gates pass. The [October 2026 baseline](docs/SolariNet_Stabilization_Baseline_2026-10-20.html)
 records what was actually checked and what remains unverified.
 
-The standalone [`scanner-ingest`](../scanner-ingest/README.md) app is an
-authorized inventory-intake subproject tracked as integration workstream I5.
-The standalone app keeps its own SQLite capture store. Its export can be reviewed
-and imported through an operator-only dashboard flow with explicit mapping,
-preview, and a transactional insert-only apply into the SoR. This physical
-asset intake is separate from SolariNet's **real-time network discovery**:
-operators start a bounded asynchronous scan in Discovery, the native scan
-worker records reviewable host candidates, and an explicit adoption sends the
-host and address through monitoring and SoR. RackWire links to that discovery
-workflow and also uses the shared inventory catalog for planning. A discovered
-network host is not automatically a physical inventory asset. See the
-[scanner import guide](docs/SolariNet_Inventory_Scanner_Import.html) and its
-[Letter PDF](docs/SolariNet_Inventory_Scanner_Import.pdf), plus the
-[stabilization baseline](docs/SolariNet_Stabilization_Baseline_2026-10-20.html)
-for verification limits. No production deployment has occurred. A read-only
-live preview on 2026-10-20 found two scanner location labels without exact SoR
-matches and did not write records. The scanner app has a local Git repository,
-but no release remote is configured yet.
+The one-time scanner-ingest import into the SoR is complete; the dashboard import feature and guide have been retired. See the [stabilization baseline](docs/SolariNet_Stabilization_Baseline_2026-10-20.html) for historical verification limits.
 
 The UniFi API integration continues to poll device health and rates for the
 monitoring panel. Its separate topology collector can now compare VLAN,

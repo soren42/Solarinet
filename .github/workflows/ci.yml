@@ -593,7 +593,7 @@ jobs:
           node tests/dashboard/test_jsx_parse.js
           node tests/dashboard/test_ca_crl_ui.js
           node tests/dashboard/test_layout.js
-          node tests/dashboard/test_scanner_import_ui.js
+          node tests/dashboard/test_inventory_rackwire_ui.js
           node tests/dashboard/test_capability_maturity.js
       - name: Dashboard cold/warm JSX cache profile
         env:
@@ -730,7 +730,7 @@ jobs:
           SOR_DB_USER: root
           SOR_DB_PASS: rwci_scratch
         run: php tests/dashboard/test_sor_transactions.php
-      - name: Scanner snapshot SoR preview, import, replay, and rollback
+      - name: RackWire barcode HTTP and retired route contract
         env:
           SOLARI_TEST_SOR_DB: '1'
           SOR_DB_HOST: 127.0.0.1
@@ -738,17 +738,8 @@ jobs:
           SOR_DB_NAME: solarinet_stage
           SOR_DB_USER: root
           SOR_DB_PASS: rwci_scratch
-        run: php tests/dashboard/test_scanner_import.php
-      - name: Scanner import through authenticated dashboard HTTP routes
-        env:
-          SOLARI_TEST_SOR_DB: '1'
-          SOR_DB_HOST: 127.0.0.1
-          SOR_DB_PORT: '3306'
-          SOR_DB_NAME: solarinet_stage
-          SOR_DB_USER: root
-          SOR_DB_PASS: rwci_scratch
-        run: php tests/dashboard/test_scanner_import_http.php
-      - name: Scanner and RackWire integration through the authenticated dashboard browser flow
+        run: php tests/dashboard/test_rackwire_barcode_http.php
+      - name: RackWire inventory integration through the authenticated dashboard browser flow
         env:
           NODE_PATH: /tmp/dashboard-playwright/node_modules
           SOLARI_TEST_SOR_DB: '1'
@@ -757,7 +748,7 @@ jobs:
           SOR_DB_NAME: solarinet_stage
           SOR_DB_USER: root
           SOR_DB_PASS: rwci_scratch
-        run: node tests/browser/test_scanner_import_e2e.cjs
+        run: node tests/browser/test_rackwire_inventory_e2e.cjs
       - name: Authenticated browser acceptance against the packaged release tree
         env:
           NODE_PATH: /tmp/dashboard-playwright/node_modules

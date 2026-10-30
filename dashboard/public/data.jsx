@@ -638,7 +638,6 @@
     capabilities: [
       { id: "monitoring-console", name: "Monitoring console", maturity: "lab", routes: ["fleet", "assets", "node", "asset", "service", "alerts", "reachability", "topology", "maintenance", "git", "dns"] },
       { id: "inventory-sor", name: "Inventory system of record", maturity: "authoritative", routes: ["inventory"], note: "Authoritative inventory records are held in the SoR." },
-      { id: "scanner-import", name: "Scanner intake", maturity: "lab", routes: ["codes"], note: "Scanner observations remain staged until an operator reviews and applies an import." },
       { id: "rackwire-integration", name: "RackWire integration", maturity: "lab", routes: ["rackwire"] },
       { id: "discovery-intake", name: "Discovery intake", maturity: "lab", routes: ["discovery"] },
       { id: "provisioning", name: "Provisioning", maturity: "lab", routes: ["provision"] },
@@ -655,7 +654,7 @@
     ],
     routes: {
       fleet: "monitoring-console", assets: "monitoring-console", node: "monitoring-console", asset: "monitoring-console", service: "monitoring-console", alerts: "monitoring-console", reachability: "monitoring-console", topology: "monitoring-console", maintenance: "monitoring-console", git: "monitoring-console", dns: "monitoring-console",
-      inventory: "inventory-sor", codes: "scanner-import", rackwire: "rackwire-integration", discovery: "discovery-intake", provision: "provisioning", opie: "opie-analysis", certificates: "certificate-operations", settings: "configuration", panel: "panel",
+      inventory: "inventory-sor", codes: "inventory-sor", rackwire: "rackwire-integration", discovery: "discovery-intake", provision: "provisioning", opie: "opie-analysis", certificates: "certificate-operations", settings: "configuration", panel: "panel",
     },
   };
 

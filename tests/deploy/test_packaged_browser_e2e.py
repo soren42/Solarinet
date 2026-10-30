@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = ROOT / "deploy/dashboard/package-release.py"
 INSTALLER = ROOT / "deploy/dashboard/install-release.py"
-BROWSER_TEST = ROOT / "tests/browser/test_scanner_import_e2e.cjs"
+BROWSER_TEST = ROOT / "tests/browser/test_rackwire_inventory_e2e.cjs"
 
 
 def main() -> int:

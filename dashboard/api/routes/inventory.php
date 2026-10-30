@@ -92,7 +92,6 @@ declare(strict_types=1);
 require_once __DIR__ . '/../lib/Sor.php';
 require_once __DIR__ . '/../lib/Operator.php';
 require_once __DIR__ . '/../lib/Coerce.php';
-require_once __DIR__ . '/../lib/ScannerImport.php';
 
 return static function (Router $router): void {
 
@@ -116,40 +115,6 @@ return static function (Router $router): void {
             'allocations' => array_map('inv_allocation_row', $allocations),
         ]);
     });
-
-    // Import a portable scanner-ingest snapshot through the authenticated SoR
-    // boundary. Both paths require an operator and same-origin CSRF via Policy.
-    foreach (['preview' => false, 'apply' => true] as $mode => $apply) {
-        $router->post('/api/inventory/scanner-import/' . $mode, static function () use ($apply): void {
-            $length = filter_var($_SERVER['CONTENT_LENGTH'] ?? null, FILTER_VALIDATE_INT);
-            if (is_int($length) && $length > ScannerImport::MAX_REQUEST_BYTES) Response::error('payload_too_large', 'Scanner snapshot exceeds 4 MiB.', 413);
-            $operator = Operator::requireOperator();
-            $body = solari_json_body(ScannerImport::MAX_REQUEST_BYTES);
-            $snapshot = $body['snapshot'] ?? null;
-            $mapping = $body['mapping'] ?? [];
-            if (!is_array($snapshot) || !is_array($mapping)) Response::error('bad_request', 'Provide a scanner snapshot and mapping object.', 400);
-            $expectedFingerprint = $body['expectedFingerprint'] ?? null;
-            if ($apply && (!is_string($expectedFingerprint) || !preg_match('/\A[a-f0-9]{64}\z/', $expectedFingerprint))) {
-                Response::error('bad_request', 'Preview the import again before applying it.', 400);
-            }
-            try {
-                $report = ScannerImport::run(Sor::db(), $operator, $snapshot, $mapping, $apply,
-                    isset($body['repairStatus']) && $body['repairStatus'] !== '' ? (string) $body['repairStatus'] : null,
-                    isset($body['unmappedLocation']) ? (string) $body['unmappedLocation'] : 'error', $expectedFingerprint);
-            } catch (InvalidArgumentException $e) {
-                Response::error('bad_request', $e->getMessage(), 400);
-            } catch (PDOException $e) {
-                error_log('[scanner-import] database error: ' . $e->getMessage());
-                Response::error('scanner_import_failed', 'Scanner import could not reach the SoR; no partial transaction was committed.', 503);
-            } catch (RuntimeException $e) {
-                Response::error('scanner_import_conflict', $e->getMessage(), 409);
-            } catch (Throwable $e) {
-                error_log('[scanner-import] ' . $e->getMessage());
-                Response::error('scanner_import_failed', 'Scanner import failed; no partial transaction was committed.', 500);
-            }
-            Response::ok($report, 200);
-        });
-    }
 
     // ==================================================================
     // components (hardware_units)

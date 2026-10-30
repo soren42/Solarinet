@@ -318,7 +318,6 @@
       ["locations", "Locations", "location"],
       ["receipts", "Receipts", "receipt"],
       ["projects", "Projects", "project"],
-      ["scanner", "Scanner import", "tag2"],
     ];
 
     return (
@@ -343,95 +342,9 @@
         {tab === "locations" && <LocationsTab inv={inv} h={helpers} act={actions} />}
         {tab === "receipts" && <ReceiptsTab inv={inv} h={helpers} act={actions} onView={setViewer} />}
         {tab === "projects" && <ProjectsTab inv={inv} h={helpers} act={actions} />}
-        {tab === "scanner" && <ScannerImportTab inv={inv} onImported={loadInventory} onNavigate={onNavigate} onConfigureRackWireProfiles={openRackWireProfiles} />}
 
         {viewer && <ReceiptViewer receipt={viewer} inv={inv} h={helpers} onClose={function () { setViewer(null); }} />}
       </div>
-    );
-  }
-
-  function ScannerImportTab({ inv, onImported, onNavigate, onConfigureRackWireProfiles }) {
-    const [snapshot, setSnapshot] = useState(null);
-    const [filename, setFilename] = useState("");
-    const [locations, setLocations] = useState({});
-    const [models, setModels] = useState({});
-    const [categories, setCategories] = useState({});
-    const [repairStatus, setRepairStatus] = useState("");
-    const [unmappedLocation, setUnmappedLocation] = useState("error");
-    const [report, setReport] = useState(null);
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState("");
-    const [done, setDone] = useState(false);
-    const sourceLocations = snapshot ? Array.from(new Set(snapshot.assets.filter(function (a) { return a.archived !== 1 && a.location; }).map(function (a) { return a.location; }))).sort() : [];
-    const seenSoRLocationNames = new Set();
-    const duplicateSoRLocationNames = new Set();
-    inv.locations.forEach(function (location) {
-      if (seenSoRLocationNames.has(location.name)) duplicateSoRLocationNames.add(location.name);
-      seenSoRLocationNames.add(location.name);
-    });
-    const hasDuplicateLocationNames = duplicateSoRLocationNames.size > 0;
-    const sourceItems = snapshot ? snapshot.items.filter(function (i) { return i.archived !== 1; }) : [];
-    const sourceCategories = snapshot ? Array.from(new Set(sourceItems.map(function (item) { return item.category; }).filter(function (category) { return typeof category === "string" && category !== ""; }))).sort() : [];
-    function clearReview() { setReport(null); setError(""); setDone(false); }
-    function readFile(event) {
-      const file = event.target.files && event.target.files[0];
-      clearReview(); setSnapshot(null); setFilename(""); setLocations({}); setModels({}); setCategories({}); setRepairStatus("");
-      if (!file) return;
-      if (file.size > 4 * 1024 * 1024) { setError("Choose a scanner export no larger than 4 MiB."); return; }
-      const reader = new FileReader();
-      reader.onload = function () {
-        try {
-          const data = JSON.parse(String(reader.result));
-          if (!data || data.schema_version !== 1 || !Array.isArray(data.items) || !Array.isArray(data.assets)) throw new Error("This is not a scanner-ingest schema version 1 export.");
-          setSnapshot(data); setFilename(file.name);
-        } catch (e) { setError(e.message || "Could not read this JSON export."); }
-      };
-      reader.onerror = function () { setError("The selected file could not be read."); };
-      reader.readAsText(file);
-    }
-    function request(mode) {
-      const a = api();
-      if (isOffline() || !a || !a.scannerImport) { setError("Scanner import requires a live, authenticated dashboard session."); return; }
-      setBusy(true); setError("");
-      const mapping = { locations: {}, models: {}, categories: {} };
-      Object.keys(locations).forEach(function (key) { if (locations[key]) mapping.locations[key] = Number(locations[key]); });
-      Object.keys(models).forEach(function (key) { if (models[key]) mapping.models[key] = Number(models[key]); });
-      Object.keys(categories).forEach(function (key) { if (categories[key]) mapping.categories[key] = categories[key]; });
-      a.scannerImport(mode, { snapshot: snapshot, mapping: mapping, repairStatus: repairStatus, unmappedLocation: unmappedLocation,
-        expectedFingerprint: mode === "apply" && report ? report.fingerprint : undefined })
-        .then(function (result) { setReport(result); if (mode === "apply") { setDone(true); toast("Scanner snapshot imported into the SoR", "check"); refresh(); if (onImported) onImported(true).catch(function () { setError("Import completed, but the inventory view could not refresh. Reload the dashboard to see the imported records."); }); } })
-        .catch(function (e) { setError((e && e.message) || "Scanner import failed."); setReport(null); })
-        .finally(function () { setBusy(false); });
-    }
-    function selectStyle() { return Object.assign({}, FLD, { maxWidth: 440 }); }
-    return (
-      <section className="panel" aria-labelledby="scanner-import-title">
-        <div className="panel__head"><Icon name="tag2" size={16} /><h3 id="scanner-import-title">Import a scanner-ingest export</h3><span className="right">authenticated SoR intake</span></div>
-        <div className="panel__body">
-          <p className="muted">Export JSON from the standalone scanner app, then review the proposed additions here. Imports add inventory with provenance and never overwrite existing SoR records. The scanner keeps its local capture database. RackWire shares this SoR inventory and barcode registry; configure a model’s RackWire device profile from Components before planning its ports.</p>
-          <label style={LBL}>Scanner JSON export<input type="file" accept="application/json,.json" onChange={readFile} style={{ display: "block", marginTop: 7 }} /></label>
-          {filename && snapshot && <p role="status" style={{ marginTop: 8 }}>{filename}: {snapshot.items.length} catalog items, {snapshot.assets.length} assets.</p>}
-          {snapshot && <>
-            {sourceLocations.length > 0 && <div style={{ marginTop: 18 }}><strong>Location matching</strong><p className="muted">Exact unique SoR names match automatically. Choose a destination for duplicate or differently named locations, or explicitly preserve an unmatched source label in asset notes.</p>
-              {hasDuplicateLocationNames && <p role="note" className="muted">Some SoR locations share a name. Options include the row ID; verify the physical destination before selecting one.</p>}
-              {sourceLocations.map(function (name) { return <label key={name} style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>{name}<select aria-label={"SoR destination for source location " + name} value={locations[name] || ""} onChange={function (e) { setLocations(Object.assign({}, locations, { [name]: e.target.value })); clearReview(); }} style={selectStyle()}><option value="">Match exact unique name</option>{inv.locations.map(function (l) { return <option key={l.id} value={l.id}>#{l.id} · {l.name}{l.code ? " (" + l.code + ")" : ""}</option>; })}</select></label>; })}
-              <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>If a source location has no matching SoR location<select aria-label="How to handle an unmatched scanner location" value={unmappedLocation} onChange={function (e) { setUnmappedLocation(e.target.value); clearReview(); }} style={selectStyle()}><option value="error">Stop and require a mapping</option><option value="notes">Keep source location in notes; leave destination empty</option></select></label>
-            </div>}
-            {sourceItems.length > 0 && <details style={{ marginTop: 18 }}><summary>Match catalog items to existing SoR models (optional)</summary><p className="muted">Unmatched items are added as new models. Use this only when the existing model represents the same item.</p>
-              {sourceItems.map(function (item) { return <label key={item.id} style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>{item.name || item.model || item.id}<select value={models[item.id] || ""} onChange={function (e) { setModels(Object.assign({}, models, { [item.id]: e.target.value })); clearReview(); }} style={selectStyle()}><option value="">Add or reuse exact make/model</option>{inv.models.map(function (m) { return <option key={m.id} value={m.id}>#{m.id} · {m.make} {m.model}</option>; })}</select></label>; })}
-            </details>}
-            {sourceCategories.length > 0 && <details style={{ marginTop: 18 }}><summary>Map source categories to SoR hardware types (optional)</summary><p className="muted">Automatic matching uses a category that exactly matches a SoR type, ignoring case; unknown categories become “other”. Overrides apply only when a new model is created. Models you match above keep their existing type.</p>
-              {sourceCategories.map(function (category) { const automatic = HW_TYPES.indexOf(category.toLowerCase()) >= 0 ? category.toLowerCase() : "other"; return <label key={category} style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>{category}<select value={categories[category] || ""} onChange={function (e) { setCategories(Object.assign({}, categories, { [category]: e.target.value })); clearReview(); }} style={selectStyle()}><option value="">Automatic · {automatic}</option>{HW_TYPES.map(function (type) { return <option key={type} value={type}>{type}</option>; })}</select></label>; })}
-            </details>}
-            {snapshot.assets.some(function (asset) { return asset.archived !== 1 && asset.status === "repair"; }) && <label style={Object.assign({}, LBL, { textTransform: "none", letterSpacing: 0 })}>Assets marked for repair<select value={repairStatus} onChange={function (e) { setRepairStatus(e.target.value); clearReview(); }} style={selectStyle()}><option value="">Stop until resolved</option><option value="in_stock">Import as in stock</option><option value="retired">Import as retired</option></select></label>}
-            <div style={{ display: "flex", gap: 10, marginTop: 20, flexWrap: "wrap" }}><button className="btn-primary" disabled={busy || done} onClick={function () { request("preview"); }}>{busy ? "Working…" : "Preview import"}</button>{report && !done && <button className="btn-primary" disabled={busy} onClick={function () { request("apply"); }}>Apply import</button>}</div>
-          </>}
-          {error && <div role="alert" style={{ color: "var(--crit)", marginTop: 14 }}>{error}</div>}
-          {report && <div role="status" style={{ marginTop: 18 }}><strong>{done ? "Import complete" : "Preview ready"}</strong><dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: "8px 18px" }}>{Object.keys(report.counts || {}).sort().map(function (key) { return <div key={key}><dt className="muted">{key.replace(/[._]/g, " ")}</dt><dd style={{ margin: 0, fontVariantNumeric: "tabular-nums" }}>{report.counts[key]}</dd></div>})}</dl>{report.locations && Object.keys(report.locations).length > 0 && <div style={{ marginTop: 12 }}><strong>Resolved locations</strong><ul>{Object.keys(report.locations).sort().map(function (source) { const target = report.locations[source]; return <li key={source}>{source} → {target.id === null ? "notes only; no SoR location" : "#" + target.id + " · " + target.name}</li>})}</ul></div>}{report.warnings && report.warnings.map(function (warning) { return <p key={warning} className="muted">{warning}</p>})}</div>}
-          {done && typeof onConfigureRackWireProfiles === "function" && <button type="button" className="btn-ghost" style={{ marginTop: 14 }} onClick={onConfigureRackWireProfiles}>Configure RackWire profiles</button>}
-          {done && typeof onNavigate === "function" && <button type="button" className="btn-ghost" style={{ marginTop: 14 }} onClick={function () { onNavigate("rackwire"); }}>Open RackWire to plan this inventory</button>}
-        </div>
-      </section>
     );
   }
 

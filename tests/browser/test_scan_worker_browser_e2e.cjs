@@ -446,7 +446,7 @@ async function main() {
 
     // Exercise the operator's candidate-ingest action end to end. Discovery
     // adoption creates a monitored host and mirrors its address into the SoR;
-    // physical assets still enter through the separate scanner-import flow.
+    // physical asset intake is outside this network discovery flow.
     const adoptedName = `${REQUESTER}-adopted-${process.pid}`;
     await page.locator('tr').filter({ hasText: SCAN_TARGET }).getByRole('button', { name: 'Monitor', exact: true }).click();
     await page.getByPlaceholder(SCAN_TARGET).fill(adoptedName);
@@ -460,7 +460,7 @@ async function main() {
     const sorMappedAddress = `::ffff:${SCAN_TARGET}`;
     const sorAddress = sql(db.sor, `SELECT COUNT(*) FROM entities e JOIN ip_addresses a ON a.entity_id=e.id WHERE a.address=INET6_ATON(${quote(sorMappedAddress)}) AND e.name=${quote(adoptedName)} AND a.deleted_at IS NULL AND e.deleted_at IS NULL`);
     assert.equal(sorAddress, '1', 'operator candidate ingest must mirror the host and address into the SoR');
-    console.log(`RackWire-to-native-worker browser E2E passed: ${SCAN_CIDR}, ${scanDone}/${scanTotal} hosts, ${scanFound} candidates, idempotent lost-response retry, database recovery after sessionStorage loss, live status polling, RackWire handoff, candidate adoption into monitoring/SoR, and physical scanner-import separation${NETWORK_SCAN ? ' before terminal completion' : ''}.`);
+    console.log(`RackWire-to-native-worker browser E2E passed: ${SCAN_CIDR}, ${scanDone}/${scanTotal} hosts, ${scanFound} candidates, idempotent lost-response retry, database recovery after sessionStorage loss, live status polling, RackWire handoff, candidate adoption into monitoring/SoR, and inventory integration separation${NETWORK_SCAN ? ' before terminal completion' : ''}.`);
   } finally {
     if (browser) await browser.close();
     await stop(php);

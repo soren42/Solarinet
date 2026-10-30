@@ -26,8 +26,7 @@ GRANT SELECT, INSERT, DELETE ON `sor`.`rw_plan_versions` TO 'solari_dashboard'@'
 GRANT SELECT, INSERT, UPDATE ON `sor`.`rw_model_groups` TO 'solari_dashboard'@'10.0.0.20';
 
 -- Entity-link edits record provenance in the same transaction; append-only.
--- external_refs stays denied: only the retiring one-time scanner import
--- writes it, and that runs under the privileged SoR account.
+-- external_refs remains denied; the one-time scanner import is retired.
 GRANT INSERT ON `sor`.`audit_log` TO 'solari_dashboard'@'10.0.0.20';
 
 GRANT SELECT ON `sor`.`interfaces` TO 'solari_dashboard'@'10.0.0.20';
