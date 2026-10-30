@@ -337,11 +337,20 @@ static void test_legacy_report_admitted_only_one_way_and_opted_in(void)
     /* default: a session-less report is rejected */
     TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
 
-    /* opted in: admitted once as legacy, its replay is dropped */
+    /* opted in: admitted as legacy; admission alone does not mark the seqNo,
+     * so a write that failed can be retried. Once committed, a replay drops. */
     cfg.allowLegacyReports = true;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
     TEST_ASSERT_TRUE(receipt.legacy);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
+    serverDedupMark(header.sourceNodeId, header.seqNo, 1);
     TEST_ASSERT_EQUAL_INT(ERR_CONN_RETRY, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
+
+    /* survey responses are never legacy */
+    header.msgType = SCP_MSG_SURVEY_RESP;
+    header.seqNo = 11;
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
+    header.msgType = SCP_MSG_CLIENT_REPORT;
 
     /* an ACK-requesting sender must carry a session even when opted in */
     header.seqNo = 10;

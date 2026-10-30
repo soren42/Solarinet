@@ -226,10 +226,9 @@ static serverDedupSource *serverDedupSlot(uint64_t nodeId, uint64_t nowMs)
     return s;
 }
 
-/* True if (nodeId, seqNo) was seen recently. On a miss, records it and returns
- * false. Pure aside from the static ring; safe to call with nodeId==0 (always a
- * miss, never recorded, since a 0 source id is not a real enrolled node). */
-static bool serverDedupSeen(uint64_t nodeId, uint32_t seqNo, uint64_t nowMs)
+/* True if (nodeId, seqNo) is in the source's recent ring. nodeId 0 is not a
+ * real enrolled node, so it is always a miss. */
+static bool serverDedupHas(uint64_t nodeId, uint32_t seqNo, uint64_t nowMs)
 {
     serverDedupSource *s;
     uint16_t i;
@@ -240,10 +239,29 @@ static bool serverDedupSeen(uint64_t nodeId, uint32_t seqNo, uint64_t nowMs)
     for (i = 0; i < s->fill; ++i) {
         if (s->seq[i] == seqNo) return true;
     }
+    return false;
+}
 
+/* Record (nodeId, seqNo) without a lookup; callers check serverDedupHas first. */
+static void serverDedupMark(uint64_t nodeId, uint32_t seqNo, uint64_t nowMs)
+{
+    serverDedupSource *s;
+
+    if (nodeId == 0) return;
+
+    s = serverDedupSlot(nodeId, nowMs);
     s->seq[s->head] = seqNo;
     s->head = (uint16_t)((s->head + 1u) % SERVER_DEDUP_WINDOW);
     if (s->fill < SERVER_DEDUP_WINDOW) s->fill++;
+}
+
+/* True if (nodeId, seqNo) was seen recently. On a miss, records it and returns
+ * false. Pure aside from the static ring; safe to call with nodeId==0 (always a
+ * miss, never recorded, since a 0 source id is not a real enrolled node). */
+static bool serverDedupSeen(uint64_t nodeId, uint32_t seqNo, uint64_t nowMs)
+{
+    if (serverDedupHas(nodeId, seqNo, nowMs)) return true;
+    serverDedupMark(nodeId, seqNo, nowMs);
     return false;
 }
 
@@ -440,17 +458,20 @@ static solariStatus serverReportIdentity(const solariFrameHeader *hdr,
 }
 
 /* Identity for a durable report. A legacy report has no receipt, so it falls
- * back to the in-memory seqNo replay guard; a replay is ERR_CONN_RETRY. */
+ * back to the in-memory seqNo replay guard; a replay is ERR_CONN_RETRY. The
+ * caller marks the seqNo only after commit, so a failed write is not mistaken
+ * for a replay. Survey responses never predate sessions and stay strict. */
 static solariStatus serverReportAdmit(serverContext *ctx,
                                       const solariFrameHeader *hdr,
                                       const uint8_t *payload, size_t len,
                                       serverReportReceipt *receipt)
 {
-    solariStatus rc = serverReportIdentity(hdr, payload, len,
-                                           ctx->cfg && ctx->cfg->allowLegacyReports,
-                                           receipt);
+    bool allowLegacy = ctx->cfg && ctx->cfg->allowLegacyReports &&
+                       (hdr->msgType == SCP_MSG_CLIENT_REPORT ||
+                        hdr->msgType == SCP_MSG_MONITOR_REPORT);
+    solariStatus rc = serverReportIdentity(hdr, payload, len, allowLegacy, receipt);
     if (rc != SOLARI_OK || !receipt->legacy) return rc;
-    if (serverDedupSeen(hdr->sourceNodeId, hdr->seqNo, solariNowUnixMs()))
+    if (serverDedupHas(hdr->sourceNodeId, hdr->seqNo, solariNowUnixMs()))
         return ERR_CONN_RETRY;
     solariLogf(SOLARI_LOG_DEBUG, "ingest legacy report src=0x%llx seq=%u msgType=0x%02x",
                (unsigned long long)hdr->sourceNodeId, (unsigned)hdr->seqNo,
@@ -489,6 +510,8 @@ static solariStatus serverIngestClientReport(serverContext *ctx,
                    (unsigned long long)hdr->sourceNodeId, solariStrError(rc));
         return rc;
     }
+    if (receipt.legacy)
+        serverDedupMark(hdr->sourceNodeId, hdr->seqNo, solariNowUnixMs());
 
     /* A client that just reported is, by definition, reachable: mark it up and
      * advance lastSeenAt so the dashboard reflects a live agent (best-effort;
@@ -536,6 +559,8 @@ static solariStatus serverIngestMonitorReport(serverContext *ctx,
                    (unsigned long long)hdr->sourceNodeId, solariStrError(rc));
         return rc;
     }
+    if (receipt.legacy)
+        serverDedupMark(hdr->sourceNodeId, hdr->seqNo, solariNowUnixMs());
 
     rc = serverMasterReconcile(ctx, hdr->sourceNodeId, &rep);
     if (rc != SOLARI_OK)
