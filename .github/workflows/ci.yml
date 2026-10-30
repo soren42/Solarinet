@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOLARINET_ACME_RUN_ID: ${{ github.run_id }}-acme-integration
+      SOLARINET_ACME_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-acme-integration
     steps:
       - uses: actions/checkout@v4
       - name: Run the disposable step-ca and Apache lifecycle test

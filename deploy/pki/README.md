@@ -156,11 +156,20 @@ trust path. The current recommendation is a separate web-only `step-ca` using
 its own pathLen=0 intermediate, with critical DNS name constraints, signed
 directly by the existing root. This preserves the existing browser root while
 isolating the web authority's strict DNS allowlist and HTTP-01-only policy.
+The disposable pilot now verifies this chain shape with a fresh pathLen=1 root,
+a pathLen=0 web intermediate, and critical DNS constraints: OpenSSL accepts
+the permitted service leaf and a name below it, rejects a sibling DNS leaf,
+and rejects a nested CA chain for exceeding pathLen=0. The simulated root key
+is removed before the online test CA starts.
+In production, the CA authority policy still matters: DNS name constraints are
+subtree constraints over DNS names, while the exact DNS-only authority policy
+also rejects other SAN types. Smallstep documents that allowing one X.509 name
+type denies other name types in its [policy reference](https://smallstep.com/docs/step-ca/policies/).
 The root has `pathLen=1`, so this chain depth is possible, but root-key custody
-and name-constraint enforcement across browsers remain unverified and the
-offline signing ceremony is not planned or approved yet. If it cannot be done
-safely, use a separate web root and account for the added trust installation.
-No live CA policy or provisioner was changed. Do not
+and browser enforcement remain unverified and the offline signing ceremony is
+not planned or approved yet. If it cannot be done safely, use a separate web
+root and account for the added trust installation. No live CA policy or
+provisioner was changed. Do not
 assume that a per-provisioner name policy is available in self-hosted step-ca;
 the [policy reference](https://smallstep.com/docs/step-ca/policies/) documents
 the authority-wide limit.

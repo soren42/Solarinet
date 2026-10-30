@@ -21,14 +21,24 @@ Certbot ACME enrollment/deploy helper, a dedicated private-CA renewal
 service/timer, and Apache/nginx HTTP-01 webroot examples. Its focused tests
 cover exact SAN and domain checks, Certbot-style lineage validation,
 certificate/key/chain checks, path and file permissions, atomic activation,
-and rollback after reload failure. On 2026-10-24, the complete opt-in
-step-ca/Certbot/Apache integration passed locally: HTTP-01 issuance, HTTPS,
-denial of an unapproved challengeable name, forced renewal, service reload,
-rollback after an injected config-test failure, and recovery. GitHub Actions
-run `40117491695` also passed the code candidate's full matrix. This is
-disposable-CA evidence only: the helper has not been enrolled against
-Chlorine or installed on a live web host. Browser trust on devices, real
-service cutover, external expiry alerts, and fleet rollout remain undone.
+and rollback after reload failure. On 2026-10-24, the opt-in step-ca/Certbot/
+Apache pilot passed locally with a disposable pathLen=1 root and a sibling
+pathLen=0 web intermediate carrying critical DNS name constraints. OpenSSL
+accepted the permitted leaf and a subdomain chain, rejected a sibling DNS name
+for a permitted-subtree violation, and rejected a nested-CA chain for exceeding
+pathLen=0. This demonstrates why the exact DNS allow policy is still required
+alongside DNS subtree constraints. The test removed the disposable root
+signing key before starting the online CA, then passed HTTP-01 issuance, trusted
+HTTPS, denial of an unapproved challengeable name, forced renewal, service
+reload, rollback after an injected config-test failure, and recovery. The test
+also asserts that the disposable configuration contains only the exact DNS
+allow policy and an ACME provisioner configured for HTTP-01; it does not test
+step-ca's response to alternate challenge types. These are test-root/OpenSSL
+and disposable-service results only: the helper has not been enrolled against
+Chlorine or installed on a live web host. Browser enforcement of name
+constraints, browser trust on devices, real service cutover, external expiry
+alerts, and fleet rollout remain **UNVERIFIED**. CI for this revision is
+recorded with the release candidate.
 
 ## Observed current state
 
@@ -353,8 +363,9 @@ SHA-1, and excessive lifetime; an acceptance test covers P-256. All 34 focused
 PKI tests and the disposable step-ca/Certbot/Apache integration passed after
 the change. GitHub Actions runs `40117491695` (code commit `defb7f1`),
 `40118388636` (`b6d58ff`), and `40118805909` (`bb039d8`) all completed with all
-jobs passing. The current local F-10 revision is documentation-only and is not
-covered by those runs; runtime code is unchanged.
+jobs passing. The name-constrained intermediate revision changes
+`deploy/pki/acme_integration.py` and is not covered by those runs; CI for it is
+recorded with the release candidate.
 Forgejo hosted execution remains unavailable because Cesium has no Forgejo
 runner service.
 

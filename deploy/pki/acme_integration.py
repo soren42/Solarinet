@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 
@@ -25,7 +27,7 @@ DENIED_NAME = "unapproved-solarinet-ci.invalid"
 CA_NAME = "ca.solarinet.test"
 LINEAGE = "acme-solarinet-ci.invalid"
 SERVICE_ID = "acme_web"
-RUN_ID = os.environ.get("SOLARINET_ACME_RUN_ID") or secrets.token_hex(4)
+RUN_ID = os.environ.get("SOLARINET_ACME_RUN_ID") or secrets.token_hex(8)
 if not all(ch.isalnum() or ch in "_.-" for ch in RUN_ID):
     raise SystemExit("SOLARINET_ACME_RUN_ID contains unsafe characters")
 RESOURCE_LABEL = f"solarinet.acme-ci={RUN_ID}"
@@ -132,6 +134,180 @@ def write_ca_config(ca_home: pathlib.Path) -> None:
         "x509": {"allow": {"dns": [ALLOWED_NAME]}}
     }
     path.write_text(json.dumps(config, indent=2) + "\n")
+    written = json.loads(path.read_text())
+    if written["authority"]["policy"]["x509"] != {"allow": {"dns": [ALLOWED_NAME]}}:
+        raise RuntimeError("web CA policy must allow only the exact configured DNS name")
+    written_provisioners = written["authority"]["provisioners"]
+    if (len(written_provisioners) != 1 or written_provisioners[0].get("type") != "ACME"
+            or written_provisioners[0].get("challenges") != ["http-01"]):
+        raise RuntimeError("web CA must expose only ACME HTTP-01 issuance")
+
+
+def step_cli(ca_home: pathlib.Path, *args: str) -> None:
+    docker("run", "--rm", "--label", RESOURCE_LABEL, "--network", "none", "--user", "1000:1000",
+           "--env", "STEPPATH=/home/step", "--volume", f"{ca_home}:/home/step",
+           STEP_CLI_IMAGE, "step", *args, timeout=120, quiet=True)
+
+
+def install_constrained_web_intermediate(ca_home: pathlib.Path) -> None:
+    template = ca_home / "config/web-intermediate.tpl"
+    template.write_text(
+        "{\n"
+        '  "subject": {{ toJson .Subject }},\n'
+        '  "keyUsage": ["certSign", "crlSign"],\n'
+        '  "basicConstraints": {"isCA": true, "maxPathLen": 0},\n'
+        '  "nameConstraints": {\n'
+        '    "critical": true,\n'
+        f'    "permittedDNSDomains": ["{ALLOWED_NAME}", "{CA_NAME}"]\n'
+        "  }\n"
+        "}\n"
+    )
+    template.chmod(0o640)
+    os.chown(template, 1000, 1000)
+    try:
+        step_cli(
+            ca_home, "certificate", "create", "--force",
+            "--template", "/home/step/config/web-intermediate.tpl",
+            "--ca", "/home/step/certs/root_ca.crt",
+            "--ca-key", "/home/step/secrets/root_ca_key",
+            "--ca-password-file", "/home/step/secrets/password",
+            "--password-file", "/home/step/secrets/password",
+            "--not-after", "8760h",
+            "SolariNet Web Intermediate",
+            "/home/step/certs/intermediate_ca.crt",
+            "/home/step/secrets/intermediate_ca_key",
+        )
+    finally:
+        template.unlink(missing_ok=True)
+
+
+def verify_constrained_web_intermediate(ca_home: pathlib.Path) -> None:
+    root_cert = ca_home / "certs/root_ca.crt"
+    intermediate_cert = ca_home / "certs/intermediate_ca.crt"
+    root_text = run(
+        ["openssl", "x509", "-in", str(root_cert), "-noout", "-text"], quiet=True
+    ).stdout
+    intermediate_text = run(
+        ["openssl", "x509", "-in", str(intermediate_cert), "-noout", "-text"], quiet=True
+    ).stdout
+    if not re.search(r"CA:TRUE,\s*pathlen:\s*1\b", root_text):
+        raise RuntimeError("disposable root must have pathLen=1 for a sibling web intermediate")
+    if not re.search(r"CA:TRUE,\s*pathlen:\s*0\b", intermediate_text):
+        raise RuntimeError("web intermediate must have pathLen=0")
+    validity_text = run([
+        "openssl", "x509", "-in", str(intermediate_cert), "-noout", "-startdate", "-enddate",
+    ], quiet=True).stdout
+    not_before = re.search(r"notBefore=(.+)", validity_text)
+    not_after = re.search(r"notAfter=(.+)", validity_text)
+    if not_before is None or not_after is None:
+        raise RuntimeError("could not read the web intermediate validity interval")
+    date_format = "%b %d %H:%M:%S %Y %Z"
+    validity = datetime.strptime(not_after.group(1), date_format).replace(tzinfo=timezone.utc) - \
+        datetime.strptime(not_before.group(1), date_format).replace(tzinfo=timezone.utc)
+    if validity < timedelta(days=360) or validity > timedelta(days=366):
+        raise RuntimeError("disposable web intermediate must have an explicit one-year validity")
+    if not re.search(r"X509v3 Name Constraints: critical", intermediate_text):
+        raise RuntimeError("web intermediate is missing critical X.509 name constraints")
+    permitted_names = (ALLOWED_NAME, CA_NAME)
+    if any(DENIED_NAME == name or DENIED_NAME.endswith("." + name) for name in permitted_names):
+        raise RuntimeError("denied test DNS name overlaps a permitted name-constraint subtree")
+    constraint_text = intermediate_text.split("X509v3 Name Constraints: critical", 1)[1]
+    permitted_block = re.search(
+        r"\bPermitted:\s*(.*?)(?=\n\s*(?:Excluded:|X509v3 |Signature Algorithm)|\Z)",
+        constraint_text, re.DOTALL,
+    )
+    if permitted_block is None:
+        raise RuntimeError("web intermediate has no permitted name-constraint block")
+    encoded_permitted_names = set(re.findall(r"DNS:([^\s,]+)", permitted_block.group(1)))
+    if encoded_permitted_names != set(permitted_names) or re.search(r"\bExcluded:", constraint_text):
+        raise RuntimeError("web intermediate name constraints do not exactly match the two required DNS subtrees")
+
+    test_dir = ca_home / "test-certs"
+    test_dir.mkdir(mode=0o750)
+    os.chown(test_dir, 1000, 1000)
+    try:
+        def create_leaf(name: str) -> None:
+            step_cli(
+                ca_home, "certificate", "create", "--force",
+                "--ca", "/home/step/certs/intermediate_ca.crt",
+                "--ca-key", "/home/step/secrets/intermediate_ca_key",
+                "--ca-password-file", "/home/step/secrets/password",
+                "--password-file", "/home/step/secrets/password",
+                "--san", name, name,
+                f"/home/step/test-certs/{name}.crt",
+                f"/home/step/test-certs/{name}.key",
+            )
+
+        def verify_leaf(name: str, issuer_chain: pathlib.Path) -> subprocess.CompletedProcess[str]:
+            return run([
+                "openssl", "verify", "-CAfile", str(root_cert),
+                "-untrusted", str(issuer_chain), "-verify_hostname", name,
+                str(test_dir / f"{name}.crt"),
+            ], check=False, quiet=True)
+
+        for permitted_name in (ALLOWED_NAME, f"host.{ALLOWED_NAME}"):
+            create_leaf(permitted_name)
+            allowed = verify_leaf(permitted_name, intermediate_cert)
+            if allowed.returncode:
+                raise RuntimeError("name-constrained chain rejected a DNS name under its permitted subtree: " +
+                                   (allowed.stderr or allowed.stdout).strip())
+
+        try:
+            create_leaf(DENIED_NAME)
+        except RuntimeError as exc:
+            raise RuntimeError("step-cli refused to create the disallowed-DNS leaf, so client enforcement was not tested") from exc
+        denied = verify_leaf(DENIED_NAME, intermediate_cert)
+        denied_output = (denied.stdout + denied.stderr).lower()
+        if denied.returncode == 0 or "permitted subtree violation" not in denied_output:
+            raise RuntimeError("name-constrained chain did not specifically reject an unpermitted DNS name: " +
+                               denied_output.strip())
+
+        nested_ca_cert = test_dir / "nested-intermediate.crt"
+        try:
+            step_cli(
+                ca_home, "certificate", "create", "--force", "--profile", "intermediate-ca",
+                "--ca", "/home/step/certs/intermediate_ca.crt",
+                "--ca-key", "/home/step/secrets/intermediate_ca_key",
+                "--ca-password-file", "/home/step/secrets/password",
+                "--password-file", "/home/step/secrets/password",
+                "Nested Web CA", "/home/step/test-certs/nested-intermediate.crt",
+                "/home/step/test-certs/nested-intermediate.key",
+            )
+        except RuntimeError as exc:
+            raise RuntimeError("step-cli refused the nested-CA probe, so path-length validation was not tested") from exc
+        step_cli(
+            ca_home, "certificate", "create", "--force",
+            "--ca", "/home/step/test-certs/nested-intermediate.crt",
+            "--ca-key", "/home/step/test-certs/nested-intermediate.key",
+            "--ca-password-file", "/home/step/secrets/password",
+            "--password-file", "/home/step/secrets/password",
+            "--san", ALLOWED_NAME, "nested-test-leaf",
+            "/home/step/test-certs/nested-test-leaf.crt",
+            "/home/step/test-certs/nested-test-leaf.key",
+        )
+        nested_chain = test_dir / "nested-chain.pem"
+        nested_chain.write_text(nested_ca_cert.read_text() + intermediate_cert.read_text())
+        nested = run([
+            "openssl", "verify", "-CAfile", str(root_cert), "-untrusted", str(nested_chain),
+            "-verify_hostname", ALLOWED_NAME, str(test_dir / "nested-test-leaf.crt"),
+        ], check=False, quiet=True)
+        nested_output = (nested.stdout + nested.stderr).lower()
+        if nested.returncode == 0 or "path length constraint exceeded" not in nested_output:
+            raise RuntimeError("pathLen=0 intermediate did not specifically reject a nested CA: " +
+                               nested_output.strip())
+    finally:
+        shutil.rmtree(test_dir)
+        if test_dir.exists():
+            raise RuntimeError("disposable certificate-test keys remain in the CA directory")
+
+    print("Disposable web intermediate verified: its critical DNS name constraints reject an out-of-scope leaf, and the chain's path-length limits reject a nested CA.")
+
+
+def remove_disposable_root_key(ca_home: pathlib.Path) -> None:
+    root_key = ca_home / "secrets/root_ca_key"
+    root_key.unlink()
+    if root_key.exists():
+        raise RuntimeError("disposable root signing key remains in the online CA directory")
 
 
 def registry(*, fail_check: bool = False) -> dict[str, object]:
@@ -308,7 +484,6 @@ def main() -> int:
         raise SystemExit("ACME helper source is missing")
 
     work: pathlib.Path | None = None
-    network_created = False
     try:
         tmp_parent = pathlib.Path(os.environ.get("RUNNER_TEMP", "/dev/shm"))
         tmp_parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -334,14 +509,16 @@ def main() -> int:
                str(image_context), timeout=600, quiet=True)
         docker("network", "create", "--internal", "--label", RESOURCE_LABEL,
                NETWORK_NAME, quiet=True)
-        network_created = True
-        docker("run", "--rm", "--network", "none", "--user", "1000:1000",
+        docker("run", "--rm", "--label", RESOURCE_LABEL, "--network", "none", "--user", "1000:1000",
                "--env", "STEPPATH=/home/step", "--volume", f"{ca_home}:/home/step",
                STEP_CLI_IMAGE, "step", "ca", "init", "--name", "SolariNet disposable CI CA",
                "--dns", CA_NAME, "--address", ":9443", "--provisioner", "ci@example.invalid",
                "--password-file", "/home/step/secrets/password",
                "--provisioner-password-file", "/home/step/secrets/password", "--acme",
                timeout=120, quiet=True)
+        install_constrained_web_intermediate(ca_home)
+        verify_constrained_web_intermediate(ca_home)
+        remove_disposable_root_key(ca_home)
         write_ca_config(ca_home)
         docker("run", "--detach", "--label", RESOURCE_LABEL, "--name", CA_CONTAINER_NAME, "--network",
                NETWORK_NAME, "--network-alias", CA_NAME,
@@ -352,13 +529,61 @@ def main() -> int:
         print("ACME disposable CA integration test PASSED.")
         return 0
     finally:
-        docker("rm", "--force", CLIENT_NAME, check=False, quiet=True)
-        docker("rm", "--force", CA_CONTAINER_NAME, check=False, quiet=True)
-        if network_created:
-            docker("network", "rm", NETWORK_NAME, check=False, quiet=True)
-        docker("image", "rm", "--force", CERTBOT_IMAGE, check=False, quiet=True)
+        cleanup_errors: list[str] = []
+
+        def cleanup_call(label: str, args: Sequence[str], *,
+                         tolerate_nonzero: bool = False) -> subprocess.CompletedProcess[str] | None:
+            try:
+                result = docker(*args, check=False, quiet=True)
+                if result.returncode and not tolerate_nonzero:
+                    cleanup_errors.append(f"{label} exited {result.returncode}")
+                return result
+            except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+                cleanup_errors.append(f"{label}: {exc}")
+                return None
+
+        cleanup_call("remove ACME client", ["rm", "--force", CLIENT_NAME], tolerate_nonzero=True)
+        cleanup_call("remove CA container", ["rm", "--force", CA_CONTAINER_NAME], tolerate_nonzero=True)
+        listed = cleanup_call("list test containers", ["ps", "--all", "--quiet", "--filter",
+                                                          f"label={RESOURCE_LABEL}"])
+        leftovers = listed.stdout.split() if listed else []
+        if leftovers:
+            cleanup_call("remove test containers", ["rm", "--force", *leftovers],
+                         tolerate_nonzero=True)
+        listed = cleanup_call("verify test containers", ["ps", "--all", "--quiet", "--filter",
+                                                           f"label={RESOURCE_LABEL}"])
+        remaining_containers = listed.stdout.split() if listed else ["inspection failed"]
+        if remaining_containers:
+            cleanup_errors.append("test-labeled Docker containers remain after cleanup")
+        listed = cleanup_call("list test networks", ["network", "ls", "--quiet", "--filter",
+                                                       f"label={RESOURCE_LABEL}"])
+        networks = listed.stdout.split() if listed else []
+        if networks:
+            cleanup_call("remove test networks", ["network", "rm", *networks],
+                         tolerate_nonzero=True)
+        listed = cleanup_call("verify test networks", ["network", "ls", "--quiet", "--filter",
+                                                        f"label={RESOURCE_LABEL}"])
+        remaining_networks = listed.stdout.split() if listed else ["inspection failed"]
+        if remaining_networks:
+            cleanup_errors.append("test-labeled Docker networks remain after cleanup")
+        cleanup_call("remove run-specific Certbot image", ["image", "rm", "--force", CERTBOT_IMAGE],
+                     tolerate_nonzero=True)
+        remaining_image = cleanup_call("verify run-specific Certbot image removal", [
+            "image", "ls", "--format", "{{.Repository}}:{{.Tag}}", "--filter",
+            f"reference={CERTBOT_IMAGE}",
+        ])
+        if remaining_image is None or remaining_image.stdout.strip():
+            cleanup_errors.append("run-specific Certbot test image remains or could not be inspected")
         if work is not None:
-            shutil.rmtree(work, ignore_errors=True)
+            try:
+                shutil.rmtree(work)
+            except OSError as exc:
+                cleanup_errors.append(f"disposable CA scratch cleanup failed: {exc}")
+            else:
+                if work.exists():
+                    cleanup_errors.append("disposable CA scratch directory remains after cleanup")
+        if cleanup_errors:
+            raise RuntimeError("test cleanup failed: " + "; ".join(cleanup_errors))
 
 
 if __name__ == "__main__":
