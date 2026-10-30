@@ -183,6 +183,10 @@ if(TARGET servercore)
   foreach(t ${SOLARI_SERVER_UNIT_TESTS})
     add_executable(${t} unit/${t}.c unit/server_stubs.c)
     target_compile_definitions(${t} PRIVATE _GNU_SOURCE)
+    if(t STREQUAL "test_server_ctl")
+      target_compile_definitions(${t} PRIVATE
+        AUTHZ_MANIFEST_PATH="${CMAKE_SOURCE_DIR}/docs/authz/AUTHZ_MANIFEST.json")
+    endif()
     if(t STREQUAL "test_server_scan")
       # Exercise the optional process-backed enrichment path with hermetic fake
       # tools; the production servercore option remains off by default.

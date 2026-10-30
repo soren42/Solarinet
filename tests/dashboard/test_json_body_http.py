@@ -25,18 +25,20 @@ def php_router() -> str:
 require_once {json.dumps(str(BOOTSTRAP))};
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {{ echo 'ready'; exit; }}
 $body = solari_json_body(4096);
+header('X-Test-Handler: reached');
 echo json_encode(['ok' => true, 'data' => $body]);
 ?>'''
 
 
-def request(port: int, content_type: str, body: bytes) -> tuple[int, str]:
+def request(port: int, content_type: str, body: bytes) -> tuple[int, str, str | None]:
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
     try:
         conn.request("POST", "/", body=body,
                      headers={"Content-Type": content_type,
                               "Content-Length": str(len(body))})
         response = conn.getresponse()
-        return response.status, response.read().decode("utf-8", "replace")
+        return (response.status, response.read().decode("utf-8", "replace"),
+                response.getheader("X-Test-Handler"))
     finally:
         conn.close()
 
@@ -71,11 +73,13 @@ def main() -> int:
         try:
             wait_ready(port, process)
             payload = b'{"sample":true}'
-            status, raw = request(port, "application/json; charset=utf-8", payload)
+            status, raw, reached = request(port, "application/json; charset=utf-8", payload)
             if status != 200 or json.loads(raw).get("data") != {"sample": True}:
                 raise AssertionError(f"valid JSON request failed: HTTP {status}: {raw}")
+            if reached != "reached":
+                raise AssertionError("valid JSON request did not reach the handler marker")
             for content_type in ("application/jsonp", "text/plain; application/json"):
-                status, raw = request(port, content_type, payload)
+                status, raw, reached = request(port, content_type, payload)
                 if status != 415:
                     raise AssertionError(
                         f"{content_type!r} was not rejected with HTTP 415: {status} {raw}"
@@ -83,6 +87,8 @@ def main() -> int:
                 response = json.loads(raw)
                 if response.get("error", {}).get("code") != "unsupported_media_type":
                     raise AssertionError(f"unexpected media-type error envelope: {raw}")
+                if reached is not None:
+                    raise AssertionError(f"{content_type!r} reached post-parse handler marker")
         finally:
             process.terminate()
             try:

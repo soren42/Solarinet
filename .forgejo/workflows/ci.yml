@@ -606,6 +606,8 @@ jobs:
           php tests/dashboard/test_authz_dispatch.php
           php tests/dashboard/test_authz_enforce.php
           php tests/dashboard/test_authz_routes.php
+          php tests/dashboard/test_authz_manifest.php
+          php tests/dashboard/test_authz_negative.php
       - name: RackWire API route tests
         run: php tests/dashboard/test_rackwire_api.php
       - name: RackWire UI parse + token bridge tests

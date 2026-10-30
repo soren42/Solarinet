@@ -1,0 +1,1295 @@
+{
+  "schemaVersion": 1,
+  "description": "Observed authorization policy shipped in Phase 1 candidate. Route roles are Policy::resolveAuth results; csrf records the effective guard mode. The C bridge defaults unlisted ctl verbs to privileged.",
+  "phpRoutes": [
+    {
+      "method": "POST",
+      "pattern": "/api/auth/login",
+      "csrf": "none",
+      "roleRequired": "public"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/auth/logout",
+      "csrf": "origin+session-token",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/auth/config",
+      "csrf": "none",
+      "roleRequired": "public"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/auth/oidc/login",
+      "csrf": "none",
+      "roleRequired": "public"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/auth/oidc/callback",
+      "csrf": "none",
+      "roleRequired": "public"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/auth/whoami",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/summary",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/panel",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/panel/command",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/panel/state",
+      "csrf": "panel-service",
+      "servicePrincipal": "local panel account (viewer)",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/panel/config",
+      "csrf": "panel-service",
+      "servicePrincipal": "local panel account (viewer)",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/nodes",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/nodes/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/nodes/{id}/history",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/probes",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/alerts",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/rules",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/alerts/ack",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/alerts/ack-all",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/maintenance",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/maintenance",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/maintenance/{id}/cancel",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/opie",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/opie/{reportId}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/segments",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/netgear",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/topology",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/gear",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/gear/{id}/interfaces",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/gear/{id}/history",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/discovery",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/forgejo",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/ca",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/identity",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/push/vapid",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/push/subscribe",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/push/subscribe",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/enrollments",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/builds",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/networks/allocator-eligibility",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/networks/{id}/allocator-eligibility",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/components",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/components/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/components/{id}/entity-link",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/components/{id}/entity-link",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/components/{id}/entity-link",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/components",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/inventory/components/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/components/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/models",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/models/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/models",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/locations",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/locations/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/locations",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/inventory/locations/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/receipts",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/receipts/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/receipts",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/receipts/{id}/scan",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/receipts/{id}/scan",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/projects",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/projects/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/allocations",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/projects",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/inventory/projects/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/projects/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/projects/{id}/allocations",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/inventory/projects/{id}/allocations/{allocId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/projects/{id}/allocations/{allocId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/shopping",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/codes",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/codes/lookup",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/codes/receive",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/codes/move",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/codes/associate",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/codes/history",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/codes",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/codes/{id}/label",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/codes/{id}/printed",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/codes/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/codes/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/locations/{id}/contents",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/projects/{id}/rollup",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/dns/query",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/dns/health",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/dns/zones",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/dns/zones/{id}/records",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/dns/hosts",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/dns/rpz",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/rackwire/plans",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/rackwire/plans/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/rackwire/plans/{id}/versions",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/rackwire/library",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/rackwire/telemetry",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/rackwire/sor/interconnects",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rackwire/plans",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rackwire/plans/{id}/delete",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rackwire/plans/{id}/versions",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rackwire/plans/{id}/restore",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rackwire/library/{modelId}/groups",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rackwire/commit",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/discovery/scan",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/discovery/scan-requests/{requestId}",
+      "csrf": "none",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/discovery/scan-jobs",
+      "csrf": "none",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/discovery/scans/{scanId}",
+      "csrf": "none",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/discovery/{discId}/adopt",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/discovery/{discId}/ignore",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/enrollments",
+      "csrf": "none",
+      "roleRequired": "public"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/enrollments/ack",
+      "csrf": "none",
+      "roleRequired": "public"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/enrollments/{enrId}/approve",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/enrollments/{enrId}/reject",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/control/provision",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/control/decommission",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/nodes/{nodeId}/retire",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/nodes/{nodeId}/criticality",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/control/survey",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/control/deploy",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/control/deploy",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/control/fleet-catalog",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/control/fleet-provision",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/control/fleet-image",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/control/fleet-provision",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/config",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/config",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/nodes/{id}/config",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/nodes/{id}/config",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rules/{ruleId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/rules/{ruleId}/delete",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/pools",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/pools",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/pools/{poolId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/pools/{poolId}/delete",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/assets",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/assets/{assetId}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/assets/{assetId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/assets/{assetId}/remove",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/assets/{assetId}/lifecycle",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/assets/{assetId}/purge",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/assets/{assetId}/criticality",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/assets/{assetId}/targets/{targetId}/remove",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/stream",
+      "csrf": "none",
+      "roleRequired": "session"
+    }
+  ],
+  "ctlVerbs": [
+    {
+      "verb": "ADOPT",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/discovery/{discId}/adopt"
+      ]
+    },
+    {
+      "verb": "ALERT_ACK",
+      "class": "ordinary",
+      "requiresOperator": true,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/alerts/ack",
+        "POST /api/alerts/ack-all"
+      ]
+    },
+    {
+      "verb": "APPROVE",
+      "class": "privileged",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/enrollments/{enrId}/approve"
+      ]
+    },
+    {
+      "verb": "ASSET_PURGE",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/assets/{assetId}/purge"
+      ]
+    },
+    {
+      "verb": "ASSET_REMOVE",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/assets/{assetId}/remove"
+      ]
+    },
+    {
+      "verb": "ASSET_SET",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/assets/{assetId}"
+      ]
+    },
+    {
+      "verb": "CONFIG_SET",
+      "class": "privileged",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/config"
+      ]
+    },
+    {
+      "verb": "CONTROL",
+      "class": "privileged",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": []
+    },
+    {
+      "verb": "CRIT_SET",
+      "class": "ordinary",
+      "requiresOperator": true,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/nodes/{nodeId}/criticality",
+        "POST /api/assets/{assetId}/criticality"
+      ]
+    },
+    {
+      "verb": "DECOMMISSION",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/control/decommission"
+      ]
+    },
+    {
+      "verb": "DEPLOY",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/control/deploy"
+      ]
+    },
+    {
+      "verb": "DISCOVER",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/discovery/scan"
+      ]
+    },
+    {
+      "verb": "DISCOVER_STATUS",
+      "class": "ordinary",
+      "requiresOperator": true,
+      "destructive": false,
+      "mayRunOnStandby": true,
+      "phpCallers": [
+        "GET /api/discovery/scans/{scanId}"
+      ]
+    },
+    {
+      "verb": "ENROLL_ACK",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/enrollments/ack"
+      ]
+    },
+    {
+      "verb": "ENROLL_SUBMIT",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/enrollments"
+      ]
+    },
+    {
+      "verb": "ENROLL_TOKEN",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": []
+    },
+    {
+      "verb": "FLEET_IMAGE",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/control/fleet-image"
+      ]
+    },
+    {
+      "verb": "FLEET_PROVISION",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/control/fleet-provision"
+      ]
+    },
+    {
+      "verb": "IGNORE",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/discovery/{discId}/ignore"
+      ]
+    },
+    {
+      "verb": "LIFECYCLE_SET",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/assets/{assetId}/lifecycle"
+      ]
+    },
+    {
+      "verb": "PING",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": true,
+      "phpCallers": [
+        "POST /api/control/decommission (capability probe)"
+      ]
+    },
+    {
+      "verb": "POOL_DEL",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/pools/{poolId}/delete"
+      ]
+    },
+    {
+      "verb": "POOL_NEW",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/pools"
+      ]
+    },
+    {
+      "verb": "POOL_SET",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/pools/{poolId}"
+      ]
+    },
+    {
+      "verb": "PROVISION",
+      "class": "privileged",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/control/provision",
+        "POST /api/nodes/{id}/config"
+      ]
+    },
+    {
+      "verb": "REJECT",
+      "class": "privileged",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/enrollments/{enrId}/reject"
+      ]
+    },
+    {
+      "verb": "REQUEST_GET",
+      "class": "enqueue",
+      "requiresOperator": true,
+      "destructive": false,
+      "mayRunOnStandby": true,
+      "phpCallers": [
+        "GET /api/discovery/scan-requests/{requestId} (poll)",
+        "POST /api/enrollments/{enrId}/approve (callQueued poll)",
+        "POST /api/enrollments/{enrId}/reject (callQueued poll)",
+        "POST /api/control/provision (callQueued poll)",
+        "POST /api/control/decommission (callQueued poll)",
+        "POST /api/nodes/{nodeId}/retire (callQueued poll)",
+        "POST /api/control/deploy (callQueued poll)",
+        "POST /api/control/fleet-provision (callQueued poll)",
+        "POST /api/control/fleet-image (callQueued poll)"
+      ]
+    },
+    {
+      "verb": "REQUEST_SUBMIT",
+      "class": "enqueue",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/discovery/scan",
+        "POST /api/enrollments/{enrId}/approve",
+        "POST /api/enrollments/{enrId}/reject",
+        "POST /api/control/provision",
+        "POST /api/control/decommission",
+        "POST /api/nodes/{nodeId}/retire",
+        "POST /api/control/deploy",
+        "POST /api/control/fleet-provision",
+        "POST /api/control/fleet-image"
+      ]
+    },
+    {
+      "verb": "RETIRE",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/nodes/{nodeId}/retire"
+      ]
+    },
+    {
+      "verb": "REVOKE_CERT",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": []
+    },
+    {
+      "verb": "RULE_DEL",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/rules/{ruleId}/delete"
+      ]
+    },
+    {
+      "verb": "RULE_SET",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/rules/{ruleId}"
+      ]
+    },
+    {
+      "verb": "SIGN",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/enrollments/{enrId}/approve (server queue invokes SIGN during APPROVE)"
+      ]
+    },
+    {
+      "verb": "SURVEY",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/control/survey"
+      ]
+    },
+    {
+      "verb": "TARGET_REMOVE",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/assets/{assetId}/targets/{targetId}/remove"
+      ]
+    }
+  ],
+  "scpPrincipalKinds": [
+    {
+      "kind": "agent-certificate-identity",
+      "identity": "Verified mTLS certificate CN client.<fqdn>; the leading role label and FQDN bind the peer to its node identity.",
+      "maySubmit": [
+        "HELLO",
+        "CLIENT_REPORT",
+        "WATCHDOG",
+        "DISCOVERY_ADVERT",
+        "TOPOLOGY_REPORT",
+        "SURVEY_RESP",
+        "CONTROL_RESULT",
+        "WHO_IS_PRIMARY",
+        "ACK",
+        "ERROR"
+      ]
+    },
+    {
+      "kind": "monitor-certificate-identity",
+      "identity": "Verified mTLS certificate CN monitor.<fqdn>; the leading role label and FQDN bind the peer to its monitor identity.",
+      "maySubmit": [
+        "HELLO",
+        "CLIENT_REPORT",
+        "MONITOR_REPORT",
+        "WATCHDOG",
+        "DISCOVERY_ADVERT",
+        "TOPOLOGY_REPORT",
+        "SURVEY_RESP",
+        "CONTROL_RESULT",
+        "WHO_IS_PRIMARY",
+        "ACK",
+        "ERROR"
+      ]
+    },
+    {
+      "kind": "enrollment-bearer",
+      "identity": "256-bit enrollment bearer token; digest, expiry, prebound host and role revalidated by C",
+      "maySubmit": [
+        "ENROLL_SUBMIT (CSR exchange/pickup)",
+        "ENROLL_ACK (certificate receipt acknowledgement)"
+      ]
+    },
+    {
+      "kind": "peer-server-certificate-identity",
+      "identity": "Verified mTLS certificate CN server.<fqdn>.",
+      "maySubmit": [
+        "HELLO",
+        "WHO_IS_PRIMARY",
+        "ACK",
+        "ERROR"
+      ]
+    }
+  ],
+  "behavior": {
+    "routeDefaults": "GET/HEAD/OPTIONS resolve to session; writes resolve to operator when undeclared. Explicit public/session/operator/admin policies override the default.",
+    "csrf": "Cookie-authenticated writes require same-origin Origin or Referer plus X-Solari-CSRF bound to the session. The panel-service exception applies only to local username panel with viewer role on routes marked panel-service, and only without Origin/Referer/Sec-Fetch-Site.",
+    "ctlPeerAcl": "SO_PEERCRED uid classes operator, dashboard, or unknown. Dashboard can call ordinary and enqueue only; privileged and unknown verbs are denied. Unknown peer denied. Operator peer may invoke all classes.",
+    "queue": "Dashboard submits privileged actions with REQUEST_SUBMIT and polls requester-scoped results with REQUEST_GET; the server queue worker executes the inner privileged verb.",
+    "standby": "Only PING, REQUEST_GET, and DISCOVER_STATUS may run on standby.",
+    "scp": "SCP role is derived from verified certificate CN and message types are checked against that role. Enrollment bearer routes are public at HTTP auth layer but require token validation in the C bridge.",
+    "privilegedDirectCallSites": "Current PHP handlers also attempt privileged direct verbs CONFIG_SET, PROVISION, ASSET_REMOVE, TARGET_REMOVE, LIFECYCLE_SET, ASSET_PURGE, POOL_DEL and RULE_DEL. SO_PEERCRED classifies these as privileged and the dashboard peer is denied; these paths fail closed rather than execute. They are recorded in phpCallers for the corresponding verbs.",
+    "contentType": "Routes that parse non-empty JSON request bodies require application/json (optional MIME parameters accepted); other media types receive HTTP 415 before route operations proceed.",
+    "sessionRevalidation": "Session age/idle limits revoke expired sessions. Local principals are reloaded from the local account store on each request, and deleted/invalid users are revoked while role changes take effect immediately. OIDC sessions periodically revalidate subject and role claims."
+  }
+}

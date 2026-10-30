@@ -337,6 +337,102 @@ static void test_verb_priv_class(void)
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass(""));
 }
 
+/* Tiny dependency-free reader for the manifest's flat ctlVerbs objects. */
+static bool json_string_value(const char *object, const char *key,
+                              char *out, size_t cap)
+{
+    char needle[64];
+    const char *p;
+    size_t n = 0;
+    if (snprintf(needle, sizeof needle, "\"%s\":", key) >= (int)sizeof needle)
+        return false;
+    p = strstr(object, needle);
+    if (!p) return false;
+    p += strlen(needle);
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p++ != '"') return false;
+    while (*p && *p != '"') {
+        if (n + 1 >= cap || *p == '\\') return false;
+        out[n++] = *p++;
+    }
+    if (*p != '"') return false;
+    out[n] = '\0';
+    return true;
+}
+
+static bool json_bool_value(const char *object, const char *key, bool *out)
+{
+    char needle[64];
+    const char *p;
+    if (snprintf(needle, sizeof needle, "\"%s\":", key) >= (int)sizeof needle)
+        return false;
+    p = strstr(object, needle);
+    if (!p) return false;
+    p += strlen(needle);
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "true", 4) == 0) { *out = true; return true; }
+    if (strncmp(p, "false", 5) == 0) { *out = false; return true; }
+    return false;
+}
+
+static void test_ctl_manifest_matches_classifier(void)
+{
+#ifndef AUTHZ_MANIFEST_PATH
+#define AUTHZ_MANIFEST_PATH "docs/authz/AUTHZ_MANIFEST.json"
+#endif
+    FILE *fp = fopen(AUTHZ_MANIFEST_PATH, "rb");
+    char *data, *section, *p;
+    long size;
+    unsigned checked = 0;
+    TEST_ASSERT_NOT_NULL_MESSAGE(fp, "authorization manifest could not be opened");
+    TEST_ASSERT_EQUAL_INT(0, fseek(fp, 0, SEEK_END));
+    size = ftell(fp);
+    TEST_ASSERT_TRUE(size > 0);
+    rewind(fp);
+    data = malloc((size_t)size + 1);
+    TEST_ASSERT_NOT_NULL(data);
+    TEST_ASSERT_EQUAL_UINT((size_t)size, fread(data, 1, (size_t)size, fp));
+    data[size] = '\0';
+    fclose(fp);
+    section = strstr(data, "\"ctlVerbs\"");
+    TEST_ASSERT_NOT_NULL_MESSAGE(section, "manifest ctlVerbs section missing");
+    p = strchr(section, '[');
+    TEST_ASSERT_NOT_NULL(p);
+    while ((p = strchr(p, '{')) != NULL) {
+        char object[1024], verb[64], cls[32];
+        const char *end = strchr(p, '}');
+        bool requiresOperator, destructive, mayRunOnStandby;
+        size_t len;
+        ctlVerbClass expectedClass;
+        if (!end) break;
+        len = (size_t)(end - p + 1);
+        TEST_ASSERT_TRUE_MESSAGE(len < sizeof object, "manifest ctl verb object too large");
+        memcpy(object, p, len); object[len] = '\0';
+        if (!strstr(object, "\"verb\"")) break;
+        TEST_ASSERT_TRUE(json_string_value(object, "verb", verb, sizeof verb));
+        TEST_ASSERT_TRUE(json_string_value(object, "class", cls, sizeof cls));
+        TEST_ASSERT_TRUE(json_bool_value(object, "requiresOperator", &requiresOperator));
+        TEST_ASSERT_TRUE(json_bool_value(object, "destructive", &destructive));
+        TEST_ASSERT_TRUE(json_bool_value(object, "mayRunOnStandby", &mayRunOnStandby));
+        if (strcmp(cls, "ordinary") == 0) expectedClass = CTL_VC_ORDINARY;
+        else if (strcmp(cls, "enqueue") == 0) expectedClass = CTL_VC_ENQUEUE;
+        else if (strcmp(cls, "privileged") == 0) expectedClass = CTL_VC_PRIVILEGED;
+        else { TEST_FAIL_MESSAGE("manifest has unknown ctl class"); expectedClass = CTL_VC_PRIVILEGED; }
+        TEST_ASSERT_EQUAL_INT(expectedClass, ctlVerbPrivClass(verb));
+        TEST_ASSERT_EQUAL_INT(requiresOperator, ctlVerbRequiresOperator(verb));
+        TEST_ASSERT_EQUAL_INT(destructive, ctlVerbIsDestructive(verb));
+        TEST_ASSERT_EQUAL_INT(mayRunOnStandby, ctlVerbMayRunOnStandby(verb));
+        checked++;
+        p = (char *)end + 1;
+        section = strstr(p, "\"behavior\"");
+        if (section && p > section) break;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(checked > 0, "manifest has no ctl verb objects");
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED,
+        ctlVerbPrivClass("AUTHZ_MANIFEST_UNLISTED_VERB"));
+    free(data);
+}
+
 static void test_decommission_confirmation_reuses_issued_token(void)
 {
     serverCtl ctl;
@@ -720,6 +816,7 @@ int main(void)
     RUN_TEST(test_split_verb);
     RUN_TEST(test_rbac);
     RUN_TEST(test_verb_priv_class);
+    RUN_TEST(test_ctl_manifest_matches_classifier);
     RUN_TEST(test_decommission_confirmation_reuses_issued_token);
     RUN_TEST(test_discovery_scan_rejected_on_standby);
     RUN_TEST(test_discovery_adopt_rejected_on_standby_before_mutation);
