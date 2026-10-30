@@ -77,7 +77,15 @@ if (is_string($scenario) && $scenario !== '') {
         case 'panel-bridged':
         case 'panel-unbridged':
         case 'operator-bridged':
+        case 'panel-bridged-browser':
+        case 'panel-oidc-bridged':
+        case 'panel-operator-bridged':
             unset($_SERVER['HTTP_ORIGIN']);
+            if ($scenario === 'panel-bridged-browser') {
+                // A browser holding the panel cookie, forged from a sibling subdomain.
+                $_SERVER['HTTP_ORIGIN'] = 'https://evil.akoria.net';
+                $_SERVER['HTTP_SEC_FETCH_SITE'] = 'same-site';
+            }
             // Auth::current() re-validates local principals against the store.
             $store = tempnam(sys_get_temp_dir(), 'solari-auth-');
             file_put_contents($store, json_encode(['version' => 1, 'users' => [
@@ -92,10 +100,20 @@ if (is_string($scenario) && $scenario !== '') {
             putenv('SOLARI_AUTH_FILE=' . $store);
             putenv('SOLARI_AUTH_RATE_DIR=' . $rate);
             putenv('SOLARI_LOCAL_LOGIN=1');
-            $_SESSION['solari'] = $scenario === 'operator-bridged'
-                ? $mk('operator')
-                : ['username' => 'panel', 'role' => 'viewer',
-                   'displayName' => 'Panel', 'source' => 'local'];
+            $panelRole = $scenario === 'panel-operator-bridged' ? 'operator' : 'viewer';
+            if ($panelRole === 'operator') {
+                // Local panel account whose stored role is not viewer.
+                file_put_contents($store, json_encode(['version' => 1, 'users' => [
+                    ['username' => 'panel', 'role' => 'operator', 'displayName' => 'Panel'],
+                ]]));
+            }
+            $_SESSION['solari'] = match ($scenario) {
+                'operator-bridged'   => $mk('operator'),
+                'panel-oidc-bridged' => ['username' => 'panel', 'role' => 'viewer',
+                                         'displayName' => 'Panel', 'source' => 'oidc'],
+                default              => ['username' => 'panel', 'role' => $panelRole,
+                                         'displayName' => 'Panel', 'source' => 'local'],
+            };
             $_SESSION['solari_csrf'] = $tok;
             $policy = $scenario === 'panel-unbridged'
                 ? ['auth' => 'session']
@@ -167,6 +185,8 @@ $cases = [
     ['panel-bridged',     'PASS',         'panel principal on csrf=panel-service route, no token -> allow'],
     ['panel-unbridged',   'forbidden',    'panel principal on a normal route, no token -> 403'],
     ['operator-bridged',  'forbidden',    'non-panel principal on bridged route, no token -> 403'],
+    ['panel-bridged-browser',  'forbidden', 'panel cookie in a browser (Origin+Sec-Fetch-Site), no token -> 403'],
+    ['panel-operator-bridged', 'forbidden', 'local panel with non-viewer role on bridged route, no token -> 403'],
     ['read-session',      'PASS',         'GET with a session -> allow'],
     ['read-nosession',    'unauthorized', 'GET without a session -> 401'],
     ['public-route',      'PASS',         'public route, no session -> allow'],

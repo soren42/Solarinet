@@ -42,9 +42,11 @@ require_once __DIR__ . '/Operator.php';
  * -----------------------------
  * A route may additionally declare ['csrf' => 'panel-service']. Its writes skip
  * the CSRF check ONLY when the session principal is the local panel service
- * account (source=local, username=panel, role=viewer). That cookie lives solely
- * in the panel daemon's in-memory curl jar, so no victim browser can carry it.
- * Any other principal on such a route still gets the full CSRF check. This is a
+ * account (source=local, username=panel, role=viewer) AND the request carries no
+ * browser provenance (Origin, Referer, Sec-Fetch-Site). The daemon sends none of
+ * these; every browser sends Origin + Sec-Fetch-Site on a cross-site POST, so a
+ * forged request from a browser that somehow holds the panel cookie is still
+ * subject to the full CSRF check. Any other principal always gets the full check. This is a
  * rolling-upgrade bridge for deployed daemons that predate X-Solari-CSRF;
  * remove it once the daemon echoes the login csrfToken.
  */
@@ -133,11 +135,18 @@ final class Policy
      *
      * @param array<string,mixed>       $policy    the route's declared policy
      * @param array<string,mixed>|null  $principal Auth::current()
+     * @param array<string,mixed>|null  $server    request headers (default $_SERVER)
      */
-    public static function isCsrfBridged(array $policy, ?array $principal): bool
+    public static function isCsrfBridged(array $policy, ?array $principal, ?array $server = null): bool
     {
         if (($policy['csrf'] ?? null) !== 'panel-service' || $principal === null) {
             return false;
+        }
+        $server ??= $_SERVER;
+        foreach (['HTTP_ORIGIN', 'HTTP_REFERER', 'HTTP_SEC_FETCH_SITE'] as $h) {
+            if (($server[$h] ?? '') !== '') {
+                return false;   // browser-originated: no bridge
+            }
         }
         return ($principal['source'] ?? null) === 'local'
             && ($principal['username'] ?? null) === 'panel'

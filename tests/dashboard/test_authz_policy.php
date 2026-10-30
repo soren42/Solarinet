@@ -96,4 +96,28 @@ assert_true(!Policy::tokenOk('', ''),
 assert_true(!Policy::tokenOk($tok . 'x', $tok),
     'mismatched token is rejected');
 
+// ---- panel-service CSRF bridge predicate (pure)
+$bridge = ['auth' => 'session', 'csrf' => 'panel-service'];
+$panel  = ['username' => 'panel', 'role' => 'viewer', 'source' => 'local'];
+$daemon = ['HTTP_CONTENT_TYPE' => 'application/json'];
+assert_true(Policy::isCsrfBridged($bridge, $panel, $daemon),
+    'local panel viewer from a header-less daemon is bridged');
+assert_true(!Policy::isCsrfBridged(['auth' => 'session'], $panel, $daemon),
+    'route without csrf=panel-service is never bridged');
+assert_true(!Policy::isCsrfBridged($bridge, null, $daemon),
+    'no principal is never bridged');
+assert_true(!Policy::isCsrfBridged($bridge, ['source' => 'oidc'] + $panel, $daemon),
+    'OIDC user named panel is not bridged');
+assert_true(!Policy::isCsrfBridged($bridge, ['source' => 'directory'] + $panel, $daemon),
+    'directory user named panel is not bridged');
+assert_true(!Policy::isCsrfBridged($bridge, ['role' => 'operator'] + $panel, $daemon),
+    'local panel with non-viewer role is not bridged');
+assert_true(!Policy::isCsrfBridged($bridge, ['username' => 'jason'] + $panel, $daemon),
+    'other local viewer is not bridged');
+foreach (['HTTP_ORIGIN' => 'https://evil.akoria.net', 'HTTP_REFERER' => 'https://x.akoria.net/',
+          'HTTP_SEC_FETCH_SITE' => 'same-site'] as $h => $v) {
+    assert_true(!Policy::isCsrfBridged($bridge, $panel, [$h => $v] + $daemon),
+        "browser provenance header $h disables the bridge");
+}
+
 echo "authz policy default-deny/CSRF tests passed\n";
