@@ -32,6 +32,14 @@ PYTHON_APPS = {
     "unifi": ("deploy/unifi/unifipolld.py",),
     "discovery": ("deploy/discovery/avahi_import.py", "deploy/discovery/mdns_inspect.py"),
 }
+# DNS renderers run by sor_apply_dnsd (dns.gen_zones / dns.gen_bare). gen-bare
+# imports zone_serial from parents[2]/netdb, so it sits under apps/netdb/.
+RENDERER_FILES = {
+    "netdb/gen-zones.py": "apps/netdb/gen-zones.py",
+    "netdb/zone_serial.py": "apps/netdb/zone_serial.py",
+    "netdb/sor/source_sor.py": "apps/netdb/sor/source_sor.py",
+    "deploy/dns-bare/gen-bare.py": "apps/netdb/dns-bare/gen-bare.py",
+}
 
 
 def digest(path: Path) -> str:
@@ -168,6 +176,8 @@ def main() -> int:
             for source_name in sources:
                 copy_file(ROOT / source_name, stage,
                           source_name.replace("deploy/", "apps/", 1), files)
+        for source_name, target_name in RENDERER_FILES.items():
+            copy_file(ROOT / source_name, stage, target_name, files)
         copy_file(ROOT / "deploy/release/requirements.txt", stage,
                   "apps/requirements.txt", files)
         required = {
