@@ -169,67 +169,39 @@ return false;
 async function main() {
   requireScratchDatabase();
   const suffix = crypto.randomBytes(6).toString('hex');
-  const exportPath = process.env.SOLARI_SCANNER_EXPORT_FILE
-    ? path.resolve(process.env.SOLARI_SCANNER_EXPORT_FILE) : '';
-  const snapshot = exportPath
-    ? JSON.parse(fs.readFileSync(exportPath, 'utf8'))
-    : {
-      schema_version: 1,
-      exported_at: new Date().toISOString(),
-      items: [{ id: crypto.randomUUID(), name: `Temporary unit ${suffix}`, manufacturer: `Browser Scanner ${suffix}`, model: `Temporary unit ${suffix}`, category: 'scanner', barcode: `PRODUCT-${suffix}`, notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
-      assets: [{ id: crypto.randomUUID(), item_id: '', tag: `BROWSER-SCAN-${suffix.toUpperCase()}`, serial: `BROWSER-SER-${suffix.toUpperCase()}`, location: `Browser Fixture ${suffix}`, status: 'in_stock', notes: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, archived: 0 }],
-    };
-  if (!exportPath) snapshot.assets[0].item_id = snapshot.items[0].id;
-  assert.equal(snapshot.schema_version, 1, 'scanner export must use supported schema version 1');
-  assert(Array.isArray(snapshot.items) && Array.isArray(snapshot.assets), 'scanner export must contain catalog and asset arrays');
-  const activeItems = snapshot.items.filter((item) => item && item.archived === 0);
-  const activeAssets = snapshot.assets.filter((asset) => asset && asset.archived === 0);
-  assert(activeItems.length > 0 && activeAssets.length > 0, 'scanner export must include active catalog items and assets');
-  const itemIdSet = new Set(activeItems.map((item) => item.id));
-  const importAssets = activeAssets.filter((asset) => itemIdSet.has(asset.item_id));
-  assert.equal(importAssets.length, activeAssets.length, 'every active scanner asset must reference an active catalog item');
-  assert(importAssets.every((asset) => typeof asset.tag === 'string' && asset.tag.trim()), 'every active scanner asset must have a tag');
-  const focusAsset = importAssets[0];
-  const focusItem = activeItems.find((item) => item.id === focusAsset.item_id);
-  const itemIds = activeItems.map((item) => item.id);
-  const assetIds = importAssets.map((asset) => asset.id);
-  const importedTags = importAssets.map((asset) => asset.tag);
-  assert.equal(new Set(importedTags).size, importedTags.length, 'active scanner asset tags must be unique');
-  const serial = focusAsset.serial || '';
-  const tag = focusAsset.tag;
-  const make = focusItem.manufacturer || 'Unknown manufacturer';
-  const model = focusItem.model || focusItem.name;
-  assert(typeof model === 'string' && model.trim(), 'selected scanner item must identify a hardware model');
-  const sourceLocations = Array.from(new Set(importAssets
-    .map((asset) => typeof asset.location === 'string' ? asset.location.trim() : '')
-    .filter(Boolean)));
-  const locationChoices = Object.create(null);
-  const sessionUser = `scanner-browser-${suffix}`;
+  const tag = `BROWSER-${suffix.toUpperCase()}`;
+  const serial = `BROWSER-SER-${suffix.toUpperCase()}`;
+  const make = `Browser Fixture ${suffix}`;
+  const model = `RackWire Unit ${suffix}`;
+  const locationName = `Browser Fixture ${suffix}`;
+  const sessionUser = `inventory-browser-${suffix}`;
   const actor = `dashboard:${sessionUser}`;
-  const sourceExistedBefore = sql(`SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1`);
   const manualSource = sql("SELECT id FROM sources WHERE slug='manual' LIMIT 1");
   const rackwireSource = sql("SELECT id FROM sources WHERE slug='rackwire' AND deleted_at IS NULL LIMIT 1");
   assert(manualSource, 'scratch SoR schema must contain the manual provenance source');
   assert(rackwireSource, 'scratch SoR schema must contain the RackWire provenance source');
   const rackwirePlanName = `RackWire Browser ${suffix}`;
   const rackwirePlanNote = `CSRF persistence proof ${suffix}`;
-  const linkedEntityName = `scanner-node-${suffix}`;
-  const peerEntityName = `scanner-peer-${suffix}`;
-  const unknownPeerEntityName = `scanner-unknown-peer-${suffix}`;
-  const committedCableLabel = `scanner-cable-${suffix}`;
-  const mappedCableLabel = `scanner-cable-port-${suffix}`;
-  const unknownPortCableLabel = `scanner-cable-unknown-port-${suffix}`;
-  const scannerInterfaceName = `scanner-uplink-${suffix}`;
+  const linkedEntityName = `inventory-node-${suffix}`;
+  const peerEntityName = `inventory-peer-${suffix}`;
+  const unknownPeerEntityName = `inventory-unknown-peer-${suffix}`;
+  const committedCableLabel = `inventory-cable-${suffix}`;
+  const mappedCableLabel = `inventory-cable-port-${suffix}`;
+  const unknownPortCableLabel = `inventory-cable-unknown-port-${suffix}`;
+  const inventoryInterfaceName = `inventory-uplink-${suffix}`;
   let rackwirePlanId = null;
   let linkedEntityId = null;
   let peerEntityId = null;
   let unknownPeerEntityId = null;
-  let scannerInterfaceId = null;
+  let inventoryInterfaceId = null;
 
-  let locationIds = [];
+  let locationId = null;
+  let hardwareModelId = null;
+  let hardwareUnitId = null;
+  let barcodeId = null;
   let child = null;
   let browser = null;
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'solarinet-scanner-browser-'));
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'solarinet-inventory-browser-'));
   const sessions = path.join(temp, 'sessions');
   fs.mkdirSync(sessions, { mode: 0o700 });
   const routerPath = path.join(temp, 'router.php');
@@ -240,16 +212,23 @@ async function main() {
   const uiLatencyMs = {};
 
   try {
-    for (const locationName of sourceLocations) {
-      sql(`INSERT INTO locations (name,loc_type,source_id,asserted_kind,asserted_at)
-           VALUES (${quote(locationName)},'site',${manualSource},'human',NOW()),
-                  (${quote(locationName)},'site',${manualSource},'human',NOW())`);
-      const choices = sql(`SELECT id FROM locations WHERE name=${quote(locationName)} AND deleted_at IS NULL ORDER BY id`).split(/\s+/).filter(Boolean);
-      assert.equal(choices.length, 2, `scratch SoR must contain two duplicate choices for source location ${locationName}`);
-      locationChoices[locationName] = choices.map(Number);
-      locationIds.push(...choices);
-    }
-    const selectedLocation = focusAsset.location ? locationChoices[focusAsset.location.trim()]?.[1] : null;
+    sql(`INSERT INTO locations (name,loc_type,source_id,asserted_kind,asserted_at)
+         VALUES (${quote(locationName)},'site',${Number(manualSource)},'human',NOW())`);
+    locationId = Number(sql(`SELECT id FROM locations WHERE name=${quote(locationName)} AND source_id=${Number(manualSource)} ORDER BY id DESC LIMIT 1`));
+    assert(locationId > 0, 'scratch SoR must contain the seeded location');
+
+    sql(`INSERT INTO hardware_models (make,model,hw_type,notes,source_id,asserted_kind,asserted_at)
+         VALUES (${quote(make)},${quote(model)},'switch','browser E2E fixture',${Number(manualSource)},'human',NOW())`);
+    hardwareModelId = Number(sql(`SELECT id FROM hardware_models WHERE make=${quote(make)} AND model=${quote(model)} LIMIT 1`));
+    assert(hardwareModelId > 0, 'scratch SoR must contain the seeded hardware model');
+    sql(`INSERT INTO hardware_units (model_id,serial,asset_tag,location_id,notes,source_id,asserted_kind,asserted_at)
+         VALUES (${hardwareModelId},${quote(serial)},${quote(tag)},${locationId},'browser E2E fixture',${Number(manualSource)},'human',NOW())`);
+    hardwareUnitId = Number(sql(`SELECT id FROM hardware_units WHERE model_id=${hardwareModelId} AND serial=${quote(serial)} LIMIT 1`));
+    assert(hardwareUnitId > 0, 'scratch SoR must contain the seeded hardware unit');
+    sql(`INSERT INTO barcodes (code,code_type,symbology,subject_table,subject_id,source_id,asserted_kind,asserted_at)
+         VALUES (${quote(tag)},'asset_tag','code128','hardware_units',${hardwareUnitId},${Number(manualSource)},'human',NOW())`);
+    barcodeId = Number(sql(`SELECT id FROM barcodes WHERE code=${quote(tag)} AND deleted_at IS NULL LIMIT 1`));
+    assert(barcodeId > 0, 'scratch SoR must contain the seeded asset-tag barcode');
 
     sql(`INSERT INTO entities (name,entity_type,source_id,asserted_kind)
          VALUES (${quote(linkedEntityName)},'network_gear',${Number(manualSource)},'human'),
@@ -261,10 +240,10 @@ async function main() {
     assert(linkedEntityId > 0 && peerEntityId > 0 && unknownPeerEntityId > 0,
       'scratch SoR must include canonical entities for mapped, entity-level, and unknown-port cable cases');
     sql(`INSERT INTO interfaces (entity_id,name,if_kind,source_id,asserted_kind,asserted_at)
-         VALUES (${linkedEntityId},${quote(scannerInterfaceName)},'physical',${Number(manualSource)},'human',NOW())`);
-    scannerInterfaceId = Number(sql(`SELECT id FROM interfaces WHERE entity_id=${linkedEntityId}
-      AND name=${quote(scannerInterfaceName)} AND deleted_at IS NULL LIMIT 1`));
-    assert(scannerInterfaceId > 0, 'scratch SoR must include the scanner device interface');
+         VALUES (${linkedEntityId},${quote(inventoryInterfaceName)},'physical',${Number(manualSource)},'human',NOW())`);
+    inventoryInterfaceId = Number(sql(`SELECT id FROM interfaces WHERE entity_id=${linkedEntityId}
+      AND name=${quote(inventoryInterfaceName)} AND deleted_at IS NULL LIMIT 1`));
+    assert(inventoryInterfaceId > 0, 'scratch SoR must include the inventory device interface');
 
     const seedNote = `seed ${suffix}`;
     const initialRackwirePlan = JSON.stringify({ devices: [], cables: [], racks: [], notes: [{ uid: `seed-${suffix}`, text: seedNote, x: 0, y: 0 }], codeMap: {} });
@@ -301,7 +280,6 @@ async function main() {
     const browserConsole = [];
     const externalRequests = [];
     const scanJobsResponses = [];
-    const locationResponses = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('console', (message) => {
       if (message.type() === 'error') browserConsole.push(message.text());
@@ -310,11 +288,6 @@ async function main() {
       if (!request.url().startsWith(base + '/') && !request.url().startsWith('file://')) externalRequests.push(request.url());
     });
     page.on('response', async (response) => {
-      if (response.url().includes('/api/inventory/locations')) {
-        let body = '';
-        try { body = await response.text(); } catch (_) { /* response body may be unavailable */ }
-        locationResponses.push(`${response.status()} ${response.url()} ${body.slice(0, 800)}`);
-      }
       if (response.url().includes('/api/discovery/scan-jobs')) {
         let body = '';
         try { body = await response.text(); } catch (_) { /* response body may be unavailable */ }
@@ -333,60 +306,13 @@ async function main() {
     }
     assert.equal(await page.evaluate(() => window.SOLARI && window.SOLARI.source), 'live', 'dashboard must boot in live mode');
     await inventoryNav.click();
-    await page.getByRole('button', { name: 'Scanner import', exact: true }).click();
-    await page.getByRole('heading', { name: 'Import a scanner-ingest export' }).waitFor();
-
-    const scannerExportName = exportPath ? path.basename(exportPath) : 'scanner-fixture.json';
-    const scannerExportBuffer = exportPath ? fs.readFileSync(exportPath) : Buffer.from(JSON.stringify(snapshot));
     let actionStartedAt = performance.now();
-    await page.getByLabel('Scanner JSON export').setInputFiles({
-      name: scannerExportName, mimeType: 'application/json',
-      buffer: scannerExportBuffer,
-    });
-    await page.getByText(`${scannerExportName}: ${snapshot.items.length} catalog items, ${snapshot.assets.length} assets.`).waitFor();
-    uiLatencyMs.scannerExportSelectToSummaryVisible = Math.round(performance.now() - actionStartedAt);
-    const duplicateLocationNote = page.getByRole('note').getByText('Some SoR locations share a name');
-    await duplicateLocationNote.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-    const duplicateNoteVisible = await duplicateLocationNote.isVisible().catch(() => false);
-    const locationOptionText = await page.locator('select[aria-label^="SoR destination for source location"]').allTextContents();
-    assert(duplicateNoteVisible,
-      `duplicate SoR names should be called out; location options=${JSON.stringify(locationOptionText)}; ` +
-      `location responses=${JSON.stringify(locationResponses)}; PHP=${phpErrors}`);
-    for (const locationName of sourceLocations) {
-      await page.getByLabel(`SoR destination for source location ${locationName}`).selectOption(String(locationChoices[locationName][1]));
-    }
-
-    const before = await context.request.get(`${base}/api/inventory`);
-    assert.equal(before.status(), 200);
-    const beforeData = (await before.json()).data;
-    assert(!beforeData.units.some((unit) => importedTags.includes(unit.assetTag)), 'preview fixture assets must not exist before apply');
-
-    actionStartedAt = performance.now();
-    await page.getByRole('button', { name: 'Preview import' }).click();
-    const preview = page.getByRole('status').filter({ hasText: 'Preview ready' });
-    await preview.waitFor();
-    uiLatencyMs.scannerPreviewClickToReadyStatusVisible = Math.round(performance.now() - actionStartedAt);
-    await preview.getByText(`insert hardware units`, { exact: false }).waitFor();
-    for (const locationName of sourceLocations) {
-      await preview.getByText(`#${locationChoices[locationName][1]} · ${locationName}`, { exact: false }).waitFor();
-    }
-    uiLatencyMs.scannerPreviewClickToDestinationMapVisible = Math.round(performance.now() - actionStartedAt);
-    const afterPreview = await context.request.get(`${base}/api/inventory`);
-    const afterPreviewData = (await afterPreview.json()).data;
-    assert(!afterPreviewData.units.some((unit) => importedTags.includes(unit.assetTag)), 'preview must leave SoR inventory unchanged');
-
-    actionStartedAt = performance.now();
-    await page.getByRole('button', { name: 'Apply import' }).click();
-    await page.getByRole('status').filter({ hasText: 'Import complete' }).waitFor();
-    uiLatencyMs.scannerApplyClickToCompleteVisible = Math.round(performance.now() - actionStartedAt);
-    const afterApply = await context.request.get(`${base}/api/inventory`);
-    assert.equal(afterApply.status(), 200);
-    const appliedData = (await afterApply.json()).data;
-    const imported = appliedData.units.find((unit) => unit.assetTag === tag);
-    assert(imported, 'applied scanner asset must be returned by the real SoR inventory route');
-    assert.equal(Number(imported.locationId), selectedLocation, 'mapped SoR location ID must be committed');
-    const importedBatch = appliedData.units.filter((unit) => importedTags.includes(unit.assetTag));
-    assert.equal(importedBatch.length, importAssets.length, 'every active scanner export asset must be imported');
+    const inventoryResponse = await context.request.get(`${base}/api/inventory`);
+    assert.equal(inventoryResponse.status(), 200);
+    const inventoryData = (await inventoryResponse.json()).data;
+    const imported = inventoryData.units.find((unit) => unit.assetTag === tag);
+    assert(imported, 'directly seeded inventory unit must be returned by the real SoR inventory route');
+    assert.equal(Number(imported.locationId), locationId, 'seeded unit must retain its selected SoR location');
 
     // Reconcile the imported physical unit to its canonical network entity in
     // the operator UI before asking RackWire to resolve cable endpoints.
@@ -411,7 +337,7 @@ async function main() {
     await page.getByRole('button', { name: 'Close', exact: true }).last().click();
 
     await page.getByRole('button', { name: 'RackWire device profiles', exact: true }).click();
-    if (focusAsset.location) await importedRow.getByText(focusAsset.location, { exact: true }).waitFor();
+    await importedRow.getByText(locationName, { exact: true }).waitFor();
     const profileModel = page.getByLabel('SoR hardware model');
     await profileModel.waitFor();
     await page.waitForFunction((id) => Array.from(document.querySelectorAll('select[aria-label="SoR hardware model"] option')).some((option) => option.value === String(id)), imported.modelId);
@@ -537,13 +463,13 @@ async function main() {
     uiLatencyMs.rackwireBarcodeLookupCsrfRefreshClickToDeviceInPlan = Math.round(performance.now() - actionStartedAt);
     assert(Number(sql(`SELECT COUNT(*) FROM barcode_scans WHERE code=${quote(tag)} AND operator=${quote(sessionUser)} AND action='lookup'`)) > 0,
       'successful RackWire lookup must append its barcode audit event');
-    let scannerPlanSaved = false;
-    for (let attempt = 0; attempt < 40 && !scannerPlanSaved; attempt += 1) {
+    let inventoryPlanSaved = false;
+    for (let attempt = 0; attempt < 40 && !inventoryPlanSaved; attempt += 1) {
       const saved = JSON.parse(sql(`SELECT plan_json FROM rw_plans WHERE id=${rackwirePlanId}`));
-      scannerPlanSaved = saved.devices.some((device) => device.assetId === tag && device.serial === serial);
-      if (!scannerPlanSaved) await new Promise((resolve) => setTimeout(resolve, 100));
+      inventoryPlanSaved = saved.devices.some((device) => device.assetId === tag && device.serial === serial);
+      if (!inventoryPlanSaved) await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    assert(scannerPlanSaved, 'RackWire should persist the scanned SoR asset tag and serial on the placed device');
+    assert(inventoryPlanSaved, 'RackWire should persist the scanned SoR asset tag and serial on the placed device');
     const savedResponse = page.waitForResponse((response) =>
       response.url().includes('/api/rackwire/plans') && response.request().method() === 'POST');
     await page.locator(frameSelector).evaluate((element, { note }) => {
@@ -567,55 +493,55 @@ async function main() {
     assert(storedPlan.devices.some((device) => device.assetId === tag && device.serial === serial),
       'RackWire plan persistence must retain the SoR-linked scanned asset');
 
-    const scannerDevice = storedPlan.devices.find((device) => device.assetId === tag);
-    assert(scannerDevice && scannerDevice.uid, 'the scanned physical unit must remain a plan device');
+    const inventoryDevice = storedPlan.devices.find((device) => device.assetId === tag);
+    assert(inventoryDevice && inventoryDevice.uid, 'the scanned physical unit must remain a plan device');
     // Scanner lookup may leave the newly placed device selected. Clear that
     // state so the following pointer click always exercises the UI path.
     await page.locator(frameSelector).evaluate((element) => {
       element.contentWindow.RackWire.select([]);
     });
-    await rackwireFrame.locator(`[data-kind="device"][data-uid="${scannerDevice.uid}"]`).click();
+    await rackwireFrame.locator(`[data-kind="device"][data-uid="${inventoryDevice.uid}"]`).click();
     const portMap = rackwireFrame.locator('input[placeholder="GigabitEthernet0/3=ge-3, Te1/0/1=sfp-1"]');
     await portMap.waitFor({ state: 'visible' });
-    const scannerPortId = await page.locator(frameSelector).evaluate((element, uid) => {
+    const inventoryPortId = await page.locator(frameSelector).evaluate((element, uid) => {
       const frame = element.contentWindow;
       const device = frame.RackWire.getPlan().devices.find((item) => item.uid === uid);
       if (!device) return '';
       const geometry = frame.RW.layout({ groups: device.groups, name: device.name, model: device.model });
       const networkPort = geometry.ports.find((port) => port.domain === 'net');
       return networkPort ? networkPort.id : '';
-    }, scannerDevice.uid);
-    assert(scannerPortId, 'the reviewed RackWire profile must expose a physical port ID');
+    }, inventoryDevice.uid);
+    assert(inventoryPortId, 'the reviewed RackWire profile must expose a physical port ID');
     const mappedSaveWait = page.waitForResponse((response) =>
       response.url().includes('/api/rackwire/plans') && response.request().method() === 'POST'
-        && (response.request().postData() || '').includes(scannerInterfaceName)
-        && (response.request().postData() || '').includes(scannerPortId));
-    await portMap.fill(`${scannerInterfaceName}=${scannerPortId}`);
+        && (response.request().postData() || '').includes(inventoryInterfaceName)
+        && (response.request().postData() || '').includes(inventoryPortId));
+    await portMap.fill(`${inventoryInterfaceName}=${inventoryPortId}`);
     const mappedSave = await mappedSaveWait;
     assert([200, 201].includes(mappedSave.status()), 'the operator port map must save through the RackWire SoR API');
     let mappedPlan = null;
-    let scannerMapPersisted = false;
+    let inventoryMapPersisted = false;
     for (let attempt = 0; attempt < 40; attempt += 1) {
       mappedPlan = JSON.parse(sql(`SELECT plan_json FROM rw_plans WHERE id=${rackwirePlanId}`));
-      const mappedDevice = mappedPlan.devices.find((device) => device.uid === scannerDevice.uid);
-      if (mappedDevice && mappedDevice.ifMap && mappedDevice.ifMap[scannerInterfaceName] === scannerPortId) {
-        scannerMapPersisted = true;
+      const mappedDevice = mappedPlan.devices.find((device) => device.uid === inventoryDevice.uid);
+      if (mappedDevice && mappedDevice.ifMap && mappedDevice.ifMap[inventoryInterfaceName] === inventoryPortId) {
+        inventoryMapPersisted = true;
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    assert(scannerMapPersisted,
+    assert(inventoryMapPersisted,
       `RackWire autosave must persist the operator-selected SoR interface-to-port mapping; last saved plan: ${JSON.stringify(mappedPlan)}`);
     assert(mappedPlan && Array.isArray(mappedPlan.devices), 'RackWire plan should remain persisted after port mapping');
-    const persistedMappedDevice = mappedPlan.devices.find((device) => device.uid === scannerDevice.uid);
+    const persistedMappedDevice = mappedPlan.devices.find((device) => device.uid === inventoryDevice.uid);
     assert(persistedMappedDevice && persistedMappedDevice.ifMap, 'the scanned device should retain its persisted port map');
-    scannerDevice.ifMap = persistedMappedDevice.ifMap;
-    assert.equal(scannerDevice.ifMap[scannerInterfaceName], scannerPortId,
+    inventoryDevice.ifMap = persistedMappedDevice.ifMap;
+    assert.equal(inventoryDevice.ifMap[inventoryInterfaceName], inventoryPortId,
       'the SoR interface name must persist against the reviewed RackWire port ID');
     const peerUid = `peer-${suffix}`;
     const cablePlan = {
-      devices: [scannerDevice, { uid: peerUid, name: peerEntityName, assetId: peerEntityName, groups: [] }],
-      cables: [{ uid: `cable-${suffix}`, a: { dev: scannerDevice.uid }, b: { dev: peerUid },
+      devices: [inventoryDevice, { uid: peerUid, name: peerEntityName, assetId: peerEntityName, groups: [] }],
+      cables: [{ uid: `cable-${suffix}`, a: { dev: inventoryDevice.uid }, b: { dev: peerUid },
         standard: 'cat6', label: committedCableLabel, lengthM: 1.25 }],
       racks: [], notes: [], codeMap: {},
     };
@@ -623,13 +549,13 @@ async function main() {
       data: { dryRun: false, plan: cablePlan },
       headers: { Origin: base, 'X-Solari-CSRF': profileHeaders['x-solari-csrf'] },
     });
-    assert.equal(cableCommit.status(), 200, 'RackWire must commit a cable using the operator-linked scanner unit');
+    assert.equal(cableCommit.status(), 200, 'RackWire must commit a cable using the operator-linked inventory unit');
     const cableCommitData = (await cableCommit.json()).data;
     assert.equal(cableCommitData.created, 1, 'RackWire commit must create the integration cable');
     const storedCable = JSON.parse(sql(`SELECT JSON_ARRAY(id,a_entity_id,b_entity_id,a_interface_id,b_interface_id)
       FROM interconnects WHERE label=${quote(committedCableLabel)} AND deleted_at IS NULL`));
     assert.equal(Number(storedCable[1]), linkedEntityId,
-      'scanner asset tag must resolve through the operator-reviewed SoR entity association');
+      'inventory asset tag must resolve through the operator-reviewed SoR entity association');
     assert.equal(Number(storedCable[2]), peerEntityId,
       'the second cable endpoint must resolve to its canonical SoR entity');
     assert.equal(storedCable[3], null, 'a cable with no port specified must remain entity-level');
@@ -637,19 +563,19 @@ async function main() {
 
     const mappedCablePlan = {
       ...cablePlan,
-      cables: [{ uid: `mapped-cable-${suffix}`, a: { dev: scannerDevice.uid, port: scannerPortId },
+      cables: [{ uid: `mapped-cable-${suffix}`, a: { dev: inventoryDevice.uid, port: inventoryPortId },
         b: { dev: peerUid }, standard: 'cat6', label: mappedCableLabel, lengthM: 1.25 }],
     };
     const mappedCableCommit = await context.request.post(`${base}/api/rackwire/commit`, {
       data: { dryRun: false, plan: mappedCablePlan },
       headers: { Origin: base, 'X-Solari-CSRF': profileHeaders['x-solari-csrf'] },
     });
-    assert.equal(mappedCableCommit.status(), 200, 'RackWire must commit the explicitly mapped scanner interface');
+    assert.equal(mappedCableCommit.status(), 200, 'RackWire must commit the explicitly mapped inventory interface');
     assert.equal((await mappedCableCommit.json()).data.created, 1, 'mapped-port cable commit must create one link');
     const mappedStoredCable = JSON.parse(sql(`SELECT JSON_ARRAY(id,a_interface_id,a_entity_id,b_interface_id,b_entity_id)
       FROM interconnects WHERE label=${quote(mappedCableLabel)} AND deleted_at IS NULL`));
-    assert.equal(Number(mappedStoredCable[1]), scannerInterfaceId,
-      'the scanner endpoint must resolve to the exact SoR interface selected by ifMap');
+    assert.equal(Number(mappedStoredCable[1]), inventoryInterfaceId,
+      'the inventory endpoint must resolve to the exact SoR interface selected by ifMap');
     assert.equal(mappedStoredCable[2], null, 'an interface endpoint must not duplicate its entity-level reference');
     assert.equal(mappedStoredCable[3], null, 'an unmapped peer endpoint must remain entity-level');
     assert.equal(Number(mappedStoredCable[4]), peerEntityId, 'the peer endpoint must retain its canonical SoR entity');
@@ -668,7 +594,7 @@ async function main() {
       ...cablePlan,
       devices: [...cablePlan.devices, { uid: unknownPeerUid, name: unknownPeerEntityName,
         assetId: unknownPeerEntityName, groups: [] }],
-      cables: [{ uid: `unknown-port-${suffix}`, a: { dev: scannerDevice.uid, port: `missing-${suffix}` },
+      cables: [{ uid: `unknown-port-${suffix}`, a: { dev: inventoryDevice.uid, port: `missing-${suffix}` },
         b: { dev: unknownPeerUid }, standard: 'cat6', label: unknownPortCableLabel, lengthM: 1.25 }],
     };
     const unknownPortCommit = await context.request.post(`${base}/api/rackwire/commit`, {
@@ -878,7 +804,7 @@ async function main() {
 
     assert.deepEqual(pageErrors, [], 'browser reported no JavaScript errors');
     assert.deepEqual(externalRequests, [], 'browser made no external requests');
-    console.log('Dashboard browser integration passed: real scanner/SoR/RackWire routes; fixture-backed Discovery UI admission and polling lifecycle. Native Discovery worker behavior is covered by test_scan_worker_browser_e2e.cjs.');
+    console.log('Dashboard browser integration passed: real inventory/SoR/RackWire routes; fixture-backed Discovery UI admission and polling lifecycle. Native Discovery worker behavior is covered by test_scan_worker_browser_e2e.cjs.');
   } catch (error) {
     failure = failure || error;
   } finally {
@@ -894,18 +820,19 @@ async function main() {
       const entityCleanup = fixtureEntityIds.length
         ? `DELETE FROM entities WHERE id IN (${fixtureEntityIds.join(',')});`
         : '';
-      const cleanup = `SET @source_id=(SELECT id FROM sources WHERE slug='scanner-ingest' LIMIT 1);
-        DELETE FROM audit_log WHERE actor_label=${quote(actor)};
+      const cleanup = `DELETE FROM audit_log WHERE actor_label=${quote(actor)};
         DELETE FROM barcode_scans WHERE operator=${quote(sessionUser)};
         DELETE FROM interconnects WHERE label IN (${quote(committedCableLabel)},${quote(mappedCableLabel)},${quote(unknownPortCableLabel)});
         ${entityCleanup}
-        DELETE FROM barcodes WHERE subject_table='hardware_units' AND subject_id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
-        DELETE FROM hardware_units WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_units' AND external_id IN (${assetIds.map(quote).join(',')}));
-        DELETE FROM hardware_models WHERE id IN (SELECT subject_id FROM external_refs WHERE source_id=@source_id AND subject_table='hardware_models' AND external_id IN (${itemIds.map(quote).join(',')}));
-        DELETE FROM external_refs WHERE source_id=@source_id AND external_id IN (${[...itemIds, ...assetIds].map(quote).join(',')});
-        DELETE FROM locations WHERE id IN (${locationIds.map(Number).join(',') || '0'});
-        ${rackwirePlanId ? `DELETE FROM rw_plan_versions WHERE plan_id=${rackwirePlanId}; DELETE FROM rw_plans WHERE id=${rackwirePlanId};` : ''}
-        ${sourceExistedBefore ? '' : "DELETE FROM sources WHERE id=@source_id AND NOT EXISTS (SELECT 1 FROM external_refs WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_models WHERE source_id=@source_id) AND NOT EXISTS (SELECT 1 FROM hardware_units WHERE source_id=@source_id);"}`;
+        DELETE FROM barcodes WHERE id=${Number.isSafeInteger(barcodeId) && barcodeId > 0 ? barcodeId : 0}
+          OR (code=${quote(tag)} AND subject_table='hardware_units');
+        DELETE FROM hardware_units WHERE id=${Number.isSafeInteger(hardwareUnitId) && hardwareUnitId > 0 ? hardwareUnitId : 0}
+          OR (serial=${quote(serial)} AND model_id IN (SELECT id FROM hardware_models WHERE make=${quote(make)} AND model=${quote(model)}));
+        DELETE FROM hardware_models WHERE id=${Number.isSafeInteger(hardwareModelId) && hardwareModelId > 0 ? hardwareModelId : 0}
+          OR (make=${quote(make)} AND model=${quote(model)});
+        DELETE FROM locations WHERE id=${Number.isSafeInteger(locationId) && locationId > 0 ? locationId : 0}
+          OR (name=${quote(locationName)} AND source_id=${Number(manualSource)});
+        ${rackwirePlanId ? `DELETE FROM rw_plan_versions WHERE plan_id=${rackwirePlanId}; DELETE FROM rw_plans WHERE id=${rackwirePlanId};` : ''}`;
       sql(cleanup);
       const remainingScanRows = Number(sql(`SELECT COUNT(*) FROM barcode_scans WHERE operator=${quote(sessionUser)}`));
       assert.equal(remainingScanRows, 0, 'browser fixture cleanup must remove its barcode scan audit rows');

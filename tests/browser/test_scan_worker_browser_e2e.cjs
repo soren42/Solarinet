@@ -408,7 +408,7 @@ async function main() {
     }
 
     // Recover the terminal record from the live monitoring DB after browser
-    // state loss. The active-job UI path is covered by the scanner import
+    // state loss. The active-job UI path is covered by the RackWire inventory
     // integration fixture and the route contract exercises a running row.
     await page.evaluate(() => sessionStorage.removeItem('solari.activeScan'));
     await page.reload({ waitUntil: 'load' });
