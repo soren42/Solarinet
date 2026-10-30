@@ -179,12 +179,12 @@ def configurationText(manifest):
     lines = []
     for zone in manifest["zones"]:
         file = f'{manifest["runtimeRoot"]}/{manifest["generation"]}/zones/{zone["file"]}'
-        if zone["bare"]:
-            policy = "allow-transfer { none; }; notify no;"
-        else:
-            addresses = "; ".join(manifest["transfer"])
-            policy = (f"allow-transfer {{ {addresses}; }}; also-notify {{ {addresses}; }}; notify yes;"
-                      if addresses else "allow-transfer { none; }; notify no;")
+        # Manifests staged before bareTransfer existed kept bare zones local;
+        # honour that so older generations still verify for rollback.
+        targets = manifest.get("bareTransfer", []) if zone["bare"] else manifest["transfer"]
+        addresses = "; ".join(targets)
+        policy = (f"allow-transfer {{ {addresses}; }}; also-notify {{ {addresses}; }}; notify yes;"
+                  if addresses else "allow-transfer { none; }; notify no;")
         lines.append(f'zone "{zone["name"]}" {{ type primary; file "{file}"; {policy} }};')
     return "\n".join(lines) + "\n"
 
@@ -204,7 +204,12 @@ def stageGeneration(config, candidate, trusted=False):
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", runtimeRoot):
         raise ValueError("invalid runtime release path")
     transfer = [str(ipaddress.ip_address(address)) for address in config.get("transfer", [])]
-    manifest = {"version": 1, "runtimeRoot": runtimeRoot, "transfer": transfer, "zones": zones}
+    # Bare single-label zones go to the secondaries that resolve them
+    # (default: every transfer target).
+    bareTransfer = [str(ipaddress.ip_address(address))
+                    for address in config.get("bareTransfer", config.get("transfer", []))]
+    manifest = {"version": 1, "runtimeRoot": runtimeRoot, "transfer": transfer,
+                "bareTransfer": bareTransfer, "zones": zones}
     generation = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
     manifest["generation"] = generation
     destination = root / generation

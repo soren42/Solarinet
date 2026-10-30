@@ -119,7 +119,12 @@ class ReleaseTest(BindFixture):
             release.activate(self.config, n_plus_two)
 
         rollback = release.loadManifest(self.link.resolve())
-        self.assertEqual("failed", json.loads((self.root / "state.json").read_text())["phase"])
+        # Depending on the BIND build the bad zone is rejected either by
+        # prevalidation (state untouched) or after reload (rolled back).
+        state = json.loads((self.root / "state.json").read_text())
+        self.assertIn(state["phase"], ("applied", "failed"))
+        self.assertEqual(active["generation"], state["applied"])
+        self.assertEqual(active["generation"], rollback["generation"])
         self.assertEqual("192.0.2.2", next(z for z in rollback["zones"]
                                              if z["name"] == "example.test")["checkValue"])
         release.verifyServed(self.config, rollback)
@@ -368,6 +373,24 @@ class BootstrapTest(BindFixture):
         self.assertEqual(self.originalParent, self.parent.read_bytes())
         self.assertFalse(self.link.exists())
         self.assertFalse((self.root / "bootstrap.json").exists())
+
+
+class TransferPolicyTest(unittest.TestCase):
+    def manifest(self, **extra):
+        zones = [{"name": "akoria.net", "file": "db.akoria.net", "bare": False},
+                 {"name": "xenon", "file": "db.bare-xenon", "bare": True}]
+        return {"version": 1, "runtimeRoot": "/r", "generation": "g",
+                "transfer": ["192.0.2.1", "192.0.2.2"], "zones": zones, **extra}
+
+    def test_bare_zones_transfer_to_bare_targets(self):
+        text = release.configurationText(self.manifest(bareTransfer=["192.0.2.2"]))
+        self.assertIn('zone "xenon" { type primary; file "/r/g/zones/db.bare-xenon"; '
+                      'allow-transfer { 192.0.2.2; }; also-notify { 192.0.2.2; }; notify yes; };', text)
+        self.assertIn("allow-transfer { 192.0.2.1; 192.0.2.2; }", text)
+
+    def test_legacy_manifest_keeps_bare_zones_local(self):
+        text = release.configurationText(self.manifest())
+        self.assertIn('db.bare-xenon"; allow-transfer { none; }; notify no; };', text)
 
 
 if __name__ == "__main__":
