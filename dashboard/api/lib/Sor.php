@@ -154,7 +154,7 @@ final class Sor
     public static function upsertHost(string $ip, ?string $name): bool
     {
         if (!self::enabled() || $ip === '') {
-            return false;
+            return true;    // SoR not configured / no IP: nothing to commit, mirror may proceed
         }
         $db = null;
         $lock = null;
@@ -211,7 +211,7 @@ final class Sor
     public static function removeHost(string $ip): bool
     {
         if (!self::enabled() || $ip === '') {
-            return false;
+            return true;    // SoR not configured / no IP: nothing to commit, mirror may proceed
         }
         $db = null;
         $lock = null;
