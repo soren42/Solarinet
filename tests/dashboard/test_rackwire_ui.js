@@ -92,7 +92,7 @@ console.log("[1] Babel parse — " + SCREEN);
         ok("pinned RackWire client sends the compare-and-save hash required by the API",
           /if \(this\._planServerHash\) body\.expectedHash = this\._planServerHash/.test(rackwireSource));
         ok("the embedded RackWire source pin contains the current compare-and-save protocol",
-          !!revisionMatch && revisionMatch[1] === "20261030a" && rackwireSource.indexOf("support.js?v=20261030a") !== -1);
+          !!revisionMatch && revisionMatch[1] === "20261030b" && rackwireSource.indexOf("support.js?v=20261030b") !== -1);
         var rackwireMarkup = rackwireSource.replace(/<!--[\s\S]*?-->/g, "");
         var runtimeAssets = Array.from(rackwireMarkup.matchAll(/<script\b([^>]*)>/gi)).map(function (m) {
           var source = /(?:^|\s)src="([^"]+)"/i.exec(m[1]);
@@ -1359,7 +1359,91 @@ async function testAutosaveRecovery() {
   }
 }
 
-testExpiredCsrfRetry().then(testAutosaveRecovery).then(function () {
+async function testSorComparison() {
+  console.log("\n[5] SoR links tab compares persisted links with the plan");
+  var html = readRackWireIndex("SoR comparison check");
+  if (html === null) return;
+  var inline = html.match(/<script[^>]*data-dc-script[^>]*>([\s\S]*?)<\/script>/);
+  ok("inline RackWire component is available for SoR comparison tests", !!inline);
+  if (!inline) return;
+  function TestLogic() { this.state = {}; }
+  TestLogic.prototype.setState = function (patch, done) { this.state = Object.assign({}, this.state, patch); if (done) done(); };
+  var posted = [];
+  var sandbox = {
+    console: console, DCLogic: TestLogic,
+    React: { createElement: function () { return {}; } },
+    location: { protocol: "http:", origin: "https://solarinet.test", search: "?embed=1&solarinet=1&integrated=1" },
+    URLSearchParams: URLSearchParams,
+    localStorage: { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} },
+    setTimeout: function () { return 0; }, clearTimeout: function () {},
+    setInterval: function () { return 0; }, clearInterval: function () {},
+    fetch: async function () { return { ok: false, status: 404, json: async function () { return {}; } }; },
+    addEventListener: function () {}, removeEventListener: function () {},
+    document: { querySelector: function () { return null; } },
+    RWLive: { stop: function () {} },
+    window: null
+  };
+  sandbox.window = sandbox;
+  sandbox.parent = { postMessage: function (m) { posted.push(m); } };
+  sandbox.RW = { DEVICES: [], CABLES: [{ id: "cat6", name: "Cat6", domain: "net", gbps: 1 }, { id: "c13", name: "C13", domain: "power", amps: 10 }] };
+  try {
+    vm.createContext(sandbox);
+    vm.runInContext(inline[1] + "\nwindow.TestComponent = Component;", sandbox, { filename: "rackwire-sor-compare.js" });
+    var app = new sandbox.TestComponent({});
+    var domains = { "sw|p1-1": "net", "sw|p1-2": "net", "fw|p1-1": "net", "sw|pw-1": "power", "pdu|o-1": "power" };
+    app.port = function (dev, pid) { var d = domains[dev + "|" + pid]; return d ? { id: pid, domain: d } : null; };
+    app.std = function (id) { return sandbox.RW.CABLES.find(function (c) { return c.id === id; }) || { id: id, name: id, domain: "net" }; };
+    app.guessStd = function () { return "cat6"; };
+    var uidN = 0;
+    app.uid = function (p) { uidN += 1; return p + uidN; };
+    app.state.devices = [
+      { uid: "sw", name: "Switch", assetId: "AK-SW1", ifMap: { eth1: "p1-1", eth2: "p1-2", psu: "pw-1" } },
+      { uid: "fw", name: "Firewall", assetId: "ak-fw1", ifMap: { wan: "p1-1" } },
+      { uid: "pdu", name: "PDU", assetId: "AK-PDU", ifMap: { out1: "o-1" } },
+      { uid: "dup1", name: "Dup A", assetId: "AK-DUP", ifMap: {} },
+      { uid: "dup2", name: "Dup B", assetId: "AK-DUP", ifMap: {} }
+    ];
+    app.state.cables = [
+      { uid: "c1", a: { dev: "fw", port: "p1-1" }, b: { dev: "sw", port: "p1-1" }, standard: "cat6" },
+      { uid: "c2", a: { dev: "sw", port: "pw-1" }, b: { dev: "pdu", port: "o-1" }, standard: "c13" },
+      { uid: "c3", a: { dev: "sw", port: "p1-2" }, b: { dev: "fw", port: "p1-1" }, standard: "cat6" }
+    ];
+    var end = function (tag, ifName) { return { entity: tag, assetTag: tag, ifName: ifName }; };
+    app.state.sorInterconnects = [
+      { id: 1, linkKind: "copper", a: end("AK-SW1", "ETH1"), b: end("AK-FW1", "wan") },
+      { id: 2, linkKind: "copper", a: end("AK-SW1", "psu"), b: end("AK-PDU", "out1") },
+      { id: 3, linkKind: "fiber", a: end("AK-SW1", "eth2"), b: end("AK-PDU", "out1"), standard: "nope", label: "uplink", lengthM: 2.5 },
+      { id: 4, linkKind: "copper", a: end("AK-DUP", "x"), b: end("AK-SW1", "eth1") },
+      { id: 5, linkKind: "copper", a: end("AK-SW1", "eth9"), b: end("AK-FW1", "wan") }
+    ];
+    var diffs = app.sorDiff();
+    var st = function (id) { return diffs.find(function (r) { return r.id === id; }); };
+    ok("SoR link matches a plan cable in either direction, case-insensitively", st(1).state === "planned" && st(1).matchedCableUid === "c1");
+    ok("kind mismatch across domains is not a match", st(2).state === "sor-only");
+    ok("resolvable SoR link without a plan cable is SoR only", st(3).state === "sor-only" && st(3).endpoints[0].dev === "sw" && st(3).endpoints[1].port === "o-1");
+    ok("ambiguous asset tag is unresolved with a reason", st(4).state === "unmatched" && /AK-DUP/.test(st(4).reason));
+    ok("unmapped interface is unresolved with a reason", st(5).state === "unmatched" && /eth9/.test(st(5).reason));
+    ok("plan-only count covers resolvable unmatched cables only", app.sorPlannedOnlyCount(diffs) === 2);
+    app.addSorCable(st(3));
+    var added = app.state.cables[app.state.cables.length - 1];
+    ok("Add to plan appends an installed cable traced to the SoR row",
+      app.state.cables.length === 4 && added.sourceSoRId === 3 && added.status === "installed" && added.standard === "cat6" && added.lengthM === 2.5 && added.label === "uplink");
+    app.addSorCable(st(1));
+    ok("Add to plan ignores rows already in the plan", app.state.cables.length === 4);
+    var rendered = true;
+    app.T = new Proxy({}, { get: function () { return "#000"; } });
+    app.state.live = { on: false };
+    try { app.renderSorInterconnects(); } catch (e) { rendered = String(e); }
+    ok("SoR links tab renders the comparison", rendered === true, rendered);
+    app.openHostInventory();
+    ok("unresolved rows route the host to its Inventory panel",
+      posted.length === 1 && posted[0].source === "rackwire" && posted[0].event === "navigate" && posted[0].payload.route === "inventory");
+  } catch (e) {
+    ok("SoR comparison behavior completes", false, String(e.stack || e));
+  }
+}
+
+testExpiredCsrfRetry().then(testAutosaveRecovery).then(testSorComparison).then(function () {
   console.log("\n" + pass + " passed, " + fail + " failed\n");
   process.exit(fail ? 1 : 0);
 }).catch(function (e) {
