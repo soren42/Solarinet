@@ -379,6 +379,8 @@ jobs:
         run: python3 -m unittest discover -s netdb -p test_gen_zones.py -v
       - name: DNS activation and rollback against isolated BIND
         run: python3 -m unittest discover -s deploy/dns-release -p test_release.py -v
+      - name: Staged DNS rollback drill in a disposable BIND container
+        run: python3 deploy/dns-release/test_container_rollback_drill.py
       - name: Khadas secondary zone inventory and refresh tests
         run: python3 -m unittest discover -s deploy/dns-khadas -p 'test_*.py' -v
       - name: Bare-zone transfer ACL and serial preservation tests
