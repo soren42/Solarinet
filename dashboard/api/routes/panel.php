@@ -893,7 +893,7 @@ return static function (Router $router): void {
                FROM panelState WHERE stateId = 1'
         );
         Response::ok(['panelState' => $stored]);
-    });
+    }, ['auth' => 'session', 'csrf' => 'panel-service']);   // handler restricts to panel service principal
 
     /**
      * Upsert the panel's per-screen enable/weight CONFIG report (CONTRACT-AW §3.3).
@@ -936,5 +936,5 @@ return static function (Router $router): void {
             'flags' => (int) $stored['flags'],
             'reportedAt' => $stored['reportedAt'],
         ]]);
-    });
+    }, ['auth' => 'session', 'csrf' => 'panel-service']);   // handler restricts to panel service principal
 };

@@ -37,6 +37,16 @@ require_once __DIR__ . '/Operator.php';
  *   - a same-origin Origin (or, absent that, a same-origin Referer); and
  *   - a session-bound synchronizer token echoed in X-Solari-CSRF.
  * SameSite=Lax remains as defense in depth, not as the authority mechanism.
+ *
+ * SERVICE-PRINCIPAL CSRF BRIDGE
+ * -----------------------------
+ * A route may additionally declare ['csrf' => 'panel-service']. Its writes skip
+ * the CSRF check ONLY when the session principal is the local panel service
+ * account (source=local, username=panel, role=viewer). That cookie lives solely
+ * in the panel daemon's in-memory curl jar, so no victim browser can carry it.
+ * Any other principal on such a route still gets the full CSRF check. This is a
+ * rolling-upgrade bridge for deployed daemons that predate X-Solari-CSRF;
+ * remove it once the daemon echoes the login csrfToken.
  */
 final class Policy
 {
@@ -92,7 +102,7 @@ final class Policy
         Auth::requireSession();
 
         // Cookie-auth state-changing requests must prove same-origin + token.
-        if (self::isWrite($method)) {
+        if (self::isWrite($method) && !self::isCsrfBridged($policy, Auth::current())) {
             self::enforceCsrf($method);
         }
 
@@ -117,6 +127,23 @@ final class Policy
      * Enforce Origin/Referer + synchronizer token on a state-changing request.
      * Terminates with 403 on any failure.
      */
+    /**
+     * True if the route opted into the service-principal CSRF bridge AND the
+     * caller is that service principal. Pure, so it is directly unit-testable.
+     *
+     * @param array<string,mixed>       $policy    the route's declared policy
+     * @param array<string,mixed>|null  $principal Auth::current()
+     */
+    public static function isCsrfBridged(array $policy, ?array $principal): bool
+    {
+        if (($policy['csrf'] ?? null) !== 'panel-service' || $principal === null) {
+            return false;
+        }
+        return ($principal['source'] ?? null) === 'local'
+            && ($principal['username'] ?? null) === 'panel'
+            && ($principal['role'] ?? null) === 'viewer';
+    }
+
     private static function enforceCsrf(string $method): void
     {
         $origin = self::requestOrigin();

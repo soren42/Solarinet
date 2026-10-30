@@ -16,6 +16,8 @@ declare(strict_types=1);
  *     POST /api/auth/logout -> session  (authenticated, CSRF-protected)
  *     POST /api/enrollments -> public   (256-bit bearer token + CSR bootstrap)
  *     POST /api/enrollments/ack -> public (same bearer confirms cert installation)
+ *     POST /api/panel/state|config -> session (handler admits only the local
+ *                                  panel service principal; csrf=panel-service)
  *
  * This is the guard that catches a NEW ungated write route the moment it is
  * added — the exact regression (~13 silently-ungated writes) that motivated the
@@ -61,6 +63,10 @@ $writeExceptions = [
     'POST /api/auth/logout' => 'session',
     'POST /api/enrollments' => 'public',
     'POST /api/enrollments/ack' => 'public',
+    // Panel daemon service writes: the handler admits only the local panel
+    // service principal (a viewer); Policy's csrf=panel-service bridge applies.
+    'POST /api/panel/state'  => 'session',
+    'POST /api/panel/config' => 'session',
 ];
 
 $readable = static function (string $regex): string {

@@ -72,6 +72,35 @@ if (is_string($scenario) && $scenario !== '') {
             $_SESSION['solari_csrf'] = $tok;
             $_SERVER['HTTP_X_SOLARI_CSRF'] = $tok;
             break;
+        // Service-principal CSRF bridge: only the panel principal, only on a
+        // route that opted in. No CSRF header and no Origin in any of these.
+        case 'panel-bridged':
+        case 'panel-unbridged':
+        case 'operator-bridged':
+            unset($_SERVER['HTTP_ORIGIN']);
+            // Auth::current() re-validates local principals against the store.
+            $store = tempnam(sys_get_temp_dir(), 'solari-auth-');
+            file_put_contents($store, json_encode(['version' => 1, 'users' => [
+                ['username' => 'panel', 'role' => 'viewer', 'displayName' => 'Panel'],
+            ]]));
+            $rate = $store . '.rate';
+            mkdir($rate, 0700);
+            register_shutdown_function(static function () use ($store, $rate): void {
+                @unlink($store);
+                @rmdir($rate);
+            });
+            putenv('SOLARI_AUTH_FILE=' . $store);
+            putenv('SOLARI_AUTH_RATE_DIR=' . $rate);
+            putenv('SOLARI_LOCAL_LOGIN=1');
+            $_SESSION['solari'] = $scenario === 'operator-bridged'
+                ? $mk('operator')
+                : ['username' => 'panel', 'role' => 'viewer',
+                   'displayName' => 'Panel', 'source' => 'local'];
+            $_SESSION['solari_csrf'] = $tok;
+            $policy = $scenario === 'panel-unbridged'
+                ? ['auth' => 'session']
+                : ['auth' => 'session', 'csrf' => 'panel-service'];
+            break;
         case 'read-session':
             $method = 'GET';
             $_SESSION['solari'] = $mk('viewer');                // reads need only a session
@@ -135,6 +164,9 @@ $cases = [
     ['write-badtoken',    'forbidden',    'same-origin, wrong CSRF token -> 403'],
     ['write-viewer',      'forbidden',    'F-02: viewer w/ valid CSRF still blocked -> 403'],
     ['write-ok-operator', 'PASS',         'operator+same-origin+valid token -> allow'],
+    ['panel-bridged',     'PASS',         'panel principal on csrf=panel-service route, no token -> allow'],
+    ['panel-unbridged',   'forbidden',    'panel principal on a normal route, no token -> 403'],
+    ['operator-bridged',  'forbidden',    'non-panel principal on bridged route, no token -> 403'],
     ['read-session',      'PASS',         'GET with a session -> allow'],
     ['read-nosession',    'unauthorized', 'GET without a session -> 401'],
     ['public-route',      'PASS',         'public route, no session -> allow'],
