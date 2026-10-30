@@ -3,6 +3,8 @@ import sys
 import types
 import unittest
 import configparser
+import os
+import re
 from unittest.mock import patch
 
 # The publishing decision needs no broker or DB client. Supply only the import
@@ -122,6 +124,30 @@ name = emitter_db
         self.assertEqual(frozenset({"vlans"}), sor_emitd.optional_tables(config))
         config.read_string("[amqp]\noptional_tables =\n")
         self.assertEqual(frozenset(), sor_emitd.optional_tables(config))
+
+    def test_every_cdc_table_is_bound_or_optional(self):
+        # A mandatory publish with no bound queue returns unroutable and holds
+        # the checkpoint, so every outbox-writing table needs a consumer or an
+        # optional default.
+        here = os.path.dirname(os.path.abspath(__file__))
+        root = os.path.normpath(os.path.join(here, "..", ".."))
+        sql_dirs = [os.path.join(root, "netdb", "sor", "migrations"), os.path.join(here, "sql")]
+        cdc = set()
+        for d in sql_dirs:
+            for name in os.listdir(d):
+                if name.endswith(".sql"):
+                    with open(os.path.join(d, name)) as f:
+                        cdc |= set(re.findall(
+                            r"INSERT\s+INTO\s+sor_outbox\s*\([^)]*\)\s*VALUES\s*\(\s*'([a-z_]+)'",
+                            f.read()))
+        bound = set()
+        for name in ("sor_apply_dnsd.py", "sor_apply_ad.py", "sor_apply_pihole.py"):
+            with open(os.path.join(here, name)) as f:
+                bound |= set(re.findall(r'"sor\.([a-z_]+)\.\*"', f.read()))
+        self.assertIn("vlans", cdc)
+        self.assertIn("entities", bound)
+        optional = sor_emitd.optional_tables(configparser.ConfigParser())
+        self.assertEqual(set(), cdc - bound - optional)
 
     def test_empty_batch_keeps_checkpoint(self):
         db = FakeDb()
