@@ -292,7 +292,13 @@ solariStatus serverIngestValidate(serverContext *ctx,
     identityStatus = serverDbNodeIdentity(ctx->db, hdr->sourceNodeId,
                                            peerCertCn, &enrolledRole,
                                            enrolledHost, sizeof enrolledHost);
-    if (identityStatus != SOLARI_OK) return identityStatus;
+    if (identityStatus != SOLARI_OK) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest reject: cert identity does not match node src=0x%llx (%s)",
+                   (unsigned long long)hdr->sourceNodeId,
+                   identityStatus == ERR_AUTH_ROLE ? "not enrolled" : "lookup failed");
+        return identityStatus;
+    }
     role = serverIngestRoleFromCn(peerCertCn);
     if (strcasecmp(peerCertCn, enrolledHost) == 0) {
         switch (enrolledRole) {
