@@ -290,8 +290,9 @@ on a passing server run remains unverified.
 (status `1`). All 14 jobs passed, including the server Discovery browser with recursive RackWire
 checkout, dashboard, RackWire browser, all four RabbitMQ compatibility jobs, protocol fuzz, core,
 panel, Python integrations, and Linux ARM64, Linux ARM32, and Windows cross builds. The dashboard
-job also passed scanner import through authenticated HTTP routes, scanner/RackWire browser
-integration, packaged release-tree browser acceptance, and deployment/rollback contracts. This
+job also passed the authenticated dashboard inventory HTTP contract, RackWire browser integration,
+packaged release-tree browser acceptance, and deployment/rollback contracts. The current HTTP step
+is named “Dashboard inventory HTTP coverage and retired route contract.” This
 verifies the CI checkout fix on Forgejo. GitHub PR CI has since run and failed at its DNS
 preflight, described below; main promotion, synchronized release publication, and service
 deployment remain behind the wider RC review.

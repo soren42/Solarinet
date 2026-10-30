@@ -63,14 +63,6 @@ function text(node) {
 }
 
 async function main() {
-  const snapshot = {
-    schema_version: 1,
-    items: [
-      { id: "item-1", name: "Switch", manufacturer: "Acme", model: "S1", category: "switch", archived: 0 },
-      { id: "item-2", name: "Wireless device", manufacturer: "Acme", model: "W1", category: "Wi-Fi device", archived: 0 },
-    ],
-    assets: [{ id: "asset-1", item_id: "item-1", tag: "TAG-1", location: "Nook", status: "in_stock", archived: 0 }],
-  };
   const profileCalls = [];
   const entityLinkCalls = [];
   const entityLinkReads = [];
@@ -78,11 +70,11 @@ async function main() {
   const React = reactShim();
   const env = {
     console, Promise, Date, Number, Math, JSON, Object, Array, Set, String,
-    SOLARI: { source: "live", fmt: { usd: (x) => String(x) }, inventory: { models: [{ id: 1, make: "Acme", model: "Test switch" }], units: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, model_id: 1, stock_status: "in_stock" })), locations: [{ id: 9103, name: "Painted Fern" }, { id: 9104, name: "Painted Fern" }], receipts: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, vendor: "Receipt " + (i + 1), subtotal_cents: 100 })), projects: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, name: "Project " + (i + 1), status: "active" })), allocations: [] },
+    SOLARI: { source: "live", fmt: { usd: (x) => String(x) }, inventory: { models: [{ id: 1, make: "Acme", model: "Test switch" }], units: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, model_id: 1, stock_status: "in_stock" })), locations: [{ id: 9103, name: "Painted Fern" }], receipts: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, vendor: "Receipt " + (i + 1), subtotal_cents: 100 })), projects: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, name: "Project " + (i + 1), status: "active" })), allocations: [] },
       api: {
         inventory: () => Promise.resolve({ models: [{ id: 1, make: "Acme", model: "Test switch", hw_type: "switch" }],
           units: Array.from({ length: 101 }, (_, i) => ({ id: i + 1, model_id: 1, stock_status: "in_stock" })),
-          locations: [{ id: 9103, name: "Painted Fern" }, { id: 9104, name: "Painted Fern" }], receipts: [], projects: [], allocations: [] }),
+          locations: [{ id: 9103, name: "Painted Fern" }], receipts: [], projects: [], allocations: [] }),
         inventoryEntityLink: (unitId, query) => { entityLinkReads.push({ unitId, query }); return Promise.resolve({
           unit: { id: unitId, assetTag: "SCAN-1", serial: "SER-1" }, entity: null,
           candidates: [{ id: 501, name: "chlorine", entityType: "server", lifecycle: "active" }],
@@ -94,7 +86,7 @@ async function main() {
         refresh: () => Promise.resolve(),
       } },
     Icon: () => null, DangerModal: () => null, __solariToast: () => {},
-    FileReader: function () { this.readAsText = function () { this.result = JSON.stringify(snapshot); this.onload(); }; },
+
   };
   env.window = env; env.React = React;
   vm.createContext(env);
@@ -126,6 +118,7 @@ async function main() {
   all(tree, (n) => n.tag === "button" && text(n) === "Next")[0].props.onClick(); tree = draw();
   if (projectCards().length !== 1) throw new Error("project pagination did not render the final page");
   const componentsTab = all(tree, (n) => n.tag === "button" && text(n) === "Components")[0];
+  if (!componentsTab) throw new Error("Components tab is missing after returning from the project view");
   componentsTab.props.onClick(); tree = draw();
   const openProfiles = all(tree, (n) => n.tag === "button" && text(n) === "RackWire device profiles")[0];
   if (!openProfiles) throw new Error("RackWire profile editor entry is missing");

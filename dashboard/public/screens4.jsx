@@ -155,11 +155,6 @@
       });
     }
 
-    function openRackWireProfiles() {
-      setTab("components");
-      setShowRackWireProfiles(true);
-    }
-
     // Live re-read on mount (offline keeps the fixture working copy).
     useEffect(function () {
       loadInventory().catch(function () {});

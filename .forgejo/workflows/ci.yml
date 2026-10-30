@@ -752,7 +752,7 @@ jobs:
           SOR_DB_USER: root
           SOR_DB_PASS: rwci_scratch
         run: php tests/dashboard/test_sor_transactions.php
-      - name: RackWire barcode HTTP and retired route contract
+      - name: Dashboard inventory HTTP coverage and retired route contract
         env:
           SOLARI_TEST_SOR_DB: '1'
           SOR_DB_HOST: 127.0.0.1
@@ -760,7 +760,7 @@ jobs:
           SOR_DB_NAME: solarinet_stage
           SOR_DB_USER: root
           SOR_DB_PASS: rwci_scratch
-        run: php tests/dashboard/test_rackwire_barcode_http.php
+        run: php tests/dashboard/test_inventory_http.php
       - name: RackWire inventory integration through the authenticated dashboard browser flow
         env:
           NODE_PATH: /tmp/dashboard-playwright/node_modules
