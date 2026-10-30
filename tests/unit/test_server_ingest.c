@@ -304,17 +304,49 @@ static void test_report_identity_requires_one_complete_session(void)
     header.msgType = SCP_MSG_CLIENT_REPORT;
     header.seqNo = 7;
     solariTlvWriterInit(&writer, payload, sizeof payload);
-    TEST_ASSERT_NOT_EQUAL(SOLARI_OK, serverReportIdentity(&header, payload, 0, &receipt));
+    TEST_ASSERT_NOT_EQUAL(SOLARI_OK, serverReportIdentity(&header, payload, 0, false, &receipt));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         solariTlvAppend(&writer, TLV_REPORT_SESSION, session, sizeof session));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        serverReportIdentity(&header, payload, writer.len, &receipt));
+        serverReportIdentity(&header, payload, writer.len, false, &receipt));
     TEST_ASSERT_EQUAL_MEMORY(session, receipt.session, sizeof session);
     TEST_ASSERT_EQUAL_UINT32(7, receipt.seqNo);
+    TEST_ASSERT_FALSE(receipt.legacy);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         solariTlvAppend(&writer, TLV_REPORT_SESSION, session, sizeof session));
     TEST_ASSERT_NOT_EQUAL(SOLARI_OK,
-        serverReportIdentity(&header, payload, writer.len, &receipt));
+        serverReportIdentity(&header, payload, writer.len, true, &receipt));
+}
+
+static void test_legacy_report_admitted_only_one_way_and_opted_in(void)
+{
+    serverContext ctx;
+    serverConfig cfg;
+    solariFrameHeader header;
+    serverReportReceipt receipt;
+    uint8_t payload[1] = {0};
+    memset(&ctx, 0, sizeof ctx);
+    memset(&header, 0, sizeof header);
+    memset(&cfg, 0, sizeof cfg);
+    ctx.cfg = &cfg;
+    memset(g_dedup, 0, sizeof g_dedup);
+    header.msgType = SCP_MSG_CLIENT_REPORT;
+    header.sourceNodeId = 0x51;
+    header.seqNo = 9;
+
+    /* default: a session-less report is rejected */
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
+
+    /* opted in: admitted once as legacy, its replay is dropped */
+    cfg.allowLegacyReports = true;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
+    TEST_ASSERT_TRUE(receipt.legacy);
+    TEST_ASSERT_EQUAL_INT(ERR_CONN_RETRY, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
+
+    /* an ACK-requesting sender must carry a session even when opted in */
+    header.seqNo = 10;
+    header.flags = SCP_FLAG_ACK_REQ;
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, serverReportAdmit(&ctx, &header, payload, 0, &receipt));
 }
 
 static void test_report_validation_never_marks_before_commit(void)
@@ -358,6 +390,7 @@ int main(void)
     RUN_TEST(test_dedup_basic);
     RUN_TEST(test_dedup_window_rolls_over);
     RUN_TEST(test_report_identity_requires_one_complete_session);
+    RUN_TEST(test_legacy_report_admitted_only_one_way_and_opted_in);
     RUN_TEST(test_report_validation_never_marks_before_commit);
     return UNITY_END();
 }

@@ -442,6 +442,11 @@ int main(int argc, char **argv)
         solariLogf(SOLARI_LOG_WARN, "no --config; using defaults");
     }
 
+    if (cfg.allowLegacyReports)
+        solariLogf(SOLARI_LOG_WARN,
+                   "ingest: allowLegacyReports on; session-less one-way reports "
+                   "accepted without durable receipts (upgrade agents, then disable)");
+
     rc = serverContextInit(&ctx, &cfg);
     if (rc != SOLARI_OK) {
         solariLogf(SOLARI_LOG_FATAL, "context init failed: %s", solariStrError(rc));

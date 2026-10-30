@@ -100,6 +100,12 @@ typedef struct {
     /* discovery / provisioning policy (Handoff §7.1) - conservative default */
     bool     autoDiscover;                   /* default true                 */
     bool     autoEnroll;                     /* default false                */
+
+    /* Rolling-upgrade bridge: accept one-way CLIENT/MONITOR reports that
+     * predate TLV_REPORT_SESSION (pre-F-10 agents). They get the in-memory
+     * seqNo replay guard instead of a durable receipt. Remove once every
+     * agent is upgraded. */
+    bool     allowLegacyReports;             /* default false                */
 } serverConfig;
 
 /* Defaults: dbPort 3306, pool 4, lease 5/15s, autoDiscover on, autoEnroll off. */
@@ -358,6 +364,7 @@ typedef struct {
     uint32_t seqNo;
     uint8_t msgType;
     uint8_t payloadHash[32];
+    bool legacy;          /* no session: skip the durable receipt */
 } serverReportReceipt;
 
 /* Receipt + hostCurrent + hostHistory in one txn. ERR_CONN_RETRY means the

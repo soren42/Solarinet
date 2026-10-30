@@ -897,6 +897,7 @@ static void test_failed_report_does_not_poison_receipt(void)
     memset(&ctx, 0, sizeof ctx);
     memset(&report, 0, sizeof report);
     memset(&receipt, 0x55, sizeof receipt);
+    receipt.legacy = false;
     receipt.msgType = SCP_MSG_CLIENT_REPORT;
     ctx.cfg = &g_cfg;
     ctx.db = g_db;
@@ -926,6 +927,7 @@ static void test_monitor_report_is_persisted_once(void)
     memset(&ctx, 0, sizeof ctx);
     memset(&report, 0, sizeof report);
     memset(&receipt, 0x66, sizeof receipt);
+    receipt.legacy = false;
     ctx.cfg = &g_cfg;
     ctx.db = g_db;
     receipt.msgType = SCP_MSG_MONITOR_REPORT;

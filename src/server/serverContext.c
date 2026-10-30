@@ -141,6 +141,7 @@ void serverConfigDefaults(serverConfig *out)
     /* discovery / provisioning policy (Handoff §7.1) - conservative default */
     out->autoDiscover = true;
     out->autoEnroll   = false;
+    out->allowLegacyReports = false;
 
     /* PHP→host security boundary (Task #1): off by default so an un-migrated
      * deployment keeps its current behaviour; a hardened host opts in via [ctl]
@@ -281,6 +282,8 @@ solariStatus serverConfigFromFile(const char *path, serverConfig *out)
                                             out->autoDiscover);
     out->autoEnroll   = solariConfigGetBool(c, "discovery", "autoEnroll",
                                             out->autoEnroll);
+    out->allowLegacyReports = solariConfigGetBool(c, "ingest", "allowLegacyReports",
+                                                  out->allowLegacyReports);
 
     /* PHP→host security boundary (Task #1). [ctl] section; uids/gid accept a
      * numeric id or a system name (e.g. dashboardUid=www-solari). */

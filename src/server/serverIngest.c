@@ -407,9 +407,12 @@ static solariStatus serverIngestApplyCrlActivation(serverContext *ctx,
 }
 
 /* Reports carry a restart-safe identity. Receipt insertion happens only in
- * the same transaction as current/history writes, never during validation. */
+ * the same transaction as current/history writes, never during validation.
+ * allowLegacy admits a session-less report only when it was sent one-way
+ * (no ACK requested), which is how pre-session agents deliver. */
 static solariStatus serverReportIdentity(const solariFrameHeader *hdr,
                                          const uint8_t *payload, size_t len,
+                                         bool allowLegacy,
                                          serverReportReceipt *receipt)
 {
     solariTlvReader reader;
@@ -428,8 +431,30 @@ static solariStatus serverReportIdentity(const solariFrameHeader *hdr,
         found = true;
     }
     if (rc != ERR_TLV_END) return rc;
-    if (!found) return ERR_INVALID_ARG;
+    if (!found) {
+        if (!allowLegacy || (hdr->flags & SCP_FLAG_ACK_REQ) != 0) return ERR_INVALID_ARG;
+        receipt->legacy = true;
+    }
     solariSha256(payload, len, receipt->payloadHash);
+    return SOLARI_OK;
+}
+
+/* Identity for a durable report. A legacy report has no receipt, so it falls
+ * back to the in-memory seqNo replay guard; a replay is ERR_CONN_RETRY. */
+static solariStatus serverReportAdmit(serverContext *ctx,
+                                      const solariFrameHeader *hdr,
+                                      const uint8_t *payload, size_t len,
+                                      serverReportReceipt *receipt)
+{
+    solariStatus rc = serverReportIdentity(hdr, payload, len,
+                                           ctx->cfg && ctx->cfg->allowLegacyReports,
+                                           receipt);
+    if (rc != SOLARI_OK || !receipt->legacy) return rc;
+    if (serverDedupSeen(hdr->sourceNodeId, hdr->seqNo, solariNowUnixMs()))
+        return ERR_CONN_RETRY;
+    solariLogf(SOLARI_LOG_DEBUG, "ingest legacy report src=0x%llx seq=%u msgType=0x%02x",
+               (unsigned long long)hdr->sourceNodeId, (unsigned)hdr->seqNo,
+               (unsigned)hdr->msgType);
     return SOLARI_OK;
 }
 
@@ -453,7 +478,8 @@ static solariStatus serverIngestClientReport(serverContext *ctx,
         return rc;
     }
 
-    rc = serverReportIdentity(hdr, payload, len, &receipt);
+    rc = serverReportAdmit(ctx, hdr, payload, len, &receipt);
+    if (rc == ERR_CONN_RETRY) return SOLARI_OK;    /* legacy replay */
     if (rc != SOLARI_OK) return rc;
     rc = serverDbWriteClientReport(ctx, hdr->sourceNodeId, &rep, &receipt);
     if (rc == ERR_CONN_RETRY) return SOLARI_OK;    /* already committed; no repeat alerts */
@@ -499,7 +525,8 @@ static solariStatus serverIngestMonitorReport(serverContext *ctx,
         return rc;
     }
 
-    rc = serverReportIdentity(hdr, payload, len, &receipt);
+    rc = serverReportAdmit(ctx, hdr, payload, len, &receipt);
+    if (rc == ERR_CONN_RETRY) return SOLARI_OK;    /* legacy replay */
     if (rc != SOLARI_OK) return rc;
     rc = serverDbWriteMonitorReport(ctx, hdr->sourceNodeId, &rep, &receipt);
     if (rc == ERR_CONN_RETRY) return SOLARI_OK;

@@ -38,6 +38,12 @@ leaseTtlSec = 15
 autoDiscover = true
 autoEnroll = false
 
+[ingest]
+# Rolling-upgrade bridge only. true accepts one-way reports from agents that
+# predate TLV_REPORT_SESSION (no durable receipt; in-memory replay guard).
+# Set false once every client/monitor runs a session-aware build.
+allowLegacyReports = false
+
 [ctl]
 enforcePeer = true
 operatorUid = solari

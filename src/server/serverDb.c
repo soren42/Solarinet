@@ -2351,7 +2351,7 @@ solariStatus serverDbWriteClientReport(serverContext *ctx, uint64_t nodeId,
     /* One transaction: upsert current (+ JSON detail) + procs + history (§9.1). */
     if (dbReportBegin(conn) != SOLARI_OK) return ERR_DB;
 
-    rc = dbReportReceipt(conn, nodeId, receipt);
+    rc = receipt->legacy ? SOLARI_OK : dbReportReceipt(conn, nodeId, receipt);
     if (rc != SOLARI_OK) return dbReportFinish(ctx->db, conn, false, rc);
 
     rc = dbStmtPrepare(conn, SQL_CUR, &st);
@@ -2438,7 +2438,7 @@ solariStatus serverDbWriteMonitorReport(serverContext *ctx, uint64_t nodeId,
 
     if (dbReportBegin(conn) != SOLARI_OK) return ERR_DB;
 
-    rc = dbReportReceipt(conn, nodeId, receipt);
+    rc = receipt->legacy ? SOLARI_OK : dbReportReceipt(conn, nodeId, receipt);
     if (rc != SOLARI_OK) goto fail_nostmt;
 
     rc = dbStmtPrepare(conn, SQL_CUR, &stCur);
