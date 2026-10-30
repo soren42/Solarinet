@@ -92,7 +92,7 @@ console.log("[1] Babel parse — " + SCREEN);
         ok("pinned RackWire client sends the compare-and-save hash required by the API",
           /if \(this\._planServerHash\) body\.expectedHash = this\._planServerHash/.test(rackwireSource));
         ok("the embedded RackWire source pin contains the current compare-and-save protocol",
-          !!revisionMatch && revisionMatch[1] === "20261023a" && rackwireSource.indexOf("support.js?v=20261023a") !== -1);
+          !!revisionMatch && revisionMatch[1] === "20261030a" && rackwireSource.indexOf("support.js?v=20261030a") !== -1);
         var rackwireMarkup = rackwireSource.replace(/<!--[\s\S]*?-->/g, "");
         var runtimeAssets = Array.from(rackwireMarkup.matchAll(/<script\b([^>]*)>/gi)).map(function (m) {
           var source = /(?:^|\s)src="([^"]+)"/i.exec(m[1]);
@@ -111,7 +111,8 @@ console.log("[1] Babel parse — " + SCREEN);
       ok("embedded frame and standalone link share the RackWire cache revision",
         /const RW_V = "[^"]+";/.test(src) &&
         /href=\{`rackwire\/index\.html\?v=\$\{RW_V\}`\}/.test(src) &&
-        /src=\{`rackwire\/index\.html\?embed=1&solarinet=1&v=\$\{RW_V\}`\}/.test(src));
+        /src=\{`rackwire\/index\.html\?embed=1&solarinet=1&integrated=1&v=\$\{RW_V\}`\}/.test(src) &&
+        !/href=\{`rackwire\/index\.html\?[^`]*integrated=1/.test(src));
     } catch (e) {
       ok(SCREEN + " parses clean", false, String(e.message).split("\n")[0]);
     }
@@ -334,9 +335,37 @@ console.log("\n[2] token bridge — every --sn-* token used is bridged to a dash
 
 /* --------------------------------------------------- [3] stale CSRF retry --- */
 async function testExpiredCsrfRetry() {
-  console.log("\n[3] stale dashboard CSRF token retries once with a refreshed token");
   var html = readRackWireIndex("CSRF retry check");
   if (html === null) return;
+  console.log("[0] portable runtime does not cross the backend boundary");
+  var modeMatch = html.match(/const RW_HTTP_ORIGIN = location\.protocol === 'http:'[\s\S]*?function rwOnline\(\) \{ return RW_INTEGRATED; \}/);
+  var fetchStart = html.indexOf("async function rwFetch(");
+  var fetchEnd = html.indexOf("\n}\n\n/*", fetchStart);
+  ok("portable-mode and rwFetch runtime sources are available", !!modeMatch && fetchStart >= 0 && fetchEnd > fetchStart);
+  if (modeMatch && fetchStart >= 0 && fetchEnd > fetchStart) {
+    var modeSource = modeMatch[0];
+    var fetchSource = html.slice(fetchStart, fetchEnd + 2);
+    async function exerciseRuntime(protocol, search) {
+      var requests = [];
+      var sandbox = {
+        location: { protocol: protocol, search: search }, URLSearchParams: URLSearchParams,
+        API: "/api/rackwire",
+        fetch: async function (url) { requests.push(url); return { ok: true, status: 200, json: async function () { return { ok: true, data: { connected: true } }; } }; }
+      };
+      var result = await vm.runInNewContext(modeSource + "\n" + fetchSource + "\nrwFetch('/plans')", sandbox);
+      return { requests: requests, result: result };
+    }
+    try {
+      var standaloneHttp = await exerciseRuntime("http:", "");
+      ok("plain HTTP standalone mode makes no API request", standaloneHttp.requests.length === 0 && standaloneHttp.result === null);
+      var integrated = await exerciseRuntime("https:", "?embed=1&integrated=1");
+      ok("explicit integrated mode enables the authenticated same-origin API adapter",
+        integrated.requests.length === 1 && integrated.requests[0] === "/api/rackwire/plans" && integrated.result.connected === true);
+      var fileMode = await exerciseRuntime("file:", "?integrated=1");
+      ok("file mode stays portable even if an integration flag is present", fileMode.requests.length === 0 && fileMode.result === null);
+    } catch (e) { ok("portable-mode runtime boundary exercises cleanly", false, String(e.message).split("\n")[0]); }
+  }
+  console.log("\n[3] stale dashboard CSRF token retries once with a refreshed token");
 
   function makeResponse(status, body) {
     return {
@@ -554,7 +583,7 @@ async function testAutosaveRecovery() {
   var sandbox = {
     console: console, DCLogic: TestLogic,
     React: { createElement: function () { return {}; } },
-    location: { protocol: "http:", origin: "https://solarinet.test", search: "" },
+    location: { protocol: "http:", origin: "https://solarinet.test", search: "?embed=1&solarinet=1&integrated=1" },
     URLSearchParams: URLSearchParams,
     localStorage: {
       getItem: function (key) { return saved.has(key) ? saved.get(key) : null; },
@@ -563,6 +592,9 @@ async function testAutosaveRecovery() {
     },
     setTimeout: function (fn, ms) { nextTimer += 1; timers.set(nextTimer, { fn: fn, ms: ms }); return nextTimer; },
     clearTimeout: function (id) { timers.delete(id); },
+    // Integrated mode polls SoR links; the poll is irrelevant to autosave recovery.
+    setInterval: function () { return 0; },
+    clearInterval: function () {},
     fetch: null, prompt: function () { return "Recovered copy"; }, confirm: function () { return true; }, alert: function () {},
     addEventListener: function () {},
     document: { querySelector: function () { return null; } },
@@ -1321,10 +1353,7 @@ async function testAutosaveRecovery() {
     ok("shared-save status keeps the local recovery warning visible", /shared plan saved/i.test(blocked.state.saved) && /local recovery unavailable/i.test(blocked.state.saved));
     ok("shared plan identity stays available in memory when browser storage is blocked", blocked.planId() === "73");
 
-    sandbox.location.protocol = "file:";
-    var offline = new sandbox.TestComponent({});
-    offline.persist(true);
-    ok("standalone file mode keeps the plan local without a permanent retry timer", !timers.has(offline._planT));
+    // Portable/file mode is fixed at load (RW_INTEGRATED); see the [0] runtime boundary checks.
   } catch (e) {
     ok("autosave failure/reload/recovery behavior completes", false, String(e.stack || e));
   }

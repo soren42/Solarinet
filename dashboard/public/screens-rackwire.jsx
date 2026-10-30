@@ -51,7 +51,7 @@
   // Release tag, in step with the ?v= on the script tags in public/index.html.
   // The frame is a separate document, so the SPA's own cache-bust does not reach
   // it — without this an operator keeps a stale planner after a deploy.
-  const RW_V = "20261023a";
+  const RW_V = "20261030a";
 
   function currentTheme() {
     return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
@@ -190,7 +190,7 @@
           <iframe
             ref={frame}
             title="RackWire network, power, and interconnect planner"
-            src={`rackwire/index.html?embed=1&solarinet=1&v=${RW_V}`}
+            src={`rackwire/index.html?embed=1&solarinet=1&integrated=1&v=${RW_V}`}
             onLoad={() => { if (ready.current) pushTheme(); }}
             style={{
               display: "block",
