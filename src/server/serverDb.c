@@ -713,7 +713,7 @@ solariStatus serverDbDecommissionConfirm(serverDb *db, uint64_t nodeId,
     unsigned long long vNode=nodeId, vScope=wipeScope, vNow=nowUnixMs;
     unsigned long lOperator=0, lHash=0;
     my_ulonglong changed;
-    unsigned long long generation;
+    unsigned long long generation = 0;
     solariStatus rc = ERR_DB;
 
     if (generationOut) *generationOut = 0;
@@ -965,6 +965,62 @@ solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t nodeId,
         return ERR_DB;
     }
     *matches = mysql_stmt_num_rows(st) != 0;
+    mysql_stmt_free_result(st);
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
+solariStatus serverDbNodeIdentity(serverDb *db, uint64_t nodeId,
+                                  const char *certCn, solariRole *role,
+                                  char *hostFqdn, size_t hostFqdnCap)
+{
+    static const char *SQL =
+        "SELECT role,hostFqdn FROM node WHERE nodeId=? "
+        "AND BINARY certCn=BINARY ? AND state <> 'retired' LIMIT 1";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st = NULL;
+    MYSQL_BIND in[2], out[2];
+    unsigned long long vNode = nodeId;
+    unsigned long cnLen;
+    char roleText[16] = {0};
+    unsigned long roleLen = 0, hostLen = 0;
+    my_bool isNull[2] = {0, 0};
+    solariStatus rc;
+
+    if (role) *role = (solariRole)0;
+    if (hostFqdn && hostFqdnCap) hostFqdn[0] = '\0';
+    if (!conn || !nodeId || !certCn || !certCn[0] || !role ||
+        !hostFqdn || hostFqdnCap == 0)
+        return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&in[0], &vNode);
+    dbBindStr(&in[1], certCn, &cnLen);
+    memset(out, 0, sizeof out);
+    out[0].buffer_type = MYSQL_TYPE_STRING;
+    out[0].buffer = roleText;
+    out[0].buffer_length = sizeof roleText - 1;
+    out[0].length = &roleLen;
+    out[0].is_null = &isNull[0];
+    out[1].buffer_type = MYSQL_TYPE_STRING;
+    out[1].buffer = hostFqdn;
+    out[1].buffer_length = (unsigned long)(hostFqdnCap - 1);
+    out[1].length = &hostLen;
+    out[1].is_null = &isNull[1];
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0 ||
+        mysql_stmt_bind_result(st, out) != 0 || mysql_stmt_store_result(st) != 0) {
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    if (mysql_stmt_fetch(st) != 0 || isNull[0] || isNull[1] ||
+        roleLen >= sizeof roleText || hostLen >= hostFqdnCap) {
+        mysql_stmt_free_result(st);
+        mysql_stmt_close(st);
+        return ERR_AUTH_ROLE;
+    }
+    roleText[roleLen] = '\0';
+    hostFqdn[hostLen] = '\0';
+    *role = dbRoleParse(roleText);
     mysql_stmt_free_result(st);
     mysql_stmt_close(st);
     return SOLARI_OK;

@@ -207,6 +207,10 @@ solariStatus serverDbRetireNode(serverDb *db, uint64_t nodeId);
  * assigned to this node ID. Fails closed when the row is absent. */
 solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t nodeId,
                                      const char *certCn, bool *matches);
+/* Return the role and enrolled FQDN only for this node's active exact CN. */
+solariStatus serverDbNodeIdentity(serverDb *db, uint64_t nodeId,
+                                  const char *certCn, solariRole *role,
+                                  char *hostFqdn, size_t hostFqdnCap);
 /* Persist and consume a short-lived confirmation for the exact currently
  * installed leaf identity. These records do not themselves alter TLS trust. */
 solariStatus serverDbCertificateRevocationIssue(

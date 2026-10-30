@@ -87,6 +87,29 @@ cat "$tmp/ca.pem" "$tmp/malformed-crl.pem" > "$tmp/malformed-trust.pem"
   "$tmp/replacement.pem" "$tmp/replacement.key" \
   expect-invalid-crl
 
+# A well-formed client leaf from a different CA must fail the peer TLS check.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -subj "/CN=Unrelated Leaf Test CA" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -keyout "$tmp/untrusted-ca.key" -out "$tmp/untrusted-ca.pem" >/dev/null 2>&1
+openssl req -new -newkey rsa:2048 -nodes \
+  -subj "/CN=intruder.gossip.test" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=clientAuth,serverAuth" \
+  -addext "subjectAltName=DNS:intruder.gossip.test" \
+  -keyout "$tmp/untrusted.key" -out "$tmp/untrusted.csr" >/dev/null 2>&1
+openssl x509 -req -in "$tmp/untrusted.csr" \
+  -CA "$tmp/untrusted-ca.pem" -CAkey "$tmp/untrusted-ca.key" \
+  -CAcreateserial -days 1 -sha256 -copy_extensions copy \
+  -out "$tmp/untrusted.pem" >/dev/null 2>&1
+"$test_bin" "$tmp/trust.pem" "$tmp/a.pem" "$tmp/a.key" \
+  "$tmp/b.pem" "$tmp/b.key" "$tmp/c.pem" "$tmp/c.key" \
+  "$tmp/revoked.pem" "$tmp/revoked.key" \
+  "$tmp/replacement.pem" "$tmp/replacement.key" \
+  "$tmp/untrusted.pem" "$tmp/untrusted.key" other-ca
+
 # A CRL from another issuer must not disrupt credentials issued by this CA.
 mkdir -p "$tmp/other/newcerts"
 touch "$tmp/other/index.txt"

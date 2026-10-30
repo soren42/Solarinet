@@ -3,6 +3,7 @@
 #include "monitor.h"
 #include "solari/solariTime.h"
 #include "solari/solariError.h"
+#include "solari/solariCrypto.h"
 #include "solari/solariNet.h"
 #include "solari/solariFrame.h"
 #include <string.h>
@@ -13,6 +14,7 @@
 #define URL_PLAIN "tcp://127.0.0.1:18815"
 static const char *caFile, *certA, *keyA, *certB, *keyB, *certC, *keyC;
 static const char *certRevoked, *keyRevoked, *certReplacement, *keyReplacement;
+static const char *certOtherCa, *keyOtherCa;
 static bool checkRevokedLeaf = true;
 void setUp(void) {}
 void tearDown(void) {}
@@ -292,13 +294,60 @@ static void test_plain_pipe_has_no_verified_peer_identity(void)
     solariConnClose(listener);
 }
 
+static void test_leaf_from_another_ca_is_rejected(void)
+{
+    monitorConfig cfgB;
+    monitorGossip *gB = NULL;
+    solariConn *untrusted = NULL;
+    solariConnOpts opts;
+    solariFrameHeader h = {0};
+    uint8_t frame[64];
+    size_t frameLen = 0;
+    solariStatus rc;
+
+    cfgWith(&cfgB, URL_B, URL_A, "b.gossip.test", certB, keyB);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, monitorGossipOpen(&cfgB,
+        monitorNodeId(&cfgB), &gB));
+    TEST_ASSERT_NOT_NULL(gB);
+    memset(&opts, 0, sizeof opts);
+    opts.url = URL_B;
+    opts.pattern = SOLARI_PATTERN_PUSH;
+    opts.useTls = true;
+    opts.caFile = caFile;
+    opts.certFile = certOtherCa;
+    opts.keyFile = keyOtherCa;
+    opts.sendTimeoutMs = 500;
+    rc = solariConnOpen(&opts, &untrusted);
+    if (rc == SOLARI_OK) {
+        h.magic[0] = SCP_MAGIC_0;
+        h.magic[1] = SCP_MAGIC_1;
+        h.protoVersion = SCP_PROTO_VERSION;
+        h.msgType = SCP_MSG_PEER_ALIVE;
+        h.sourceNodeId = solariNodeIdFromFqdnRole("intruder.gossip.test", ROLE_MONITOR);
+        h.sendTimeUnixMs = solariNowUnixMs();
+        TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+            solariFrameBuild(&h, NULL, 0, frame, sizeof frame, &frameLen));
+        rc = solariConnSend(untrusted, frame, frameLen);
+    }
+    TEST_ASSERT_EQUAL_INT(ERR_TLS, rc);
+    solariConnClose(untrusted);
+    monitorGossipClose(gB);
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 12 && argc != 13) return 2;
+    if (argc != 12 && argc != 13 && argc != 15) return 2;
     caFile = argv[1]; certA = argv[2]; keyA = argv[3]; certB = argv[4]; keyB = argv[5];
     certC = argv[6]; keyC = argv[7];
     certRevoked = argv[8]; keyRevoked = argv[9];
     certReplacement = argv[10]; keyReplacement = argv[11];
+    if (argc == 15) {
+        certOtherCa = argv[12]; keyOtherCa = argv[13];
+        if (strcmp(argv[14], "other-ca") != 0) return 2;
+        UNITY_BEGIN();
+        RUN_TEST(test_leaf_from_another_ca_is_rejected);
+        return UNITY_END();
+    }
     if (argc == 13 && strcmp(argv[12], "expect-invalid-crl") == 0) {
         UNITY_BEGIN();
         RUN_TEST(test_invalid_crl_fails_closed);

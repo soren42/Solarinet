@@ -24,7 +24,9 @@
  * checks each iteration, so sockets, the bridge, the context and the db are torn
  * down cleanly on the way out.
  */
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L   /* sigaction/sigemptyset under -std=c99 */
+#endif
 
 #include "server.h"
 
@@ -282,10 +284,13 @@ static void serverServiceControl(serverContext *ctx)
             return;
         }
         rc = serverIngestDispatch(ctx, &hdr, payload, plen);
-        if (rc != SOLARI_OK) {
+        if (rc != SOLARI_OK && rc != ERR_CONN_RETRY) {
             serverSendError(ctx, hdr.seqNo, 8, "report persistence failed");
             return;
         }
+        /* The durable receipt transaction returns ERR_CONN_RETRY when this
+         * exact session/sequence/payload was committed earlier. That is a
+         * successful replay: re-ACK it so the sender can retire its spool row. */
         rc = serverSendReportAck(ctx, &hdr, payload, plen);
         if (rc != SOLARI_OK)
             solariLogf(SOLARI_LOG_WARN, "control: report ACK send failed src=0x%llx seq=%u",

@@ -152,12 +152,21 @@ static void test_open_ping(void)
 static void test_node_lifecycle(void)
 {
     bool matches = false;
+    solariRole enrolledRole = (solariRole)0;
+    char enrolledHost[SOLARI_FQDN_MAX];
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbUpsertNode(g_db, ITEST_NODE, ROLE_CLIENT,
                            "itest.host", "itest-cn", "linux", "x86_64", 7));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbNodeCertMatches(g_db, ITEST_NODE, "itest-cn", &matches));
     TEST_ASSERT_TRUE(matches);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverDbNodeIdentity(g_db, ITEST_NODE,
+        "itest-cn", &enrolledRole, enrolledHost, sizeof enrolledHost));
+    TEST_ASSERT_EQUAL_INT(ROLE_CLIENT, enrolledRole);
+    TEST_ASSERT_EQUAL_STRING("itest.host", enrolledHost);
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, serverDbNodeIdentity(g_db,
+        ITEST_NODE + 1, "itest-cn", &enrolledRole, enrolledHost,
+        sizeof enrolledHost));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbNodeCertMatches(g_db, ITEST_NODE + 1, "itest-cn", &matches));
     TEST_ASSERT_FALSE(matches);
@@ -187,6 +196,60 @@ static void test_node_lifecycle(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbNodeCertMatches(g_db, ITEST_NODE, "itest-cn-reissued", &matches));
     TEST_ASSERT_TRUE(matches); /* fresh approved HELLO reactivates retired ID */
+}
+
+static void test_host_only_cn_uses_enrolled_role(void)
+{
+    const uint64_t nodeId = ITEST_NODE + 20;
+    serverContext ctx;
+    solariFrameHeader hdr;
+    solariHello hello;
+    uint8_t welcome[128];
+    size_t welcomeLen = 0;
+    uint16_t welcomeCount = 0;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbUpsertNode(g_db, nodeId, ROLE_CLIENT, "legacy-host.itest",
+                           "legacy-host.itest", "linux", "x86_64", 1));
+    memset(&ctx, 0, sizeof ctx);
+    ctx.db = g_db;
+    memset(&hdr, 0, sizeof hdr);
+    hdr.sourceNodeId = nodeId;
+    hdr.msgType = SCP_MSG_CLIENT_REPORT;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestValidate(&ctx, &hdr, "legacy-host.itest"));
+    hdr.msgType = SCP_MSG_MONITOR_REPORT;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &hdr, "legacy-host.itest"));
+    hdr.msgType = SCP_MSG_CLIENT_REPORT;
+    hdr.sourceNodeId++;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &hdr, "legacy-host.itest"));
+    hdr.sourceNodeId = nodeId;
+    hdr.sendTimeUnixMs = solariNowUnixMs();
+    memset(&hello, 0, sizeof hello);
+    hello.role = ROLE_CLIENT;
+    snprintf(hello.hostFqdn, sizeof hello.hostFqdn, "legacy-host.itest");
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverMasterAcceptHello(&ctx, &hdr, &hello, "legacy-host.itest",
+                                welcome, sizeof welcome, &welcomeLen,
+                                &welcomeCount));
+    hello.role = ROLE_MONITOR;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverMasterAcceptHello(&ctx, &hdr, &hello, "legacy-host.itest",
+                                welcome, sizeof welcome, &welcomeLen,
+                                &welcomeCount));
+    hello.role = ROLE_CLIENT;
+    snprintf(hello.hostFqdn, sizeof hello.hostFqdn, "other-host.itest");
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverMasterAcceptHello(&ctx, &hdr, &hello, "legacy-host.itest",
+                                welcome, sizeof welcome, &welcomeLen,
+                                &welcomeCount));
+    {
+        char sql[160];
+        (void)snprintf(sql, sizeof sql, "DELETE FROM node WHERE nodeId=%llu",
+                       (unsigned long long)nodeId);
+        TEST_ASSERT_EQUAL_INT(0, mysql_query(serverDbConn(g_db), sql));
+    }
 }
 
 /* Verify pooled transaction cleanup on commit and rollback: autocommit is
@@ -253,6 +316,7 @@ static void test_pending_control_directive_match(void)
     const uint32_t failedCorrelation = 0x7e570003U;
     const uint32_t nonconvergentCorrelation = 0x7e570006U;
     const uint32_t zeroEpochCorrelation = 0x7e570007U;
+    const uint32_t secondCorrelation = 0x7e570008U;
     const uint64_t targetEpoch = 91;
     const uint32_t staleCorrelation = 0x7e570004U;
     char staleSql[256];
@@ -281,7 +345,14 @@ static void test_pending_control_directive_match(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbControlDirectiveAdd(g_db, ITEST_NODE, correlation,
                                     CTRL_SET_CONFIG, targetEpoch));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlDirectiveAdd(g_db, ITEST_NODE, secondCorrelation,
+                                    CTRL_SET_CONFIG, targetEpoch));
     /* Wrong verb and wrong successful epoch must leave the record pending. */
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverDbControlResultApply(g_db, ITEST_NODE + 1, correlation,
+                                   CTRL_SET_CONFIG, targetEpoch, true, 0, "ok",
+                                   1700000000000ULL));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
         serverDbControlResultApply(g_db, ITEST_NODE, correlation,
                                    CTRL_RESTART, targetEpoch, true, 0, "ok", 1700000000000ULL));
@@ -298,6 +369,14 @@ static void test_pending_control_directive_match(void)
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
         serverDbControlResultApply(g_db, ITEST_NODE, correlation,
                                    CTRL_SET_CONFIG, targetEpoch, true, 0, "ok", 1700000000000ULL));
+    TEST_ASSERT_EQUAL_UINT64(1, liveCount(
+        "SELECT COUNT(*) FROM pendingControlDirective WHERE nodeId=0x7e57c0de0001 AND correlationId=0x7e570008"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbControlResultApply(g_db, ITEST_NODE, secondCorrelation,
+                                   CTRL_SET_CONFIG, targetEpoch, true, 0, "ok",
+                                   1700000000000ULL));
+    TEST_ASSERT_EQUAL_UINT64(0, liveCount(
+        "SELECT COUNT(*) FROM pendingControlDirective WHERE nodeId=0x7e57c0de0001 AND correlationId=0x7e570008"));
 
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbControlDirectiveAdd(g_db, ITEST_NODE, nonconvergentCorrelation,
@@ -376,12 +455,17 @@ static void test_decommission_challenge(void)
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
         serverDbDecommissionConfirm(g_db, activeNode, 7, "test-operator",
                                     wrongHash, now + 1, &generation));
+    TEST_ASSERT_EQUAL_UINT64(0, generation);
+    generation = UINT64_MAX;
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
         serverDbDecommissionConfirm(g_db, activeNode, 3, "test-operator",
                                     validHash, now + 1, &generation));
+    TEST_ASSERT_EQUAL_UINT64(0, generation);
+    generation = UINT64_MAX;
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
         serverDbDecommissionConfirm(g_db, activeNode, 7, "other-operator",
                                     validHash, now + 1, &generation));
+    TEST_ASSERT_EQUAL_UINT64(0, generation);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbDecommissionConfirm(g_db, activeNode, 7, "test-operator",
                                     validHash, now + 1, &generation));
@@ -1806,6 +1890,7 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_open_ping);
     RUN_TEST(test_node_lifecycle);
+    RUN_TEST(test_host_only_cn_uses_enrolled_role);
     RUN_TEST(test_transaction_session_reset);
     RUN_TEST(test_pending_control_directive_match);
     RUN_TEST(test_decommission_challenge);

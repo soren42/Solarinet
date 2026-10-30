@@ -96,6 +96,10 @@ bool serverIngestHelloMatchesIdentity(solariRole role, const char *hostFqdn,
     case ROLE_SERVER:  roleLabel = "server"; break;
     default: return false;
     }
+    /* During the approved migration window, an existing enrolled leaf may
+     * carry only its host FQDN. serverIngestValidate has already resolved its
+     * role from that node's exact enrollment row before this HELLO check. */
+    if (strcasecmp(hostFqdn, peerCertCn) == 0) return true;
     n = snprintf(expectedCn, sizeof expectedCn, "%s.%s", roleLabel, hostFqdn);
     if (n <= 0 || (size_t)n >= sizeof expectedCn) return false;
     dot = strchr(expectedCn, '.');
@@ -272,15 +276,45 @@ solariStatus serverIngestValidate(serverContext *ctx,
                                   const char *peerCertCn)
 {
     serverIngestRole role;
+    solariRole enrolledRole = (solariRole)0;
+    char enrolledHost[SOLARI_FQDN_MAX];
+    const char *cnHost = NULL;
     uint64_t nowMs;
-    bool identityMatches = false;
     solariStatus identityStatus;
 
     if (!ctx || !hdr) return ERR_INVALID_ARG;
 
-    /* 1. Authorization: the msgType must be legal for the presenting cert role.
-     *    A missing / unparseable CN maps to UNKNOWN, for which nothing is legal. */
+    /* Resolve identity against the active enrollment before inferring a role.
+     * For role-prefixed leaves, the DB role, CN role, and CN host must all
+     * agree. Existing host-only leaves inherit only the role enrolled on this
+     * exact node ID and are accepted only while the stored CN equals FQDN. */
+    if (!peerCertCn || !peerCertCn[0] || !ctx->db) return ERR_AUTH_ROLE;
+    identityStatus = serverDbNodeIdentity(ctx->db, hdr->sourceNodeId,
+                                           peerCertCn, &enrolledRole,
+                                           enrolledHost, sizeof enrolledHost);
+    if (identityStatus != SOLARI_OK) return identityStatus;
     role = serverIngestRoleFromCn(peerCertCn);
+    if (strcasecmp(peerCertCn, enrolledHost) == 0) {
+        switch (enrolledRole) {
+        case ROLE_CLIENT: role = INGEST_ROLE_CLIENT; break;
+        case ROLE_MONITOR: role = INGEST_ROLE_MONITOR; break;
+        case ROLE_SERVER: role = INGEST_ROLE_SERVER; break;
+        default: role = INGEST_ROLE_UNKNOWN; break;
+        }
+    } else {
+        const char *dot = strchr(peerCertCn, '.');
+        cnHost = dot ? dot + 1 : NULL;
+        if (!cnHost || strcasecmp(cnHost, enrolledHost) != 0) {
+            role = INGEST_ROLE_UNKNOWN;
+        } else if ((role == INGEST_ROLE_CLIENT && enrolledRole != ROLE_CLIENT) ||
+                   (role == INGEST_ROLE_MONITOR && enrolledRole != ROLE_MONITOR) ||
+                   (role == INGEST_ROLE_SERVER && enrolledRole != ROLE_SERVER)) {
+            role = INGEST_ROLE_UNKNOWN;
+        }
+    }
+
+    /* 1. Authorization: the msgType must be legal for the enrolled role.
+     *    Unknown or mismatched identity maps to UNKNOWN, which can send nothing. */
     if (!serverIngestRoleMaySend(role, hdr->msgType)) {
         solariLogf(SOLARI_LOG_WARN,
                    "ingest reject: role=%s cn=%s msgType=0x%02x src=0x%llx (ERR_AUTH_ROLE)",
@@ -288,20 +322,6 @@ solariStatus serverIngestValidate(serverContext *ctx,
                    (unsigned)hdr->msgType,
                    (unsigned long long)hdr->sourceNodeId);
         return ERR_AUTH_ROLE;
-    }
-
-    /* The certificate role alone does not authorize a frame to claim another
-     * node's source ID. Bind the transport identity to the approved SoR-backed
-     * node record on every frame; a DB error or missing identity fails closed. */
-    if (!peerCertCn || !peerCertCn[0] || !ctx->db) return ERR_AUTH_ROLE;
-    identityStatus = serverDbNodeCertMatches(ctx->db, hdr->sourceNodeId,
-                                             peerCertCn, &identityMatches);
-    if (identityStatus != SOLARI_OK || !identityMatches) {
-        solariLogf(SOLARI_LOG_WARN,
-                   "ingest reject: cert identity does not match node src=0x%llx (%s)",
-                   (unsigned long long)hdr->sourceNodeId,
-                   identityStatus == SOLARI_OK ? "not enrolled" : "lookup failed");
-        return identityStatus == SOLARI_OK ? ERR_AUTH_ROLE : identityStatus;
     }
 
     /* 2. Replay: drop a frame whose (sourceNodeId, seqNo) we already processed.

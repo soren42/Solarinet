@@ -51,11 +51,14 @@ static void test_peer_certificate_binds_monitor_node_id(void)
         solariNodeIdFromFqdnRole("outpost.akoria.net", ROLE_MONITOR), id);
     TEST_ASSERT_TRUE(monitorPeerIdentityMatchesCn(id,
         "monitor.outpost.akoria.net"));
+    TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id,
+        "outpost.akoria.net")); /* gossip has no enrollment-role lookup */
     TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id + 1,
         "monitor.outpost.akoria.net"));
     TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id,
         "client.outpost.akoria.net"));
     TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id, "monitor."));
+    TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id, "other.akoria.net"));
     TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(0,
         "monitor.outpost.akoria.net"));
     TEST_ASSERT_FALSE(monitorPeerIdentityMatchesCn(id, NULL));

@@ -2299,12 +2299,19 @@ solariStatus serverCtlSignCsr(serverCtl *ctl, const char *csrPem,
                     if (strlen(leafCertFp) != 64) break;
                 }
                 if (leafCertSerial) {
-                    size_t i, serialLen = issuedCrt.serial.len;
-                    if (!issuedCrt.serial.p || serialLen == 0 || serialLen > 20 ||
-                        serialLen * 2 + 1 > leafCertSerialCap) break;
+                    size_t i, first = 0, serialLen = issuedCrt.serial.len;
+                    if (!issuedCrt.serial.p || serialLen == 0 || serialLen > 20) break;
+                    /* DER may add one leading 00 byte to keep a positive
+                     * INTEGER positive. Report the canonical serial text used
+                     * by OpenSSL and the issuance ledger, without that pad. */
+                    while (first + 1 < serialLen && issuedCrt.serial.p[first] == 0)
+                        first++;
+                    serialLen -= first;
+                    if (serialLen * 2 + 1 > leafCertSerialCap) break;
                     for (i = 0; i < serialLen; ++i) {
-                        leafCertSerial[2 * i] = serialHex[issuedCrt.serial.p[i] >> 4];
-                        leafCertSerial[2 * i + 1] = serialHex[issuedCrt.serial.p[i] & 0x0F];
+                        uint8_t byte = issuedCrt.serial.p[first + i];
+                        leafCertSerial[2 * i] = serialHex[byte >> 4];
+                        leafCertSerial[2 * i + 1] = serialHex[byte & 0x0F];
                     }
                     leafCertSerial[serialLen * 2] = '\0';
                 }

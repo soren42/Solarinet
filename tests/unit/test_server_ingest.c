@@ -18,18 +18,25 @@
 
 static uint64_t g_expectedNodeId;
 static const char *g_expectedCertCn;
+static const char *g_expectedHost;
+static solariRole g_expectedRole;
 static solariStatus g_identityLookupStatus;
 static solariStatus g_crlAckStatus = SOLARI_OK;
 static unsigned g_crlAckCalls;
 
-solariStatus serverDbNodeCertMatches(serverDb *db, uint64_t nodeId,
-                                     const char *certCn, bool *matches)
+solariStatus serverDbNodeIdentity(serverDb *db, uint64_t nodeId,
+                                  const char *certCn, solariRole *role,
+                                  char *hostFqdn, size_t hostFqdnCap)
 {
-    if (!db || !matches) return ERR_INVALID_ARG;
-    *matches = false;
+    if (!db || !role || !hostFqdn || hostFqdnCap == 0) return ERR_INVALID_ARG;
+    *role = (solariRole)0;
+    hostFqdn[0] = '\0';
     if (g_identityLookupStatus != SOLARI_OK) return g_identityLookupStatus;
-    *matches = nodeId == g_expectedNodeId && certCn && g_expectedCertCn &&
-               strcmp(certCn, g_expectedCertCn) == 0;
+    if (nodeId != g_expectedNodeId || !certCn || !g_expectedCertCn ||
+        strcmp(certCn, g_expectedCertCn) != 0) return ERR_AUTH_ROLE;
+    *role = g_expectedRole;
+    if (!g_expectedHost || strlen(g_expectedHost) >= hostFqdnCap) return ERR_INVALID_ARG;
+    strcpy(hostFqdn, g_expectedHost);
     return SOLARI_OK;
 }
 
@@ -43,7 +50,16 @@ solariStatus serverDbCertificateCrlAcknowledge(serverDb *db, uint64_t nodeId,
     return g_crlAckStatus;
 }
 
-void setUp(void) { g_crlAckStatus = SOLARI_OK; g_crlAckCalls = 0; }
+void setUp(void)
+{
+    g_expectedNodeId = 0;
+    g_expectedCertCn = NULL;
+    g_expectedHost = NULL;
+    g_expectedRole = (solariRole)0;
+    g_identityLookupStatus = SOLARI_OK;
+    g_crlAckStatus = SOLARI_OK;
+    g_crlAckCalls = 0;
+}
 void tearDown(void) {}
 
 /* ---- CN -> role ---- */
@@ -87,6 +103,45 @@ static void test_hello_identity_matches_authenticated_certificate(void)
         ROLE_CLIENT, "", "client.node.akoria.net"));
     TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
         ROLE_CLIENT, "node.akoria.net", NULL));
+    TEST_ASSERT_TRUE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "node.akoria.net", "node.akoria.net"));
+    TEST_ASSERT_FALSE(serverIngestHelloMatchesIdentity(
+        ROLE_CLIENT, "node.akoria.net", "other.akoria.net"));
+}
+
+static void test_enrolled_identity_enforces_node_and_role_with_legacy_cn(void)
+{
+    serverContext ctx = {0};
+    solariFrameHeader hdr = {0};
+    ctx.db = (serverDb *)(uintptr_t)1;
+    hdr.msgType = SCP_MSG_CLIENT_REPORT;
+    hdr.sourceNodeId = g_expectedNodeId = 42;
+    g_expectedCertCn = "host.akoria.net";
+    g_expectedHost = "host.akoria.net";
+    g_expectedRole = ROLE_CLIENT;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverIngestValidate(&ctx, &hdr, "host.akoria.net"));
+
+    /* A host-only CN cannot claim the monitor-only report verb when the
+     * enrolled role is client. */
+    hdr.msgType = SCP_MSG_MONITOR_REPORT;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &hdr, "host.akoria.net"));
+
+    /* A role-prefixed CN must agree with both enrolled role and FQDN. */
+    hdr.msgType = SCP_MSG_CLIENT_REPORT;
+    g_expectedCertCn = "monitor.host.akoria.net";
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &hdr, "monitor.host.akoria.net"));
+    g_expectedCertCn = "client.other.akoria.net";
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &hdr, "client.other.akoria.net"));
+
+    /* Cross-node identity lookup fails closed even when CN role is valid. */
+    g_expectedCertCn = "client.host.akoria.net";
+    hdr.sourceNodeId++;
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE,
+        serverIngestValidate(&ctx, &hdr, "client.host.akoria.net"));
 }
 
 /* ---- authorization matrix ---- */
@@ -370,6 +425,8 @@ static void test_report_validation_never_marks_before_commit(void)
     header.seqNo = 7;
     g_expectedNodeId = 42;
     g_expectedCertCn = "client.test";
+    g_expectedHost = "test";
+    g_expectedRole = ROLE_CLIENT;
     g_identityLookupStatus = SOLARI_OK;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverIngestValidate(&ctx, &header, "client.test"));
@@ -389,6 +446,7 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_role_from_cn);
     RUN_TEST(test_hello_identity_matches_authenticated_certificate);
+    RUN_TEST(test_enrolled_identity_enforces_node_and_role_with_legacy_cn);
     RUN_TEST(test_matrix_client);
     RUN_TEST(test_matrix_monitor_is_superset);
     RUN_TEST(test_matrix_server_and_unknown);

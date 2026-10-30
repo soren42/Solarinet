@@ -37,6 +37,7 @@
 #include "solari/solariTime.h"
 
 #include <string.h>
+#include <strings.h>
 
 /* ===================================================================== */
 /* WELCOME schedule contract                                              */
@@ -188,6 +189,8 @@ solariStatus serverMasterAcceptHello(serverContext *ctx,
     uint64_t     assignedEpoch;
     const char  *fqdn;
     const char  *certCn;
+    solariRole enrolledRole = (solariRole)0;
+    char enrolledHost[SOLARI_FQDN_MAX];
     solariStatus rc;
 
     if (outLen)   *outLen = 0;          /* defensive pre-zero */
@@ -195,6 +198,16 @@ solariStatus serverMasterAcceptHello(serverContext *ctx,
 
     if (!ctx || !ctx->db || !hdr || !hello || !out || !outLen || !tlvCount)
         return ERR_INVALID_ARG;
+
+    rc = serverDbNodeIdentity(ctx->db, hdr->sourceNodeId, peerCertCn,
+                              &enrolledRole, enrolledHost, sizeof enrolledHost);
+    if (rc != SOLARI_OK || enrolledRole != hello->role ||
+        strcasecmp(enrolledHost, hello->hostFqdn) != 0) {
+        solariLogf(SOLARI_LOG_WARN,
+                   "master: reject HELLO enrollment identity src=0x%llx",
+                   (unsigned long long)hdr->sourceNodeId);
+        return rc == SOLARI_OK ? ERR_AUTH_ROLE : rc;
+    }
 
     if (!serverIngestHelloMatchesIdentity(hello->role, hello->hostFqdn,
                                           peerCertCn)) {

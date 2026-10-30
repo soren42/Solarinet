@@ -261,6 +261,21 @@ if(TARGET servercore)
   target_link_libraries(test_server_db_live PRIVATE servercore unity)
   add_test(NAME test_server_db_live COMMAND test_server_db_live)
 
+  # Drive the actual REP control handler through report commit failure, lost
+  # ACK, and idempotent replay against the same scratch-DB environment contract.
+  if(TARGET clientcore AND SOLARI_WITH_IO AND SOLARI_WITH_SQLITE)
+    add_executable(test_server_handler_live
+      integration/test_server_handler_live.c)
+    target_compile_definitions(test_server_handler_live PRIVATE _GNU_SOURCE)
+    target_include_directories(test_server_handler_live PRIVATE
+      ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src/server)
+    target_link_libraries(test_server_handler_live PRIVATE
+      servercore clientcore unity)
+    target_link_options(test_server_handler_live PRIVATE
+      "-Wl,--wrap=solariConnPeerCn" "-Wl,--wrap=solariConnSend")
+    add_test(NAME test_server_handler_live COMMAND test_server_handler_live)
+  endif()
+
   # A real C control-socket process used by the authenticated dashboard
   # discovery acceptance test. It is launched only against that test's
   # dedicated monitoring schema; no live transport or monitor is attached.
