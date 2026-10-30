@@ -262,18 +262,18 @@ jobs:
       - name: Install Clang and CMake
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y clang cmake build-essential
+          sudo apt-get install -y clang cmake build-essential pkg-config libmariadb-dev
       - name: Build coverage-instrumented protocol parsers
         run: |
           CC=clang cmake -S . -B build-fuzz \
             -DCMAKE_C_FLAGS=-Werror \
             -DSOLARI_BUILD_CLIENT=OFF \
             -DSOLARI_BUILD_MONITOR=OFF \
-            -DSOLARI_BUILD_SERVER=OFF \
+            -DSOLARI_BUILD_SERVER=ON \
             -DSOLARI_BUILD_TESTS=ON \
             -DSOLARI_BUILD_FUZZERS=ON
           cmake --build build-fuzz -j
-      - name: Run strict Clang tests and fuzz frame, TLV, and message parsers
+      - name: Run strict Clang tests and fuzz SCP parsers and the ctl request path
         run: ctest --test-dir build-fuzz --output-on-failure
 
   # ---- default core: zero external deps, always builds (Makefile `all`) -----

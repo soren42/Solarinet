@@ -17,14 +17,6 @@ if(SOLARI_BUILD_FUZZERS)
   add_test(NAME fuzz_protocol_smoke COMMAND fuzz_protocol
     -runs=20000 -seed=20261020 -max_len=4096
     -dict=${CMAKE_CURRENT_SOURCE_DIR}/fuzz/protocol.dict)
-  add_executable(fuzz_ctl fuzz/fuzz_ctl.c)
-  target_link_libraries(fuzz_ctl PRIVATE solari)
-  target_compile_options(fuzz_ctl PRIVATE
-    -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
-  target_link_options(fuzz_ctl PRIVATE -fsanitize=fuzzer,address,undefined)
-  add_test(NAME fuzz_ctl_smoke COMMAND fuzz_ctl
-    -runs=20000 -seed=20261030 -max_len=16384
-    -dict=${CMAKE_CURRENT_SOURCE_DIR}/fuzz/ctl.dict)
 endif()
 
 set(SOLARI_UNIT_TESTS
@@ -213,6 +205,26 @@ if(TARGET servercore)
       $<TARGET_PROPERTY:servercore,INTERFACE_LINK_LIBRARIES>)
     add_test(NAME ${t} COMMAND ${t})
   endforeach()
+
+  if(SOLARI_BUILD_FUZZERS)
+    # The ctl fuzzer includes solariCtl.c (like test_server_ctl) so it drives
+    # the shipped reader/parser/authz statics; it therefore needs the server
+    # tree and only builds when SOLARI_BUILD_SERVER is on.
+    add_executable(fuzz_ctl fuzz/fuzz_ctl.c unit/server_stubs.c)
+    target_compile_definitions(fuzz_ctl PRIVATE _GNU_SOURCE)
+    target_include_directories(fuzz_ctl PRIVATE
+      ${CMAKE_SOURCE_DIR}/include
+      ${CMAKE_SOURCE_DIR}/src/server
+      $<TARGET_PROPERTY:servercore,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_link_libraries(fuzz_ctl PRIVATE solari
+      $<TARGET_PROPERTY:servercore,INTERFACE_LINK_LIBRARIES>)
+    target_compile_options(fuzz_ctl PRIVATE
+      -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
+    target_link_options(fuzz_ctl PRIVATE -fsanitize=fuzzer,address,undefined)
+    add_test(NAME fuzz_ctl_smoke COMMAND fuzz_ctl
+      -runs=20000 -seed=20261030 -max_len=16384
+      -dict=${CMAKE_CURRENT_SOURCE_DIR}/fuzz/ctl.dict)
+  endif()
 
   add_executable(test_server_control_result
     unit/test_server_control_result.c unit/server_stubs.c

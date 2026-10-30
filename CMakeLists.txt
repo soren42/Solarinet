@@ -16,6 +16,13 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration)
+# glibc >= 2.43 implements strchr/strstr/etc. as _Generic macros even under
+# -std=c99; Clang's -Wpedantic then reports the expansion as a C11 extension
+# in our call sites, which -Werror turns fatal. The construct is the system
+# header's, not ours.
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wno-c11-extensions)
+endif()
 
 # ---- options -------------------------------------------------------------
 option(SOLARI_BUILD_SERVER "Build solariServer (x86_64/arm64 only)" OFF)
