@@ -93,6 +93,19 @@ reboot, systemd-managed consumer restart, multi-target recovery, and production
 cutover remain unverified. Do not infer target freshness from an advanced
 emitter checkpoint alone.
 
+The opt-in `test_disposable_supervision_drill.py` creates uniquely named
+MariaDB 11.4 and RabbitMQ 4.1 containers, imports the checked-in SoR schema
+snapshot, and runs the actual `sor_emitd.run()` daemon plus the production
+consumer delivery boundary in child processes. Its small supervisor loop mirrors each unit's
+`Restart=on-failure` / `RestartSec` behavior. It kills the emitter after a
+confirmed publish but before its batch checkpoint, restarts the broker while
+the applier is supervised, and injects a one-time second-target failure. Two
+file-backed idempotent targets stand in for DNS and Pi-hole; final state and
+empty durable queue are checked. Run with
+`python3 deploy/sorsync/test_disposable_supervision_drill.py`. This proves the
+restart semantics exercised by the harness, not host systemd boot behavior or
+production target adapters.
+
 ## Install
 
 For a fresh SoR installation only, create the empty database on Cesium with

@@ -92,3 +92,15 @@ ports. They exercise activation, removal of retired zones, protection of
 unmanaged zones, invalid input, candidate symlinks, reload/health failures,
 crash recovery, rollback retries, and serial history across reintroduction.
 They leave the production BIND process and AppArmor profile untouched.
+
+`test_container_rollback_drill.py` activates N+1 and rejects invalid N+2 before
+the pointer changes, then injects a post-load health failure and verifies the
+journaled rollback generation and SOA are served, all against a disposable BIND
+9.20 container. Run it with
+`python3 deploy/dns-release/test_container_rollback_drill.py`. The existing
+suite also covers this sequence with its isolated local BIND process. A
+secondary AXFR target is not included in this small drill; secondary
+rollback/serial verification remains an explicit deployment gate.
+
+The live cutover procedure is in [LIVE-CUTOVER-RUNBOOK.md](LIVE-CUTOVER-RUNBOOK.md).
+It is instructions only and does not authorize or perform DNS changes.

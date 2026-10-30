@@ -101,6 +101,33 @@ class BindFixture(unittest.TestCase):
         release.verifyServed(self.config, manifest)
 
 class ReleaseTest(BindFixture):
+    def test_staged_n_plus_two_validation_failure_keeps_n_plus_one_served(self):
+        n_plus_one = self.candidate("stage-n-plus-one", 2026102002, "192.0.2.2")
+        result = release.activate(self.config, n_plus_one)
+        self.assertEqual("applied", result["phase"])
+        active = release.loadManifest(self.link.resolve())
+        release.verifyServed(self.config, active)
+        served = subprocess.run(
+            ["dig", "@127.0.0.1", "-p", str(self.port), "example.test", "SOA",
+             "+norecurse", "+noall", "+answer"], capture_output=True, text=True, timeout=3)
+        self.assertIn(f" {active['zones'][0]['serial']} ", served.stdout)
+
+        n_plus_two = self.candidate("stage-n-plus-two-invalid", 2026102003, "192.0.2.3")
+        with (n_plus_two / "db.example.test").open("a", encoding="utf-8") as output:
+            output.write("@ IN CNAME forbidden.example.test.\n")
+        with self.assertRaises(RuntimeError):
+            release.activate(self.config, n_plus_two)
+
+        rollback = release.loadManifest(self.link.resolve())
+        self.assertEqual("failed", json.loads((self.root / "state.json").read_text())["phase"])
+        self.assertEqual("192.0.2.2", next(z for z in rollback["zones"]
+                                             if z["name"] == "example.test")["checkValue"])
+        release.verifyServed(self.config, rollback)
+        restored = subprocess.run(
+            ["dig", "@127.0.0.1", "-p", str(self.port), "example.test", "SOA",
+             "+norecurse", "+noall", "+answer"], capture_output=True, text=True, timeout=3)
+        self.assertIn(f" {rollback['zones'][0]['serial']} ", restored.stdout)
+
     def test_ns_only_zone_is_verified_after_activation(self):
         candidate = self.folder / "ns-only"
         candidate.mkdir()
