@@ -335,6 +335,8 @@ def process(conn, ctx: Ctx, row: dict, *, install_timeout: int, attempts: int) -
                f"{started} of {attempts} ended without a result)")
         return "failed"
     n = started + 1
+    if installed:               # every tick of an installed run is an attempt: count it first
+        set_detail(conn, run_id, f"installed; probing host (attempt {n} of {attempts})")
     kh = f"{ctx.runs}/reimage-{run_id}.known_hosts"
     marker = read_marker(ctx, rec, kh)
     if marker != run_id:

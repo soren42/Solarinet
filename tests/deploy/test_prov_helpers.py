@@ -300,12 +300,21 @@ sys.exit(int(os.environ.get("FAKE_PROVISION_RC", "0")))
 '''
 
 
+# mv that fails on demand (FAKE_MV_FAIL=1): a crash inside prov-finish's
+# local "remote" side, e.g. pinning the probed host key.
+FAKE_MV = r'''#!/bin/sh
+if [ "${FAKE_MV_FAIL:-}" = 1 ]; then echo "fake mv failure" >&2; exit 1; fi
+PATH=/usr/bin:/bin
+exec mv "$@"
+'''
+
+
 def make_fakes(tmp: str) -> str:
     fakebin = os.path.join(tmp, "fakebin")
     os.makedirs(fakebin)
     interp = shutil.which("python3") or sys.executable
     for name, body in (("ansible", FAKE_ANSIBLE), ("ansible-playbook", FAKE_PLAYBOOK),
-                       ("fleet-provision", FAKE_PROVISION)):
+                       ("fleet-provision", FAKE_PROVISION), ("mv", FAKE_MV)):
         p = os.path.join(fakebin, name)
         with open(p, "w", encoding="utf-8") as fh:
             fh.write(body.replace("__PY__", interp))
@@ -742,6 +751,21 @@ class ProvFinish(StageMixin, Base):
         self.assertEqual(self.status(rid), ("failed", "installed; stacks not applied (attempt 3 "
                                             "of 3 ended without a result)"))
         self.assertEqual(self.calls(), [])
+
+    def test_crash_between_probe_and_apply_still_counts(self):
+        rid = self.staged()
+        admin(f"UPDATE prov_runs SET detail='installed; stack apply pass failed; retrying "
+              f"(attempt 1 of 3)' WHERE id={rid}")
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_MV_FAIL": "1",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "3"}
+        for n in (2, 3):        # pinning the probed key crashes the tick every time
+            p = self.finish(rid, **env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertEqual(self.status(rid), ("running", f"installed; probing host (attempt {n} of 3)"))
+        self.finish(rid, **env)
+        self.assertEqual(self.status(rid), ("failed", "installed; stacks not applied (attempt 3 "
+                                            "of 3 ended without a result)"))
+        self.assertEqual(self.calls("ansible-playbook"), [])
 
     def test_unstage_waits_for_mac_lock(self):
         rid = self.staged()
