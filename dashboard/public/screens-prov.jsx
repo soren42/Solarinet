@@ -76,6 +76,53 @@
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
   }
   function errText(e) { return (e && e.message) || "Request failed"; }
+  function fmtBytes(n) {
+    if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return null;
+    const u = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i === 0 || n >= 100 ? Math.round(n) : n.toFixed(1)) + " " + u[i];
+  }
+  function fmtAgo(iso) {
+    const t = iso ? new Date(iso).getTime() : NaN;
+    if (!Number.isFinite(t)) return null;
+    const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+    return m < 1 ? "just now" : m < 120 ? m + " min ago" : Math.round(m / 60) + " h ago";
+  }
+
+  // NAS image store (installers + images on benzene), as last checked by the
+  // prov-finish timer (GET /api/provisioning/store). Every fact is visible
+  // text — nothing is hover-only (iPad first).
+  function storeView(st) {
+    if (!st || !st.known) return { cls: "warn", label: "store: not checked yet", why: "No store check has been published yet — the solari-prov-finish timer writes it every couple of minutes." };
+    const ago = fmtAgo(st.checked_at);
+    if (st.stale) return { cls: "warn", label: "store: status stale", why: "Last checked " + (ago || "at an unknown time") + "; the provisioning timer or benzene may be down, so the store state is unknown." };
+    if (!st.reachable) return { cls: "warn", label: "store: unchecked", why: st.reason || "The provisioning host did not answer the store check." };
+    if (!st.mounted) return { cls: "crit", label: "store not mounted", why: (st.reason || "The NAS share is not mounted.") + " Refresh, staging and image builds are refused until it is." };
+    if (!st.linked) return { cls: "crit", label: "store not linked", why: st.reason || "installers/ or images/ is not linked into the store." };
+    return { cls: "ok", label: "store mounted", why: null };
+  }
+  function StoreStatus({ res, onRetry }) {
+    if (res.error && !res.data) {
+      return <div className="prov-store" role="status"><span className="tag warn">store status unavailable</span>
+        <span className="prov-faint">{errText(res.error)}</span>
+        <button type="button" className="chip" onClick={onRetry}>Retry</button></div>;
+    }
+    if (!res.data) return null;
+    const st = res.data;
+    const v = storeView(st);
+    const free = fmtBytes(st.avail_bytes), size = fmtBytes(st.size_bytes);
+    const ago = fmtAgo(st.checked_at);
+    return (
+      <div className="prov-store" role="status" aria-label="Image store status">
+        <span className={"tag " + v.cls}>{v.label}</span>
+        {st.store && <span className="mono prov-store__path">{st.store}</span>}
+        {st.mounted && free && <span className="prov-store__fact">{free} free{size ? " of " + size : ""}</span>}
+        {ago && <span className="prov-faint prov-store__fact">checked {ago}</span>}
+        {v.why && <div className="prov-store__why">{v.why}</div>}
+      </div>
+    );
+  }
   function shortHost(n) { return String(n || "").split(".")[0].toLowerCase(); }
 
   // Stack closure + order — mirrors deploy/fleet/stackgen.py resolve_order():
@@ -405,6 +452,7 @@
     const [softR, reloadSoft] = useResource(needApi((a) => a.provSoftware()));
     const [targetsR, reloadTargets] = useResource(needApi((a) => a.provTargets()));
     const [runsR, reloadRuns] = useResource(needApi((a) => a.provRuns("?limit=25")));
+    const [storeR, reloadStore] = useResource(needApi((a) => a.provStore()));
 
     const [targetId, setTargetId] = useState("");
     const [mode, setMode] = useState("reimage");
@@ -432,7 +480,13 @@
     // Netboot interface: the operator's pick, else the management one.
     const iface = (target && target.interfaces.find((i) => i.mac === ifaceMac)) || primaryIface(target);
 
-    function reloadAll() { reloadImages(); reloadStacks(); reloadSoft(); reloadTargets(); reloadRuns(); }
+    function reloadAll() { reloadImages(); reloadStacks(); reloadSoft(); reloadTargets(); reloadRuns(); reloadStore(); }
+
+    // The store check is published every ~2 min; follow it while the screen is open.
+    useEffect(() => {
+      const t = setInterval(() => { reloadStore(); }, 120000);
+      return () => clearInterval(t);
+    }, [reloadStore]);
 
     // A different machine invalidates the picked image (the mockup does the same).
     useEffect(() => { setImageId(null); setIfaceMac(""); }, [targetId]);
@@ -738,6 +792,7 @@
                       onClick={() => setModal({ kind: "image", img: null })}><Icon name="plus" size={14} /> Add image</button>
                   </div>
                 </div>
+                {live && <StoreStatus res={storeR} onRetry={reloadStore} />}
                 {imagesR.loading && !imagesR.data ? <Skeleton rows={4} />
                   : imagesR.error && !imagesR.data ? <div className="panel__body"><ErrorBox error={imagesR.error} onRetry={reloadImages} /></div>
                     : !images.length ? (

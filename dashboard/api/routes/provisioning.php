@@ -23,6 +23,8 @@ declare(strict_types=1);
  *     GET  /api/provisioning/runs?entity=&mode=&status=&limit=   GET /runs/{id}
  *     GET  /api/provisioning/targets              (P4: entities with a MAC + arch)
  *     GET  /api/provisioning/log?kind=&id=        (P4: helper log tail, 64 KiB)
+ *     GET  /api/provisioning/store                (NAS image store status, as
+ *                                                  last published by prov-finish)
  *   Writes (operator; Origin + X-Solari-CSRF via Policy):
  *     POST/PUT/DELETE images, software, stacks (DELETE = soft delete)
  *     POST/DELETE software/{id}/artifacts|requires|conflicts
@@ -787,6 +789,52 @@ return static function (Router $router): void {
             'truncated'  => $size > $max,
             'size'       => $size,
             'updated_at' => $mtime,
+        ]);
+    });
+
+    // -------------------------------------------------------------- store
+    // The NAS image store (installers/ + images/ on benzene) as last checked
+    // by prov-finish.py (every timer tick, ~2 min) — provlib.store_status()
+    // written to <ctl socket dir>/prov-store.json. No new privileged path:
+    // PHP only reads that file, with the same no-link / same-inode rule as
+    // the log tail. `stale` once the check is older than 10 minutes (the
+    // timer or benzene's ssh is down; the store state is then unknown).
+
+    $router->get("$P/store", static function (): void {
+        $sock = getenv('SOLARI_CTL_SOCK') ?: '/run/solari/solariCtl.sock';
+        $file = dirname($sock) . '/prov-store.json';
+        $raw = false;
+        $st = @lstat($file);
+        $fh = ($st !== false && ($st['mode'] & 0170000) === 0100000) ? @fopen($file, 'rb') : false;
+        if ($fh !== false) {
+            $fs = fstat($fh);
+            if ($fs !== false && $fs['dev'] === $st['dev'] && $fs['ino'] === $st['ino']) {
+                $raw = stream_get_contents($fh, 16384);
+            }
+            fclose($fh);
+        }
+        $d = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($d)) {
+            Response::ok(['known' => false, 'stale' => true, 'checked_at' => null]);
+        }
+        $str = static fn($v): ?string => is_string($v) && $v !== '' ? substr($v, 0, 512) : null;
+        $num = static fn($v): ?int => is_int($v) && $v >= 0 ? $v : null;
+        $checked = $str($d['checked_at'] ?? null);
+        $ts = $checked !== null ? strtotime($checked) : false;
+        Response::ok([
+            'known'       => true,
+            'store'       => $str($d['store'] ?? null),
+            'fstype'      => $str($d['fstype'] ?? null),
+            'source'      => $str($d['source'] ?? null),
+            'reachable'   => ($d['reachable'] ?? false) === true,
+            'mounted'     => ($d['mounted'] ?? false) === true,
+            'linked'      => ($d['linked'] ?? false) === true,
+            'ok'          => ($d['ok'] ?? false) === true,
+            'size_bytes'  => $num($d['size_bytes'] ?? null),
+            'avail_bytes' => $num($d['avail_bytes'] ?? null),
+            'reason'      => $str($d['reason'] ?? null),
+            'checked_at'  => $checked,
+            'stale'       => $ts === false || time() - $ts > 600,
         ]);
     });
 

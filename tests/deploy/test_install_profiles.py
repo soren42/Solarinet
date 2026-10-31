@@ -54,13 +54,28 @@ VERSIONS = {"ubuntu": "24.04.3"}
 STUB_SSH = """#!/usr/bin/env bash
 # test stub: run the "remote" command locally; refuse any host but the test one.
 # STUB_SSH_FAIL_ON=<text>: fail (without running) any remote command containing it.
+# STUB_SSH_SWAP_ON=<text> + STUB_SSH_SWAP_LINK=<path>: before running a command
+# containing <text>, replace the symlink <path> with an empty real directory
+# (HTTP_ROOT/installers falling back onto the local disk between check and write).
 while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
 [ "${1:-}" = "p5-test-benzene" ] || { echo "stub ssh: refusing host ${1:-?}" >&2; exit 97; }
 shift
 if [ -n "${STUB_SSH_FAIL_ON:-}" ] && [[ "$*" == *"${STUB_SSH_FAIL_ON}"* ]]; then
   echo "stub ssh: injected failure" >&2; exit 1
 fi
+if [ -n "${STUB_SSH_SWAP_ON:-}" ] && [[ "$*" == *"${STUB_SSH_SWAP_ON}"* ]] && [ -L "${STUB_SSH_SWAP_LINK}" ]; then
+  rm -f "${STUB_SSH_SWAP_LINK}" && mkdir "${STUB_SSH_SWAP_LINK}"
+fi
 exec bash -c "$*"
+"""
+
+# stub findmnt: reports $STUB_STORE as a cifs mount, so the production store
+# check (prov-store-guard.sh) runs; HTTP_ROOT/installers links into the store.
+STUB_FINDMNT = """#!/usr/bin/env bash
+t= m=
+while [ $# -gt 0 ]; do case "$1" in -t) t=$2; shift 2 ;; -M) m=$2; shift 2 ;; *) shift ;; esac; done
+[ "$t" = cifs ] && [ "$m" = "$STUB_STORE" ] && { echo //nas.test/SolariNet; exit 0; }
+exit 1
 """
 
 
@@ -115,12 +130,21 @@ class InstallProfiles(unittest.TestCase):
         with open(os.path.join(bindir, "ssh"), "w") as fh:
             fh.write(STUB_SSH)
         os.chmod(os.path.join(bindir, "ssh"), 0o755)
+        with open(os.path.join(bindir, "findmnt"), "w") as fh:
+            fh.write(STUB_FINDMNT)
+        os.chmod(os.path.join(bindir, "findmnt"), 0o755)
+        store = os.path.join(self.tmp, "store")
+        for sub in ("installers", "images"):
+            os.makedirs(os.path.join(store, sub))
+            os.makedirs(self.http, exist_ok=True)
+            os.symlink(os.path.join(store, sub), os.path.join(self.http, sub))
         self.sign = _SignStub(os.path.join(self.tmp, "ctl.sock"))
         self.env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", HOME=home,
                         BENZENE="p5-test-benzene", HTTP_ROOT=self.http, PROV_ROOT=self.prov,
                         HTTP_BASE=BASE, CTL_SOCK=self.sign.path,
                         FLEET_CONTROL_PUBKEY=CONTROL_KEY,
-                        SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1")
+                        SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1",
+                        PROV_STORE=store, PROV_STORE_FSTYPE="cifs", STUB_STORE=store)
         for k in ("SOLARI_PROV_LOCAL", "ADMIN_USER", "DOMAIN"):
             self.env.pop(k, None)
         for distro, (release, src) in IMAGES.items():
@@ -299,6 +323,21 @@ class InstallProfiles(unittest.TestCase):
         self.assertTrue(self.armed())
         p = self.provision("opensuse", "--run-id", "6", STUB_SSH_FAIL_ON="/profile.env")
         self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.armed())
+
+
+    # -- store writes re-check the store at write time ---------------------------
+    def test_firstboot_write_rechecks_store(self):
+        # installers/ stops resolving into the store after the up-front check:
+        # the firstboot write must refuse, not land on benzene's local disk
+        link = os.path.join(self.http, "installers")
+        p = self.provision("debian", STUB_SSH_SWAP_ON="solari-firstboot.sh", STUB_SSH_SWAP_LINK=link)
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("cannot write installers/solari-firstboot.sh into the image store", p.stderr)
+        self.assertFalse(os.path.islink(link))
+        self.assertEqual(os.listdir(link), [], "nothing may be written onto the local disk")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "store", "installers",
+                                                     "solari-firstboot.sh")))
         self.assertFalse(self.armed())
 
 

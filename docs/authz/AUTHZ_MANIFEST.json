@@ -299,6 +299,12 @@
       "roleRequired": "session"
     },
     {
+      "method": "GET",
+      "pattern": "/api/provisioning/store",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
       "method": "POST",
       "pattern": "/api/provisioning/images",
       "csrf": "origin+session-token",

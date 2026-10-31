@@ -36,11 +36,23 @@ PROV_ROOT/profiles/<cfgkey>/profile.env still names the given run, and
 disarm_stale_profile() disarms a profile whose run is no longer active.
 
 Provisioning host (benzene) — the same env names and defaults as
-fleet-lib.sh: BENZENE, BENZENE_IP, HTTP_PORT, HTTP_BASE, PROV_ROOT, HTTP_ROOT.
+fleet-lib.sh: BENZENE, BENZENE_IP, HTTP_PORT, HTTP_BASE, PROV_ROOT, HTTP_ROOT,
+PROV_STORE (default PROV_ROOT/store) and PROV_STORE_FSTYPE (default cifs).
 remote_run() ssh-es there with the argv shlex-quoted (the remote login shell
 sees literal words, never interpolated operator input). Test seam:
 SOLARI_PROV_LOCAL=1 runs the same argv locally instead, so tests point
 PROV_ROOT/HTTP_ROOT at a temp dir and never touch a network.
+
+Image store (NAS): installers/ and images/ under HTTP_ROOT are links into
+PROV_STORE, a CIFS share automounted on benzene. require_store() runs
+prov-store-guard.sh there and raises ProvError ("provisioning image store not
+mounted ...") unless the share is mounted and linked, so nothing big is ever
+written to benzene's local disk under an unmounted mountpoint.
+PROV_STORE_FSTYPE=none (skip the mount check) is refused outside the seam.
+store_status() reports the same facts without failing; publish_store_status()
+writes them to <status dir>/prov-store.json for GET /api/provisioning/store
+(status dir: SOLARI_PROV_STATUS_DIR, else the ctl socket's directory, which
+the dashboard already reads helper logs from).
 
 Stdlib only; pymysql is imported lazily by connect_sor().
 """
@@ -326,7 +338,9 @@ def remote_env(env: dict[str, str] | None = None) -> dict[str, str]:
     return {"BENZENE": env.get("BENZENE", "jason@benzene.akoria.net"),
             "HTTP_BASE": env.get("HTTP_BASE", f"http://{benzene_ip}:{port}"),
             "PROV_ROOT": prov_root,
-            "HTTP_ROOT": env.get("HTTP_ROOT", f"{prov_root}/netboot/http")}
+            "HTTP_ROOT": env.get("HTTP_ROOT", f"{prov_root}/netboot/http"),
+            "PROV_STORE": env.get("PROV_STORE", f"{prov_root}/store"),
+            "PROV_STORE_FSTYPE": env.get("PROV_STORE_FSTYPE", "cifs")}
 
 
 # Active lock watch for remote_run, innermost last: (interval_s, still_held).
@@ -451,6 +465,101 @@ def prov_paths(env: dict[str, str] | None = None) -> tuple[str, str]:
             raise ProvError(f"{name} {path!r} is not a plain absolute path")
         out.append(path)
     return out[0], out[1]
+
+
+# ---- NAS image store ---------------------------------------------------------
+STORE_SUBS = ("installers", "images")
+FSTYPE_RE = re.compile(r"^[a-z0-9.]{1,16}$")
+STORE_GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prov-store-guard.sh")
+STORE_STATUS_FILE = "prov-store.json"
+
+
+def store_config(env: dict[str, str] | None = None) -> tuple[str, str]:
+    """(PROV_STORE, PROV_STORE_FSTYPE), validated; "none" only under the seam."""
+    env = os.environ if env is None else env
+    renv = remote_env(env)
+    store, fstype = renv["PROV_STORE"].rstrip("/"), renv["PROV_STORE_FSTYPE"]
+    if not PATH_RE.match(store) or "/../" in store + "/":
+        raise ProvError(f"PROV_STORE {store!r} is not a plain absolute path")
+    if not FSTYPE_RE.match(fstype):
+        raise ProvError(f"PROV_STORE_FSTYPE {fstype!r} is not a filesystem type name")
+    if fstype == "none" and env.get("SOLARI_PROV_LOCAL") != "1":
+        raise ProvError("PROV_STORE_FSTYPE=none is only allowed under SOLARI_PROV_LOCAL=1")
+    return store, fstype
+
+
+def _store_guard(mode: str, subs: Iterable[str], timeout: float) -> subprocess.CompletedProcess:
+    store, fstype = store_config()
+    http_root = prov_paths()[1]
+    with open(STORE_GUARD, encoding="utf-8") as fh:
+        script = fh.read() + '\nprov_store "$@"\n'
+    return remote_run(["sh", "-c", script, "prov-store", mode, store, fstype, http_root, *subs],
+                      check=False, timeout=timeout)
+
+
+def require_store(subs: Iterable[str] = STORE_SUBS, timeout: float = 90) -> None:
+    """Fail closed unless the image store is mounted and HTTP_ROOT/<sub> links into it."""
+    proc = _store_guard("check", subs, timeout)
+    if proc.returncode != 0:
+        lines = [ln.removeprefix("[store][error] ") for ln in
+                 (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+                 if ln.startswith("[store]")]
+        raise ProvError(lines[-1] if lines else
+                        f"provisioning image store not mounted or unreachable ({_err_tail(proc)})")
+
+
+def store_status(timeout: float = 60) -> dict[str, Any]:
+    """The guard's status report as a dict (never raises for an unmounted store)."""
+    store, fstype = store_config()
+    why = "store check printed no status"
+    try:
+        proc = _store_guard("status", STORE_SUBS, timeout)
+    except ProvError as exc:
+        proc, why = None, str(exc)
+    raw: dict[str, str] = {}
+    if proc is not None and proc.returncode == 0:
+        for line in proc.stdout.decode("utf-8", "replace").splitlines():
+            key, sep, val = line.partition("=")
+            if sep and re.fullmatch(r"[a-z_]{1,16}", key):
+                raw[key] = val[:512]
+    elif proc is not None:
+        why = f"store check could not run on the provisioning host ({_err_tail(proc)})"
+
+    def num(key: str) -> int | None:
+        return int(raw[key]) * 1024 if raw.get(key, "").isdigit() else None
+    return {"store": store, "fstype": fstype, "reachable": bool(raw),
+            "mounted": raw.get("mounted") == "yes", "linked": raw.get("linked") == "yes",
+            "ok": raw.get("ok") == "yes", "source": raw.get("source") or None,
+            "size_bytes": num("size_kb"), "avail_bytes": num("avail_kb"),
+            "reason": raw.get("reason") or (None if raw else why),
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+def status_dir(env: dict[str, str] | None = None) -> str:
+    env = os.environ if env is None else env
+    return env.get("SOLARI_PROV_STATUS_DIR") or os.path.dirname(
+        env.get("SOLARI_CTL_SOCK") or "/run/solari/solariCtl.sock")
+
+
+def publish_store_status(status: dict[str, Any]) -> str:
+    """Atomically write the status for the dashboard; returns the path.
+
+    0644: it carries no secret (path, mount flag, share name, free space) and
+    the directory (the ctl socket's, 0751) is not listable by the web user."""
+    path = os.path.join(status_dir(), STORE_STATUS_FILE)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            os.fchmod(fh.fileno(), 0o644)
+            json.dump(status, fh, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return path
 
 
 # Un-stage / disarm one per-MAC profile, but only while profile.env still

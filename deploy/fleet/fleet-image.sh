@@ -39,6 +39,10 @@ fleet_require_unverified_override || exit 1
 SERVER_NAME="$(printf '%s' "${SERVER_URL}" | sed -E 's#^[a-z+]+://##; s#:[0-9]+$##')"
 FQDN="${HOSTNAME_}.${DOMAIN}"
 OUT_IMG="${HTTP_ROOT}/images/${HOSTNAME_}-${ARCH}.img"
+# The image (GBs) is built straight into the NAS store behind HTTP_ROOT/images;
+# refuse before minting anything if the store is not mounted + linked (a
+# pre-check only: build-pi-image.sh re-checks right before it writes).
+fleet_require_store images
 
 flog "building ${DISTRO}/${ARCH} image for ${HOSTNAME_} (profile=${PROFILE} role=${ROLE})"
 
@@ -54,6 +58,9 @@ flog "minted enrollment cert CN=client.${FQDN} (enroll token ${ENROLL_TOKEN:0:8}
 # ---- sync the Pi imaging scripts + client binary to benzene -----------------
 bssh "install -d -m 755 ${PROV_ROOT}/pi ${PROV_ROOT}/pi/bin"
 rsync -a -e "ssh -o BatchMode=yes" "${FLEET_DIR}/pi/" "${BENZENE}:${PROV_ROOT}/pi/" >/dev/null
+# build-pi-image.sh sources these from its parent dir (${PROV_ROOT}/)
+rsync -a -e "ssh -o BatchMode=yes" "${FLEET_DIR}/provisioning-guard.sh" \
+  "${FLEET_DIR}/prov-store-guard.sh" "${BENZENE}:${PROV_ROOT}/" >/dev/null
 CLIENT_BIN="${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient"
 if [ -x "${CLIENT_BIN}" ]; then
   rsync -a -e "ssh -o BatchMode=yes" "${CLIENT_BIN}" "${BENZENE}:${PROV_ROOT}/pi/bin/solariClient.${ARCH}" >/dev/null
@@ -69,7 +76,11 @@ UNVERIFIED_OVERRIDE="${SOLARI_ALLOW_UNVERIFIED_PROVISIONING:-0}"
 
 # ---- run the build on benzene (needs loop-mount; jason has passwordless sudo) -
 flog "running image build on benzene (this downloads the base image and can take several minutes)…"
-bssh "sudo env SOLARI_ALLOW_UNVERIFIED_PROVISIONING=${UNVERIFIED_OVERRIDE} bash ${PROV_ROOT}/pi/build-pi-image.sh \
+# The builder re-checks the store itself right before writing, and writes to
+# the resolved store path (not through HTTP_ROOT/images).
+bssh "sudo env SOLARI_ALLOW_UNVERIFIED_PROVISIONING=${UNVERIFIED_OVERRIDE} \
+    PROV_STORE=$(fleet_sq "${PROV_STORE}") PROV_STORE_FSTYPE=$(fleet_sq "${PROV_STORE_FSTYPE}") \
+    HTTP_ROOT=$(fleet_sq "${HTTP_ROOT}") bash ${PROV_ROOT}/pi/build-pi-image.sh \
     --hostname $(printf %q "${HOSTNAME_}") --fqdn $(printf %q "${FQDN}") --arch ${ARCH} \
     --admin-user $(printf %q "${ADMIN_USER}") --ssh-pubkey $(printf %q "${PUBKEY}") \
     --server-url $(printf %q "${SERVER_URL}") --server-name $(printf %q "${SERVER_NAME}") \

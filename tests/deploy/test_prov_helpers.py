@@ -369,12 +369,20 @@ class Base(unittest.TestCase):
             fh.write("---\n")
         if os.path.exists(self.log_path):
             os.unlink(self.log_path)
+        # the NAS image store the helpers require: <prov>/store/{installers,images}
+        # linked from the HTTP root (fstype "none" = the seam's directory check)
+        http = os.path.join(self.prov_root, "netboot", "http")
+        self.store = os.path.join(self.prov_root, "store")
+        for sub in ("installers", "images"):
+            os.makedirs(os.path.join(self.store, sub))
+            os.makedirs(http, exist_ok=True)
+            os.symlink(os.path.join(self.store, sub), os.path.join(http, sub))
         fakebin = os.path.join(tmp, "fakebin")
         self.env = {
             "PATH": fakebin + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": os.environ.get("HOME", tmp), "LANG": "C.UTF-8",
             "SOLARI_PROV_LOCAL": "1", "PROV_ROOT": self.prov_root,
-            "HTTP_ROOT": os.path.join(self.prov_root, "netboot", "http"),
+            "HTTP_ROOT": http, "PROV_STORE": self.store, "PROV_STORE_FSTYPE": "none",
             "SOLARI_FLEET_PROVISION": os.path.join(fakebin, "fleet-provision"),
             "SOLARI_ALLOW_UNVERIFIED_PROVISIONING": "1",
             "SOR_DB_NAME": DB, "SOR_DB_HOST": "127.0.0.1", "SOR_DB_PORT": DB_PORT,
@@ -499,6 +507,30 @@ class ProvStage(StageMixin, Base):
         self.assert_refused(ent("Bad_Name"), tw, "not a valid hostname label")
         self.assert_refused(ent("p3h-gone"), tw, "does not exist or is deleted")
         self.assert_refused(n1, tw, "unknown or deleted stack(s): nope", stacks="core,nope")
+
+    def test_store_not_mounted_fails_run(self):
+        n1 = ent("p3h-node1")
+        base = len(runs(n1))
+        p = self.stage(n1, img(TW), PROV_STORE_FSTYPE="cifs")     # a temp dir is no cifs mount
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        r = runs(n1)[base:]
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0]["status"], "failed")
+        self.assertIn("provisioning image store not mounted", r[0]["detail"])
+        self.assertEqual(self.calls("fleet-provision"), [])
+
+    def test_store_unlinked_fails_run(self):
+        n1 = ent("p3h-node1")
+        link = os.path.join(self.env["HTTP_ROOT"], "installers")
+        os.unlink(link)
+        os.makedirs(link)                                         # old layout: local disk
+        base = len(runs(n1))
+        p = self.stage(n1, img(TW))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        r = runs(n1)[base:]
+        self.assertEqual(r[0]["status"], "failed")
+        self.assertIn("does not resolve into the image store", r[0]["detail"])
+        self.assertEqual(self.calls("fleet-provision"), [])
 
     def test_mac_must_belong_to_entity(self):
         n1 = ent("p3h-node1")
@@ -1092,6 +1124,75 @@ class ProvFinish(StageMixin, Base):
         self.assertEqual(p.returncode, 1)
         self.assertIn("is not a plain absolute path", p.stderr)
         self.assertEqual(self.calls(), [])
+
+
+class StoreStatus(Base):
+    """provlib.store_status + prov-finish's per-tick publish of prov-store.json."""
+    SNIPPET = (
+        "import sys, importlib.util; sys.path.insert(0, sys.argv[1])\n"
+        "spec = importlib.util.spec_from_file_location('pf', sys.argv[1] + '/prov-finish.py')\n"
+        "pf = importlib.util.module_from_spec(spec); spec.loader.exec_module(pf)\n"
+        "pf.publish_store()\n")
+
+    def publish(self, **env):
+        e = dict(self.env, **env)
+        return subprocess.run([PY, "-c", self.SNIPPET, FLEET], env=e, capture_output=True,
+                              text=True, timeout=120)
+
+    def read(self, d):
+        path = os.path.join(d, "prov-store.json")
+        self.assertEqual(stat.S_IMODE(os.lstat(path).st_mode), 0o644)
+        self.assertEqual(os.listdir(d), ["prov-store.json"])           # no temp file left
+        with open(path) as fh:
+            return json.load(fh)
+
+    def test_mounted_and_linked(self):
+        d = tempfile.mkdtemp(prefix="p3h-status-")
+        self.addCleanup(shutil.rmtree, d, True)
+        p = self.publish(SOLARI_PROV_STATUS_DIR=d)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        st = self.read(d)
+        self.assertEqual((st["store"], st["fstype"], st["reachable"], st["mounted"], st["linked"],
+                          st["ok"], st["reason"]), (self.store, "none", True, True, True, True, None))
+        self.assertIsInstance(st["size_bytes"], int)
+        self.assertGreater(st["size_bytes"], 0)
+        self.assertRegex(st["checked_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_not_mounted_is_published_not_raised(self):
+        d = tempfile.mkdtemp(prefix="p3h-status-")
+        self.addCleanup(shutil.rmtree, d, True)
+        p = self.publish(SOLARI_PROV_STATUS_DIR=d, PROV_STORE_FSTYPE="cifs")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("store status: NOT OK: provisioning image store not mounted", p.stdout + p.stderr)
+        st = self.read(d)
+        self.assertEqual((st["reachable"], st["mounted"], st["linked"], st["ok"], st["size_bytes"]),
+                         (True, False, False, False, None))
+        self.assertIn("not a cifs mount", st["reason"])
+
+    def test_unlinked(self):
+        d = tempfile.mkdtemp(prefix="p3h-status-")
+        self.addCleanup(shutil.rmtree, d, True)
+        os.unlink(os.path.join(self.env["HTTP_ROOT"], "images"))
+        p = self.publish(SOLARI_PROV_STATUS_DIR=d)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        st = self.read(d)
+        self.assertEqual((st["mounted"], st["linked"], st["ok"]), (True, False, False))
+        self.assertIn("images does not resolve into the image store", st["reason"])
+
+    def test_seam_never_writes_the_ctl_dir(self):
+        d = tempfile.mkdtemp(prefix="p3h-ctl-")
+        self.addCleanup(shutil.rmtree, d, True)
+        p = self.publish(SOLARI_CTL_SOCK=os.path.join(d, "solariCtl.sock"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(os.listdir(d), [])
+
+    def test_fstype_none_refused_outside_seam(self):
+        d = tempfile.mkdtemp(prefix="p3h-status-")
+        self.addCleanup(shutil.rmtree, d, True)
+        p = self.publish(SOLARI_PROV_STATUS_DIR=d, SOLARI_PROV_LOCAL="0", BENZENE="p3-test-must-not-ssh")
+        self.assertEqual(p.returncode, 0, p.stderr)                       # best effort: logged
+        self.assertIn("PROV_STORE_FSTYPE=none", p.stdout + p.stderr)
+        self.assertEqual(os.listdir(d), [])
 
 
 class StackApply(Base):

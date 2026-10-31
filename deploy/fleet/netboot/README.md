@@ -120,6 +120,34 @@ no fetched image the menu offers just the shell, reboot and local disk.
 > refuses ("lists no ubuntu-24.04[.N]-netboot-amd64.tar.gz"). That is the
 > intended fail-closed behaviour; serving Ubuntu needs a checksummed source.
 
+### Image store (NAS) — where installers/ and images/ actually live
+
+`installers/` and `images/` are big (kernels/initrds, multi-GB Pi images), so
+they live on the carbon NAS store `PROV_STORE` (default
+`/srv/solari-provision/store`, a CIFS systemd automount; `PROV_STORE_FSTYPE`
+default `cifs`). The HTTP root reaches them through **whole-directory
+symlinks** `HTTP_ROOT/installers -> $PROV_STORE/installers` and
+`HTTP_ROOT/images -> $PROV_STORE/images`; nginx serves them unchanged (it
+follows symlinks). `ipxe/`, `configs/`, `enroll/`, profiles and TFTP stay on
+local disk. Why whole-directory links rather than per-image links or an nginx
+`alias`: one invariant to check, no nginx edit, and a NAS outage turns into a
+404 rather than a silent fallback — per-distro links would let a `mkdir -p`
+create a local directory under the web root and fill benzene's disk.
+
+Every helper that reads or writes those trees (`fetch-images.sh`,
+`fleet-provision.sh`, `fleet-image.sh`, `image-refresh.py`, `prov-stage.py`)
+first runs `prov-store-guard.sh check`: it touches the store (triggers the
+automount), requires `findmnt -t $PROV_STORE_FSTYPE`, and requires each link to
+resolve into the store — else it fails closed with
+`provisioning image store not mounted: …`. The writes themselves re-check on
+benzene in the writing shell and go to the resolved store path; every touch
+is time-bounded (`PROV_STORE_TIMEOUT`), and writers hold the store maintenance
+lock shared so `prov-store-migrate.py --apply` cannot run under them (details
+in the benzene README). `prov-finish.py` publishes the
+store state to `/run/solari/prov-store.json` each tick; the Images panel shows
+it (`GET /api/provisioning/store`). Host setup, credentials and the one-time
+migration (`prov-store-migrate.py`): `deploy/host-configs/benzene/README.md`.
+
 ### On-disk layout and the sha256 convention
 
 ```

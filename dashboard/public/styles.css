@@ -1507,6 +1507,11 @@ textarea.prov-input { min-height: 90px; resize: vertical; line-height: 1.5; }
 .prov-err { margin-top: 12px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--crit) 45%, transparent); border-radius: var(--r-md); background: var(--crit-bg); color: var(--crit); font-size: 12.5px; line-height: 1.45; }
 .prov-err b { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; margin-right: 6px; }
 .prov-warnbox { margin-top: 12px; padding: 9px 12px; border-radius: var(--r-md); background: var(--warn-bg); color: var(--warn); font-size: 12.5px; line-height: 1.45; }
+.prov-store { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.prov-store__path { font-size: 12px; overflow-wrap: anywhere; }
+.prov-store__fact { white-space: nowrap; }
+.prov-store__why { flex-basis: 100%; color: var(--ink-faint); line-height: 1.45; }
+.prov-store .chip { min-height: 44px; padding: 0 14px; }   /* touch target (iPad) */
 .prov-ico { color: var(--teal); flex: 0 0 auto; }
 .prov-ib { width: 32px; height: 32px; display: inline-grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink-faint); cursor: pointer; }
 .prov-ib:hover, .prov-ib:focus-visible { border-color: var(--line-2); background: var(--panel-2); color: var(--ink); }

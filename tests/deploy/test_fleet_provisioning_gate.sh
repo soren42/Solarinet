@@ -30,7 +30,8 @@ assert_blocked bash "$ROOT/deploy/fleet/pi/pi5-netboot/setup-pi5-netboot.sh" \
 	--serial 12345678 --hostname gate-test --img /missing/test.img
 # PROV_STAGE helper: the gate fires before any SoR/network access.
 assert_blocked python3 "$ROOT/deploy/fleet/prov-stage.py" \
-	--entity 1 --image 1 --stacks core --op gate-test
+	--entity 1 --image 1 --stacks core --mac aa:bb:cc:dd:ee:ff --arch x86_64 \
+	--op gate-test
 
 override_output="$(SOLARI_ALLOW_UNVERIFIED_PROVISIONING=1 bash -c \
 	'. "$1"; fleet_require_unverified_override' _ \

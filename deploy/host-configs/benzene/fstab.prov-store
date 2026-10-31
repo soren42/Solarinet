@@ -1,0 +1,7 @@
+# /etc/fstab line for the SolariNet provisioning image store on benzene.
+# The share lives on the carbon NAS (RAID5). Credentials come from a root-only
+# 0600 file — see README.md; never put username/password in fstab or git.
+# x-systemd.automount + nofail: boot never blocks on the NAS; the first access
+# mounts it, and solari-prov-store-mount.service waits for it at boot.
+# mfsymlinks: lets the migration (and future tooling) create symlinks on SMB.
+//nas.akoria.net/Shared/SolariNet-Provisioning /srv/solari-provision/store cifs vers=3.1.1,credentials=/etc/cifs-nas-carbon.cred,uid=jason,gid=users,file_mode=0644,dir_mode=0755,hard,serverino,nounix,mfsymlinks,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=30,x-systemd.idle-timeout=0 0 0
