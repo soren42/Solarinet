@@ -34,6 +34,7 @@ HELPER_ENTRYPOINTS = {
     "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
     "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
     "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
+    "deploy/fleet/prov-finish.py",
 }
 HELPER_RUNTIME_FILES = HELPER_ENTRYPOINTS | {
     "bin/solariCtlClient",

@@ -1,0 +1,19 @@
+# /etc/systemd/system/solari-prov-finish.service
+# Completes PROV_STAGE reimage runs: detects the first boot of a staged install
+# (run-id marker over SSH via the provisioning host), un-stages the per-MAC boot
+# profile, applies the staged stacks and moves prov_runs to succeeded/failed.
+# Same account, release and environment as solarinet-server.service (the ctl
+# helpers' SoR + provisioning-host settings). Started by the .timer.
+[Unit]
+Description=SolariNet provisioning: complete staged reimage runs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jason
+Group=jason
+WorkingDirectory=/opt/solarinet/current
+EnvironmentFile=/home/jason/Code/Solarinet/run/server.env
+ExecStart=/opt/solarinet/current/deploy/fleet/prov-finish.py
+TimeoutStartSec=3h

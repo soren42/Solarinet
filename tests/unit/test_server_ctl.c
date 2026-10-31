@@ -1148,6 +1148,42 @@ static void test_prov_validators_pure(void)
     TEST_ASSERT_TRUE(ctlProvValidPrincipal(line));
     line[128] = 'a'; line[129] = '\0';
     TEST_ASSERT_FALSE(ctlProvValidPrincipal(line));
+
+    /* mac: exactly provlib.MAC_RE (lowercase, colon) */
+    TEST_ASSERT_TRUE(ctlProvValidMac("aa:bb:cc:dd:ee:ff"));
+    TEST_ASSERT_TRUE(ctlProvValidMac("00:11:22:33:44:55"));
+    TEST_ASSERT_TRUE(ctlProvValidMac("0a:1b:2c:3d:4e:5f"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("AA:BB:CC:DD:EE:FF"));     /* uppercase */
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa:bb:cc:dd:ee:FF"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa-bb-cc-dd-ee-ff"));     /* hyphen */
+    TEST_ASSERT_FALSE(ctlProvValidMac("aabb.ccdd.eeff"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("aabbccddeeff"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa:bb:cc:dd:ee"));        /* short */
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa:bb:cc:dd:ee:f"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa:bb:cc:dd:ee:ff:00"));  /* extra */
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa:bb:cc:dd:ee:ff "));
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa:bb:cc:dd:ee:ff\n"));
+    TEST_ASSERT_FALSE(ctlProvValidMac(" aa:bb:cc:dd:ee:ff"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("gg:bb:cc:dd:ee:ff"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa::bb:cc:dd:ee:f"));
+    TEST_ASSERT_FALSE(ctlProvValidMac("aa:bb:cc:dd:ee;ff"));
+    TEST_ASSERT_FALSE(ctlProvValidMac(""));
+    TEST_ASSERT_FALSE(ctlProvValidMac(NULL));
+
+    /* arch: exactly provlib.ARCHES / prov_images.arch */
+    TEST_ASSERT_TRUE(ctlProvValidArch("x86_64"));
+    TEST_ASSERT_TRUE(ctlProvValidArch("arm64"));
+    TEST_ASSERT_TRUE(ctlProvValidArch("armhf"));
+    TEST_ASSERT_TRUE(ctlProvValidArch("riscv64"));
+    TEST_ASSERT_TRUE(ctlProvValidArch("i386"));
+    TEST_ASSERT_FALSE(ctlProvValidArch("amd64"));     /* PHP normalises agent spellings */
+    TEST_ASSERT_FALSE(ctlProvValidArch("aarch64"));
+    TEST_ASSERT_FALSE(ctlProvValidArch("X86_64"));
+    TEST_ASSERT_FALSE(ctlProvValidArch("x86_64 "));
+    TEST_ASSERT_FALSE(ctlProvValidArch("arm"));
+    TEST_ASSERT_FALSE(ctlProvValidArch("unknown"));
+    TEST_ASSERT_FALSE(ctlProvValidArch(""));
+    TEST_ASSERT_FALSE(ctlProvValidArch(NULL));
 }
 
 static void test_prov_strict_decode_refuses_embedded_nul(void)
@@ -1176,16 +1212,16 @@ static void test_prov_verbs_exec_exact_argv(void)
     prov_expect_spawn("IMAGE_REFRESH op=alice image=4294967295 junk=ignored",
         "deploy/fleet/image-refresh.py|--image|4294967295|--op|alice",
         "image-refresh-4294967295.log", "refreshing");
-    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core,dev-tools op=jason@akoria.org",
-        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core,dev-tools|--op|jason@akoria.org",
+    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core,dev-tools mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=jason@akoria.org",
+        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core,dev-tools|--mac|aa:bb:cc:dd:ee:ff|--arch|x86_64|--op|jason@akoria.org",
         "prov-stage-42.log", "staging");
     /* duplicates collapse before reaching the helper */
-    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=web,core,web op=alice",
-        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|web,core|--op|alice",
+    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=web,core,web mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice",
+        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|web,core|--mac|aa:bb:cc:dd:ee:ff|--arch|x86_64|--op|alice",
         "prov-stage-42.log", "staging");
     /* pct-encoded principal is decoded once (queue replay encodes requestedBy) */
-    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core op=a%2Bb",
-        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core|--op|a+b",
+    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=a%2Bb",
+        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core|--mac|aa:bb:cc:dd:ee:ff|--arch|x86_64|--op|a+b",
         "prov-stage-42.log", "staging");
     prov_expect_spawn("STACK_APPLY entity=9 stacks=core dryRun=1 op=alice",
         "deploy/fleet/stack-apply.py|--entity|9|--stacks|core|--dry-run|--op|alice",
@@ -1219,15 +1255,15 @@ static void test_prov_verbs_refuse_bad_args(void)
     prov_expect_err("IMAGE_REFRESH image=1", ERR_AUTH_ROLE);
     prov_expect_err("IMAGE_REFRESH image=1 op=", ERR_AUTH_ROLE);
     prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core", ERR_AUTH_ROLE);
-    prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core op=", ERR_AUTH_ROLE);
+    prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=", ERR_AUTH_ROLE);
     prov_expect_err("STACK_APPLY entity=1 stacks=core dryRun=0", ERR_AUTH_ROLE);
     prov_expect_err("STACK_APPLY entity=1 stacks=core dryRun=0 op=", ERR_AUTH_ROLE);
 
     /* missing args */
     prov_expect_err("IMAGE_REFRESH op=alice", ERR_INVALID_ARG);
-    prov_expect_err("PROV_STAGE image=1 stacks=core op=alice", ERR_INVALID_ARG);
-    prov_expect_err("PROV_STAGE entity=1 stacks=core op=alice", ERR_INVALID_ARG);
-    prov_expect_err("PROV_STAGE entity=1 image=1 op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE image=1 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE entity=1 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE entity=1 image=1 mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice", ERR_INVALID_ARG);
     prov_expect_err("STACK_APPLY stacks=core dryRun=0 op=alice", ERR_INVALID_ARG);
     prov_expect_err("STACK_APPLY entity=1 dryRun=0 op=alice", ERR_INVALID_ARG);
     prov_expect_err("STACK_APPLY entity=1 stacks=core op=alice", ERR_INVALID_ARG);
@@ -1235,15 +1271,15 @@ static void test_prov_verbs_refuse_bad_args(void)
     for (i = 0; i < sizeof badIds / sizeof badIds[0]; i++) {
         snprintf(line, sizeof line, "IMAGE_REFRESH image=%s op=alice", badIds[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
-        snprintf(line, sizeof line, "PROV_STAGE entity=%s image=1 stacks=core op=alice", badIds[i]);
+        snprintf(line, sizeof line, "PROV_STAGE entity=%s image=1 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice", badIds[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
-        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=%s stacks=core op=alice", badIds[i]);
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=%s stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice", badIds[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
         snprintf(line, sizeof line, "STACK_APPLY entity=%s stacks=core dryRun=0 op=alice", badIds[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
     }
     for (i = 0; i < sizeof badSlugs / sizeof badSlugs[0]; i++) {
-        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=%s op=alice", badSlugs[i]);
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=%s mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice", badSlugs[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
         snprintf(line, sizeof line, "STACK_APPLY entity=1 stacks=core,%s dryRun=1 op=alice", badSlugs[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
@@ -1255,14 +1291,14 @@ static void test_prov_verbs_refuse_bad_args(void)
     for (i = 0; i < sizeof badOps / sizeof badOps[0]; i++) {
         snprintf(line, sizeof line, "IMAGE_REFRESH image=1 op=%s", badOps[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
-        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=core op=%s", badOps[i]);
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=%s", badOps[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
         snprintf(line, sizeof line, "STACK_APPLY entity=1 stacks=core dryRun=0 op=%s", badOps[i]);
         prov_expect_err(line, ERR_INVALID_ARG);
     }
 
     /* 33 distinct stacks */
-    o = (size_t)snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 op=alice stacks=");
+    o = (size_t)snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice stacks=");
     for (i = 0; i < 33; i++)
         o += (size_t)snprintf(line + o, sizeof line - o, "%ss%u", i ? "," : "", (unsigned)i);
     prov_expect_err(line, ERR_INVALID_ARG);
@@ -1273,11 +1309,60 @@ static void test_prov_verbs_refuse_bad_args(void)
     prov_expect_err(line, ERR_INVALID_ARG);
 }
 
+/* PROV_STAGE carries the operator-picked MAC and the server-resolved arch to
+ * the helper verbatim; anything outside MAC_RE / ARCHES is refused unspawned. */
+static void test_prov_stage_mac_arch(void)
+{
+    static const char *const badMacs[] = {
+        "AA:BB:CC:DD:EE:FF", "aa:bb:cc:dd:ee:FF", "aa-bb-cc-dd-ee-ff", "aabbccddeeff",
+        "aa:bb:cc:dd:ee", "aa:bb:cc:dd:ee:ff:00", "aa:bb:cc:dd:ee:f", "gg:bb:cc:dd:ee:ff",
+        "aa:bb:cc:dd:ee:ff%00", "aa:bb:cc:dd:ee:ff%0a", "aa:bb:cc:dd:ee:ff%20x",
+        "aa:bb:cc:dd:ee:ff;id", "aa%3Abb", "", "%24%28id%29",
+    };
+    static const char *const badArches[] = {
+        "amd64", "aarch64", "X86_64", "arm", "unknown", "", "x86_64%00", "x86_64%20",
+        "x86_64;id", "riscv", "i686", "%24%28id%29",
+    };
+    char line[512];
+    size_t i;
+
+    prov_expect_spawn("PROV_STAGE entity=7 image=2 stacks=core mac=dc:a6:32:01:02:03 arch=arm64 op=alice",
+        "deploy/fleet/prov-stage.py|--entity|7|--image|2|--stacks|core|--mac|dc:a6:32:01:02:03|--arch|arm64|--op|alice",
+        "prov-stage-7.log", "staging");
+    /* a percent-encoded value (any replayed/encoded frame) decodes exactly once */
+    prov_expect_spawn("PROV_STAGE entity=7 image=2 stacks=core mac=dc%3Aa6%3A32%3A01%3A02%3A03 arch=riscv64 op=alice",
+        "deploy/fleet/prov-stage.py|--entity|7|--image|2|--stacks|core|--mac|dc:a6:32:01:02:03|--arch|riscv64|--op|alice",
+        "prov-stage-7.log", "staging");
+    /* order of keys is irrelevant; first occurrence wins */
+    prov_expect_spawn("PROV_STAGE op=alice arch=i386 mac=00:11:22:33:44:55 stacks=core image=2 entity=7 mac=AA:BB:CC:DD:EE:FF",
+        "deploy/fleet/prov-stage.py|--entity|7|--image|2|--stacks|core|--mac|00:11:22:33:44:55|--arch|i386|--op|alice",
+        "prov-stage-7.log", "staging");
+
+    /* both are mandatory */
+    prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core arch=x86_64 op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core mac=aa:bb:cc:dd:ee:ff op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core op=alice", ERR_INVALID_ARG);
+    for (i = 0; i < sizeof badMacs / sizeof badMacs[0]; i++) {
+        char reply[512];
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=core mac=%s arch=x86_64 op=alice", badMacs[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        prov_call(line, CTL_PEER_OPERATOR, reply, sizeof reply);
+        TEST_ASSERT_NOT_NULL_MESSAGE(strstr(reply, "invalid mac"), line);
+    }
+    for (i = 0; i < sizeof badArches / sizeof badArches[0]; i++) {
+        char reply[512];
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=core mac=aa:bb:cc:dd:ee:ff arch=%s op=alice", badArches[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        prov_call(line, CTL_PEER_OPERATOR, reply, sizeof reply);
+        TEST_ASSERT_NOT_NULL_MESSAGE(strstr(reply, "invalid arch"), line);
+    }
+}
+
 static void test_prov_verbs_dashboard_must_queue(void)
 {
     static const char *const direct[] = {
         "IMAGE_REFRESH image=1 op=alice",
-        "PROV_STAGE entity=1 image=1 stacks=core op=alice",
+        "PROV_STAGE entity=1 image=1 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice",
         "STACK_APPLY entity=1 stacks=core dryRun=1 op=alice",
     };
     static const char *const inner[] = { "IMAGE_REFRESH", "PROV_STAGE", "STACK_APPLY" };
@@ -1370,6 +1455,24 @@ static void test_prov_queue_replay_binds_requester(void)
         TEST_ASSERT_TRUE(gQueuedDecommissionCompleted);
         snprintf(want, sizeof want, "OK log=%s/stack-apply-12.log status=applying", gLogDir);
         TEST_ASSERT_EQUAL_STRING(want, gQueuedDecommissionResult);
+    }
+
+    /* PROV_STAGE replays from the queue; an encoded mac decodes exactly once */
+    gQueuedCustomReady = true;
+    snprintf(gQueuedVerb, sizeof gQueuedVerb, "PROV_STAGE");
+    snprintf(gQueuedArgs, sizeof gQueuedArgs,
+             "entity=12 image=3 stacks=core mac=aa%%3Abb%%3Acc%%3Add%%3Aee%%3Aff arch=arm64");
+    snprintf(gQueuedRequester, sizeof gQueuedRequester, "alice");
+    gSpawnCalls = 0;
+    gQueuedDecommissionCompleted = false;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverCtlQueuePoll(&ctl));
+    TEST_ASSERT_EQUAL_UINT(1, gSpawnCalls);
+    {
+        char want[1024];
+        snprintf(want, sizeof want, "%s/deploy/fleet/prov-stage.py|--entity|12|--image|3|"
+                 "--stacks|core|--mac|aa:bb:cc:dd:ee:ff|--arch|arm64|--op|alice", gHelperRoot);
+        TEST_ASSERT_EQUAL_STRING(want, gSpawnArgv);
+        TEST_ASSERT_TRUE(gQueuedDecommissionCompleted);
     }
 
     /* a bad queued arg fails the row cleanly and spawns nothing */
@@ -1531,7 +1634,7 @@ static void test_missing_helper_fails_loudly(void)
           "deploy/fleet/fleet-provision.sh" },
         { "FLEET_IMAGE hostname=pi1 arch=arm64 op=alice", "deploy/fleet/fleet-image.sh" },
         { "IMAGE_REFRESH image=7 op=alice", "deploy/fleet/image-refresh.py" },
-        { "PROV_STAGE entity=4 image=3 stacks=core op=alice", "deploy/fleet/prov-stage.py" },
+        { "PROV_STAGE entity=4 image=3 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice", "deploy/fleet/prov-stage.py" },
         { "STACK_APPLY entity=4 stacks=core dryRun=1 op=alice", "deploy/fleet/stack-apply.py" },
     };
     char path[512], want[160];
@@ -1570,7 +1673,7 @@ static void test_unwritable_log_dir_fails_loudly(void)
         char link[512];
         snprintf(link, sizeof link, "%s/prov-stage-5.log", gLogDir);
         TEST_ASSERT_EQUAL_INT(0, symlink("/etc/passwd", link));
-        helper_expect_refusal("PROV_STAGE entity=5 image=3 stacks=core op=alice",
+        helper_expect_refusal("PROV_STAGE entity=5 image=3 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice",
                               "helper log not writable: prov-stage-5.log");
         TEST_ASSERT_EQUAL_INT(0, unlink(link));
     }
@@ -1606,7 +1709,7 @@ static void test_unconfigured_helper_root_fails_loudly(void)
     serverCtl ctl;
     char line[128], reply[512];
     memset(&ctl, 0, sizeof ctl);                 /* never opened: no root */
-    snprintf(line, sizeof line, "PROV_STAGE entity=4 image=3 stacks=core op=alice");
+    snprintf(line, sizeof line, "PROV_STAGE entity=4 image=3 stacks=core mac=aa:bb:cc:dd:ee:ff arch=x86_64 op=alice");
     gSpawnCalls = 0;
     (void)ctlHandleLine(&ctl, line, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
     TEST_ASSERT_EQUAL_INT(0, strncmp(reply, "ERR -70 ", 8));
@@ -1680,6 +1783,7 @@ int main(void)
     RUN_TEST(test_prov_strict_decode_refuses_embedded_nul);
     RUN_TEST(test_prov_verbs_exec_exact_argv);
     RUN_TEST(test_prov_verbs_refuse_bad_args);
+    RUN_TEST(test_prov_stage_mac_arch);
     RUN_TEST(test_prov_verbs_dashboard_must_queue);
     RUN_TEST(test_prov_queue_replay_binds_requester);
     RUN_TEST(test_helper_path_primitives);

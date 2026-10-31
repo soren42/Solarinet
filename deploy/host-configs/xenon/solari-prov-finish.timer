@@ -1,0 +1,11 @@
+# /etc/systemd/system/solari-prov-finish.timer
+[Unit]
+Description=SolariNet provisioning: poll staged reimage runs every 2 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

@@ -133,6 +133,12 @@ if (str_starts_with($path, '/api/')) {
                     'dry_run'=>(bool)($rec['body']['dry_run'] ?? false), 'detail'=>null,
                     'requested_at'=>gmdate('Y-m-d\\TH:i:s\\Z'), 'started_at'=>null, 'finished_at'=>null];
             }
+            if ($rec['method'] === 'POST' && $rec['path'] === 'image-refresh') {
+                $s['runs'][] = ['id'=>(string)(count($s['runs']) + 20), 'mode'=>'refresh', 'entity_id'=>null, 'entity_name'=>null,
+                    'image_id'=>(string)$rec['body']['image'], 'image_label'=>'debian 12 arm64', 'stack_slugs'=>[],
+                    'requested_by'=>$principal['username'], 'status'=>'running', 'dry_run'=>false, 'detail'=>null,
+                    'requested_at'=>gmdate('Y-m-d\\TH:i:s\\Z'), 'started_at'=>null, 'finished_at'=>null];
+            }
             if ($rec['method'] === 'DELETE' && preg_match('~\\Astacks/(\\d+)\\z~', $rec['path'], $m)) {
                 unset($s['stacks'][$m[1]]);
             }
@@ -140,6 +146,23 @@ if (str_starts_with($path, '/api/')) {
         });
         if ($method === 'DELETE') fx_out(['deleted'=>true]);
         fx_out(['status'=>'queued', 'request'=>(string)(100 + count($s['writes'])), 'log'=>null]);
+    }
+    if ($method === 'PUT' && preg_match('~\\A/api/inventory/models/(\\d+)\\z~', $path, $m)) {
+        $body = json_decode(file_get_contents('php://input') ?: '', true);
+        $id = (int) $m[1];
+        fx_state($statePath, static function ($s) use ($id, $body) {
+            $s['writes'][] = ['method'=>'PUT', 'path'=>'inventory/models/' . $id, 'body'=>$body,
+                'csrf'=>($_SERVER['HTTP_X_SOLARI_CSRF'] ?? '') === Auth::csrfToken(), 'idem'=>''];
+            foreach ($s['targets'] as &$t) {
+                if (($t['hw_model_id'] ?? null) === $id) {
+                    $t['arch'] = $body['arch'] ?: null;
+                    $t['arch_source'] = $body['arch'] ? 'hardware_model' : null;
+                }
+            }
+            unset($t);
+            return $s;
+        });
+        fx_out(['id'=>$id, 'arch'=>$body['arch'] ?: null]);
     }
     $data = match ($path) {
         '/api/summary' => ['counts'=>[], 'lease'=>[]],
@@ -199,14 +222,19 @@ function fixtureState() {
     },
     targets: [
       { id: '9', name: 'neon', entity_type: 'server', lifecycle: 'active', role: 'compute', hw_make: 'Raspberry Pi',
-        hw_model: 'Pi 5', hw_type: 'sbc', arch: 'arm64', arch_source: 'agent',
+        hw_model: 'Pi 5', hw_type: 'sbc', hw_model_id: null, arch: 'arm64', arch_source: 'agent', agent_arch: 'arm64',
         interfaces: [{ name: 'eth0', mac: 'aa:bb:cc:00:00:01', management: true },
           { name: 'wlan0', mac: 'aa:bb:cc:00:00:02', management: false }] },
       { id: '12', name: 'argon', entity_type: 'vm', lifecycle: 'active', role: null, hw_make: null, hw_model: null,
-        hw_type: null, arch: null, arch_source: null, interfaces: [{ name: 'ens18', mac: 'aa:bb:cc:00:00:03', management: false }] },
+        hw_type: null, hw_model_id: null, arch: null, arch_source: null, agent_arch: null,
+        interfaces: [{ name: 'ens18', mac: 'aa:bb:cc:00:00:03', management: false }] },
+      { id: '14', name: 'krypton', entity_type: 'server', lifecycle: 'active', role: null, hw_make: 'Dell', hw_model: 'R410',
+        hw_type: 'server', hw_model_id: 3, arch: null, arch_source: null, agent_arch: null,
+        interfaces: [{ name: 'eno1', mac: 'aa:bb:cc:00:00:04', management: true }] },
     ],
     runs: [],
-    logs: { 'stack-apply-9': 'PLAY [neon] ****\nTASK [chrony] ok\nPLAY RECAP neon ok=3 changed=0\n' },
+    logs: { 'stack-apply-9': 'PLAY [neon] ****\nTASK [chrony] ok\nPLAY RECAP neon ok=3 changed=0\n',
+      'image-refresh-6': 'fetch debian 12 arm64 netboot\nsha256 ok\n' },
   };
 }
 
@@ -219,6 +247,8 @@ async function main() {
   const routerPath = path.join(temp, 'router.php');
   fs.writeFileSync(routerPath, phpRouter(stateFile), { mode: 0o600 });
   const writes = () => JSON.parse(fs.readFileSync(stateFile, 'utf8')).writes;
+  // The page holds no lock on the state file; the test edits it between polls.
+  const mutate = (fn) => { const st = JSON.parse(fs.readFileSync(stateFile, 'utf8')); fn(st); fs.writeFileSync(stateFile, JSON.stringify(st)); };
 
   let child = null;
   let browser = null;
@@ -257,15 +287,20 @@ async function main() {
     const targetSel = page.getByLabel('Machine (from inventory)');
     await targetSel.selectOption({ label: 'neon — Raspberry Pi Pi 5 · arm64' });
     const facts = page.locator('.prov-facts');
-    await facts.getByText('aa:bb:cc:00:00:01').waitFor();
-    assert.match(await facts.innerText(), /arm64[\s\S]*\+1[\s\S]*Raspberry Pi Pi 5[\s\S]*active/i,
-      'target facts show arch, management MAC (+1 more), model, lifecycle: ' + JSON.stringify(await facts.innerText()));
+    const ifaceSel = page.getByLabel('Netboot interface');
+    await ifaceSel.waitFor();
+    assert.equal(await ifaceSel.inputValue(), 'aa:bb:cc:00:00:01', 'netboot interface defaults to the management MAC');
+    assert.equal(await ifaceSel.isDisabled(), false, 'a multi-NIC target offers an explicit interface choice');
+    assert.deepEqual(await ifaceSel.locator('option').allInnerTexts(),
+      ['eth0 · aa:bb:cc:00:00:01 (mgmt)', 'wlan0 · aa:bb:cc:00:00:02'], 'every interface is listed, management marked');
+    assert.match(await facts.innerText(), /arm64[\s\S]*Raspberry Pi Pi 5[\s\S]*active/i,
+      'target facts show arch, model, lifecycle: ' + JSON.stringify(await facts.innerText()));
     const x86 = page.getByRole('radio', { name: /^Select Debian 13 \(trixie\) x86_64/ });
     const arm = page.getByRole('radio', { name: 'Select Debian 13 (trixie) arm64' });
     const unfetched = page.getByRole('radio', { name: /^Select Debian 12 \(bookworm\) arm64/ });
     const pi = page.getByRole('radio', { name: /^Select Raspberry Pi OS 12 \(bookworm\) armhf/ });
     assert.equal(await x86.isDisabled(), true, 'x86_64 image is not selectable for an arm64 target');
-    assert.match(await x86.getAttribute('aria-label'), /arch mismatch \(target is arm64\)/, 'mismatch reason is announced');
+    assert.match(await x86.getAttribute('aria-label'), /image is x86_64, target is arm64/, 'mismatch reason is announced');
     assert.match(await unfetched.getAttribute('aria-label'), /not fetched/, 'unfetched image explains why it is disabled');
     assert.equal(await unfetched.isDisabled(), true, 'unfetched image cannot be staged');
     assert.equal(await pi.isDisabled(), true, 'armhf Pi image is greyed out for arm64');
@@ -291,11 +326,14 @@ async function main() {
     // --- reimage → PROV_STAGE via type-to-confirm --------------------------
     await arm.check();
     await deploy.getByText(/Unmapped on debian: Monitoring: prom-tools/).waitFor();
-    await deploy.getByText(/Wipes the install disk on neon/).waitFor();
+    await deploy.getByText(/Wipes the install disk on neon's next network boot from eth0 \(aa:bb:cc:00:00:01\)/).waitFor();
+    await ifaceSel.selectOption('aa:bb:cc:00:00:02');
+    await deploy.getByText(/next network boot from wlan0 \(aa:bb:cc:00:00:02\)/).waitFor();
     await deployBtn.click();
     let dialog = page.getByRole('alertdialog', { name: 'Stage reinstall of neon?' });
     await dialog.waitFor();
     assert.match(await dialog.innerText(), /Core → Web → Monitoring/, 'confirm lists the run order');
+    assert.match(await dialog.innerText(), /PROV_STAGE · wlan0 aa:bb:cc:00:00:02 · arm64/, 'confirm names the chosen interface + arch');
     const stageBtn = dialog.getByRole('button', { name: 'Stage reinstall' });
     assert.equal(await stageBtn.isDisabled(), true, 'stage is disarmed until the target name is typed');
     await dialog.getByRole('button', { name: 'Cancel' }).click();
@@ -311,7 +349,8 @@ async function main() {
     let w = writes();
     assert.equal(w.length, 1, 'one stage write');
     assert.deepEqual([w[0].method, w[0].path, w[0].body], ['POST', 'stage',
-      { entity: '9', image: 5, stacks: ['core', 'web', 'monitoring'] }], 'stage body: entity, image, ordered stacks');
+      { entity: '9', image: 5, stacks: ['core', 'web', 'monitoring'], mac: 'aa:bb:cc:00:00:02' }],
+      'stage body: entity, image, ordered stacks, the operator-chosen MAC (never a client arch)');
     assert.equal(w[0].csrf, true, 'stage carries the session CSRF token');
     assert.match(w[0].idem, /^prov-/, 'stage carries an idempotency key');
     const runs = page.locator('section[aria-labelledby="prov-h-runs"]');
@@ -355,9 +394,19 @@ async function main() {
     // --- image refresh + delete confirm ------------------------------------
     await page.getByRole('radio', { name: 'Reimage (wipe + install)' }).click();
     await page.getByRole('button', { name: 'Refresh Debian 12 (bookworm) arm64 from upstream' }).click();
-    await page.locator('.prov-irow').filter({ hasText: 'refreshing…' }).waitFor();
+    await page.locator('.toast').filter({ hasText: /Refresh of Debian 12 \(bookworm\) arm64 queued \(request \d+\) — follow it in Recent runs/ }).waitFor();
     w = writes();
     assert.deepEqual([w[3].path, w[3].body, w[3].csrf], ['image-refresh', { image: 6 }, true], 'IMAGE_REFRESH for the row');
+    await runs.getByText('refresh  debian 12 arm64').waitFor();
+    await page.locator('.prov-irow').filter({ hasText: 'refresh running…' }).waitFor();
+    await runs.getByRole('button', { name: /^Helper log for run / }).first().click();
+    const refreshLog = page.getByRole('dialog', { name: 'Refresh log · debian 12 arm64' });
+    await refreshLog.getByText(/sha256 ok/).waitFor();
+    await page.keyboard.press('Escape');
+    await refreshLog.waitFor({ state: 'detached' });
+    mutate((st) => { st.runs.find((r) => r.mode === 'refresh').status = 'succeeded'; });
+    await page.locator('.toast').filter({ hasText: 'Refresh of debian 12 arm64 succeeded' }).waitFor({ timeout: 15000 });
+    await page.locator('.prov-irow').filter({ hasText: /refresh(ing| running)…/ }).waitFor({ state: 'detached' });
 
     await page.getByRole('button', { name: 'Delete stack Web' }).click();
     dialog = page.getByRole('alertdialog', { name: 'Delete stack Web?' });
@@ -375,6 +424,31 @@ async function main() {
     await alt.uncheck();
     assert.equal(await deployBtn.isDisabled(), false, 'clearing the conflict re-arms deploy');
     assert.equal(writes().length, 4, 'a blocked conflict sent nothing');
+
+    // --- unknown target arch fails closed for reimage ------------------------
+    await targetSel.selectOption({ label: 'argon' });
+    await deploy.getByText('Target CPU architecture unknown — give argon a hardware model with a CPU architecture (Inventory) or let the agent report it.').waitFor();
+    assert.equal(await deployBtn.isDisabled(), true, 'reimage is blocked when the arch is unknown');
+    assert.equal(await ifaceSel.isDisabled(), true, 'a single-NIC target shows its interface without a choice');
+    assert.equal(await facts.getByRole('button', { name: 'Set' }).count(), 0, 'no model → no arch edit');
+    await page.getByRole('radio', { name: 'Apply stacks only' }).click();
+    await deploy.getByText(/Target CPU architecture unknown/).waitFor({ state: 'detached' });
+    await page.getByRole('radio', { name: 'Reimage (wipe + install)' }).click();
+    await targetSel.selectOption({ label: 'krypton — Dell R410' });
+    await deploy.getByText('Target CPU architecture unknown — set the CPU architecture on hardware model Dell R410 (Inventory) or let the agent report it.').waitFor();
+    await facts.getByRole('button', { name: 'Set' }).click();
+    dialog = page.getByRole('alertdialog', { name: 'CPU architecture of Dell R410' });
+    await dialog.getByLabel('CPU architecture').selectOption('x86_64');
+    await dialog.getByRole('button', { name: 'Save' }).click();
+    await dialog.waitFor({ state: 'detached' });
+    w = writes();
+    assert.deepEqual([w[4].method, w[4].path, w[4].body, w[4].csrf], ['PUT', 'inventory/models/3', { arch: 'x86_64' }, true],
+      'arch edit PUTs the hardware model with CSRF');
+    await deploy.getByText(/Target CPU architecture unknown/).waitFor({ state: 'detached' });
+    assert.match(await facts.getByText('x86_64', { exact: true }).getAttribute('title'), /From hardware model Dell R410/,
+      'resolved arch names its source');
+    await deploy.getByText('Select an image.').waitFor();
+    await targetSel.selectOption({ label: 'neon — Raspberry Pi Pi 5 · arm64' });
 
     if (process.env.SOLARI_PROVIMAGES_SCREENSHOT) {
       await page.screenshot({ path: process.env.SOLARI_PROVIMAGES_SCREENSHOT, fullPage: true });
@@ -413,8 +487,9 @@ async function main() {
     }
 
     assert.deepEqual(pageErrors, [], 'browser reported no JavaScript or console errors');
-    console.log('Images & Stacks browser acceptance passed: arch filtering, locked/auto stacks + run order, '
-      + 'typed-confirm stage, dry-run then apply, log tail, refresh, delete confirm, pool, mobile layout.');
+    console.log('Images & Stacks browser acceptance passed: arch filtering, netboot interface choice, locked/auto stacks + run order, '
+      + 'typed-confirm stage, dry-run then apply, log tail, refresh run tracking, delete confirm, unknown-arch block + '
+      + 'hardware-model arch edit, pool, mobile layout.');
   } catch (error) {
     failure = error;
   } finally {

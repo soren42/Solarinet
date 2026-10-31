@@ -187,7 +187,7 @@ jobs:
       - name: Install exercised sync dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y mariadb-client bind9 bind9-utils python3-venv
+          sudo apt-get install -y mariadb-client bind9 bind9-utils python3-venv python3-yaml
           python3 -m venv /tmp/sorsync-ci
           /tmp/sorsync-ci/bin/pip install -r deploy/sorsync/requirements.txt
       - name: Apply SoR migrations to the disposable integration database
@@ -238,6 +238,16 @@ jobs:
           STACKGEN_TEST_PYTHON: /tmp/sorsync-ci/bin/python
           STACKGEN_TEST_USER_HOST: '%'
         run: bash tests/netdb/test_prov_cdc_030.sh
+      - name: Provisioning arch + refresh runs (migration 031) shape CHECK, guards, rollback digest, ledger rehearsal
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+          STACKGEN_TEST_PYTHON: /tmp/sorsync-ci/bin/python
+          STACKGEN_TEST_USER_HOST: '%'
+        run: bash tests/netdb/test_prov_arch_refresh_031.sh
       - name: IMAGE_REFRESH helper, fetch-images.sh and boot-menu render (local fixtures, no internet)
         env:
           SOLARI_TEST_SOR_DB: '1'
@@ -249,7 +259,9 @@ jobs:
           STACKGEN_TEST_USER_HOST: '%'
           IMAGE_REFRESH_REQUIRE_DB: '1'
         run: python3 tests/deploy/test_image_refresh.py
-      - name: PROV_STAGE / STACK_APPLY helpers (prov_runs lifecycle, F-07 gate, faked ansible)
+      - name: Rendered install profiles (AutoYaST XML one package per name, preseed, autoinstall)
+        run: python3 tests/deploy/test_install_profiles.py
+      - name: PROV_STAGE / STACK_APPLY / prov-finish helpers (prov_runs lifecycle, F-07 gate, faked ansible)
         env:
           SOLARI_TEST_SOR_DB: '1'
           MYSQL_HOST: 127.0.0.1
@@ -704,6 +716,9 @@ jobs:
           $MYSQL < netdb/sor/migrations/026_unifi_network_cdc.sql
           $MYSQL < netdb/sor/migrations/027_interconnect_cable_details.sql
           $MYSQL < netdb/sor/migrations/028_entity_unit_association.sql
+          $MYSQL < netdb/sor/migrations/029_provisioning_images_stacks.sql
+          $MYSQL < netdb/sor/migrations/030_provisioning_cdc.sql
+          $MYSQL < netdb/sor/migrations/031_provisioning_arch_refresh.sql
           $MYSQL -e "CREATE TABLE _solarinet_test_scratch (marker VARCHAR(64) PRIMARY KEY); INSERT INTO _solarinet_test_scratch VALUES ('solarinet-ci-scratch-v1')"
           echo "-- re-applying idempotent network/RackWire migrations --"
           $MYSQL < netdb/sor/migrations/025_network_allocator_gate.sql
@@ -853,7 +868,7 @@ jobs:
           test "$monitoring_migration_count" = 38 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 38" >&2; exit 1; }
           echo "ledger-gate: monitoring applied-migration count is $monitoring_migration_count"
           sor_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read SoR migration count' >&2; exit 1; }
-          test "$sor_migration_count" = 15 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 15" >&2; exit 1; }
+          test "$sor_migration_count" = 16 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 16" >&2; exit 1; }
           echo "ledger-gate: SoR applied-migration count is $sor_migration_count"
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output "$ledger_tmp/monitoring-schema.sql"
           echo 'ledger-gate: monitoring schema exported'
@@ -894,7 +909,8 @@ jobs:
             tests/deploy/test_stack_items_ansible.sh \
             tests/deploy/test_fleet_provisioning_gate.sh \
             tests/netdb/test_prov_images_stacks.sh \
-            tests/netdb/test_prov_cdc_030.sh
+            tests/netdb/test_prov_cdc_030.sh \
+            tests/netdb/test_prov_arch_refresh_031.sh
       - name: F-07 fleet provisioning fails closed
         run: bash tests/deploy/test_fleet_provisioning_gate.sh
       - name: F-07 signed release manifest contract

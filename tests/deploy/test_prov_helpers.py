@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_prov_helpers — deploy/fleet/prov-stage.py + stack-apply.py end to end.
+"""test_prov_helpers — deploy/fleet/prov-stage.py, stack-apply.py, prov-finish.py end to end.
 
 Runs both helpers as subprocesses against a SCRATCH MariaDB this test creates
 and always drops (`sor_test_p3_helpers`: schema.sql + every migration in
@@ -31,6 +31,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -38,6 +39,7 @@ FLEET = os.path.join(ROOT, "deploy", "fleet")
 SOR = os.path.join(ROOT, "netdb", "sor")
 PROV_STAGE = os.path.join(FLEET, "prov-stage.py")
 STACK_APPLY = os.path.join(FLEET, "stack-apply.py")
+PROV_FINISH = os.path.join(FLEET, "prov-finish.py")
 DB = "sor_test_p3_helpers"
 LIVE_DBS = {"sor", "solarinet", "solarinet_stage", "sor_probe"}
 PY = os.environ.get("STACKGEN_TEST_PYTHON", "python3")
@@ -138,6 +140,17 @@ INSERT INTO interfaces (entity_id, name, if_kind, mac, is_management, source_id)
   ((SELECT id FROM entities WHERE name='p3h-nomac'),'eth1','physical','02:00:00:00:00:21',0,{SRC});
 UPDATE interfaces SET deleted_at=NOW() WHERE name='old0'
   OR (name='eth1' AND entity_id=(SELECT id FROM entities WHERE name='p3h-nomac'));
+INSERT INTO hardware_models (make, model, hw_type, arch, source_id) VALUES
+  ('P3H','Box x86','server','x86_64',{SRC}), ('P3H','Box arm','sbc','arm64',{SRC});
+INSERT INTO hardware_units (model_id, serial, source_id) VALUES
+  ((SELECT id FROM hardware_models WHERE model='Box x86'),'p3h-sn-2',{SRC}),
+  ((SELECT id FROM hardware_models WHERE model='Box arm'),'p3h-sn-3',{SRC});
+INSERT INTO entities (name, entity_type, source_id, hardware_unit_id) VALUES
+  ('p3h-node3','server',{SRC},(SELECT id FROM hardware_units WHERE serial='p3h-sn-3'));
+UPDATE entities SET hardware_unit_id=(SELECT id FROM hardware_units WHERE serial='p3h-sn-2')
+  WHERE name='p3h-node2';
+INSERT INTO interfaces (entity_id, name, if_kind, mac, is_management, source_id) VALUES
+  ((SELECT id FROM entities WHERE name='p3h-node3'),'eth0','physical','02:00:00:00:00:31',1,{SRC});
 """)
 
 
@@ -166,14 +179,66 @@ def runs(entity: str, mode: str | None = None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # fakes
 # ---------------------------------------------------------------------------
+# FAKE_HOOK_ON=<point> + FAKE_HOOK_SQL: the fake runs that SQL on the scratch
+# SoR (as the helper user) when it reaches <point> — e.g. a PROV_STAGE
+# cancelling the run while prov-finish is mid-way.
+FAKE_HOOK = r'''
+def _hook(point):
+    if os.environ.get("FAKE_HOOK_ON") != point:
+        return
+    import subprocess
+    e = dict(os.environ, MYSQL_PWD=os.environ["SOR_DB_PASS"])
+    subprocess.run(["mariadb", "--protocol=TCP", "-h", os.environ["SOR_DB_HOST"],
+                    "-P", os.environ["SOR_DB_PORT"], "-u", os.environ["SOR_DB_USER"],
+                    os.environ["SOR_DB_NAME"], "-e", os.environ["FAKE_HOOK_SQL"]],
+                   env=e, check=True)
+'''
+
 FAKE_ANSIBLE = r'''#!__PY__
 import json, os, sys
+__HOOK__
 rec = {"tool": "ansible", "argv": sys.argv[1:], "cwd": os.getcwd(),
        "load_cb": os.environ.get("ANSIBLE_LOAD_CALLBACK_PLUGINS"),
-       "result_fmt": os.environ.get("ANSIBLE_CALLBACK_RESULT_FORMAT")}
+       "result_fmt": os.environ.get("ANSIBLE_CALLBACK_RESULT_FORMAT"),
+       "ssh_args": os.environ.get("ANSIBLE_SSH_COMMON_ARGS"),
+       "hkc": os.environ.get("ANSIBLE_HOST_KEY_CHECKING"),
+       "become": os.environ.get("ANSIBLE_BECOME")}
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")
 host = sys.argv[sys.argv.index("-i") + 1].rstrip(",")
+def _hostkey_ok():
+    # Emulate ssh host-key checking from ANSIBLE_SSH_COMMON_ARGS: accept-new
+    # records FAKE_HOSTKEY in an empty/absent file; any recorded key must match.
+    args = (os.environ.get("ANSIBLE_SSH_COMMON_ARGS") or "").split()
+    opts = dict(a.split("=", 1) for a in args if "=" in a)
+    kh, mode = opts.get("UserKnownHostsFile"), opts.get("StrictHostKeyChecking")
+    if not kh or os.environ.get("ANSIBLE_HOST_KEY_CHECKING") != "True":
+        return True
+    key = os.environ.get("FAKE_HOSTKEY", "key-A")
+    have = open(kh).read().strip() if os.path.exists(kh) else ""
+    if have:
+        return have == key
+    if mode == "accept-new":
+        with open(kh, "w") as fh:
+            fh.write(key + "\n")
+        return True
+    return False
+if not _hostkey_ok():
+    print(host + " | UNREACHABLE! => {\"msg\": \"Host key verification failed.\"}")
+    sys.exit(4)
+if sys.argv[sys.argv.index("-m") + 1] == "ansible.builtin.raw":
+    cmd = sys.argv[sys.argv.index("-a") + 1]
+    if cmd.startswith("cat /etc/ansible/facts.d/"):
+        marker = os.environ.get("FAKE_MARKER")
+        if marker is None:
+            print(host + " | UNREACHABLE! => {\"changed\": false, \"unreachable\": true}")
+            sys.exit(4)
+        print(host + " | CHANGED | rc=0 >>\n" + marker)
+        sys.exit(0)
+    _hook("bootstrap")
+    rc = int(os.environ.get("FAKE_RAW_RC", "0"))
+    print(host + (" | CHANGED | rc=0 >>" if rc == 0 else " | FAILED | rc=%d >>" % rc))
+    sys.exit(rc)
 facts = {"ansible_os_family": os.environ.get("FAKE_FAMILY", "Suse"),
          "ansible_architecture": os.environ.get("FAKE_ARCH", "x86_64")}
 mode = os.environ.get("FAKE_FACTS_MODE", "oneline")
@@ -192,9 +257,12 @@ else:
 
 FAKE_PLAYBOOK = r'''#!__PY__
 import json, os, stat, sys
+__HOOK__
 argv = sys.argv[1:]
 rec = {"tool": "ansible-playbook", "argv": argv, "cwd": os.getcwd(),
-       "stdout_cb": os.environ.get("ANSIBLE_STDOUT_CALLBACK")}
+       "stdout_cb": os.environ.get("ANSIBLE_STDOUT_CALLBACK"),
+       "ssh_args": os.environ.get("ANSIBLE_SSH_COMMON_ARGS"),
+       "hkc": os.environ.get("ANSIBLE_HOST_KEY_CHECKING")}
 ev = argv[argv.index("-e") + 1] if "-e" in argv else ""
 if ev.startswith("@"):
     try:
@@ -206,7 +274,30 @@ if ev.startswith("@"):
         rec["vars_error"] = str(exc)
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")
+def _hostkey_ok():
+    # Emulate ssh host-key checking from ANSIBLE_SSH_COMMON_ARGS: accept-new
+    # records FAKE_HOSTKEY in an empty/absent file; any recorded key must match.
+    args = (os.environ.get("ANSIBLE_SSH_COMMON_ARGS") or "").split()
+    opts = dict(a.split("=", 1) for a in args if "=" in a)
+    kh, mode = opts.get("UserKnownHostsFile"), opts.get("StrictHostKeyChecking")
+    if not kh or os.environ.get("ANSIBLE_HOST_KEY_CHECKING") != "True":
+        return True
+    key = os.environ.get("FAKE_HOSTKEY", "key-A")
+    have = open(kh).read().strip() if os.path.exists(kh) else ""
+    if have:
+        return have == key
+    if mode == "accept-new":
+        with open(kh, "w") as fh:
+            fh.write(key + "\n")
+        return True
+    return False
+if not _hostkey_ok():
+    print("fatal: [host]: UNREACHABLE! => Host key verification failed.")
+    sys.exit(4)
 check = "--check" in argv
+_hook("check" if check else "apply")
+if not check and os.environ.get("FAKE_APPLY_SLEEP"):
+    import time; time.sleep(float(os.environ["FAKE_APPLY_SLEEP"]))
 print("PLAY [Provision SolariNet fleet host] " + ("(check)" if check else "(apply)"))
 rc = int(os.environ.get("FAKE_CHECK_RC" if check else "FAKE_APPLY_RC", "0"))
 print("PLAY RECAP ok=3 failed=%d" % (1 if rc else 0))
@@ -226,8 +317,30 @@ if sv:
         rec["vars_error"] = str(exc)
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")
+if os.environ.get("FAKE_PROVISION_PUBLISH") == "1":
+    # what fleet-provision.sh --run-id leaves behind: profile.env naming the
+    # run and the armed per-MAC boot profile
+    cfg = argv[argv.index("--target") + 1].replace(":", "-")
+    run = argv[argv.index("--run-id") + 1]
+    pdir = os.path.join(os.environ["PROV_ROOT"], "profiles", cfg)
+    ipxe = os.path.join(os.environ["HTTP_ROOT"], "ipxe")
+    os.makedirs(pdir, exist_ok=True)
+    os.makedirs(ipxe, exist_ok=True)
+    with open(os.path.join(pdir, "profile.env"), "w") as fh:
+        fh.write("mac=%s\nrun_id=%s\n" % (cfg, run))
+    with open(os.path.join(ipxe, "mac-%s.ipxe" % cfg), "w") as fh:
+        fh.write("#!ipxe\n# run %s\n" % run)
 print("[fleet] fake staged " + " ".join(argv))
 sys.exit(int(os.environ.get("FAKE_PROVISION_RC", "0")))
+'''
+
+
+# mv that fails on demand (FAKE_MV_FAIL=1): a crash inside prov-finish's
+# local "remote" side, e.g. pinning the probed host key.
+FAKE_MV = r'''#!/bin/sh
+if [ "${FAKE_MV_FAIL:-}" = 1 ]; then echo "fake mv failure" >&2; exit 1; fi
+PATH=/usr/bin:/bin
+exec mv "$@"
 '''
 
 
@@ -236,10 +349,10 @@ def make_fakes(tmp: str) -> str:
     os.makedirs(fakebin)
     interp = shutil.which("python3") or sys.executable
     for name, body in (("ansible", FAKE_ANSIBLE), ("ansible-playbook", FAKE_PLAYBOOK),
-                       ("fleet-provision", FAKE_PROVISION)):
+                       ("fleet-provision", FAKE_PROVISION), ("mv", FAKE_MV)):
         p = os.path.join(fakebin, name)
         with open(p, "w", encoding="utf-8") as fh:
-            fh.write(body.replace("__PY__", interp))
+            fh.write(body.replace("__PY__", interp).replace("__HOOK__", FAKE_HOOK))
         os.chmod(p, 0o755)
     return fakebin
 
@@ -292,15 +405,29 @@ class Base(unittest.TestCase):
 class ArgsAndGate(Base):
     def test_usage_errors_exit_2(self):
         n1 = ent("p3h-node1")
+        ma = ["--mac", "02:00:00:00:00:02", "--arch", "x86_64"]
         cases = [
-            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core"]),           # no --op
-            (PROV_STAGE, ["--entity", "01", "--image", "1", "--stacks", "core", "--op", "j"]),
-            (PROV_STAGE, ["--entity", "0", "--image", "1", "--stacks", "core", "--op", "j"]),
-            (PROV_STAGE, ["--entity", n1, "--image", "4294967296", "--stacks", "core", "--op", "j"]),
-            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core,", "--op", "j"]),
-            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "Core", "--op", "j"]),
-            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--op", "j k"]),
-            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--op", "$(id)"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", *ma]),      # no --op
+            (PROV_STAGE, ["--entity", "01", "--image", "1", "--stacks", "core", *ma, "--op", "j"]),
+            (PROV_STAGE, ["--entity", "0", "--image", "1", "--stacks", "core", *ma, "--op", "j"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "4294967296", "--stacks", "core", *ma,
+                          "--op", "j"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core,", *ma, "--op", "j"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "Core", *ma, "--op", "j"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", *ma, "--op", "j k"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", *ma, "--op", "$(id)"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--arch", "x86_64",
+                          "--op", "j"]),                                              # no --mac
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--mac",
+                          "02:00:00:00:00:02", "--op", "j"]),                          # no --arch
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--mac",
+                          "02-00-00-00-00-02", "--arch", "x86_64", "--op", "j"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--mac",
+                          "02:00:00:00:00:02;id", "--arch", "x86_64", "--op", "j"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--mac",
+                          "02:00:00:00:00:02", "--arch", "amd64", "--op", "j"]),
+            (PROV_STAGE, ["--entity", n1, "--image", "1", "--stacks", "core", "--mac",
+                          "02:00:00:00:00:02", "--arch", "", "--op", "j"]),
             (STACK_APPLY, ["--entity", "-1", "--stacks", "core", "--op", "j"]),
             (STACK_APPLY, ["--entity", n1, "--stacks", "core,,web", "--op", "j"]),
             (STACK_APPLY, ["--entity", n1, "--stacks", ",".join(f"s{i}" for i in range(33)), "--op", "j"]),
@@ -318,32 +445,45 @@ class ArgsAndGate(Base):
         # Points the SoR at a database that does not exist: the gate must refuse
         # before any connect attempt, so the only message is the F-07 denial.
         p = self.run_helper(PROV_STAGE, "--entity", ent("p3h-node1"), "--image", "1",
-                            "--stacks", "core", "--op", "jason",
-                            SOLARI_ALLOW_UNVERIFIED_PROVISIONING=None,
+                            "--stacks", "core", "--mac", "02:00:00:00:00:02", "--arch", "x86_64",
+                            "--op", "jason", SOLARI_ALLOW_UNVERIFIED_PROVISIONING=None,
                             SOR_DB_NAME="sor_test_p3_does_not_exist")
         self.assertEqual(p.returncode, 1)
         self.assertIn("[fleet][error] F-07: unsigned provisioning is disabled.", p.stderr)
         self.assertNotIn("connect", p.stderr)
         self.assertEqual(self.calls(), [])
         p = self.run_helper(PROV_STAGE, "--entity", ent("p3h-node1"), "--image", "1",
-                            "--stacks", "core", "--op", "jason",
-                            SOLARI_ALLOW_UNVERIFIED_PROVISIONING="yes")
+                            "--stacks", "core", "--mac", "02:00:00:00:00:02", "--arch", "x86_64",
+                            "--op", "jason", SOLARI_ALLOW_UNVERIFIED_PROVISIONING="yes")
         self.assertEqual(p.returncode, 1)
         self.assertIn("F-07: unsigned provisioning is disabled.", p.stderr)
 
 
-class ProvStage(Base):
-    def stage(self, entity, image, stacks="core", **env):
-        return self.run_helper(PROV_STAGE, "--entity", entity, "--image", image,
-                               "--stacks", stacks, "--op", "jason+ops@akoria.org", **env)
+MACS = {"p3h-node1": "02:00:00:00:00:02", "p3h-node2": "02:00:00:00:00:12",
+        "p3h-node3": "02:00:00:00:00:31", "p3h-nomac": "02:00:00:00:00:21",
+        "Bad_Name": "02:00:00:00:00:99", "p3h-gone": "02:00:00:00:00:98"}
 
-    def assert_refused(self, entity, image, needle, stacks="core"):
+
+class StageMixin:
+    def stage(self, entity, image, stacks="core", mac=None, arch="x86_64", **env):
+        if mac is None:
+            name = admin(f"SELECT name FROM entities WHERE id={entity}") if entity.isdigit() else ""
+            mac = MACS.get(name, "02:00:00:00:00:02")
+        return self.run_helper(PROV_STAGE, "--entity", entity, "--image", image,
+                               "--stacks", stacks, "--mac", mac, "--arch", arch,
+                               "--op", "jason+ops@akoria.org", **env)
+
+
+class ProvStage(StageMixin, Base):
+    def assert_refused(self, entity, image, needle, stacks="core", **kw):
         before = runs(entity)
-        p = self.stage(entity, image, stacks)
+        p = self.stage(entity, image, stacks, **kw)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn(needle, p.stderr)
         self.assertEqual(runs(entity), before, "a refusal must not open a run")
         self.assertEqual(self.calls(), [])
+        self.assertFalse(os.path.exists(os.path.join(self.prov_root, "runs")),
+                         "a refusal must not write a run record")
 
     def test_refusals_open_no_run(self):
         n1 = ent("p3h-node1")
@@ -355,18 +495,54 @@ class ProvStage(Base):
         self.assert_refused(n1, img("boot_method='pi_netboot'"), "supports only ipxe")
         self.assert_refused(n1, img("boot_method='media'"), "supports only ipxe")
         self.assert_refused(n1, "999999", "does not exist")
-        self.assert_refused(ent("p3h-nomac"), tw, "no live interface with a MAC")
+        self.assert_refused(ent("p3h-nomac"), tw, "is not a live interface of entity")
         self.assert_refused(ent("Bad_Name"), tw, "not a valid hostname label")
         self.assert_refused(ent("p3h-gone"), tw, "does not exist or is deleted")
         self.assert_refused(n1, tw, "unknown or deleted stack(s): nope", stacks="core,nope")
 
+    def test_mac_must_belong_to_entity(self):
+        n1 = ent("p3h-node1")
+        tw = img(TW)
+        # another entity's MAC, and this entity's deleted interface
+        self.assert_refused(n1, tw, "MAC 02:00:00:00:00:12 is not a live interface",
+                            mac="02:00:00:00:00:12")
+        self.assert_refused(n1, tw, "MAC 02:00:00:00:00:04 is not a live interface",
+                            mac="02:00:00:00:00:04")
+        # upper-case input is normalised, not refused
+        p = self.stage(n1, tw, mac="02:00:00:00:00:01".upper())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        argv = self.calls("fleet-provision")[0]["argv"]
+        self.assertEqual(argv[argv.index("--target") + 1], "02:00:00:00:00:01")   # wlan0 as picked
+
+    def test_arch_fail_closed(self):
+        n1, n2, n3 = ent("p3h-node1"), ent("p3h-node2"), ent("p3h-node3")
+        tw = img(TW)
+        # no hardware model arch: the asserted (agent-reported) arch must match the image
+        self.assert_refused(n1, tw, f"image {tw} is x86_64 but entity {n1} is arm64",
+                            arch="arm64")
+        # the hardware model arch wins over the request ...
+        self.assert_refused(n2, tw, f"entity {n2} hardware model arch is x86_64 but the "
+                            "request says arm64", arch="arm64")
+        self.assert_refused(n3, tw, f"entity {n3} hardware model arch is arm64 but the "
+                            "request says x86_64")
+        # ... and must equal the image arch
+        self.assert_refused(n3, tw, f"image {tw} is x86_64 but entity {n3} is arm64",
+                            arch="arm64")
+        p = self.stage(n2, tw)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("arch x86_64 (hardware model)", p.stdout)
+        p = self.stage(n1, tw)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("arch x86_64 (asserted)", p.stdout)
+
     def test_stage_supersede_and_failure(self):
         n2 = ent("p3h-node2")
         tw = img(TW)
+        base = len(runs(n2))                 # earlier tests may have staged node2
         p = self.stage(n2, tw, "dev-tools,core,dev-tools")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("F-07 override active", p.stderr)
-        r = runs(n2)
+        r = runs(n2)[base:]
         self.assertEqual(len(r), 1)
         first = r[0]
         self.assertEqual((first["mode"], first["status"], first["detail"]),
@@ -377,21 +553,34 @@ class ProvStage(Base):
         self.assertTrue(first["started"] and not first["finished"])
         prov = self.calls("fleet-provision")
         self.assertEqual(len(prov), 1)
-        argv = prov[0]["argv"]
-        sv = argv[argv.index("--stack-vars") + 1]
-        # no management MAC on node2: physical beats wifi despite the lower id
-        self.assertEqual(argv, ["--target", "02:00:00:00:00:12", "--distro", "opensuse",
-                                "--arch", "x86_64", "--release", "tumbleweed",
-                                "--hostname", "p3h-node2", "--stack-vars", sv,
-                                "--op", "jason+ops@akoria.org"])
-        self.assertEqual(prov[0]["vars_order"], ["core", "dev-tools"])
-        self.assertFalse(os.path.exists(sv), "temporary stack vars must be cleaned up")
+        rid = first["id"]
+        self.assertEqual(prov[0]["argv"], [
+            "--target", "02:00:00:00:00:12", "--distro", "opensuse", "--arch", "x86_64",
+            "--release", "tumbleweed", "--hostname", "p3h-node2", "--domain", "akoria.net",
+            "--run-id", str(rid), "--op", "jason+ops@akoria.org"])
         self.assertIn("fake staged", p.stdout)                       # child output streamed
+        # the run record + vars stay operator-side (0600), never in the web root
+        runs_dir = os.path.join(self.prov_root, "runs")
+        for suffix in (".json", ".stack.json"):
+            st = os.stat(os.path.join(runs_dir, f"reimage-{rid}{suffix}"))
+            self.assertEqual(stat.S_IMODE(st.st_mode), 0o600, suffix)
+        with open(os.path.join(runs_dir, f"reimage-{rid}.json")) as fh:
+            rec = json.load(fh)
+        self.assertEqual({k: rec[k] for k in ("run_id", "entity_id", "fqdn", "mac", "cfgkey",
+                                              "family", "arch", "admin_user", "stack_order")},
+                         {"run_id": rid, "entity_id": int(n2), "fqdn": "p3h-node2.akoria.net",
+                          "mac": "02:00:00:00:00:12", "cfgkey": "02-00-00-00-00-12",
+                          "family": "suse", "arch": "x86_64", "admin_user": "solari-admin",
+                          "stack_order": ["core", "dev-tools"]})
+        with open(os.path.join(runs_dir, f"reimage-{rid}.stack.json")) as fh:
+            self.assertEqual(json.load(fh)["solari_stack_order"], ["core", "dev-tools"])
+        self.assertFalse(os.path.exists(os.path.join(self.prov_root, "netboot", "http", "configs",
+                                                     "02-00-00-00-00-12.stack.json")))
 
         # second stage supersedes the first
         p = self.stage(n2, tw)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        r = runs(n2)
+        r = runs(n2)[base:]
         self.assertEqual(len(r), 2)
         self.assertEqual((r[0]["status"], r[0]["detail"]),
                          ("cancelled", f"superseded by run {r[1]['id']}"))
@@ -401,18 +590,93 @@ class ProvStage(Base):
         # a failing fleet-provision marks the (new) run failed
         p = self.stage(n2, tw, FAKE_PROVISION_RC="3")
         self.assertEqual(p.returncode, 1)
-        r = runs(n2)
+        r = runs(n2)[base:]
         self.assertEqual([x["status"] for x in r], ["cancelled", "cancelled", "failed"])
         self.assertEqual(r[2]["detail"], "fleet-provision failed (exit 3)")
         self.assertEqual(r[1]["detail"], f"superseded by run {r[2]['id']}")
 
-    def test_management_mac_preferred(self):
+    def profile(self, cfg="02-00-00-00-00-02"):
+        http = os.path.join(self.prov_root, "netboot", "http")
+        pdir = os.path.join(self.prov_root, "profiles", cfg)
+        return (os.path.join(http, "ipxe", f"mac-{cfg}.ipxe"), pdir)
+
+    def test_failed_staging_disarms_its_profile(self):
+        # fleet-provision published the profile and then failed (exit 3):
+        # the destructive boot profile must not stay armed
         n1 = ent("p3h-node1")
-        p = self.stage(n1, img(TW))
+        p = self.stage(n1, img(TW), FAKE_PROVISION_PUBLISH="1", FAKE_PROVISION_RC="3")
+        self.assertEqual(p.returncode, 1)
+        rid = runs(n1)[-1]["id"]
+        self.assertEqual(runs(n1)[-1]["status"], "failed")
+        ipxe, pdir = self.profile()
+        self.assertFalse(os.path.exists(ipxe), "boot profile left armed")
+        self.assertFalse(os.path.exists(os.path.join(pdir, "profile.env")))
+        self.assertTrue(os.path.exists(os.path.join(pdir, f"disarmed-{rid}.ipxe")))
+        self.assertTrue(os.path.exists(os.path.join(pdir, f"disarmed-{rid}.env")))
+        self.assertIn(f"disarmed the 02-00-00-00-00-02 boot profile of run {rid}", p.stdout)
+
+    def test_failed_restage_disarms_superseded_profile(self):
+        # run A is armed; a re-stage supersedes A and fails before replacing
+        # A's profile — A (now cancelled) must not keep the MAC armed
+        n1 = ent("p3h-node1")
+        p = self.stage(n1, img(TW), FAKE_PROVISION_PUBLISH="1")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        argv = self.calls("fleet-provision")[0]["argv"]
-        # live management (virtual) beats physical/wifi; the deleted mgmt NIC is ignored
-        self.assertEqual(argv[argv.index("--target") + 1], "02:00:00:00:00:03")
+        a = runs(n1)[-1]["id"]
+        ipxe, pdir = self.profile()
+        self.assertTrue(os.path.exists(ipxe))
+        p = self.stage(n1, img(TW), FAKE_PROVISION_RC="3")
+        self.assertEqual(p.returncode, 1)
+        r = runs(n1)
+        self.assertEqual((r[-2]["id"], r[-2]["status"], r[-1]["status"]), (a, "cancelled", "failed"))
+        self.assertFalse(os.path.exists(ipxe), "superseded run's boot profile left armed")
+        self.assertTrue(os.path.exists(os.path.join(pdir, f"disarmed-{a}.env")))
+
+    def test_failed_staging_leaves_live_profile(self):
+        # profile.env names a different run that is still live: not ours to touch
+        n1, n2 = ent("p3h-node1"), ent("p3h-node2")
+        p = self.stage(n2, img(TW))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        live = runs(n2)[-1]["id"]
+        ipxe, pdir = self.profile()
+        os.makedirs(os.path.dirname(ipxe), exist_ok=True)
+        os.makedirs(pdir, exist_ok=True)
+        with open(ipxe, "w") as fh:
+            fh.write("#!ipxe\n")
+        with open(os.path.join(pdir, "profile.env"), "w") as fh:
+            fh.write(f"run_id={live}\n")
+        p = self.stage(n1, img(TW), FAKE_PROVISION_RC="3")
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(runs(n2)[-1]["status"], "running")
+        self.assertTrue(os.path.exists(ipxe))
+        self.assertTrue(os.path.exists(os.path.join(pdir, "profile.env")))
+
+    def test_open_run_is_running_at_once(self):
+        # a crash right after open_run must not leave a queued row behind:
+        # the row is born running (started_at set) in one commit
+        n1 = ent("p3h-node1")
+        # whatever the outcome, close the row so it never blocks later applies
+        self.addCleanup(admin, "UPDATE prov_runs SET status='failed', finished_at=CURRENT_TIMESTAMP"
+                        f" WHERE entity_id={n1} AND mode='apply' AND status IN ('queued','running')")
+        snippet = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import provlib\n"
+            "conn = provlib.connect_sor()\n"
+            "rid = provlib.open_run(conn, mode='apply', entity_id=int(sys.argv[2]), image_id=None,\n"
+            "                       stack_order=['core'], requested_by='jason', detail='d')\n"
+            "import os; os._exit(9)\n")         # die without any further statement
+        proc = subprocess.run([PY, "-c", snippet, FLEET, n1], env=self.env,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 9, proc.stderr)
+        r = runs(n1, "apply")[-1]
+        self.assertEqual((r["status"], r["detail"], r["started"], r["finished"]),
+                         ("running", "d", True, False))
+
+    def test_bad_domain_or_admin_user_refused(self):
+        n1 = ent("p3h-node1")
+        before = runs(n1)
+        self.assertEqual(self.stage(n1, img(TW), SOLARI_PROV_DOMAIN="Lab;example").returncode, 1)
+        self.assertEqual(self.stage(n1, img(TW), ADMIN_USER="root user").returncode, 1)
+        self.assertEqual(runs(n1), before)
+        self.assertEqual(self.calls(), [])
 
     def test_forward_only_status(self):
         n1 = ent("p3h-node1")
@@ -441,6 +705,393 @@ class ProvStage(Base):
                          "running:refused queued:refused succeeded:refused sql:refused",
                          proc.stderr)
         self.assertEqual(runs(n1)[-1]["status"], "failed")
+
+
+class ProvFinish(StageMixin, Base):
+    """prov-finish.py: first-boot detection -> un-stage -> stacks -> terminal status."""
+    CFG = "02-00-00-00-00-02"
+
+    def staged(self) -> int:
+        p = self.stage(ent("p3h-node1"), img(TW))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        rid = runs(ent("p3h-node1"))[-1]["id"]
+        # what fleet-provision.sh --run-id would have published (the fake does not)
+        self.http = os.path.join(self.prov_root, "netboot", "http")
+        self.pdir = os.path.join(self.prov_root, "profiles", self.CFG)
+        for rel, body in ((f"ipxe/mac-{self.CFG}.ipxe", "#!ipxe\n"),
+                          (f"configs/{self.CFG}.xml", "<profile/>\n")):
+            os.makedirs(os.path.dirname(os.path.join(self.http, rel)), exist_ok=True)
+            with open(os.path.join(self.http, rel), "w") as fh:
+                fh.write(body)
+        os.makedirs(self.pdir, exist_ok=True)
+        self.write_profile_env(rid)
+        if os.path.exists(self.log_path):
+            os.unlink(self.log_path)
+        return rid
+
+    def write_profile_env(self, rid):
+        with open(os.path.join(self.pdir, "profile.env"), "w") as fh:
+            fh.write(f"mac={self.CFG.replace('-', ':')}\nrun_id={rid}\n")
+
+    def finish(self, rid, **env):
+        p = self.run_helper(PROV_FINISH, "--run", str(rid), **env)
+        return p
+
+    def status(self, rid):
+        st, detail = admin(f"SELECT status, IFNULL(detail,'') FROM prov_runs WHERE id={rid}").split("\t")
+        return st, detail
+
+    def staged_files(self):
+        return {name: os.path.exists(path) for name, path in (
+            ("ipxe", os.path.join(self.http, "ipxe", f"mac-{self.CFG}.ipxe")),
+            ("xml", os.path.join(self.http, "configs", f"{self.CFG}.xml")),
+            ("profile", os.path.join(self.pdir, "profile.env")))}
+
+    def test_waits_until_marker_matches(self):
+        rid = self.staged()
+        for marker in (None, '{"run_id": 999999}'):
+            with self.subTest(marker=marker):
+                p = self.finish(rid, FAKE_MARKER=marker)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn(f"run {rid}: waiting", p.stdout)
+                self.assertEqual(self.status(rid), ("running", "staged; awaiting netboot install"))
+                self.assertEqual(set(self.staged_files().values()), {True})
+        probes = self.calls("ansible")
+        self.assertEqual(len(probes), 2)
+        kh = os.path.join(self.prov_root, "runs", f"reimage-{rid}.known_hosts")
+        for c in probes:
+            self.assertEqual(c["argv"][:6], ["all", "-i", "p3h-node1.akoria.net,", "-u",
+                                             "solari-admin", "-m"])
+            self.assertEqual(c["argv"][-1], "cat /etc/ansible/facts.d/solari_prov.fact")
+            self.assertEqual(c["ssh_args"], f"-o UserKnownHostsFile={kh}.probe "
+                             "-o StrictHostKeyChecking=accept-new")
+            self.assertEqual((c["hkc"], c["become"]), ("True", "False"))
+            self.assertEqual(c["cwd"], os.path.join(self.prov_root, "ansible"))
+        self.assertEqual(self.calls("ansible-playbook"), [])
+        # a host that answered without this run's marker is never pinned
+        self.assertFalse(os.path.exists(kh))
+        self.assertFalse(os.path.exists(kh + ".probe"))
+
+    def test_marker_match_applies_and_unstages(self):
+        rid = self.staged()
+        p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}')
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
+        self.assertTrue(runs(ent("p3h-node1"))[-1]["finished"])
+        self.assertEqual(set(self.staged_files().values()), {False})
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, f"finished-{rid}.env")))
+        kh = os.path.join(self.prov_root, "runs", f"reimage-{rid}.known_hosts")
+        pinned = f"-o UserKnownHostsFile={kh} -o StrictHostKeyChecking=yes"
+        ans = self.calls("ansible")
+        self.assertEqual([c["argv"][c["argv"].index("-m") + 1] for c in ans],
+                         ["ansible.builtin.raw", "ansible.builtin.raw", "ansible.builtin.setup"])
+        self.assertIn("zypper --non-interactive install", ans[1]["argv"][-1])
+        self.assertEqual((ans[1]["become"], ans[1]["ssh_args"]), ("True", pinned))
+        self.assertEqual(ans[2]["ssh_args"], pinned)
+        self.assertIn("-u", ans[2]["argv"])
+        pb = self.calls("ansible-playbook")
+        self.assertEqual(len(pb), 2)
+        vars_path = os.path.join(self.prov_root, "runs", f"reimage-{rid}.stack.json")
+        for c, check in zip(pb, (True, False)):
+            self.assertEqual(c["argv"][:4], ["-i", "p3h-node1.akoria.net,", "-u", "solari-admin"])
+            self.assertEqual(c["argv"][c["argv"].index("-e") + 1], "@" + vars_path)
+            self.assertEqual("--check" in c["argv"], check)
+            self.assertEqual((c["ssh_args"], c["hkc"]), (pinned, "True"))
+            self.assertEqual((c["vars_mode"], c["vars_order"]), ("0o600", ["core"]))
+        self.assertFalse(os.path.exists(kh), "per-run known_hosts is removed on success")
+        # terminal: a later tick does nothing
+        os.unlink(self.log_path)
+        p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}')
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_apply_failure_retries_then_fails(self):
+        rid = self.staged()
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_APPLY_RC": "2",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "2"}
+        p = self.finish(rid, **env)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.status(rid), ("running", "installed; stack apply pass failed; "
+                                            "retrying (attempt 1 of 2)"))
+        self.assertEqual(set(self.staged_files().values()), {False})    # never reinstalls
+        p = self.finish(rid, **env)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.status(rid), ("failed", "installed; stack apply pass failed; "
+                                            "stacks not applied (attempt 2 of 2)"))
+        self.assertEqual(len(self.calls("ansible-playbook")), 4)
+
+    def test_host_key_pinned_across_ticks(self):
+        rid = self.staged()
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_APPLY_RC": "2",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "3"}
+        self.finish(rid, **env)
+        kh = os.path.join(self.prov_root, "runs", f"reimage-{rid}.known_hosts")
+        with open(kh) as fh:
+            self.assertEqual(fh.read().strip(), "key-A")    # pinned from the marker probe
+        # next tick: a different host answers on that name with the marker
+        os.unlink(self.log_path)
+        self.finish(rid, FAKE_HOSTKEY="key-B", **env)
+        self.assertEqual(self.status(rid), ("running", "installed; installed host not reachable; "
+                                            "retrying (attempt 2 of 3)"))
+        probe = self.calls("ansible")
+        self.assertEqual(len(probe), 1)
+        self.assertEqual(probe[0]["ssh_args"], f"-o UserKnownHostsFile={kh} "
+                         "-o StrictHostKeyChecking=yes")       # never re-trusted
+        self.assertEqual(self.calls("ansible-playbook"), [])
+        with open(kh) as fh:
+            self.assertEqual(fh.read().strip(), "key-A")
+        # the original host is back: the pinned key still works
+        self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_APPLY_ATTEMPTS="3")
+        self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
+
+    def test_crash_mid_attempt_uses_it_up(self):
+        rid = self.staged()
+        # attempt 1 of 3 started, then the process died (no outcome recorded)
+        admin(f"UPDATE prov_runs SET detail='installed; applying stacks (attempt 1 of 3)' "
+              f"WHERE id={rid}")
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_APPLY_RC": "2",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "3"}
+        self.finish(rid, **env)
+        self.assertEqual(self.status(rid), ("running", "installed; stack apply pass failed; "
+                                            "retrying (attempt 2 of 3)"))
+        # the last attempt started and died: the next tick fails without retrying
+        admin(f"UPDATE prov_runs SET detail='installed; apply pass (attempt 3 of 3)' WHERE id={rid}")
+        os.unlink(self.log_path)
+        self.finish(rid, **env)
+        self.assertEqual(self.status(rid), ("failed", "installed; stacks not applied (attempt 3 "
+                                            "of 3 ended without a result)"))
+        self.assertEqual(self.calls(), [])
+
+    def test_crash_between_probe_and_apply_still_counts(self):
+        rid = self.staged()
+        admin(f"UPDATE prov_runs SET detail='installed; stack apply pass failed; retrying "
+              f"(attempt 1 of 3)' WHERE id={rid}")
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_MV_FAIL": "1",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "3"}
+        for n in (2, 3):        # pinning the probed key crashes the tick every time
+            p = self.finish(rid, **env)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertEqual(self.status(rid), ("running", f"installed; probing host (attempt {n} of 3)"))
+        self.finish(rid, **env)
+        self.assertEqual(self.status(rid), ("failed", "installed; stacks not applied (attempt 3 "
+                                            "of 3 ended without a result)"))
+        self.assertEqual(self.calls("ansible-playbook"), [])
+
+    def test_gate_holds_run_through_launch(self):
+        # gated(): the status check and the launch of the target command are
+        # one operation — a cancel cannot slip in between them
+        rid = self.staged()
+        snippet = (
+            "import sys, importlib.util; sys.path.insert(0, sys.argv[1]); import provlib\n"
+            "spec = importlib.util.spec_from_file_location('pf', sys.argv[1] + '/prov-finish.py')\n"
+            "pf = importlib.util.module_from_spec(spec); spec.loader.exec_module(pf)\n"
+            "rid = int(sys.argv[2]); conn = provlib.connect_sor(); other = provlib.connect_sor()\n"
+            "out = []\n"
+            "def cancel():\n"
+            "    try:\n"
+            "        with other.cursor() as c:\n"
+            "            c.execute('SET SESSION innodb_lock_wait_timeout=1')\n"
+            "            c.execute(\"UPDATE prov_runs SET status='cancelled', finished_at=NOW()\"\n"
+            "                      \" WHERE id=%s\", (rid,))\n"
+            "        other.commit(); return 'cancelled'\n"
+            "    except Exception:\n"
+            "        other.rollback(); return 'blocked'\n"
+            "def launch(on_spawn):\n"
+            "    out.append('pre-spawn:' + cancel())\n"
+            "    on_spawn()\n"
+            "    out.append('post-spawn:' + cancel())\n"
+            "    return 'ran'\n"
+            "out.append(pf.gated(conn, rid, 'installed; check pass', launch))\n"
+            "try:\n"
+            "    pf.gated(conn, rid, 'installed; apply pass', lambda s: out.append('LAUNCHED'))\n"
+            "except pf.Superseded:\n"
+            "    out.append('stopped')\n"
+            "print(' '.join(out))\n")
+        proc = subprocess.run([PY, "-c", snippet, FLEET, str(rid)], env=self.env,
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.stdout.strip(), "pre-spawn:blocked post-spawn:cancelled ran stopped",
+                         proc.stderr)
+        self.assertEqual(self.status(rid)[0], "cancelled")
+
+    def test_unstage_waits_for_mac_lock(self):
+        rid = self.staged()
+        name = "solari-prov-mac-" + self.CFG.replace("-", ":")
+
+        def lock_used():
+            return admin(f"SELECT IS_USED_LOCK('{name}') IS NOT NULL", db=None).strip() == "1"
+
+        # The holder's stdin stays open, so its session (and the lock) lives
+        # until we RELEASE_LOCK explicitly — no kill, no orphaned client.
+        holder = subprocess.Popen(ADMIN + ["-N", "-B"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        try:
+            holder.stdin.write(f"SELECT GET_LOCK('{name}', 10);\n")
+            holder.stdin.flush()
+            for _ in range(100):
+                if lock_used():
+                    break
+                subprocess.run(["sleep", "0.1"], check=True)
+            else:
+                self.fail("lock holder never got the MAC lock")
+            # a concurrent PROV_STAGE holds the MAC: nothing may be removed, and
+            # the lock timeout is not an attempt — with 1 attempt allowed the run
+            # must survive any number of busy ticks
+            for _ in range(2):
+                p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}',
+                                SOLARI_PROV_MAC_LOCK_WAIT="0", SOLARI_PROV_APPLY_ATTEMPTS="1")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertEqual(self.status(rid), (
+                    "running", f"installed; another provisioning step holds MAC {self.CFG}; "
+                    "try again shortly; deferred"))
+                self.assertEqual(set(self.staged_files().values()), {True})
+                self.assertEqual(self.calls("ansible-playbook"), [])
+            holder.stdin.write(f"SELECT RELEASE_LOCK('{name}');\n")
+            holder.stdin.close()
+            holder.wait(timeout=30)
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+                holder.wait()
+        for _ in range(100):
+            if not lock_used():
+                break
+            subprocess.run(["sleep", "0.1"], check=True)
+        else:
+            self.fail("MAC lock still held after RELEASE_LOCK")
+        self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_APPLY_ATTEMPTS="1")
+        self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
+        self.assertEqual(set(self.staged_files().values()), {False})
+
+    def test_cancel_mid_flow_stops_target_effects(self):
+        # A PROV_STAGE cancels the run while prov-finish is mid-way: nothing
+        # further may touch the target, and the run stays cancelled.
+        for point, raws, playbooks in (("bootstrap", 2, 0), ("check", 2, 1)):
+            with self.subTest(point=point):
+                rid = self.staged()
+                p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', FAKE_HOOK_ON=point,
+                                FAKE_HOOK_SQL="UPDATE prov_runs SET status='cancelled', "
+                                "detail='superseded by run 999999', finished_at=CURRENT_TIMESTAMP "
+                                f"WHERE id={rid}")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertEqual(self.status(rid), ("cancelled", "superseded by run 999999"))
+                ans = self.calls("ansible")
+                self.assertEqual([c["argv"][c["argv"].index("-m") + 1] for c in ans],
+                                 ["ansible.builtin.raw"] * raws
+                                 + (["ansible.builtin.setup"] if playbooks else []))
+                pb = self.calls("ansible-playbook")
+                self.assertEqual(len(pb), playbooks)
+                self.assertTrue(all("--check" in c["argv"] for c in pb), "apply pass ran")
+
+    def test_foreign_profile_stops_the_run(self):
+        rid = self.staged()
+        self.write_profile_env(rid + 1000)                  # a newer PROV_STAGE owns the MAC
+        p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}')
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.status(rid), ("cancelled", "superseded: a newer staging owns the "
+                                            "boot profile; stacks not applied"))
+        self.assertEqual(set(self.staged_files().values()), {True})   # left to the newer run
+        self.assertEqual(len(self.calls("ansible")), 1)               # the marker probe only
+        self.assertEqual(self.calls("ansible-playbook"), [])
+
+    def test_sweep_disarms_profile_of_terminal_run(self):
+        rid = self.staged()
+        # the run ended without disarming (e.g. prov-stage died after failing it)
+        admin(f"UPDATE prov_runs SET status='failed', detail='x', finished_at=CURRENT_TIMESTAMP "
+              f"WHERE id={rid}")
+        p = self.finish(rid)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"sweep: disarmed the {self.CFG} boot profile of terminal run {rid}", p.stdout)
+        self.assertEqual(self.staged_files()["ipxe"], False)
+        self.assertEqual(self.staged_files()["profile"], False)
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, f"disarmed-{rid}.ipxe")))
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, f"disarmed-{rid}.env")))
+        self.assertEqual(self.calls(), [])
+
+    def test_fact_mismatch_and_bootstrap_failure(self):
+        rid = self.staged()
+        p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', FAKE_FAMILY="Debian",
+                        SOLARI_PROV_APPLY_ATTEMPTS="1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        st, detail = self.status(rid)
+        self.assertEqual(st, "failed")
+        self.assertIn("installed system reports debian/x86_64, expected suse/x86_64", detail)
+        self.assertEqual(self.calls("ansible-playbook"), [])
+
+        rid = self.staged()
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_RAW_RC": "1",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "2"}
+        self.finish(rid, **env)
+        st, detail = self.status(rid)
+        self.assertEqual(st, "running")
+        self.assertTrue(detail.startswith("installed; python3 bootstrap failed:"), detail)
+        self.assertTrue(detail.endswith("(attempt 1 of 2)"), detail)
+        # the installed host then drops off the network: counts as the last attempt
+        self.finish(rid, FAKE_MARKER=None, SOLARI_PROV_APPLY_ATTEMPTS="2")
+        self.assertEqual(self.status(rid), ("failed", "installed; installed host not reachable; "
+                                            "stacks not applied (attempt 2 of 2)"))
+
+    def test_install_timeout_disarms_profile(self):
+        rid = self.staged()
+        admin(f"UPDATE prov_runs SET started_at = NOW() - INTERVAL 7 HOUR WHERE id={rid}")
+        p = self.finish(rid)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.status(rid), ("failed", "install not detected within 6 h; boot "
+                                            "profile disarmed; re-stage to retry"))
+        self.assertEqual(set(self.staged_files().values()), {False})
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, f"disarmed-{rid}.ipxe")))
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, f"disarmed-{rid}.env")))
+        self.assertEqual(self.calls(), [])                  # no probe once timed out
+
+    def test_newer_staging_profile_left_alone(self):
+        rid = self.staged()
+        self.write_profile_env(rid + 1000)                  # a newer PROV_STAGE owns the MAC
+        admin(f"UPDATE prov_runs SET started_at = NOW() - INTERVAL 7 HOUR WHERE id={rid}")
+        p = self.finish(rid, SOLARI_PROV_INSTALL_TIMEOUT="3600")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.status(rid), ("failed", "install not detected within 1 h; boot "
+                                            "profile left to the newer staging; re-stage to retry"))
+        self.assertEqual(set(self.staged_files().values()), {True})
+
+    def test_legacy_staging_and_malformed_records(self):
+        rid = self.staged()
+        os.unlink(os.path.join(self.prov_root, "runs", f"reimage-{rid}.json"))
+        self.finish(rid)
+        self.assertEqual(self.status(rid), ("failed", "staged before completion tracking (no "
+                                            "run record); re-stage to retry"))
+
+        rid = self.staged()                                 # prov-stage still mid-flight
+        admin(f"UPDATE prov_runs SET detail='staging netboot install' WHERE id={rid}")
+        os.unlink(os.path.join(self.prov_root, "runs", f"reimage-{rid}.json"))
+        p = self.finish(rid)
+        self.assertIn(f"run {rid}: staging", p.stdout)
+        self.assertEqual(self.status(rid), ("running", "staging netboot install"))
+        admin(f"UPDATE prov_runs SET started_at = NOW() - INTERVAL 7 HOUR WHERE id={rid}")
+        self.finish(rid)
+        self.assertEqual(self.status(rid), ("failed", "staging never completed (no run "
+                                            "record); re-stage to retry"))
+
+        rid = self.staged()
+        path = os.path.join(self.prov_root, "runs", f"reimage-{rid}.json")
+        with open(path) as fh:
+            rec = json.load(fh)
+        rec["fqdn"] = "p3h-node1.akoria.net -oProxyCommand=id"
+        with open(path, "w") as fh:
+            json.dump(rec, fh)
+        self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}')
+        self.assertEqual(self.status(rid), ("failed", "run record is malformed or does not "
+                                            "match the run"))
+        self.assertEqual(self.calls(), [])
+
+    def test_usage_and_env_errors(self):
+        self.assertEqual(self.run_helper(PROV_FINISH, "--run", "01").returncode, 2)
+        self.assertEqual(self.run_helper(PROV_FINISH, "--run", "x").returncode, 2)
+        p = self.run_helper(PROV_FINISH, SOLARI_PROV_INSTALL_TIMEOUT="5")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("SOLARI_PROV_INSTALL_TIMEOUT must be an integer >= 600", p.stderr)
+        p = self.run_helper(PROV_FINISH, PROV_ROOT="/srv/prov root")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("is not a plain absolute path", p.stderr)
+        self.assertEqual(self.calls(), [])
 
 
 class StackApply(Base):
@@ -507,21 +1158,119 @@ class StackApply(Base):
         self.assertEqual((run["status"], run["detail"]), ("failed", "apply pass failed"))
         self.assertEqual(len(self.calls("ansible-playbook")), 2)
 
-    def test_concurrent_apply_refused(self):
-        n1 = ent("p3h-node1")
+    def hold_lock(self, name):
+        """A separate SoR session holding named lock `name`; .release() frees it."""
+        def used():
+            return admin(f"SELECT IS_USED_LOCK('{name}') IS NOT NULL", db=None).strip() == "1"
+        holder = subprocess.Popen(ADMIN + ["-N", "-B"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        holder.stdin.write(f"SELECT GET_LOCK('{name}', 10);\n")
+        holder.stdin.flush()
+        for _ in range(100):
+            if used():
+                break
+            subprocess.run(["sleep", "0.1"], check=True)
+        else:
+            holder.kill()
+            holder.wait()
+            self.fail(f"lock holder never got {name}")
+
+        def release():
+            if holder.poll() is None:
+                holder.stdin.write(f"SELECT RELEASE_LOCK('{name}');\n")
+                holder.stdin.close()
+                try:
+                    holder.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    holder.kill()
+                    holder.wait()
+            for _ in range(100):
+                if not used():
+                    return
+                subprocess.run(["sleep", "0.1"], check=True)
+            self.fail(f"{name} still held after release")
+        holder.release = release
+        self.addCleanup(release)
+        return holder
+
+    def orphan_apply(self, n1, status="running"):
         admin("INSERT INTO prov_runs (mode, entity_id, stack_slugs, requested_by, status, "
-              f"source_id) VALUES ('apply', {n1}, '[\"core\"]', 'someone', 'queued', {SRC})")
-        busy = runs(n1, "apply")[-1]
+              f"started_at, source_id) VALUES ('apply', {n1}, '[\"core\"]', 'someone', "
+              f"'{status}', NOW(), {SRC})")
+        return runs(n1, "apply")[-1]
+
+    def test_concurrent_apply_refused(self):
+        # a live stack-apply holds the entity's apply lock for its whole run
+        n1 = ent("p3h-node1")
+        busy = self.orphan_apply(n1)
+        holder = self.hold_lock(f"solari-prov-apply-{n1}")
         try:
             before = len(runs(n1))
             p = self.apply()
             self.assertEqual(p.returncode, 1)
-            self.assertIn(f"apply run {busy['id']} for entity {n1} is still active", p.stderr)
+            self.assertIn("another stack apply for this entity is in progress", p.stderr)
             self.assertEqual(len(runs(n1)), before)
             self.assertEqual(self.calls(), [])
-            # a reimage run in flight does not block an apply (different mode)
+            self.assertEqual(runs(n1, "apply")[-1]["status"], "running")   # not reaped
         finally:
-            admin(f"UPDATE prov_runs SET status='cancelled', detail='test cleanup' WHERE id={busy['id']}")
+            holder.release()
+            admin(f"UPDATE prov_runs SET status='cancelled', detail='test cleanup' "
+                  f"WHERE id={busy['id']} AND status IN ('queued','running')")
+
+    def test_orphaned_apply_is_reaped_by_next_apply(self):
+        # a helper that died left its row running; nobody holds the lock
+        n1 = ent("p3h-node1")
+        for status in ("running", "queued"):
+            with self.subTest(status=status):
+                dead = self.orphan_apply(n1, status)
+                p = self.apply()
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                st, detail = admin(f"SELECT status, detail FROM prov_runs WHERE id={dead['id']}").split("\t")
+                self.assertEqual(st, "failed")
+                self.assertIn("helper exited without a result", detail)
+                self.assertEqual(self.last_apply()["status"], "succeeded")
+
+    def test_lost_db_session_aborts_live_apply(self):
+        # the apply lock is session-scoped: if the helper's SoR session drops
+        # mid-apply the server frees it, so the helper must kill its step
+        # rather than keep applying under a run the reaper may fail
+        n1 = ent("p3h-node1")
+        e = dict(self.env, FAKE_APPLY_SLEEP="60", SOLARI_PROV_LOCK_WATCH="0.5")
+        t0 = time.monotonic()
+        helper = subprocess.Popen([PY, STACK_APPLY, "--entity", n1, "--stacks", "core",
+                                   "--op", "jason"], env=e, cwd=ROOT, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: helper.poll() is None and helper.kill())
+        for _ in range(300):
+            if len(self.calls("ansible-playbook")) == 2:     # apply pass is running
+                break
+            subprocess.run(["sleep", "0.1"], check=True)
+        else:
+            self.fail("apply pass never started")
+        cid = admin(f"SELECT IS_USED_LOCK('solari-prov-apply-{n1}')", db=None).strip()
+        self.assertTrue(cid.isdigit(), cid)
+        admin(f"KILL CONNECTION {cid}", db=None)
+        out, err = helper.communicate(timeout=30)
+        self.assertLess(time.monotonic() - t0, 45)              # did not sit out the 60 s
+        self.assertEqual(helper.returncode, 1, out + err)
+        self.assertIn("provisioning lock lost", err)
+        p = self.run_helper(PROV_FINISH, "--run", "999999999")   # reaper closes the row
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.last_apply()["status"], "failed")
+
+    def test_prov_finish_reaps_orphaned_apply(self):
+        n1 = ent("p3h-node1")
+        dead = self.orphan_apply(n1)
+        holder = self.hold_lock(f"solari-prov-apply-{n1}")
+        p = self.run_helper(PROV_FINISH, "--run", "999999999")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(runs(n1, "apply")[-1]["status"], "running")      # live owner: left
+        holder.release()
+        p = self.run_helper(PROV_FINISH, "--run", "999999999")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        st = admin(f"SELECT status FROM prov_runs WHERE id={dead['id']}").strip()
+        self.assertEqual(st, "failed")
+        self.assertEqual(self.calls(), [])
 
     def test_fact_handling(self):
         n1 = ent("p3h-node1")

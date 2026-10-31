@@ -41,6 +41,20 @@ FLEET_DIR="${REPO_ROOT}/deploy/fleet"
 # shellcheck disable=SC2034
 FLEET_CORE_PACKAGES="sudo curl wget ca-certificates gnupg htop tmux git vim rsync jq unzip lsof chrony python3 net-tools openssh-server"
 
+# The INSTALLER's own package set: just enough for first boot to be reachable
+# and manageable by Ansible (sshd, sudo, a fetcher, CA roots, python3). Per
+# family because the names differ; each name becomes its own <package> /
+# YAML list item / pkgsel word (render_package_tokens). Core and every other
+# stack arrive after the install via prov-finish.py (SoR stacks over SSH).
+# openSUSE: python3 is a capability provided by the versioned interpreter
+# (python3xx), not a package NAME on Tumbleweed, so it is not an AutoYaST
+# <package> (an unresolvable name stops an unattended install); the AutoYaST
+# chroot script installs it with zypper and prov-finish.py ensures it again.
+# shellcheck disable=SC2034
+FLEET_BOOTSTRAP_PACKAGES_SUSE="openssh sudo curl ca-certificates"
+# shellcheck disable=SC2034
+FLEET_BOOTSTRAP_PACKAGES_DEB="openssh-server sudo curl ca-certificates python3"
+
 # ---- logging (matches the PHP GET log-tail markers) -------------------------
 flog()  { printf '\033[1;36m[fleet]\033[0m %s\n' "$*"; }
 fwarn() { printf '\033[1;33m[fleet][warn]\033[0m %s\n' "$*" >&2; }
@@ -55,10 +69,12 @@ fdie()  { printf '\033[1;31m[fleet][error]\033[0m %s\n' "$*" >&2; exit 1; }
 bssh() {
   ssh -o BatchMode=yes "${BENZENE}" "$@" 2> >(grep -vE 'Kernel: Linux.*CPU:' >&2)
 }
-# write stdin to a remote path (creates parent dir), optional mode
+# write stdin to a remote path (creates parent dir), optional mode. Atomic: the
+# data lands under a temp name in the same directory and is renamed into place,
+# so a reader (an iPXE client fetching a profile) never sees a partial file.
 bput() { # <remote-path> [mode]
-  local dst="$1" mode="${2:-0644}"
-  bssh "install -D -m ${mode} /dev/stdin '${dst}'"
+  local dst="$1" mode="${2:-0644}" tmp="$1.tmp.$$"
+  bssh "install -D -m ${mode} /dev/stdin '${tmp}' && mv -f '${tmp}' '${dst}' || { rm -f '${tmp}'; exit 1; }"
 }
 
 # ---- MAC normalization ------------------------------------------------------
@@ -125,4 +141,47 @@ fleet_admin_pubkey() {
     [ -f "$k" ] && { cat "$k"; return 0; }
   done
   return 1
+}
+
+# fleet_clean_pubkey <key-line> : print "type base64 [comment]" or fail.
+# Keys are substituted into XML, YAML and single-quoted shell, so only the
+# OpenSSH public-key alphabet passes; the comment is reduced to safe chars.
+fleet_clean_pubkey() {
+  local t b c
+  read -r t b c <<<"$1" || true
+  [[ "${t}" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)$ ]] || return 1
+  [[ "${b}" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || return 1
+  c="$(printf '%s' "${c}" | tr -cd 'A-Za-z0-9@._+:-')"
+  printf '%s %s%s' "${t}" "${b}" "${c:+ ${c}}"
+}
+
+# The provisioning host's Ansible control key (benzene runs the playbooks as
+# its BENZENE login user). Authorized for ADMIN_USER on PROV_STAGE installs so
+# prov-finish.py can reach the fresh host. FLEET_CONTROL_PUBKEY overrides.
+fleet_control_pubkey() {
+  if [ -n "${FLEET_CONTROL_PUBKEY:-}" ]; then
+    printf '%s\n' "${FLEET_CONTROL_PUBKEY}"
+    return 0
+  fi
+  # shellcheck disable=SC2016  # expanded by the remote shell
+  bssh 'for k in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_ecdsa.pub" "$HOME/.ssh/id_rsa.pub"; do [ -f "$k" ] && { head -n 1 "$k"; exit 0; }; done; exit 1'
+}
+
+# render_package_tokens <name...> : export TOK_PACKAGES (space-separated, for
+# pkgsel/include), TOK_PACKAGES_XML (one <package> per name) and
+# TOK_PACKAGES_YAML (one "- name" list item per name). Duplicates are dropped
+# in order; a name outside the distro package alphabet is refused.
+render_package_tokens() {
+  local p seen=" " words="" xml="" yaml=""
+  for p in "$@"; do
+    [[ "${p}" =~ ^[a-z0-9][a-z0-9.+_-]{0,99}$ ]] || fdie "invalid package name: ${p}"
+    case "${seen}" in *" ${p} "*) continue ;; esac
+    seen="${seen}${p} "
+    words="${words:+${words} }${p}"
+    xml="${xml:+${xml}
+}      <package>${p}</package>"
+    yaml="${yaml:+${yaml}
+}    - ${p}"
+  done
+  export TOK_PACKAGES="${words}" TOK_PACKAGES_XML="${xml}" TOK_PACKAGES_YAML="${yaml}"
 }

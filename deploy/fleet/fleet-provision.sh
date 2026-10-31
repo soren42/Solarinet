@@ -12,9 +12,16 @@
 # switch (proxyDHCP or UniFi options) which activates separately. Until then the
 # entry is staged and inert.
 #
+# The per-MAC iPXE profile (ipxe/mac-<MAC>.ipxe) is what makes a machine wipe
+# itself on its next network boot. Staging first removes any previous one for
+# the MAC, writes every installer file and profile.env, and publishes the new
+# profile LAST by atomic rename: a staging that fails part-way leaves no
+# profile armed (prov-stage.py then disarms whatever its run owns).
+#
 #   fleet-provision.sh --target <MAC|host> --distro <debian|ubuntu|opensuse>
 #                      --arch <x86_64|arm64|arm32> [--release <release_name>]
-#                      --hostname <h> [--stack-vars <file.json>]
+#                      --hostname <h> [--run-id <prov_runs id>]
+#                      [--stack-vars <file.json>]
 #                      [--profile <p>] [--role <r>] [--server <url>]
 #                      [--server-ip <ip>] [--domain <d>] [--disk <dev>] --op <op>
 #
@@ -23,8 +30,18 @@
 # Without it a per-distro default is used (with a warning) so the original
 # FLEET_PROVISION callers keep working. A per-MAC auto-install is only staged
 # for an image that has been fetched + verified (its solari-image.json exists).
-# --stack-vars (a JSON object) is published as configs/<cfgkey>.stack.json and
-# kept operator-side as PROV_ROOT/profiles/<cfgkey>/stack.json (0600).
+# --run-id (PROV_STAGE, prov-stage.py) ties the install to a prov_runs row: the
+# installer writes it to the target as the Ansible local fact
+# /etc/ansible/facts.d/solari_prov.fact and authorizes the provisioning host's
+# control key for ADMIN_USER, so prov-finish.py can recognise THIS install,
+# un-stage the per-MAC profile and apply the run's stacks over SSH. A run-id
+# install needs a MAC target and carries only the bootstrap package set.
+# --stack-vars (a JSON object) is kept operator-side only, as
+# PROV_ROOT/profiles/<cfgkey>/stack.json (0600); stack vars are never published
+# in the web root (a stale configs/<cfgkey>.stack.json is removed).
+# Installer packages: the per-family bootstrap set from fleet-lib.sh, one
+# <package> / list item per name; Debian/Ubuntu installs without --run-id also
+# get FLEET_CORE_PACKAGES (Debian names) as before.
 # The generated boot menu (ipxe/boot.ipxe, written by image-refresh.py) is never
 # overwritten; the repo's static zero-image menu is installed only if none exists.
 # =============================================================================
@@ -32,13 +49,14 @@ set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-lib.sh"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/provisioning-guard.sh"
 
-TARGET="" DISTRO="" ARCH="" RELEASE="" STACK_VARS="" HOSTNAME_="" PROFILE="standard" ROLE="sensor" OP="dashboard" DISK=""
+TARGET="" DISTRO="" ARCH="" RELEASE="" RUN_ID="" STACK_VARS="" HOSTNAME_="" PROFILE="standard" ROLE="sensor" OP="dashboard" DISK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) TARGET="${2:?}"; shift ;;
     --distro) DISTRO="${2:?}"; shift ;;
     --arch)   ARCH="${2:?}"; shift ;;
     --release) RELEASE="${2:?}"; shift ;;
+    --run-id) RUN_ID="${2:?}"; shift ;;
     --stack-vars) STACK_VARS="${2:?}"; shift ;;
     --hostname) HOSTNAME_="${2:?}"; shift ;;
     --profile) PROFILE="${2:?}"; shift ;;
@@ -78,6 +96,12 @@ if [ -z "${RELEASE}" ]; then
 fi
 [[ "${RELEASE}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$ ]] || fdie "invalid --release: ${RELEASE}"
 [[ "${HOSTNAME_}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || fdie "invalid --hostname: ${HOSTNAME_}"
+[[ "${DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] || fdie "invalid --domain: ${DOMAIN}"
+[[ "${ADMIN_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fdie "invalid ADMIN_USER: ${ADMIN_USER}"
+if [ -n "${RUN_ID}" ]; then
+  [[ "${RUN_ID}" =~ ^[1-9][0-9]{0,9}$ ]] || fdie "invalid --run-id: ${RUN_ID}"
+  is_mac "${TARGET}" || fdie "--run-id needs a MAC --target (per-MAC staged install)"
+fi
 if [ -n "${STACK_VARS}" ]; then
   [ -f "${STACK_VARS}" ] && [ -r "${STACK_VARS}" ] || fdie "--stack-vars file not readable: ${STACK_VARS}"
   python3 -c 'import json,sys
@@ -102,15 +126,47 @@ else
 fi
 
 # ---- gather render values ---------------------------------------------------
-PUBKEY="$(fleet_admin_pubkey || true)"
-[ -n "${PUBKEY}" ] || fwarn "no SSH public key found under ~/.ssh; provisioned host will have no admin key"
+PUBKEY=""
+if RAWKEY="$(fleet_admin_pubkey)"; then
+  PUBKEY="$(fleet_clean_pubkey "${RAWKEY}")" || fdie "operator SSH public key is not a plain OpenSSH public key"
+else
+  fwarn "no SSH public key found under ~/.ssh; provisioned host will have no admin key"
+fi
+CONTROL_PUBKEY=""
+if [ -n "${RUN_ID}" ]; then
+  RAWKEY="$(fleet_control_pubkey)" \
+    || fdie "cannot read the provisioning host's control SSH public key (set FLEET_CONTROL_PUBKEY); nothing staged."
+  CONTROL_PUBKEY="$(fleet_clean_pubkey "${RAWKEY}")" \
+    || fdie "provisioning host control key is not a plain OpenSSH public key; nothing staged."
+  [ "${CONTROL_PUBKEY}" != "${PUBKEY}" ] || CONTROL_PUBKEY=""
+fi
+AUTH_XML="" AUTH_YAML=""
+for k in "${PUBKEY}" "${CONTROL_PUBKEY}"; do
+  [ -n "${k}" ] || continue
+  AUTH_XML="${AUTH_XML:+${AUTH_XML}
+}        <listentry>${k}</listentry>"
+  AUTH_YAML="${AUTH_YAML:+${AUTH_YAML}
+}      - \"${k}\""
+done
 PWHASH="$(openssl passwd -6 "$(openssl rand -base64 18)")"   # account exists; sshd is key-only
-PKGS="${FLEET_CORE_PACKAGES}"
-[ "${PROFILE}" = "minimal" ] && PKGS="sudo curl ca-certificates openssh-server chrony rsync jq"
+
+# Installer package set (finding: one <package> per name, family names).
+case "${DISTRO}" in
+  opensuse) PKGS="${FLEET_BOOTSTRAP_PACKAGES_SUSE}" ;;
+  *) PKGS="${FLEET_BOOTSTRAP_PACKAGES_DEB}"
+     if [ -z "${RUN_ID}" ]; then
+       if [ "${PROFILE}" = "minimal" ]; then PKGS="${PKGS} chrony rsync jq"
+       else PKGS="${PKGS} ${FLEET_CORE_PACKAGES}"; fi
+     fi ;;
+esac
+# shellcheck disable=SC2086  # word-split the package list on purpose
+render_package_tokens ${PKGS}
 
 export TOK_HOSTNAME="${HOSTNAME_}" TOK_FQDN="${FQDN}" TOK_DOMAIN="${DOMAIN}" \
        TOK_TIMEZONE="${TIMEZONE}" TOK_ADMIN_USER="${ADMIN_USER}" TOK_ADMIN_PWHASH="${PWHASH}" \
-       TOK_SSH_PUBKEY="${PUBKEY}" TOK_DISK="${DISK}" TOK_PACKAGES="${PKGS}" \
+       TOK_SSH_PUBKEY="${PUBKEY}" TOK_CONTROL_PUBKEY="${CONTROL_PUBKEY}" \
+       TOK_AUTHORIZED_KEYS_XML="${AUTH_XML}" TOK_AUTHORIZED_KEYS_YAML="${AUTH_YAML}" \
+       TOK_PROV_RUN_ID="${RUN_ID}" TOK_DISK="${DISK}" \
        TOK_HTTP_BASE="${HTTP_BASE}" TOK_ARCH="${ARCH}" TOK_SERVER_URL="${SERVER_URL}" \
        TOK_SERVER_NAME="${SERVER_NAME}" TOK_SERVER_IP="${SERVER_IP}" \
        TOK_MAC="${CFGKEY}" TOK_DISTRO="${DISTRO}"
@@ -143,6 +199,12 @@ sign_node_cert "${FQDN}" "${OP}" "${CERTTMP}"
 ENROLL_TOKEN="$(openssl rand -hex 16)"
 flog "minted enrollment cert CN=client.${FQDN}"
 
+# ---- disarm the previous per-MAC profile before rewriting what it boots -------
+if [ -n "${MAC}" ]; then
+  bssh "rm -f '${HTTP_ROOT}/ipxe/mac-${MAC}.ipxe'" \
+    || fdie "cannot remove the previous per-MAC profile ipxe/mac-${MAC}.ipxe; nothing staged."
+fi
+
 # ---- render + push the distro unattended-install config ---------------------
 case "${DISTRO}" in
   debian)
@@ -160,15 +222,11 @@ case "${DISTRO}" in
 esac
 flog "rendered ${DISTRO} unattended-install config -> configs/${CFGKEY}"
 
-# ---- top-level boot menu: only bootstrap it; per-MAC entry ------------------
+# ---- top-level boot menu: only bootstrap it ---------------------------------
 # ipxe/boot.ipxe is generated from the SoR's fetched images by image-refresh.py;
 # never overwrite it. The static zero-image menu is installed only if absent.
 render_template "${FLEET_DIR}/netboot/ipxe/boot.ipxe" > "${WORK}/boot.ipxe"
 bssh "test -e '${HTTP_ROOT}/ipxe/boot.ipxe' || install -D -m 0644 /dev/stdin '${HTTP_ROOT}/ipxe/boot.ipxe'" < "${WORK}/boot.ipxe"
-if [ -n "${MAC}" ]; then
-  bput "${HTTP_ROOT}/ipxe/mac-${MAC}.ipxe" 0644 < "${WORK}/mac.ipxe"
-  flog "staged per-MAC auto-install: ipxe/mac-${MAC}.ipxe (${IMG_DIR})"
-fi
 
 # ---- stage the first-boot installer + enrollment material -------------------
 # solari-firstboot.sh runs on the freshly installed node; the cert material is
@@ -180,15 +238,23 @@ for f in ca.pem node.pem node.key; do
 done
 # also keep an operator-side copy on benzene, outside the web root
 bssh "install -d -m 700 ${PROV_ROOT}/profiles/${CFGKEY}"
-printf 'hostname=%s\nfqdn=%s\ndistro=%s\nrelease=%s\narch=%s\nrole=%s\nprofile=%s\nmac=%s\nenroll_token=%s\nserver_url=%s\nstaged_at=%s\n' \
-  "${HOSTNAME_}" "${FQDN}" "${DISTRO}" "${RELEASE}" "${ARCH}" "${ROLE}" "${PROFILE}" "${CFGKEY}" "${ENROLL_TOKEN}" "${SERVER_URL}" "$(date -u +%FT%TZ)" \
+printf 'hostname=%s\nfqdn=%s\ndistro=%s\nrelease=%s\narch=%s\nrole=%s\nprofile=%s\nmac=%s\nrun_id=%s\nenroll_token=%s\nserver_url=%s\nstaged_at=%s\n' \
+  "${HOSTNAME_}" "${FQDN}" "${DISTRO}" "${RELEASE}" "${ARCH}" "${ROLE}" "${PROFILE}" "${CFGKEY}" "${RUN_ID}" "${ENROLL_TOKEN}" "${SERVER_URL}" "$(date -u +%FT%TZ)" \
   | bput "${PROV_ROOT}/profiles/${CFGKEY}/profile.env" 0600
+# Stack vars never live in the web root (P4 published them there; drop any).
+bssh "rm -f '${HTTP_ROOT}/configs/${CFGKEY}.stack.json'"
 if [ -n "${STACK_VARS}" ]; then
-  bput "${HTTP_ROOT}/configs/${CFGKEY}.stack.json" 0644 < "${STACK_VARS}"
   bput "${PROV_ROOT}/profiles/${CFGKEY}/stack.json" 0600 < "${STACK_VARS}"
-  flog "published stack vars -> configs/${CFGKEY}.stack.json"
+  flog "kept stack vars operator-side -> profiles/${CFGKEY}/stack.json"
 fi
+[ -z "${RUN_ID}" ] || flog "install tagged with prov_runs ${RUN_ID}; prov-finish completes it after first boot"
 flog "staged enrollment material (enroll token ${ENROLL_TOKEN:0:8}…)"
+
+# ---- arm: publish the per-MAC profile LAST (atomic rename via bput) ----------
+if [ -n "${MAC}" ]; then
+  bput "${HTTP_ROOT}/ipxe/mac-${MAC}.ipxe" 0644 < "${WORK}/mac.ipxe"
+  flog "staged per-MAC auto-install: ipxe/mac-${MAC}.ipxe (${IMG_DIR})"
+fi
 
 flog "staged. ${HOSTNAME_} will install ${DISTRO} ${RELEASE}/${IMG_ARCH} on next network boot once PXE is live."
 if [ -z "${MAC}" ]; then

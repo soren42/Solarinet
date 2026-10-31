@@ -100,7 +100,8 @@ class ImmutableReleaseTests(unittest.TestCase):
                          "apps/discovery/mdns_inspect.py", "apps/requirements.txt",
                          "bin/solariCtlClient", "deploy/remote-deploy.sh",
                          "deploy/fleet/fleet-provision.sh", "deploy/fleet/provlib.py",
-                         "deploy/fleet/stack-apply.py", "deploy/fleet/ansible/ansible.cfg"):
+                         "deploy/fleet/stack-apply.py", "deploy/fleet/prov-finish.py",
+                         "deploy/fleet/ansible/ansible.cfg"):
                 self.assertIn(name, names)
             self.assertFalse(any(Path(name).name.lower().startswith(".env")
                                  or name.endswith((".key", ".pem")) for name in names))

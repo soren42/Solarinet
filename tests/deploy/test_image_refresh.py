@@ -259,6 +259,15 @@ def deb_args(kernel_sha: str | None = None, root: str = DEB_DIR) -> list[str]:
             "--meta", "version", "fetched-20261031"]
 
 
+def fetch_lines(stdout: str) -> dict:
+    out = {}
+    for ln in stdout.splitlines():
+        key, _, val = ln.partition(" ")
+        if key in ("staged", "previous", "swapped"):
+            out[key] = val
+    return out
+
+
 class FetchImagesTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="p3c-fetch-")
@@ -301,11 +310,64 @@ class FetchImagesTests(unittest.TestCase):
         leftovers = [e for e in os.listdir(os.path.dirname(final)) if e.startswith(".x86_64.v.")]
         self.assertEqual(leftovers, [before])          # the failed staging dir was removed
 
-        p = self.run_fetch(deb_args())                 # a re-fetch swaps and drops the old dir
+        p = self.run_fetch(deb_args())                 # a re-fetch swaps but KEEPS the old dir
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotEqual(os.readlink(final), before)
-        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(final), before)))
+        new = os.readlink(final)
+        self.assertNotEqual(new, before)
+        self.assertEqual(fetch_lines(p.stdout), {"staged": new, "previous": before, "swapped": ""})
+        self.assertTrue(os.path.isdir(os.path.join(os.path.dirname(final), before)))
+        p = self.run_fetch(["--dest", "installers/debian/12/x86_64", "--prune", new])   # commit
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(os.readlink(final), new)
+        self.assertEqual(self.versions(), [new])
         self.assertFalse([d for d in tree_dirs(self.http) if os.path.basename(d) == "amd64"])
+
+    def versions(self, rel: str = "installers/debian/12") -> list[str]:
+        return sorted(e for e in os.listdir(os.path.join(self.http, rel)) if e.startswith(".x86_64.v."))
+
+    def test_rollback_restores_previous(self):
+        dest = ["--dest", "installers/debian/12/x86_64"]
+        final = os.path.join(self.http, "installers/debian/12/x86_64")
+        p = self.run_fetch(deb_args())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        first = fetch_lines(p.stdout)
+        self.assertEqual(first["previous"], "-")
+        old = os.readlink(final)
+        old_manifest = sha256_file(os.path.join(final, "SHA256SUMS.solari"))
+        p = self.run_fetch(deb_args())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        new = os.readlink(final)
+        # Refusals: prune/rollback only act on the version the symlink points at.
+        for args in (["--prune", old], ["--rollback", new, old], ["--rollback", "-", old]):
+            with self.subTest(args=args):
+                q = self.run_fetch(dest + args)
+                self.assertEqual(q.returncode, 1, q.stderr)
+                self.assertIn("refusing", q.stderr)
+                self.assertEqual(os.readlink(final), new)
+                self.assertEqual(self.versions(), sorted([old, new]))
+        for args in (["--prune", "../x"], ["--prune", ".arm64.v.abcdefgh"], ["--rollback", old, old],
+                     ["--rollback", "x", new], ["--prune", new, "--file", "linux", "file:///x", "0" * 64]):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_fetch(dest + args).returncode, 2)
+        p = self.run_fetch(dest + ["--rollback", old, new])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(os.readlink(final), old)
+        self.assertEqual(self.versions(), [old])
+        self.assertEqual(sha256_file(os.path.join(final, "SHA256SUMS.solari")), old_manifest)
+        p = self.run_fetch(dest + ["--rollback", "-", old])    # first-ever fetch undone: nothing served
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.lexists(final))
+        self.assertEqual(self.versions(), [])
+
+    def test_foreign_symlink_target_refused(self):
+        parent = os.path.join(self.http, "installers/debian/12")
+        os.makedirs(os.path.join(parent, "handmade"))
+        os.symlink("handmade", os.path.join(parent, "x86_64"))
+        p = self.run_fetch(deb_args())
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("not a version dir", p.stderr)
+        self.assertEqual(os.readlink(os.path.join(parent, "x86_64")), "handmade")
+        self.assertEqual(self.versions(), [])
 
     def test_ubuntu_tarball_extract(self):
         tb = os.path.join(UP, "ubuntu/24.04/ubuntu-24.04.5-netboot-amd64.tar.gz")
@@ -535,12 +597,13 @@ class FleetProvisionTests(unittest.TestCase):
         self.assertIn(f"set base {BASE}", prof)
         self.assertIn("hostname : node-7", prof)
         self.assertNotIn("@@", prof)
+        # stack vars stay operator-side (0600); never published in the web root
         pub = os.path.join(self.http, "configs", f"{self.MACH}.stack.json")
         priv = os.path.join(self.prov, "profiles", self.MACH, "stack.json")
-        for path, mode in ((pub, 0o644), (priv, 0o600)):
-            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), mode, path)
-            with open(path) as fh:
-                self.assertEqual(json.load(fh)["solari_stacks"], ["core"])
+        self.assertFalse(os.path.exists(pub), pub)
+        self.assertEqual(stat.S_IMODE(os.stat(priv).st_mode), 0o600, priv)
+        with open(priv) as fh:
+            self.assertEqual(json.load(fh)["solari_stacks"], ["core"])
         with open(os.path.join(self.prov, "profiles", self.MACH, "profile.env")) as fh:
             env = fh.read()
         self.assertIn("release=12\n", env)
@@ -681,17 +744,47 @@ class ImageRefreshDBTests(unittest.TestCase):
         return admin(f"SELECT CONCAT_WS('|', IFNULL(version,'-'), IFNULL(sha256,'-'),"
                      f" IFNULL(fetched_at,'-')) FROM prov_images WHERE id={image_id}")
 
-    def refresh(self, image_id, rewrite: str | None = None, op: str = "p3-test@solari"):
+    def refresh(self, image_id, rewrite: str | None = None, op: str = "p3-test@solari",
+                http: str | None = None):
         env = dict(os.environ, SOLARI_PROV_LOCAL="1", SOLARI_PROV_URL_REWRITE=rewrite or rewrite_env(),
-                   HTTP_ROOT=self.http, PROV_ROOT=os.path.join(self.tmp, "prov"), HTTP_BASE=BASE,
+                   HTTP_ROOT=http or self.http, PROV_ROOT=os.path.join(self.tmp, "prov"), HTTP_BASE=BASE,
                    BENZENE="p3-test-no-ssh", SOR_DB_HOST="127.0.0.1", SOR_DB_PORT=DB_PORT,
                    SOR_DB_NAME=DB, SOR_DB_USER=APP_USER, SOR_DB_PASS=APP_PASS)
         return subprocess.run([PY, IMAGE_REFRESH, "--image", str(image_id), "--op", op], env=env,
                               capture_output=True, text=True, timeout=300)
 
-    def menu(self) -> str:
-        with open(os.path.join(self.http, "ipxe", "boot.ipxe"), encoding="utf-8") as fh:
+    def menu(self, http: str | None = None) -> str:
+        with open(os.path.join(http or self.http, "ipxe", "boot.ipxe"), encoding="utf-8") as fh:
             return fh.read()
+
+    def runs(self, image_id: int) -> list[dict]:
+        cols = ("id", "mode", "entity_id", "image_id", "stack_slugs", "requested_by", "status", "dry_run",
+                "started", "finished", "detail")
+        out = admin("SELECT id, mode, IFNULL(entity_id,'NULL'), image_id, stack_slugs, requested_by, status,"
+                    " dry_run, started_at IS NOT NULL, finished_at IS NOT NULL, IFNULL(detail,'')"
+                    f" FROM prov_runs WHERE image_id={int(image_id)} ORDER BY id")
+        return [dict(zip(cols, ln.split("\t"))) for ln in out.splitlines() if ln]
+
+    def assert_run(self, image_id: int, status: str, *needles: str, n_before: int | None = None) -> dict:
+        runs = self.runs(image_id)
+        if n_before is not None:
+            self.assertEqual(len(runs), n_before + 1, runs)
+        run = runs[-1]
+        self.assertEqual((run["mode"], run["entity_id"], run["image_id"], json.loads(run["stack_slugs"]),
+                          run["requested_by"], run["status"], run["dry_run"], run["finished"]),
+                         ("refresh", "NULL", str(image_id), [], "p3-test@solari", status, "0", "1"), run)
+        for needle in needles:
+            self.assertIn(needle, run["detail"])
+        return run
+
+    def versions(self, rel: str, http: str | None = None) -> list[str]:
+        parent = os.path.join(http or self.http, os.path.dirname(rel))
+        return sorted(e for e in os.listdir(parent) if e.startswith(".x86_64.v."))
+
+    def snapshot(self, image_id: int, rel: str) -> tuple:
+        final = os.path.join(self.http, rel)
+        return (self.state(image_id), os.readlink(final), self.versions(rel),
+                sha256_file(os.path.join(final, "SHA256SUMS.solari")), self.menu())
 
     def assert_recorded(self, image_id: int, rel: str, version: str):
         manifest = os.path.join(self.http, rel, "SHA256SUMS.solari")
@@ -714,6 +807,14 @@ class ImageRefreshDBTests(unittest.TestCase):
         self.assertIn("item debian-12-x86_64 Debian 12 (bookworm) - x86_64 - fetched-", menu)
         self.assertNotIn("ubuntu-", menu)
         self.assertIn("boot menu regenerated with 1 fetched image(s)", p.stdout)
+        run = self.assert_run(iid, "succeeded", f"installed fetched-{today}", n_before=0)
+        self.assertEqual(run["started"], "1")
+        self.assertEqual(self.versions("installers/debian/12/x86_64"),
+                         [os.readlink(os.path.join(self.http, "installers/debian/12/x86_64"))])
+        p = self.refresh(iid)                              # a second refresh prunes the first version
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assert_run(iid, "succeeded", "installed", n_before=1)
+        self.assertEqual(len(self.versions("installers/debian/12/x86_64")), 1)
 
     def test_02_ubuntu(self):
         iid = self.image_id("ubuntu", "24.04")
@@ -726,6 +827,7 @@ class ImageRefreshDBTests(unittest.TestCase):
         menu = self.menu()
         self.assertIn("item ubuntu-24.04-x86_64 Ubuntu 24.04 LTS (noble) - x86_64 - 24.04.5", menu)
         self.assertIn("item debian-12-x86_64 ", menu)
+        self.assert_run(iid, "succeeded", "installed 24.04.5")
 
     def test_03_tumbleweed(self):
         iid = self.image_id("opensuse", "tumbleweed")
@@ -751,12 +853,15 @@ class ImageRefreshDBTests(unittest.TestCase):
         with open(os.path.join(bad_root, "dists/bookworm/main/installer-amd64/current/images/netboot/"
                                          "debian-installer/amd64/linux"), "ab") as fh:
             fh.write(b"tampered")
+        n = len(self.runs(iid))
         p = self.refresh(iid, rewrite=rewrite_env(debian_root=bad_root))
         self.assertEqual(p.returncode, 1)
         self.assertIn("sha256 MISMATCH for linux", p.stderr)
         self.assertEqual(os.readlink(final), before_link)
         self.assertEqual(sha256_file(os.path.join(final, "SHA256SUMS.solari")), before_manifest)
         self.assertEqual(self.state(iid), before_state)
+        self.assertEqual(self.versions("installers/debian/12/x86_64"), [before_link])
+        self.assert_run(iid, "failed", "fetch-images.sh failed", n_before=n)
 
     def test_05_missing_checksum_entry(self):
         iid = self.image_id("ubuntu", "24.04")
@@ -765,6 +870,7 @@ class ImageRefreshDBTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("lists no ubuntu-24.04[.N]-netboot-amd64.tar.gz", p.stderr)
         self.assertEqual(self.state(iid), before)
+        self.assert_run(iid, "failed", "lists no ubuntu-24.04")
 
     def test_06_no_checksum_source(self):
         iid = self.image_id("debian", "13")
@@ -772,6 +878,7 @@ class ImageRefreshDBTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("no checksum_url", p.stderr)
         self.assertEqual(self.state(iid), "-|-|-")
+        self.assert_run(iid, "failed", "no checksum_url", n_before=0)
         self.assertFalse(os.path.exists(os.path.join(self.http, "installers/debian/13")))
 
     def test_07_non_ipxe_refused(self):
@@ -779,6 +886,7 @@ class ImageRefreshDBTests(unittest.TestCase):
         p = self.refresh(iid)
         self.assertEqual(p.returncode, 1)
         self.assertIn("boots via pi_netboot", p.stderr)
+        self.assert_run(iid, "failed", "boots via pi_netboot", n_before=0)
 
     def test_08_usage_and_unknown(self):
         for args in (["--image", "0", "--op", "x"], ["--image", "1", "--op", "bad op"],
@@ -791,6 +899,7 @@ class ImageRefreshDBTests(unittest.TestCase):
         p = self.refresh(999999)
         self.assertEqual(p.returncode, 1)
         self.assertIn("no live prov_images row", p.stderr)
+        self.assertEqual(self.runs(999999), [])
 
     def test_09_disk_layout(self):
         self.assertFalse([d for d in tree_dirs(self.http) if os.path.basename(d) in ("amd64", "aarch64")])
@@ -802,6 +911,134 @@ class ImageRefreshDBTests(unittest.TestCase):
                  if ln.startswith("item ") and not ln.startswith("item --gap")]
         self.assertEqual(items, ["debian-12-x86_64", "opensuse-tumbleweed-x86_64", "ubuntu-24.04-x86_64",
                                  "shell", "reboot", "local"])
+
+    # -- F4: a failure after the swap leaves the OLD image serving -----------
+    def test_10_sor_update_failure_keeps_old(self):
+        iid = self.image_id("debian", "12")
+        rel = "installers/debian/12/x86_64"
+        before = self.snapshot(iid, rel)
+        n = len(self.runs(iid))
+        admin("DELIMITER //\nCREATE TRIGGER trg_test_refresh_fail BEFORE UPDATE ON prov_images FOR EACH ROW"
+              f" BEGIN IF NEW.id = {iid} THEN SIGNAL SQLSTATE '45000'"
+              " SET MESSAGE_TEXT = 'injected SoR failure'; END IF; END//\nDELIMITER ;\n")
+        try:
+            p = self.refresh(iid)
+        finally:
+            admin("DROP TRIGGER IF EXISTS trg_test_refresh_fail")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("injected SoR failure", p.stderr)
+        self.assertIn("old image kept", p.stderr)
+        self.assertEqual(self.snapshot(iid, rel), before)   # SoR, symlink, version dirs, files, menu
+        self.assert_run(iid, "failed", "injected SoR failure", "old image kept", n_before=n)
+
+    def _readonly_menu_dir(self, http: str):
+        ipxe = os.path.join(http, "ipxe")
+        os.makedirs(ipxe, exist_ok=True)
+        os.chmod(ipxe, 0o555)
+        self.addCleanup(os.chmod, ipxe, 0o755)
+
+    def test_11_menu_failure_keeps_old(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the read-only menu dir used to inject the failure")
+        iid = self.image_id("ubuntu", "24.04")
+        rel = "installers/ubuntu/24.04/x86_64"
+        before = self.snapshot(iid, rel)
+        n = len(self.runs(iid))
+        self._readonly_menu_dir(self.http)
+        p = self.refresh(iid)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("recorded image", p.stdout)             # the SoR row WAS updated, then restored
+        self.assertIn("restored image", p.stdout)
+        self.assertIn("old image kept", p.stderr)
+        self.assertEqual(self.snapshot(iid, rel), before)
+        self.assert_run(iid, "failed", "old image kept", n_before=n)
+
+    def test_12_first_fetch_menu_failure_serves_nothing(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the read-only menu dir used to inject the failure")
+        iid = self.image_id("debian", "12")
+        before_state = self.state(iid)
+        fresh = os.path.join(self.tmp, "http-fresh")
+        self._readonly_menu_dir(fresh)
+        p = self.refresh(iid, http=fresh)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("no image installed", p.stderr)
+        self.assertFalse(os.path.lexists(os.path.join(fresh, "installers/debian/12/x86_64")))
+        self.assertEqual(self.versions("installers/debian/12/x86_64", http=fresh), [])
+        self.assertEqual(self.state(iid), before_state)
+        self.assert_run(iid, "failed", "no image installed")
+
+    # -- F6: lock + supersede ------------------------------------------------
+    def test_13_concurrent_refresh_refused(self):
+        iid = self.image_id("debian", "12")
+        n = len(self.runs(iid))
+        holder = subprocess.Popen(ADMIN + ["-N", "-B", "--unbuffered", DB], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, text=True)
+        try:
+            holder.stdin.write(f"SELECT GET_LOCK('solari-prov-refresh-{iid}', 5);\n")
+            holder.stdin.flush()
+            self.assertEqual(holder.stdout.readline().strip(), "1")
+            p = self.refresh(iid)
+        finally:
+            holder.stdin.close()
+            holder.wait(timeout=30)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("another refresh of this image is running", p.stderr)
+        self.assertEqual(len(self.runs(iid)), n)              # refused before a run was opened
+
+    def test_14_orphaned_run_superseded(self):
+        iid = self.image_id("debian", "12")
+        admin("INSERT INTO prov_runs (mode, entity_id, image_id, stack_slugs, requested_by, status,"
+              " source_id, asserted_kind) VALUES ('refresh', NULL, %d, '[]', 'p3-test@solari', 'queued',"
+              " (SELECT id FROM sources WHERE slug='provisioner'), 'human')" % iid)
+        admin(f"UPDATE prov_runs SET status='running' WHERE image_id={iid} AND status='queued'")
+        stale = self.runs(iid)[-1]
+        self.assertEqual(stale["status"], "running")
+        p = self.refresh(iid)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        runs = {r["id"]: r for r in self.runs(iid)}
+        new = self.assert_run(iid, "succeeded", "installed")
+        self.assertEqual(runs[stale["id"]]["status"], "cancelled")
+        self.assertEqual(runs[stale["id"]]["detail"], f"superseded by run {new['id']}")
+        self.assertFalse([r for r in runs.values() if r["status"] in ("queued", "running")])
+
+    def test_15_sigterm_mid_fetch_closes_run(self):
+        iid = self.image_id("debian", "12")
+        rel = "installers/debian/12/x86_64"
+        before = self.snapshot(iid, rel)
+        n = len(self.runs(iid))
+        hang_root = os.path.join(self.tmp, "hang-debian")
+        shutil.copytree(os.path.join(UP, "debian"), hang_root)
+        fifo = os.path.join(hang_root, "dists/bookworm/main/installer-amd64/current/images/netboot/"
+                                       "debian-installer/amd64/linux")
+        os.unlink(fifo)
+        os.mkfifo(fifo)                                     # curl blocks reading it: a hung download
+        env = dict(os.environ, SOLARI_PROV_LOCAL="1", SOLARI_PROV_URL_REWRITE=rewrite_env(debian_root=hang_root),
+                   HTTP_ROOT=self.http, PROV_ROOT=os.path.join(self.tmp, "prov"), HTTP_BASE=BASE,
+                   BENZENE="p3-test-no-ssh", SOR_DB_HOST="127.0.0.1", SOR_DB_PORT=DB_PORT,
+                   SOR_DB_NAME=DB, SOR_DB_USER=APP_USER, SOR_DB_PASS=APP_PASS)
+        proc = subprocess.Popen([PY, IMAGE_REFRESH, "--image", str(iid), "--op", "p3-test@solari"], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = dt.datetime.now() + dt.timedelta(seconds=60)
+            while dt.datetime.now() < deadline:
+                runs = self.runs(iid)
+                if len(runs) > n and runs[-1]["status"] == "running":
+                    break
+            else:
+                self.fail("refresh run never reached running")
+            threading.Event().wait(1.5)                     # let curl block on the fifo
+            proc.terminate()
+            out, err = proc.communicate(timeout=60)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        self.assertEqual(proc.returncode, 1, out + err)
+        self.assert_run(iid, "failed", "SIGTERM", n_before=n)
+        with self.assertRaises(OSError):                   # no fetch child left reading the fifo
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        self.assertEqual(self.snapshot(iid, rel)[:2], before[:2])
+        self.assertEqual(self.snapshot(iid, rel)[3:], before[3:])
 
 
 if __name__ == "__main__":

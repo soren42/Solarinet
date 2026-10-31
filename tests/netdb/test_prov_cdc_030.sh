@@ -19,7 +19,8 @@
 #   * ledger rehearsal (tools/migrate.py) on a second scratch database: clean
 #     ledgered install applies 030, a second run is a no-op, --check matches,
 #     --verify-live matches netdb/sor/schema.snapshot.sql, and an upgrade from
-#     a 029-only ledger (030 row + triggers removed) applies only 030.
+#     a 029-only ledger (031 + 030 rolled back, rows removed) applies
+#     exactly 030 then 031.
 #
 # Never touches live `sor` / `solarinet` / `solarinet_stage` / `sor_probe`:
 # database names are fixed below, the script refuses if either already exists,
@@ -306,16 +307,19 @@ out="$(mig --verify-live)" || die "--verify-live failed: $out"
 grep -q '^MATCH: live schema matches the candidate snapshot' <<<"$out" || die "--verify-live output: $out"
 ok "--verify-live: live schema matches netdb/sor/schema.snapshot.sql (snapshot includes the 27 triggers)"
 
-# upgrade path: a ledger that stops at 029 picks up only 030
+# upgrade path: a ledger that stops at 029 picks up 030 (then 031, which
+# follows it; the runner refuses a gap, so 031 is rolled back first too)
+"${ADMIN[@]}" "$LDB" < "$SOR/rollback/031-down.sql"
 "${ADMIN[@]}" "$LDB" < "$D030"
-L "DELETE FROM solari_migration_ledger WHERE migration_id='030_provisioning_cdc'"
+L "DELETE FROM solari_migration_ledger WHERE migration_id IN ('030_provisioning_cdc','031_provisioning_arch_refresh')"
 out="$(mig --check)" || die "--check on 029-only ledger failed: $out"
-grep -q '^PENDING 030_provisioning_cdc ' <<<"$out" || die "030 not reported pending: $out"
-[[ "$(grep -c '^PENDING ' <<<"$out")" == 1 ]] || die "more than 030 pending: $out"
-ok "029-only ledger: --check reports exactly 030 pending"
+[[ "$(grep '^PENDING ' <<<"$out" | cut -d' ' -f2 | paste -sd,)" == "030_provisioning_cdc,031_provisioning_arch_refresh" ]] \
+  || die "029-only ledger: expected exactly 030,031 pending: $out"
+ok "029-only ledger: --check reports exactly 030 then 031 pending"
 out="$(mig)" || die "upgrade run failed: $out"
-[[ "$out" =~ ^APPLIED\ 030_provisioning_cdc\ [0-9a-f]{12}$ ]] || die "upgrade applied more than 030: $out"
-ok "upgrade run applied only 030"
+[[ "$(cut -d' ' -f1,2 <<<"$out" | paste -sd,)" == "APPLIED 030_provisioning_cdc,APPLIED 031_provisioning_arch_refresh" ]] \
+  || die "upgrade applied something other than 030 then 031: $out"
+ok "upgrade run applied only 030, then 031"
 out="$(mig --verify-live)" || die "--verify-live after upgrade failed: $out"
 ok "--verify-live after the 029 -> 030 upgrade"
 

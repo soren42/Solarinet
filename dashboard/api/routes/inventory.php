@@ -51,6 +51,7 @@ declare(strict_types=1);
  *   GET    /api/inventory/models                 list (filters: hw_type, q, limit, offset)
  *   GET    /api/inventory/models/{id}             one model
  *   POST   /api/inventory/models                  create
+ *   PUT    /api/inventory/models/{id}             update (partial; arch '' => NULL = unknown)
  *
  *   GET    /api/inventory/locations               tree (roots + nested children)
  *   GET    /api/inventory/locations?parent_id=N   flat list of N's direct children
@@ -470,18 +471,44 @@ return static function (Router $router): void {
             : 'other';
 
         Inv::exec(
-            "INSERT INTO hardware_models (make, model, hw_type, notes, source_id, asserted_kind, asserted_at)
-             VALUES (:make, :model, :hw_type, :notes, :src, 'human', NOW())",
+            "INSERT INTO hardware_models (make, model, hw_type, arch, notes, source_id, asserted_kind, asserted_at)
+             VALUES (:make, :model, :hw_type, :arch, :notes, :src, 'human', NOW())",
             [
                 ':make'    => $make,
                 ':model'   => $model,
                 ':hw_type' => $hwType,
+                ':arch'    => inv_model_arch($b),
                 ':notes'   => inv_str($b, 'notes'),
                 ':src'     => Sor::dashboardSourceId(),
             ]
         );
         $id = (int) Inv::lastInsertId();
         Response::ok(inv_model_row(Inv::row(inv_model_sql() . ' WHERE id = :i', [':i' => $id])), 201);
+    });
+
+    // arch (031) is what provisioning trusts first for a target's CPU arch.
+    // Deliberately arch-only: the hardened grant is column-scoped to
+    // UPDATE (arch, source_id, asserted_kind, asserted_at) on hardware_models
+    // (deploy/dashboard/hardened/sor-dashboard-grants.sql), and each edit
+    // re-asserts provenance as a human dashboard assertion, like the POST.
+    $router->add('PUT', '/api/inventory/models/{id}', static function (array $p): void {
+        Operator::requireOperator();
+        $id = Inv::idParam($p['id']);
+        if (Inv::row('SELECT id FROM hardware_models WHERE id = :i AND deleted_at IS NULL', [':i' => $id]) === null) {
+            Response::error('not_found', "No hardware model $id", 404);
+        }
+        $b = solari_json_body();
+        if (!array_key_exists('arch', $b) || array_diff(array_keys($b), ['arch']) !== []) {
+            Response::error('bad_request', 'Only arch can be updated on a hardware model.', 400);
+        }
+
+        Inv::exec(
+            "UPDATE hardware_models
+                SET arch = :arch, source_id = :src, asserted_kind = 'human', asserted_at = NOW()
+              WHERE id = :id",
+            [':arch' => inv_model_arch($b), ':src' => Sor::dashboardSourceId(), ':id' => $id]
+        );
+        Response::ok(inv_model_row(Inv::row(inv_model_sql() . ' WHERE id = :i', [':i' => $id])));
     });
 
     // ==================================================================
@@ -1399,7 +1426,20 @@ function inv_component_row(array $r): array
 
 function inv_model_sql(): string
 {
-    return 'SELECT id, make, model, hw_type, notes, source_id, created_at, updated_at FROM hardware_models';
+    return 'SELECT id, make, model, hw_type, arch, notes, source_id, created_at, updated_at FROM hardware_models';
+}
+
+/** Body arch for hardware_models: absent/null/'' => NULL (unknown), else the 031 enum. */
+function inv_model_arch(array $b): ?string
+{
+    $v = $b['arch'] ?? null;
+    if ($v === null || $v === '') {
+        return null;
+    }
+    if (!is_string($v)) {
+        Response::error('bad_request', 'arch must be a string.', 400);
+    }
+    return Inv::requireEnum('hardware_models', 'arch', $v, 'arch');
 }
 
 function inv_model_row(array $r): array
@@ -1409,6 +1449,7 @@ function inv_model_row(array $r): array
         'make'      => $r['make'],
         'model'     => $r['model'],
         'hwType'    => $r['hw_type'],
+        'arch'      => $r['arch'] ?? null,
         'notes'     => $r['notes'],
         'sourceId'  => Coerce::int($r['source_id']),
         'createdAt' => Coerce::iso($r['created_at'] ?? null),

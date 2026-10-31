@@ -231,7 +231,7 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 |---|---|---|
 | 1 | `sources` | Registry of systems allowed to assert facts (provenance targets); pre-seeded |
 | 2 | `locations` | Physical hierarchy site/room/rack/position (self-referencing tree) |
-| 3 | `hardware_models` | Product catalog: make + model + device class |
+| 3 | `hardware_models` | Product catalog: make + model + device class + CPU `arch` (031; NULL = unknown) |
 | 4 | `hardware_units` | Individual serial-numbered units of a model, placed at a location |
 | 5 | `operating_systems` | OS catalog (family, name, version, EOL) |
 | 6 | `entities` | **Supertype hub**: every server/device/appliance/app/service |
@@ -374,7 +374,7 @@ tables hold nothing but the untouched seed.
 | `prov_stacks` | Named, ordered bundles of pool entries (`slug`, `name`, `description`, `locked`, `sort_order`). `core` is locked and always rendered first. |
 | `prov_stack_members` | Stack → pool entry. `item_order` NULL = the type default (repo 100, pkg 200, artifact 300, build 400, script 500, role 600); `sort_order` breaks ties. One live row per `(stack_id, software_id)`; the same entry may be a member of many stacks. Deleting a stack cascades its members; deleting an entry a stack still includes is RESTRICTed. |
 | `prov_stack_deps` | Stack → stack dependency edges. A CHECK rejects self-dependency; cycles are rejected by the generator. |
-| `prov_runs` | Append-only audit of reimage/apply requests. Request columns are immutable (trigger), and a terminal status is final. A run can never return to `queued`, and rows cannot be deleted. `mode='reimage'` requires `image_id`; `stack_slugs` must be a JSON array. |
+| `prov_runs` | Append-only audit of reimage/apply runs and (031) image refreshes. Request columns are immutable (trigger, NULL-safe), and a terminal status is final. A run can never return to `queued`, and rows cannot be deleted. Shape (031 `ck_prov_runs_shape`): `reimage` = entity + image, `apply` = entity, no image, `refresh` = image, no entity. `stack_slugs` must be a JSON array. |
 
 Why a pool: one row per piece of software means a version pin, sha256 or
 repo key is changed in one place, a host never installs the same thing
@@ -479,6 +479,25 @@ unroutable `prov_*` event stalls the emit checkpoint for every table. Apply as
 DB root on cesium. `prov_runs` deletes are refused by the 029 guard, so its
 delete trigger never fires today. Rolling back 029 drops these triggers with the
 tables; re-apply 030 after any 029 forward recovery.
+
+Migration 031 (`migrations/031_provisioning_arch_refresh.sql`, manual rollback
+[`rollback/031-down.sql`](rollback/031-down.sql)) adds the nullable
+`hardware_models.arch` ENUM (exactly the `prov_images.arch` vocabulary,
+appended only in lockstep; NULL = unknown). It is the first arch source for a
+reimage target; the agent-reported `node.arch` is the fallback, and a reimage
+is refused while the target arch is unknown or differs from the image. It
+also adds `prov_runs.mode='refresh'` (IMAGE_REFRESH records a run): `entity_id`
+becomes NULL-able and the 029 `ck_prov_runs_image` CHECK is replaced by
+`ck_prov_runs_shape` (see the `prov_runs` row above). No trigger is created or
+replaced; the 029 guards compare with `<=>`, so a refresh run's NULL
+`entity_id` is immutable too, and the 030 CDC triggers publish refresh runs
+like any other. `hardware_models` carries no CDC. **Deploy order:** apply 031
+(as DB root on cesium) before activating the release that reads `arch` or
+writes `refresh` runs, and before applying the dashboard grant file (its
+column-scoped `UPDATE (arch, …)` on `hardware_models` names the new column).
+The rollback refuses while any refresh run or non-NULL `arch` exists; since
+`prov_runs` refuses deletes, a recorded refresh run makes 031 effectively
+forward-only.
 
 The seed is inserted once and never resurrected; a soft-deleted seed row stays
 deleted on re-run:

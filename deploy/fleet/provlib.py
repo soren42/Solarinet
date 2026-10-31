@@ -6,7 +6,7 @@ are dispatched by solariServer's queue consumer, which execs ONE helper per
 verb with a literal argv (no shell):
 
   deploy/fleet/image-refresh.py --image <id> --op <principal>
-  deploy/fleet/prov-stage.py    --entity <id> --image <id> --stacks <a,b> --op <principal>
+  deploy/fleet/prov-stage.py    --entity <id> --image <id> --stacks <a,b> --mac <mac> --arch <arch> --op <principal>
   deploy/fleet/stack-apply.py   --entity <id> --stacks <a,b> [--dry-run] --op <principal>
 
 The C side has already validated every argument with the same rules as below;
@@ -24,6 +24,16 @@ SoR connection — never from argv. In order:
 prov_runs lifecycle is forward-only (029's trg_prov_runs_bu enforces it in the
 DB; advance_run() refuses the same moves client-side for a clean message):
   queued -> running | failed | cancelled;  running -> succeeded | failed | cancelled.
+The helpers never leave a row queued: open_run() INSERTs it already `running`
+(started_at set) in one commit, so a helper that dies right after opening
+leaves a run its own recovery path sees (prov-finish for reimage, the next
+refresh's supersede for refresh), never one stuck in `queued`.
+
+Per-MAC boot profiles (PROV_STAGE): the per-MAC iPXE profile is what makes a
+machine wipe itself on its next network boot. Every write to one MAC's files
+holds mac_lock(); unstage_profile() removes (finish) or disarms one only while
+PROV_ROOT/profiles/<cfgkey>/profile.env still names the given run, and
+disarm_stale_profile() disarms a profile whose run is no longer active.
 
 Provisioning host (benzene) — the same env names and defaults as
 fleet-lib.sh: BENZENE, BENZENE_IP, HTTP_PORT, HTTP_BASE, PROV_ROOT, HTTP_ROOT.
@@ -37,6 +47,7 @@ Stdlib only; pymysql is imported lazily by connect_sor().
 from __future__ import annotations
 
 import configparser
+import contextlib
 import json
 import os
 import re
@@ -44,18 +55,24 @@ import shlex
 import stat
 import subprocess
 import sys
-from typing import Any, Iterable
+import time
+from typing import Any, Callable, Iterable
 
 # The same rules the C validators in src/server/solariCtl.c enforce.
 ID_RE = re.compile(r"^[1-9][0-9]{0,9}$")             # unsigned decimal, no sign/zero-pad, < 10^10
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")   # 029 slug CHECK, bounded to VARCHAR(48)
 PRINCIPAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+:-]{0,127}$")
+MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")     # lowercase, colon-separated
+# prov_images.arch == hardware_models.arch (031) vocabulary.
+ARCHES = ("x86_64", "arm64", "armhf", "riscv64", "i386")
 MAX_STACKS = 32
 
 DEFAULT_CNF = "/etc/solarinet/prov-sor.cnf"
 PROVISIONER_SOURCE = "provisioner"
 
 TERMINAL = frozenset({"succeeded", "failed", "cancelled"})
+# mode -> (entity required, image required); mirrors 031 ck_prov_runs_shape.
+RUN_SHAPES = {"reimage": (True, True), "apply": (True, False), "refresh": (False, True)}
 _FORWARD = {
     "queued": frozenset({"running", "failed", "cancelled"}),
     "running": frozenset({"succeeded", "failed", "cancelled"}),
@@ -64,6 +81,10 @@ _FORWARD = {
 
 class ProvError(Exception):
     """A refusal or failure the helper reports and exits non-zero on."""
+
+
+class MacBusy(ProvError):
+    """mac_lock() timed out: another step holds the MAC. Transient — retry later."""
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +112,19 @@ def parse_stacks(value: str) -> list[str]:
     if len(out) > MAX_STACKS:
         raise ProvError(f"at most {MAX_STACKS} stacks per run")
     return out
+
+
+def parse_mac(value: str) -> str:
+    """The deploy target's MAC exactly as the C bridge passes it (lowercase a:b:..)."""
+    if not isinstance(value, str) or not MAC_RE.match(value):
+        raise ProvError("mac must be a lowercase colon-separated MAC address")
+    return value
+
+
+def parse_arch(value: str) -> str:
+    if value not in ARCHES:
+        raise ProvError(f"arch must be one of {', '.join(ARCHES)}")
+    return value
 
 
 def parse_principal(value: str) -> str:
@@ -188,26 +222,68 @@ def provisioner_source_id(cur) -> int:
     return int(row["id"])
 
 
-def open_run(conn, *, mode: str, entity_id: int, image_id: int | None,
+def open_run(conn, *, mode: str, entity_id: int | None, image_id: int | None,
              stack_order: Iterable[str], requested_by: str, dry_run: bool = False,
              detail: str | None = None) -> int:
-    """INSERT a queued prov_runs row and commit; returns its id."""
-    if mode not in ("reimage", "apply"):
+    """INSERT a `running` prov_runs row (started_at = now) and commit; returns its id.
+
+    One statement, one commit: there is no queued window a crash could strand.
+    Shapes (031 ck_prov_runs_shape): reimage = entity + image; apply = entity,
+    no image; refresh = image, no entity (stack_order empty).
+    """
+    if mode not in RUN_SHAPES:
         raise ProvError(f"invalid run mode {mode!r}")
-    if (mode == "reimage") != (image_id is not None):
-        raise ProvError("reimage runs need an image; apply runs must not name one")
+    need_entity, need_image = RUN_SHAPES[mode]
+    if (entity_id is not None) != need_entity or (image_id is not None) != need_image:
+        raise ProvError("reimage runs need an entity and an image; apply runs an entity and "
+                        "no image; refresh runs an image and no entity")
     slugs = list(stack_order)
     with conn.cursor() as cur:
         src = provisioner_source_id(cur)
         cur.execute(
             "INSERT INTO prov_runs (mode, entity_id, image_id, stack_slugs, requested_by,"
-            " status, dry_run, detail, source_id, asserted_kind)"
-            " VALUES (%s,%s,%s,%s,%s,'queued',%s,%s,%s,'human')",
+            " status, dry_run, detail, started_at, source_id, asserted_kind)"
+            " VALUES (%s,%s,%s,%s,%s,'running',%s,%s,CURRENT_TIMESTAMP,%s,'human')",
             (mode, entity_id, image_id, json.dumps(slugs), requested_by,
              1 if dry_run else 0, _clip(detail), src))
         run_id = int(cur.lastrowid)
     conn.commit()
     return run_id
+
+
+def run_status(conn, run_id: int) -> str | None:
+    """Current status of one run (None = no such row); ends the read transaction."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM prov_runs WHERE id=%s", (run_id,))
+        row = cur.fetchone()
+    conn.commit()
+    return row["status"] if row else None
+
+
+@contextlib.contextmanager
+def mac_lock(conn, mac: str, wait: int):
+    """SoR named lock serialising every write to one MAC's netboot files.
+
+    PROV_STAGE (fleet-provision publishing a profile) and prov-finish
+    (un-staging / disarming one) both run against the same per-MAC files on
+    the provisioning host; holding this across each keeps an older run's
+    clean-up from removing a newer staging's files mid-publish."""
+    name = "solari-prov-mac-" + parse_mac(mac.replace("-", ":"))
+    with conn.cursor() as cur:
+        cur.execute("SELECT GET_LOCK(%s, %s) AS got", (name, wait))
+        row = cur.fetchone()
+    got = row.get("got") if isinstance(row, dict) else (row[0] if row else None)
+    if got != 1:
+        raise MacBusy(f"another provisioning step holds MAC {mac}; try again shortly")
+    try:
+        yield
+    finally:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT RELEASE_LOCK(%s)", (name,))
+                cur.fetchall()
+        except Exception:  # noqa: BLE001 — the lock also dies with the session
+            pass
 
 
 def advance_run(conn, run_id: int, status: str, detail: str | None = None) -> None:
@@ -253,19 +329,91 @@ def remote_env(env: dict[str, str] | None = None) -> dict[str, str]:
             "HTTP_ROOT": env.get("HTTP_ROOT", f"{prov_root}/netboot/http")}
 
 
+# Active lock watch for remote_run, innermost last: (interval_s, still_held).
+_WATCHES: list[tuple[float, Callable[[], bool]]] = []
+def _watch_interval() -> float:
+    raw_v = os.environ.get("SOLARI_PROV_LOCK_WATCH", "")
+    return float(raw_v) if re.fullmatch(r"[0-9]{1,4}(\.[0-9]{1,3})?", raw_v) and float(raw_v) > 0 else 15.0
+
+
+LOCK_WATCH_INTERVAL = _watch_interval()
+
+
+def holds_lock(conn, name: str) -> bool:
+    """True when this SoR session still owns named lock `name` (False on any error)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT IS_USED_LOCK(%s) = CONNECTION_ID() AS mine", (name,))
+            row = cur.fetchone()
+        conn.commit()
+    except Exception:  # noqa: BLE001 — a dead session no longer owns anything
+        return False
+    mine = row.get("mine") if isinstance(row, dict) else (row[0] if row else None)
+    return mine == 1
+
+
+@contextlib.contextmanager
+def lock_watch(conn, name: str, interval: float = LOCK_WATCH_INTERVAL):
+    """While active, every remote_run re-checks `name` is still held each
+    `interval` seconds and kills its child when it is not. The named locks
+    are session-scoped: if the SoR session drops, the server frees the lock
+    and a reaper may treat the run as orphaned, so the step must not go on."""
+    _WATCHES.append((float(interval), lambda: holds_lock(conn, name)))
+    try:
+        yield
+    finally:
+        _WATCHES.pop()
+
+
 def remote_run(argv: list[str], *, input: bytes | None = None, check: bool = True,
-               timeout: float | None = None) -> subprocess.CompletedProcess:
-    """Run argv on the provisioning host (or locally under SOLARI_PROV_LOCAL=1)."""
+               timeout: float | None = None,
+               on_spawn: Callable[[], None] | None = None) -> subprocess.CompletedProcess:
+    """Run argv on the provisioning host (or locally under SOLARI_PROV_LOCAL=1).
+
+    `on_spawn` runs once the child exists and before it is waited on; if it
+    raises, the child is killed and the exception propagates. prov-finish
+    uses it to commit its run-status gate only after the step is in flight.
+    Under lock_watch() the child is killed if the watched lock is lost."""
     if not argv or not all(isinstance(a, str) for a in argv):
         raise ProvError("remote_run needs a non-empty list of strings")
     if os.environ.get("SOLARI_PROV_LOCAL") == "1":
         cmd = list(argv)
     else:
         cmd = ["ssh", "-o", "BatchMode=yes", remote_env()["BENZENE"], "--", shlex.join(argv)]
-    try:
-        proc = subprocess.run(cmd, input=input, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise ProvError(f"timed out: {argv[0]}") from None
+    watch = _WATCHES[-1] if _WATCHES else None
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    with subprocess.Popen(cmd, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        failure: BaseException | None = None
+        try:
+            if on_spawn is not None:
+                on_spawn()
+            while True:
+                wait = watch[0] if watch else None
+                if deadline is not None:
+                    left = max(0.0, deadline - time.monotonic())
+                    wait = left if wait is None else min(wait, left)
+                try:
+                    # retrying communicate() after a timeout loses no output
+                    out, err = child.communicate(input, timeout=wait)
+                    break
+                except subprocess.TimeoutExpired:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        failure = ProvError(f"timed out: {argv[0]}")
+                        break
+                    if watch and not watch[1]():
+                        failure = ProvError(f"{argv[0]} aborted: provisioning lock lost "
+                                            "(SoR session dropped)")
+                        break
+        except BaseException as exc:  # noqa: BLE001 — kill the child, then re-raise
+            failure = exc
+        if failure is not None:
+            child.kill()
+            child.communicate()
+            if isinstance(failure, ProvError):
+                raise failure from None
+            raise failure
+    proc = subprocess.CompletedProcess(cmd, child.returncode, out, err)
     if check and proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-3:]
         raise ProvError(f"{argv[0]} failed (exit {proc.returncode}): {' | '.join(tail)}")
@@ -283,6 +431,132 @@ def remote_write(path: str, data: bytes, mode: str = "0644") -> None:
     if not re.fullmatch(r"0[0-7]{3}", mode):
         raise ProvError(f"invalid mode {mode!r}")
     remote_run(["sh", "-c", _WRITE_SH, "sh", path, mode], input=data)
+
+
+# ---------------------------------------------------------------------------
+# Per-MAC boot profiles on the provisioning host
+# ---------------------------------------------------------------------------
+CFGKEY_RE = re.compile(r"^[0-9a-f]{2}(-[0-9a-f]{2}){5}$")
+# PROV_ROOT / HTTP_ROOT reach ssh options (space-split by Ansible) and a remote shell.
+PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
+
+
+def prov_paths(env: dict[str, str] | None = None) -> tuple[str, str]:
+    """(PROV_ROOT, HTTP_ROOT) without a trailing slash; plain absolute paths only."""
+    renv = remote_env(env)
+    out = []
+    for name in ("PROV_ROOT", "HTTP_ROOT"):
+        path = renv[name].rstrip("/")
+        if not PATH_RE.match(path) or "/../" in path + "/":
+            raise ProvError(f"{name} {path!r} is not a plain absolute path")
+        out.append(path)
+    return out[0], out[1]
+
+
+# Un-stage / disarm one per-MAC profile, but only while profile.env still
+# names THIS run (a newer PROV_STAGE for the same MAC owns the files
+# otherwise). Idempotent; prints one word: done|already|foreign. "disarm"
+# moves the boot profile out of the web root (kept for the record).
+_UNSTAGE_SH = r'''
+set -eu
+run=$1 cfg=$2 prov=$3 http=$4 how=$5
+pdir="$prov/profiles/$cfg"
+if [ -f "$pdir/finished-$run.env" ] || [ -f "$pdir/disarmed-$run.env" ]; then echo already; exit 0; fi
+if [ ! -f "$pdir/profile.env" ] || ! grep -qx "run_id=$run" "$pdir/profile.env"; then echo foreign; exit 0; fi
+if [ "$how" = disarm ] && [ -f "$http/ipxe/mac-$cfg.ipxe" ]; then
+  mv -f "$http/ipxe/mac-$cfg.ipxe" "$pdir/disarmed-$run.ipxe"
+fi
+rm -f "$http/ipxe/mac-$cfg.ipxe" "$http/configs/$cfg.xml" "$http/configs/$cfg.preseed" \
+      "$http/configs/$cfg.stack.json"
+rm -rf "$http/configs/ubuntu/$cfg"
+if [ "$how" = disarm ]; then mv -f "$pdir/profile.env" "$pdir/disarmed-$run.env"
+else mv -f "$pdir/profile.env" "$pdir/finished-$run.env"; fi
+echo done
+'''
+
+# Owner of one MAC's staged files: the run_id profile.env names (may be
+# empty). Exit 3 = no profile.env.
+_OWNER_SH = r'''
+set -eu
+f="$1/profiles/$2/profile.env"
+[ -f "$f" ] || exit 3
+sed -n 's/^run_id=//p' "$f" | head -n 1
+'''
+
+# Every armed per-MAC profile: "<cfgkey> <run_id>" per line.
+_ARMED_SH = r'''
+set -eu
+prov=$1 http=$2
+for f in "$prov"/profiles/*/profile.env; do
+  [ -f "$f" ] || continue
+  d=${f%/profile.env}; cfg=${d##*/}
+  [ -f "$http/ipxe/mac-$cfg.ipxe" ] || continue
+  printf '%s %s\n' "$cfg" "$(sed -n 's/^run_id=//p' "$f" | head -n 1)"
+done
+'''
+
+
+def _err_tail(proc: subprocess.CompletedProcess) -> str:
+    text = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+    return " | ".join(text[-3:]) or f"exit {proc.returncode}"
+
+
+def unstage_profile(run_id: int, cfgkey: str, how: str, paths: tuple[str, str]) -> str:
+    """Run _UNSTAGE_SH for one run; the caller holds mac_lock(). done|already|foreign."""
+    if not CFGKEY_RE.match(cfgkey) or how not in ("finish", "disarm"):
+        raise ProvError(f"refusing to un-stage {cfgkey!r} ({how!r})")
+    proc = remote_run(["sh", "-c", _UNSTAGE_SH, "sh", str(run_id), cfgkey, paths[0], paths[1],
+                       how], check=False, timeout=60)
+    word = proc.stdout.decode("utf-8", "replace").strip()
+    if proc.returncode != 0 or word not in ("done", "already", "foreign"):
+        raise ProvError(f"un-staging {cfgkey} failed: {_err_tail(proc)}")
+    return word
+
+
+def profile_owner(cfgkey: str, paths: tuple[str, str]) -> int | None:
+    """The run id one MAC's profile.env names; None when absent or empty."""
+    if not CFGKEY_RE.match(cfgkey):
+        raise ProvError(f"refusing cfgkey {cfgkey!r}")
+    proc = remote_run(["sh", "-c", _OWNER_SH, "sh", paths[0], cfgkey], check=False, timeout=60)
+    if proc.returncode == 3:
+        return None
+    if proc.returncode != 0:
+        raise ProvError(f"cannot read the {cfgkey} profile owner: {_err_tail(proc)}")
+    run = proc.stdout.decode("utf-8", "replace").strip()
+    return int(run) if ID_RE.match(run) else None
+
+
+def armed_profiles(paths: tuple[str, str]) -> list[tuple[str, int]]:
+    """Every armed per-MAC profile whose profile.env names a run: (cfgkey, run id)."""
+    proc = remote_run(["sh", "-c", _ARMED_SH, "sh", paths[0], paths[1]], check=False, timeout=60)
+    if proc.returncode != 0:
+        raise ProvError(f"cannot list armed boot profiles: {_err_tail(proc)}")
+    out = []
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        cfg, _, run = line.strip().partition(" ")
+        if CFGKEY_RE.match(cfg) and ID_RE.match(run):
+            out.append((cfg, int(run)))
+    return out
+
+
+def disarm_stale_profile(conn, cfgkey: str, paths: tuple[str, str], *, wait: int,
+                         own_run: int | None = None) -> int | None:
+    """Disarm one MAC's staged install if nothing live owns it; returns the run disarmed.
+
+    Under mac_lock(): reads which run profile.env names and disarms it when it
+    is `own_run` (the caller's own staging just failed) or a run that is no
+    longer queued/running in the SoR (failed, cancelled — e.g. superseded by a
+    staging that then failed — or even succeeded). A live run's profile, an
+    unknown run id, or a profile.env with no run id (FLEET_PROVISION) is left
+    alone. Raises MacBusy when the lock is held."""
+    with mac_lock(conn, cfgkey, wait):
+        owner = profile_owner(cfgkey, paths)
+        if owner is None:
+            return None
+        if owner != own_run and run_status(conn, owner) not in TERMINAL:
+            return None
+        unstage_profile(owner, cfgkey, "disarm", paths)
+        return owner
 
 
 def die(msg: str, code: int = 1) -> int:

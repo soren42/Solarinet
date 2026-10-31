@@ -142,8 +142,16 @@ installers/<distro>/<release_name>/.<arch>.v.XXXXXXXX/
   openSUSE's `CHECKSUMS` carry no build/snapshot id).
 - The swap is atomic: everything is downloaded + verified into a staging dir
   next to the target, then the `<arch>` symlink is replaced with `rename(2)`.
-  A failed or mismatched fetch leaves the previous image untouched. **nginx
-  must follow symlinks** (the default; do not set `disable_symlinks`).
+  A failed or mismatched fetch leaves the previous image untouched. The
+  previous version dir is kept after the swap until image-refresh.py has
+  updated the SoR row and regenerated `boot.ipxe`; it then commits with
+  `fetch-images.sh --prune <new>`, or — if either step failed — restores the
+  SoR row and runs `--rollback <previous|-> <new>`, so the OLD image keeps
+  serving with a matching menu and row. **nginx must follow symlinks** (the
+  default; do not set `disable_symlinks`).
+- Every IMAGE_REFRESH is a `prov_runs` row (`mode='refresh'`, `image_id` set,
+  `entity_id` NULL) that ends `succeeded` (`installed <version> …`) or
+  `failed` (reason + `old image kept` / `rollback FAILED: …`).
 - `solari-image.json` lets `fleet-provision.sh` (which has no SoR access)
   render a per-MAC profile with exactly the menu's paths.
 
@@ -195,17 +203,50 @@ http/ipxe/mac-<aa-bb-cc-dd-ee-ff>.ipxe      # <mac> = iPXE ${net0/mac:hexhyp}
 
 It refuses to stage a per-MAC install for an image that has not been fetched
 (`--distro`, `--release <release_name>`, `--arch`; without `--release` it
-defaults per distro and warns). `--stack-vars <file>` (a JSON object) is
-published as `configs/<cfgkey>.stack.json` (0644) and kept operator-side as
-`PROV_ROOT/profiles/<cfgkey>/stack.json` (0600). It never overwrites the
-generated `ipxe/boot.ipxe`; the repo's static zero-image `ipxe/boot.ipxe`
+defaults per distro and warns). `--stack-vars <file>` (a JSON object) is kept
+operator-side only, as `PROV_ROOT/profiles/<cfgkey>/stack.json` (0600); stack
+vars are never published in the HTTP root. It never overwrites the generated
+`ipxe/boot.ipxe`; the repo's static zero-image `ipxe/boot.ipxe`
 (`netbootlib.py bootstrap-menu`) is installed only when none exists.
 
 `boot.ipxe` chains to that file **first**. Because a missing file simply 404s and
 falls through to the local-disk default, staging is opt-in and a non-staged
-machine is **never** wiped. The install is effectively **one-shot**: after the
-target's firstboot reports success (marker `PENDING_ENROLLMENT` appears/clears),
-the dashboard should delete the per-MAC file so a reboot doesn't reinstall.
+machine is **never** wiped.
+
+### One-shot completion (`--run-id`, PROV_STAGE)
+
+PROV_STAGE (`deploy/fleet/prov-stage.py`) stages with `--run-id <prov_runs.id>`
+and `--domain`, and keeps the run record + rendered stack vars operator-side at
+`PROV_ROOT/runs/reimage-<run>.json` / `.stack.json` (0600). With `--run-id` the
+installer profile also:
+
+- writes the run id to the new system as the Ansible local fact
+  `/etc/ansible/facts.d/solari_prov.fact` (`{"run_id": N}`);
+- authorizes the provisioning host's **control key** (benzene `~/.ssh/id_*.pub`,
+  or `FLEET_CONTROL_PUBKEY`) for the admin user next to the operator key;
+- records `run_id=N` in `profiles/<cfgkey>/profile.env`.
+
+`deploy/fleet/prov-finish.py` (xenon `solari-prov-finish.timer`, every 2 min)
+polls each running reimage run: over SSH from benzene, as the admin user, it
+reads the marker. Only when it names **this** run (the new OS is up) does it
+remove `ipxe/mac-<cfgkey>.ipxe` + the installer configs (only while
+`profile.env` still names this run, under the per-MAC SoR lock that PROV_STAGE
+also holds while publishing; it becomes `finished-<run>.env`), install python3
+if missing, verify the installed OS family/arch, and run the stack playbook
+(check, then apply). Host keys: probes before the marker is seen use a
+throw-away known_hosts; the key that first answers with this run's marker is
+pinned in `runs/reimage-<run>.known_hosts` and required (strict checking) for
+every later probe and step, across ticks. The run then ends `succeeded`, or
+`failed` after `SOLARI_PROV_APPLY_ATTEMPTS` (default 3) attempts — each attempt
+is recorded before it starts, so a crash still uses it up; the profile is
+already gone, so a failed apply never reinstalls. A run whose install is not seen within `SOLARI_PROV_INSTALL_TIMEOUT`
+seconds (default 6 h) is `failed` and its profile **disarmed** (moved to
+`profiles/<cfgkey>/disarmed-<run>.*`); re-stage to retry.
+
+Reinstall-loop window: until the marker is seen, a machine that network-boots
+before its disk (BIOS/PXE-first boot order) re-enters the installer on reboot.
+UEFI installers put the installed OS first; for PXE-first machines, watch the
+first boot or fix the boot order after the install.
 
 ---
 
@@ -230,7 +271,6 @@ the dashboard should delete the per-MAC file so a reboot doesn't reinstall.
     └── configs/
         ├── <mac>.preseed                   # Debian
         ├── <mac>.xml                       # openSUSE AutoYaST
-        ├── <mac>.stack.json                # stack vars (--stack-vars)
         └── ubuntu/<mac>/{user-data,meta-data}   # Ubuntu nocloud (dir datasource)
 ```
 
@@ -255,9 +295,13 @@ Tokens without a value for a given target are simply left unused by that file.
 | `@@ADMIN_USER@@` | admin account to create (SSH key, passwordless sudo) | `solari` |
 | `@@ADMIN_PWHASH@@` | crypt(3) SHA-512 hash for the admin (and root) account; `*`/`!` to lock password login | `$6$abc$…` |
 | `@@SSH_PUBKEY@@` | admin's SSH public key (single line) | `ssh-ed25519 AAAA… ops` |
+| `@@CONTROL_PUBKEY@@` | provisioning host's control key (`--run-id` only; empty otherwise) | `ssh-ed25519 AAAA… jason@benzene` |
+| `@@AUTHORIZED_KEYS_XML@@` / `@@AUTHORIZED_KEYS_YAML@@` | the admin key(s) as AutoYaST `<listentry>` / autoinstall list lines, one per key | — |
+| `@@PROV_RUN_ID@@` | PROV_STAGE run id written to the first-boot marker; empty = no marker | `42` |
 | `@@TIMEZONE@@` | IANA timezone | `America/New_York` |
 | `@@DISK@@` | **explicit** target install disk (never "first disk") | `/dev/sda` |
-| `@@PACKAGES@@` | space-separated extra base packages | `vim htop chrony` |
+| `@@PACKAGES@@` | space-separated installer package set (preseed) | `openssh-server sudo curl` |
+| `@@PACKAGES_XML@@` / `@@PACKAGES_YAML@@` | the same set as one AutoYaST `<package>` / autoinstall list line **per name** | — |
 | `@@DISTRO@@` | distro family for the per-MAC dispatch | `debian` / `ubuntu` / `opensuse` |
 | `@@ARCH@@` | agent-binary arch (`solariClient.<arch>`) | `x86_64` / `arm64` / `arm32` |
 | `@@MAC@@` | booting NIC MAC, lowercase hyphen form (`${net0/mac:hexhyp}`) | `aa-bb-cc-dd-ee-ff` |
@@ -266,6 +310,11 @@ Tokens without a value for a given target are simply left unused by that file.
 | `@@SERVER_IP@@` | server IP for the `/etc/hosts` pin | `10.5.2.50` |
 
 Notes:
+- The installer package set is a minimal **per-family bootstrap** (`fleet-lib.sh`
+  `FLEET_BOOTSTRAP_PACKAGES_SUSE` / `_DEB`: SSH server, sudo, curl, CA
+  certificates, python3) in that distro's own names. Core arrives afterwards as
+  the `core` stack (prov-finish). Only a legacy profile staged without
+  `--run-id` on Debian/Ubuntu also appends `FLEET_CORE_PACKAGES`.
 - `@@ARCH@@` is the agent-binary suffix (`installers/solariClient.<arch>`,
   client build names `x86_64`/`arm64`/`arm32`; `amd64` is normalized to
   `x86_64`). Installer image dirs use the prov_images arch instead

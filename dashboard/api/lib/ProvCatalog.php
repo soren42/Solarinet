@@ -65,7 +65,7 @@ final class ProvCatalog
     public const REFRESH     = ['manual', 'weekly', 'point_release'];
     public const ITEM_TYPES  = ['pkg', 'repo', 'artifact', 'script', 'build', 'role'];
     public const BUILD_SYSTEMS = ['cmake', 'make', 'autotools', 'meson', 'custom'];
-    public const RUN_MODES   = ['reimage', 'apply'];
+    public const RUN_MODES   = ['reimage', 'apply', 'refresh'];
     public const RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'];
     /** Type-default member order (029 header / stackgen TYPE_DEFAULT_ORDER). */
     public const TYPE_RANK_SQL = "FIELD(p.item_type,'repo','pkg','artifact','build','script','role')";
@@ -934,6 +934,25 @@ final class ProvCatalog
      * Agent/uname arch string -> prov_images arch enum (the
      * deploy/fleet/stack-apply.py ARCH_MAP plus common aliases), or null.
      */
+    /** provlib MAC_RE: the only form PROV_STAGE / prov-stage.py accept. */
+    public const MAC_RE = '/^[0-9a-f]{2}(:[0-9a-f]{2}){5}\z/';
+
+    /** Lowercase, '-' => ':' (operator/vendor spellings) — not validated. */
+    public static function normMac(string $m): string
+    {
+        return str_replace('-', ':', strtolower(trim($m)));
+    }
+
+    /** A request MAC, normalised to MAC_RE form or 400. */
+    public static function macValue(mixed $v, string $field = 'mac'): string
+    {
+        $m = is_string($v) ? self::normMac($v) : '';
+        if (preg_match(self::MAC_RE, $m) !== 1) {
+            self::bad("$field must be a MAC address (aa:bb:cc:dd:ee:ff).");
+        }
+        return $m;
+    }
+
     public static function normArch(string $a): ?string
     {
         return [
@@ -1017,7 +1036,7 @@ final class ProvCatalog
         return [
             'id'           => (string) $r['id'],
             'mode'         => $r['mode'],
-            'entity_id'    => (string) $r['entity_id'],
+            'entity_id'    => $r['entity_id'] === null ? null : (string) $r['entity_id'],   // null: refresh
             'entity_name'  => $r['entity_name'] ?? null,
             'image_id'     => $r['image_id'] === null ? null : (int) $r['image_id'],
             'image_label'  => $r['image_label'] ?? null,

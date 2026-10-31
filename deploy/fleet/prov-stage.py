@@ -4,28 +4,50 @@
 Invoked by solariServer's queue consumer for the operator-gated PROV_STAGE
 verb with a literal argv (no shell):
 
-  deploy/fleet/prov-stage.py --entity <id> --image <id> --stacks <a,b> --op <principal>
+  deploy/fleet/prov-stage.py --entity <id> --image <id> --stacks <a,b> \
+                             --mac <mac> --arch <arch> --op <principal>
 
 Flow:
   1. validate the arguments (provlib, the same rules as the C bridge) and pass
      the F-07 gate BEFORE touching the SoR or the network;
   2. load from the SoR: the live entity (its name must be a hostname label),
-     its MAC (live interface with a MAC: management first, then physical, then
-     lowest id), the live image (boot_method 'ipxe' only in P3; sha256 and
-     fetched_at must be set, i.e. IMAGE_REFRESH has verified it) and every
-     requested stack (live prov_stacks rows);
+     the live image (boot_method 'ipxe' only; sha256 and fetched_at must be
+     set, i.e. IMAGE_REFRESH has verified it) and every requested stack (live
+     prov_stacks rows). --mac is the interface the operator picked: it must be
+     a live interface of THIS entity. Arch fails closed: hardware_models.arch
+     (031) wins when set and must equal --arch; either way the target arch
+     must equal the image arch (--arch is the dashboard's resolution, which
+     may come from the agent — the helper cannot read the monitoring DB);
   3. render the stack vars with `stackgen.py --from-db` for the image's
      family/arch (solari_stack_order = the dependency-closed run order);
-  4. open a prov_runs row (mode reimage) and cancel any older queued/running
-     reimage run for the same entity ("superseded by run <id>");
-  5. stage through the EXISTING flow — fleet-provision.sh with --release and
-     --stack-vars (path overridable via SOLARI_FLEET_PROVISION for tests);
-  6. on success the run stays `running` with detail "staged; awaiting netboot
-     install" (the install itself completes on the machine's next PXE boot);
-     any failure after the run is open marks it `failed`.
+  4. open a prov_runs row (mode reimage) directly as `running` (one commit,
+     no queued window) and cancel any older queued/running reimage run for the
+     same entity ("superseded by run <id>");
+  5. keep the run's record operator-side on the provisioning host, outside
+     the web root: PROV_ROOT/runs/reimage-<run>.json (target, image, admin
+     user) and PROV_ROOT/runs/reimage-<run>.stack.json (the vars) — stack vars
+     are never published over HTTP;
+  6. stage through the EXISTING flow — fleet-provision.sh with --release and
+     --run-id (path overridable via SOLARI_FLEET_PROVISION for tests), under
+     the per-MAC SoR lock; the installer writes the run id to the target as an
+     Ansible local fact and authorizes the provisioning host's control key.
+     fleet-provision publishes the per-MAC boot profile LAST (atomic rename),
+     after every installer file and profile.env, so a staging that fails
+     part-way never leaves a destructive profile armed for a half-written
+     install;
+  7. on success the run stays `running` with detail "staged; awaiting netboot
+     install". prov-finish.py (solari-prov-finish.timer) completes it: once
+     the freshly installed host answers with this run id it un-stages the
+     per-MAC profile, applies the stacks over SSH and marks the run
+     succeeded/failed. Any failure here after the run is open marks it
+     `failed` and then, under the per-MAC lock, disarms this MAC's staged
+     install if profile.env names this run or a run that is no longer active
+     (e.g. the one just superseded) — a failed PROV_STAGE leaves nothing armed.
+     prov-finish sweeps the same condition on every tick in case this
+     clean-up itself could not run.
 
 Exit: 0 staged, 1 refusal/failure, 2 usage error. Progress goes to stdout /
-stderr (the C side redirects both to run/prov-stage-<entity>.log). Secrets are
+stderr (the C side redirects both to the helper log). Secrets are
 never printed: the SoR password travels only in the child's environment.
 """
 from __future__ import annotations
@@ -45,7 +67,10 @@ import provlib  # noqa: E402  (path set above)
 from provlib import ProvError  # noqa: E402
 
 HOST_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
-MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+DEFAULT_DOMAIN = "akoria.net"
+DEFAULT_ADMIN_USER = "solari-admin"
 # release_name reaches fleet-provision.sh argv and on-disk paths: one token.
 RELEASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$")
 DISTRO_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
@@ -53,6 +78,7 @@ DISTRO_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 F07_DENIED = "[fleet][error] F-07: unsigned provisioning is disabled."
 STACKGEN_TIMEOUT = 300
 PROVISION_TIMEOUT = 3600
+MAC_LOCK_WAIT = 120       # s; prov-finish holds the MAC lock only while un-staging
 
 
 def log(msg: str) -> None:
@@ -84,18 +110,36 @@ def load_entity(cur, entity_id: int) -> dict:
     return row
 
 
-def load_mac(cur, entity_id: int) -> str:
+def check_mac(cur, entity_id: int, mac: str) -> None:
+    """The operator-picked MAC must be a live interface of this entity."""
+    cur.execute("SELECT mac FROM interfaces WHERE entity_id=%s AND deleted_at IS NULL"
+                " AND mac IS NOT NULL", (entity_id,))
+    live = {(r["mac"] or "").strip().lower().replace("-", ":") for r in cur.fetchall()}
+    if mac not in live:
+        raise ProvError(f"MAC {mac} is not a live interface of entity {entity_id}")
+
+
+def load_model_arch(cur, entity_id: int) -> str | None:
+    """hardware_models.arch of the entity's live hardware unit; None = unknown."""
     cur.execute(
-        "SELECT mac FROM interfaces WHERE entity_id=%s AND deleted_at IS NULL AND mac IS NOT NULL"
-        " ORDER BY is_management DESC, (if_kind='physical') DESC, id ASC LIMIT 1",
-        (entity_id,))
+        "SELECT hm.arch FROM entities e"
+        " JOIN hardware_units hu ON hu.id = e.hardware_unit_id AND hu.deleted_at IS NULL"
+        " JOIN hardware_models hm ON hm.id = hu.model_id AND hm.deleted_at IS NULL"
+        " WHERE e.id=%s", (entity_id,))
     row = cur.fetchone()
-    if not row:
-        raise ProvError(f"entity {entity_id} has no live interface with a MAC address")
-    mac = (row["mac"] or "").strip().lower()
-    if not MAC_RE.match(mac):
-        raise ProvError(f"entity {entity_id} MAC {row['mac']!r} is malformed")
-    return mac
+    return (row or {}).get("arch") or None
+
+
+def check_arch(entity_id: int, model_arch: str | None, asserted: str, image: dict) -> str:
+    """Fail closed: the target arch must be known and equal the image arch."""
+    if model_arch is not None and model_arch != asserted:
+        raise ProvError(f"entity {entity_id} hardware model arch is {model_arch} but the "
+                        f"request says {asserted}; refusing")
+    target = model_arch or asserted
+    if target != image["arch"]:
+        raise ProvError(f"image {image['id']} is {image['arch']} but entity {entity_id} "
+                        f"is {target}; refusing")
+    return target
 
 
 def load_image(cur, image_id: int) -> dict:
@@ -173,11 +217,21 @@ def set_running_detail(conn, run_id: int, detail: str) -> None:
     conn.commit()
 
 
-def stage(mac: str, image: dict, hostname: str, vars_path: str, op: str) -> None:
+def publish_run(run_id: int, record: dict, vars_path: str) -> None:
+    """Keep the run's record + vars operator-side on the provisioning host."""
+    runs = provlib.remote_env()["PROV_ROOT"].rstrip("/") + "/runs"
+    with open(vars_path, "rb") as fh:
+        provlib.remote_write(f"{runs}/reimage-{run_id}.stack.json", fh.read(), "0600")
+    provlib.remote_write(f"{runs}/reimage-{run_id}.json",
+                         (json.dumps(record, sort_keys=True) + "\n").encode(), "0600")
+    log(f"run record kept at {runs}/reimage-{run_id}.json (+ .stack.json)")
+
+
+def stage(mac: str, image: dict, hostname: str, domain: str, run_id: int, op: str) -> None:
     script = os.environ.get("SOLARI_FLEET_PROVISION") or os.path.join(HERE, "fleet-provision.sh")
     argv = [script, "--target", mac, "--distro", image["distro"], "--arch", image["arch"],
-            "--release", image["release_name"], "--hostname", hostname,
-            "--stack-vars", vars_path, "--op", op]
+            "--release", image["release_name"], "--hostname", hostname, "--domain", domain,
+            "--run-id", str(run_id), "--op", op]
     log("staging via " + " ".join(argv))
     sys.stdout.flush()
     sys.stderr.flush()
@@ -197,19 +251,28 @@ def parse_args(argv: list[str] | None):
     ap.add_argument("--entity", required=True)
     ap.add_argument("--image", required=True)
     ap.add_argument("--stacks", required=True)
+    ap.add_argument("--mac", required=True)
+    ap.add_argument("--arch", required=True)
     ap.add_argument("--op", required=True)
     a = ap.parse_args(argv)
     try:
         return (provlib.parse_id(a.entity, "entity"), provlib.parse_id(a.image, "image"),
-                provlib.parse_stacks(a.stacks), provlib.parse_principal(a.op))
+                provlib.parse_stacks(a.stacks), provlib.parse_mac(a.mac),
+                provlib.parse_arch(a.arch), provlib.parse_principal(a.op))
     except ProvError as exc:
         ap.error(str(exc))   # exit 2
 
 
 def main(argv: list[str] | None = None) -> int:
-    entity_id, image_id, slugs, op = parse_args(argv)
+    entity_id, image_id, slugs, mac, asserted_arch, op = parse_args(argv)
     if not f07_gate():
         return 1
+    domain = os.environ.get("SOLARI_PROV_DOMAIN", DEFAULT_DOMAIN)
+    admin_user = os.environ.get("ADMIN_USER", DEFAULT_ADMIN_USER)
+    if not DOMAIN_RE.match(domain):
+        return provlib.die(f"SOLARI_PROV_DOMAIN {domain!r} is not a valid domain")
+    if not USER_RE.match(admin_user):
+        return provlib.die(f"ADMIN_USER {admin_user!r} is not a valid user name")
 
     try:
         conn = provlib.connect_sor()
@@ -221,30 +284,43 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 with conn.cursor() as cur:
                     entity = load_entity(cur, entity_id)
-                    mac = load_mac(cur, entity_id)
+                    check_mac(cur, entity_id, mac)
                     image = load_image(cur, image_id)
+                    model_arch = load_model_arch(cur, entity_id)
                     check_stacks(cur, slugs)
                 conn.commit()
-                log(f"entity {entity_id} {entity['name']} mac {mac}; image {image_id} "
+                arch = check_arch(entity_id, model_arch, asserted_arch, image)
+                log(f"entity {entity_id} {entity['name']} mac {mac} arch {arch} "
+                    f"({'hardware model' if model_arch else 'asserted'}); image {image_id} "
                     f"{image['distro']} {image['release_name']} {image['arch']}")
                 vars_path = os.path.join(tmp, "stack.json")
                 order = render_stacks(image["family"], image["arch"], slugs, vars_path)
                 log("stack order: " + ",".join(order))
                 run_id = provlib.open_run(conn, mode="reimage", entity_id=entity_id,
                                           image_id=image_id, stack_order=order,
-                                          requested_by=op)
+                                          requested_by=op, detail="staging netboot install")
                 log(f"opened prov_runs {run_id}")
                 supersede(conn, entity_id, run_id)
-                provlib.advance_run(conn, run_id, "running", "staging netboot install")
-                stage(mac, image, entity["name"], vars_path, op)
+                publish_run(run_id, {
+                    "run_id": run_id, "entity_id": entity_id, "image_id": image_id,
+                    "hostname": entity["name"], "fqdn": f"{entity['name']}.{domain}",
+                    "mac": mac, "cfgkey": mac.replace(":", "-"),
+                    "family": image["family"], "arch": image["arch"],
+                    "distro": image["distro"], "release": image["release_name"],
+                    "admin_user": admin_user, "stack_order": order,
+                }, vars_path)
+                with provlib.mac_lock(conn, mac, MAC_LOCK_WAIT):
+                    stage(mac, image, entity["name"], domain, run_id, op)
                 set_running_detail(conn, run_id, "staged; awaiting netboot install")
             except ProvError as exc:
                 if run_id is not None:
                     _fail(conn, run_id, str(exc))
+                    _disarm(conn, mac, run_id, lock_busy=isinstance(exc, provlib.MacBusy))
                 return provlib.die(str(exc))
             except Exception as exc:  # noqa: BLE001 — never leave the run open
                 if run_id is not None:
                     _fail(conn, run_id, f"internal error: {type(exc).__name__}")
+                    _disarm(conn, mac, run_id, lock_busy=False)
                 raise
     finally:
         conn.close()
@@ -258,6 +334,29 @@ def _fail(conn, run_id: int, detail: str) -> None:
         provlib.advance_run(conn, run_id, "failed", detail)
     except Exception as exc:  # noqa: BLE001
         print(f"error: could not mark run {run_id} failed: {exc}", file=sys.stderr)
+
+
+def _disarm(conn, mac: str, run_id: int, *, lock_busy: bool) -> None:
+    """After a failed staging: leave no destructive boot profile armed for it.
+
+    Disarms this MAC's staged install when profile.env names this run, or a
+    run that is no longer active (the run this staging superseded, whose
+    profile fleet-provision had not yet replaced). Best effort: prov-finish's
+    sweep disarms the same condition on its next tick if this cannot."""
+    cfgkey = mac.replace(":", "-")
+    if lock_busy:   # never got the MAC lock, so fleet-provision never ran
+        log(f"MAC {mac} busy; prov-finish will disarm any stale profile")
+        return
+    try:
+        conn.rollback()
+        owner = provlib.disarm_stale_profile(conn, cfgkey, provlib.prov_paths(),
+                                             wait=MAC_LOCK_WAIT, own_run=run_id)
+    except Exception as exc:  # noqa: BLE001 — prov-finish sweeps what this misses
+        print(f"error: could not disarm the {cfgkey} boot profile after run {run_id} "
+              f"failed: {exc}; prov-finish will retry", file=sys.stderr)
+        return
+    if owner is not None:
+        log(f"disarmed the {cfgkey} boot profile of run {owner}")
 
 
 if __name__ == "__main__":
