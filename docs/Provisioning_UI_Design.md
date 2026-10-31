@@ -77,6 +77,22 @@ Operator sketch: `IMG_1662.png` (T3 attachment, 2026-10-31; not committed).
      | `build` | Source build (cmake / make / autotools / meson / custom). Pinned git ref or checksummed tarball; build deps resolve through the package map |
      | `role` | Existing Ansible role |
 
+   - **Software pool (operator-approved 2026-10-31, before 029 went live).**
+     Every installable item is defined **once** in a shared pool: its type,
+     per-family names, spec, pins and per-arch artifacts. A stack is an ordered
+     list of *references* to pool entries plus its stack dependencies.
+     - The pool is the family name map, which retires the "Core doubles as the
+       map" workaround.
+     - Duplicate definitions are impossible: there is one live entry per
+       logical name.
+     - A pin is bumped once and applies to every stack that uses it.
+     - Pool entries carry `conflicts_with`. The generator rejects a selection
+       containing conflicting entries before anything runs.
+     - An entry shared by two selected stacks is installed once, at its
+       first position in run order.
+     - UI: the stack editor picks entries from the pool, and a Software pool
+       view manages the entries (P4).
+
      Default order within a stack is repo → pkg → artifact → build → script → role,
      and an explicit item order overrides it. An unpinned remote script is
      rejected; there is no blind `curl | sh`.
