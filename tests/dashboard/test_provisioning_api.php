@@ -167,7 +167,7 @@ $writes = [
     ['POST', "$P/image-refresh"], ['POST', "$P/stage"], ['POST', "$P/apply"],
 ];
 $reads = ["$P/images", "$P/images/4", "$P/software", "$P/software/5", "$P/stacks", "$P/stacks/3", "$P/runs", "$P/runs/8",
-    "$P/targets", "$P/log"];
+    "$P/targets", "$P/log", "$P/store"];
 
 // ---------------------------------------------------------------------------
 echo "[1] authorization + CSRF gating\n";
@@ -522,6 +522,33 @@ $r = pv(['path' => "$P/log", 'query' => 'kind=stack-apply&id=5', 'env' => $LOGEN
 pv_ok($r['status'] === 200 && ($r['body']['data']['exists'] ?? null) === false
     && ($r['body']['data']['log'] ?? null) === '' && !str_contains(json_encode($r['body']), 'SECRET'),
     'log at a symlinked name is not followed (exists:false, nothing read)', json_encode($r['body']['data'] ?? null));
+
+// NAS image store status: a file prov-finish publishes in the ctl socket dir.
+$r = pv(['path' => "$P/store", 'env' => $LOGENV]);
+pv_ok($r['status'] === 200 && ($r['body']['data']['known'] ?? null) === false && ($r['body']['data']['stale'] ?? null) === true
+    && $r['sql'] === [], 'store status with no published check -> known:false, stale, no SQL', json_encode($r['body']['data'] ?? null));
+$storeDoc = ['store' => '/srv/solari-provision/store', 'fstype' => 'cifs', 'source' => '//nas/Share', 'reachable' => true,
+    'mounted' => true, 'linked' => true, 'ok' => true, 'size_bytes' => 1000, 'avail_bytes' => 400, 'reason' => null,
+    'checked_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 60), 'extra' => 'SECRET-EXTRA'];
+file_put_contents("$logDir/prov-store.json", json_encode($storeDoc));
+$r = pv(['path' => "$P/store", 'role' => 'viewer', 'env' => $LOGENV]);
+$d = $r['body']['data'] ?? [];
+pv_ok($r['status'] === 200 && ($d['known'] ?? null) === true && ($d['mounted'] ?? null) === true && ($d['ok'] ?? null) === true
+    && ($d['avail_bytes'] ?? null) === 400 && ($d['stale'] ?? null) === false && !array_key_exists('extra', $d),
+    'store status: viewer reads the published check, fresh, only known fields', json_encode($d));
+$storeDoc['checked_at'] = gmdate('Y-m-d\TH:i:s\Z', time() - 3600);
+$storeDoc['mounted'] = 'yes';   // not a JSON true -> false
+$storeDoc['avail_bytes'] = -5;
+file_put_contents("$logDir/prov-store.json", json_encode($storeDoc));
+$r = pv(['path' => "$P/store", 'env' => $LOGENV]);
+$d = $r['body']['data'] ?? [];
+pv_ok($r['status'] === 200 && ($d['stale'] ?? null) === true && ($d['mounted'] ?? null) === false && array_key_exists('avail_bytes', $d) && $d['avail_bytes'] === null,
+    'store status: an hour-old check is stale; non-boolean / negative values are not trusted', json_encode($d));
+unlink("$logDir/prov-store.json");
+symlink($secret, "$logDir/prov-store.json");
+$r = pv(['path' => "$P/store", 'env' => $LOGENV]);
+pv_ok($r['status'] === 200 && ($r['body']['data']['known'] ?? null) === false && !str_contains(json_encode($r['body']), 'SECRET'),
+    'store status at a symlinked name is not followed', json_encode($r['body']['data'] ?? null));
 foreach (glob("$logDir/*") ?: [] as $f) {
     @unlink($f);
 }

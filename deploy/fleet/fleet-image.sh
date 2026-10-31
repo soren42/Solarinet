@@ -39,6 +39,9 @@ fleet_require_unverified_override || exit 1
 SERVER_NAME="$(printf '%s' "${SERVER_URL}" | sed -E 's#^[a-z+]+://##; s#:[0-9]+$##')"
 FQDN="${HOSTNAME_}.${DOMAIN}"
 OUT_IMG="${HTTP_ROOT}/images/${HOSTNAME_}-${ARCH}.img"
+# The image (GBs) is built straight into the NAS store behind HTTP_ROOT/images;
+# refuse before minting anything if the store is not mounted + linked.
+fleet_require_store images
 
 flog "building ${DISTRO}/${ARCH} image for ${HOSTNAME_} (profile=${PROFILE} role=${ROLE})"
 

@@ -53,6 +53,20 @@ FETCH_SH = os.path.join(FLEET, "fetch-images.sh")
 IMAGE_REFRESH = os.path.join(FLEET, "image-refresh.py")
 FLEET_PROVISION = os.path.join(FLEET, "fleet-provision.sh")
 STATIC_BOOT = os.path.join(FLEET, "netboot", "ipxe", "boot.ipxe")
+
+
+def link_store(http: str, store: str | None = None, fstype: str = "none") -> dict:
+    """Lay out the NAS image store the helpers now require: <store>/{installers,images}
+    with HTTP_ROOT/<sub> -> <store>/<sub> links (as prov-store-migrate.py leaves benzene).
+    fstype "none" = the SOLARI_PROV_LOCAL=1 seam's "is a directory" check."""
+    store = store or f"{http.rstrip('/')}-store"
+    os.makedirs(http, exist_ok=True)
+    for sub in ("installers", "images"):
+        os.makedirs(os.path.join(store, sub), exist_ok=True)
+        link = os.path.join(http, sub)
+        if not os.path.lexists(link):
+            os.symlink(os.path.join(store, sub), link)
+    return {"PROV_STORE": store, "PROV_STORE_FSTYPE": fstype}
 UPDATE_GOLDEN = os.environ.get("UPDATE_GOLDEN") == "1"
 
 sys.path.insert(0, FLEET)
@@ -272,8 +286,10 @@ class FetchImagesTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="p3c-fetch-")
         self.http = os.path.join(self.tmp, "http")
+        self.store = os.path.join(self.tmp, "store")
         self.env = dict(os.environ, SOLARI_PROV_LOCAL="1", HTTP_ROOT=self.http,
-                        PROV_ROOT=os.path.join(self.tmp, "prov"), BENZENE="p3-test-no-ssh")
+                        PROV_ROOT=os.path.join(self.tmp, "prov"), BENZENE="p3-test-no-ssh",
+                        **link_store(self.http, self.store))
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -419,6 +435,55 @@ class FetchImagesTests(unittest.TestCase):
         self.assertIn("disallowed URL", p.stderr)
 
 
+    # -- the NAS image store guard (prov-store-guard.sh) -----------------------
+    def test_store_fetch_lands_in_the_store(self):
+        p = self.run_fetch(deb_args())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.islink(os.path.join(self.store, "installers/debian/12/x86_64")))
+        self.assertTrue(os.path.islink(os.path.join(self.http, "installers")))   # never replaced by a dir
+
+    def test_store_not_mounted_fails_closed(self):
+        # a plain temp dir is not a cifs mount: the real findmnt says so
+        env = dict(self.env, PROV_STORE_FSTYPE="cifs")
+        p = self.run_fetch(deb_args(), env=env)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("provisioning image store not mounted", p.stderr)
+        self.assertEqual(os.listdir(os.path.join(self.store, "installers")), [])
+
+    def test_store_unlinked_http_root_fails_closed(self):
+        os.unlink(os.path.join(self.http, "installers"))
+        os.makedirs(os.path.join(self.http, "installers"))          # a real local dir: the old layout
+        p = self.run_fetch(deb_args())
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("does not resolve into the image store", p.stderr)
+        self.assertEqual(os.listdir(os.path.join(self.http, "installers")), [])
+
+    def test_store_link_to_elsewhere_fails_closed(self):
+        other = os.path.join(self.tmp, "other")
+        os.makedirs(other)
+        os.unlink(os.path.join(self.http, "installers"))
+        os.symlink(other, os.path.join(self.http, "installers"))
+        p = self.run_fetch(deb_args())
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("does not resolve into the image store", p.stderr)
+        self.assertEqual(os.listdir(other), [])
+
+    def test_store_knobs_refused(self):
+        env = dict(self.env)
+        env.pop("SOLARI_PROV_LOCAL")
+        env["BENZENE"] = "p3-test-must-not-ssh"
+        p = self.run_fetch(["--dest", "installers/debian/12/x86_64", "--file", "linux",
+                            "https://deb.debian.org/x/linux", SHA_A], env=env)
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("PROV_STORE_FSTYPE=none is only allowed under SOLARI_PROV_LOCAL=1", p.stderr)
+        for knob, value in (("PROV_STORE", "/srv/x/../etc"), ("PROV_STORE", "rel/path"),
+                            ("PROV_STORE_FSTYPE", "cifs;rm")):
+            with self.subTest(knob=knob, value=value):
+                p = self.run_fetch(deb_args(), env=dict(self.env, **{knob: value}))
+                self.assertEqual(p.returncode, 2, p.stderr)
+                self.assertIn(f"unsafe {knob}", p.stderr)
+
+
 # ===========================================================================
 # image-refresh.py — plan building (no DB)
 # ===========================================================================
@@ -534,6 +599,15 @@ shift
 exec bash -c "$*"
 """
 
+# stub findmnt: reports $STUB_STORE as a cifs mount while $STUB_MOUNTED exists,
+# so fleet-provision.sh exercises the production (non-"none") store check.
+STUB_FINDMNT = """#!/usr/bin/env bash
+t= m=
+while [ $# -gt 0 ]; do case "$1" in -t) t=$2; shift 2 ;; -M) m=$2; shift 2 ;; *) shift ;; esac; done
+[ "$t" = cifs ] && [ "$m" = "$STUB_STORE" ] && [ -e "$STUB_MOUNTED" ] && { echo //nas.test/SolariNet; exit 0; }
+exit 1
+"""
+
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl needed by fleet-provision.sh")
 class FleetProvisionTests(unittest.TestCase):
@@ -553,11 +627,19 @@ class FleetProvisionTests(unittest.TestCase):
         with open(os.path.join(bindir, "ssh"), "w") as fh:
             fh.write(STUB_SSH)
         os.chmod(os.path.join(bindir, "ssh"), 0o755)
+        with open(os.path.join(bindir, "findmnt"), "w") as fh:
+            fh.write(STUB_FINDMNT)
+        os.chmod(os.path.join(bindir, "findmnt"), 0o755)
+        self.store = os.path.join(self.tmp, "store")
+        self.mounted = os.path.join(self.tmp, "store-mounted")
+        open(self.mounted, "w").close()
         self.sign = _SignStub(os.path.join(self.tmp, "ctl.sock"))
         self.env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", HOME=home,
                         BENZENE="p3-test-benzene", HTTP_ROOT=self.http, PROV_ROOT=self.prov,
                         HTTP_BASE=BASE, CTL_SOCK=self.sign.path,
-                        SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1")
+                        SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1",
+                        STUB_STORE=self.store, STUB_MOUNTED=self.mounted,
+                        **link_store(self.http, self.store, fstype="cifs"))
         self.env.pop("SOLARI_PROV_LOCAL", None)
         self.vars = os.path.join(self.tmp, "vars.json")
         with open(self.vars, "w") as fh:
@@ -647,6 +729,25 @@ class FleetProvisionTests(unittest.TestCase):
                            env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 1)
         self.assertIn("F-07", p.stderr)
+        self.assertEqual(self.sign.calls, [])
+
+    def test_store_not_mounted_refused_before_minting(self):
+        self.fetch_debian()
+        os.unlink(self.mounted)                              # the NAS goes away
+        p = self.provision()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("provisioning image store not mounted", p.stderr)
+        self.assertEqual(self.sign.calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.http, "ipxe", f"mac-{self.MACH}.ipxe")))
+
+    def test_store_fstype_none_refused_outside_seam(self):
+        self.fetch_debian()
+        p = subprocess.run(["bash", FLEET_PROVISION, "--target", self.MAC, "--distro", "debian",
+                            "--arch", "amd64", "--hostname", "node-7", "--op", "t", "--release", "12"],
+                           env=dict(self.env, PROV_STORE_FSTYPE="none"), capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("PROV_STORE_FSTYPE=none is only allowed", p.stderr)
         self.assertEqual(self.sign.calls, [])
 
 
@@ -745,11 +846,13 @@ class ImageRefreshDBTests(unittest.TestCase):
                      f" IFNULL(fetched_at,'-')) FROM prov_images WHERE id={image_id}")
 
     def refresh(self, image_id, rewrite: str | None = None, op: str = "p3-test@solari",
-                http: str | None = None):
+                http: str | None = None, store: dict | None = None):
+        http = http or self.http
         env = dict(os.environ, SOLARI_PROV_LOCAL="1", SOLARI_PROV_URL_REWRITE=rewrite or rewrite_env(),
-                   HTTP_ROOT=http or self.http, PROV_ROOT=os.path.join(self.tmp, "prov"), HTTP_BASE=BASE,
+                   HTTP_ROOT=http, PROV_ROOT=os.path.join(self.tmp, "prov"), HTTP_BASE=BASE,
                    BENZENE="p3-test-no-ssh", SOR_DB_HOST="127.0.0.1", SOR_DB_PORT=DB_PORT,
-                   SOR_DB_NAME=DB, SOR_DB_USER=APP_USER, SOR_DB_PASS=APP_PASS)
+                   SOR_DB_NAME=DB, SOR_DB_USER=APP_USER, SOR_DB_PASS=APP_PASS,
+                   **(store if store is not None else link_store(http)))
         return subprocess.run([PY, IMAGE_REFRESH, "--image", str(image_id), "--op", op], env=env,
                               capture_output=True, text=True, timeout=300)
 
@@ -1016,7 +1119,8 @@ class ImageRefreshDBTests(unittest.TestCase):
         env = dict(os.environ, SOLARI_PROV_LOCAL="1", SOLARI_PROV_URL_REWRITE=rewrite_env(debian_root=hang_root),
                    HTTP_ROOT=self.http, PROV_ROOT=os.path.join(self.tmp, "prov"), HTTP_BASE=BASE,
                    BENZENE="p3-test-no-ssh", SOR_DB_HOST="127.0.0.1", SOR_DB_PORT=DB_PORT,
-                   SOR_DB_NAME=DB, SOR_DB_USER=APP_USER, SOR_DB_PASS=APP_PASS)
+                   SOR_DB_NAME=DB, SOR_DB_USER=APP_USER, SOR_DB_PASS=APP_PASS,
+                   **link_store(self.http))
         proc = subprocess.Popen([PY, IMAGE_REFRESH, "--image", str(iid), "--op", "p3-test@solari"], env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
@@ -1039,6 +1143,34 @@ class ImageRefreshDBTests(unittest.TestCase):
             os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
         self.assertEqual(self.snapshot(iid, rel)[:2], before[:2])
         self.assertEqual(self.snapshot(iid, rel)[3:], before[3:])
+
+    def test_16_store_not_mounted_fails_closed(self):
+        iid = self.image_id("debian", "12")
+        rel = "installers/debian/12/x86_64"
+        before = self.snapshot(iid, rel)
+        n = len(self.runs(iid))
+        store = link_store(self.http)
+        store["PROV_STORE_FSTYPE"] = "cifs"                 # a temp dir is no cifs mount (real findmnt)
+        p = self.refresh(iid, store=store)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("provisioning image store not mounted", p.stderr)
+        self.assert_run(iid, "failed", "provisioning image store not mounted", n_before=n)
+        self.assertEqual(self.snapshot(iid, rel), before)
+
+    def test_17_store_unlinked_fails_closed(self):
+        iid = self.image_id("debian", "13")
+        before_state = self.state(iid)
+        local = os.path.join(self.tmp, "http-local")
+        os.makedirs(os.path.join(local, "installers"))         # old layout: real dir on local disk
+        os.makedirs(os.path.join(self.tmp, "http-local-store", "installers"))
+        p = self.refresh(iid, http=local,
+                         store={"PROV_STORE": os.path.join(self.tmp, "http-local-store"),
+                                "PROV_STORE_FSTYPE": "none"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("does not resolve into the image store", p.stderr)
+        self.assertEqual(os.listdir(os.path.join(local, "installers")), [])
+        self.assertEqual(self.state(iid), before_state)
+        self.assert_run(iid, "failed", "does not resolve into the image store")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,10 @@ every few minutes, or by hand — drives each such run to a terminal status:
      is terminal (a PROV_STAGE whose own clean-up could not run, a run failed
      by hand) and disarms them under the per-MAC lock.
 
+Each timer tick (no --run) first publishes the NAS image-store status for the
+dashboard's Images screen (provlib.store_status -> <ctl dir>/prov-store.json;
+best effort, never fails the tick).
+
 Runs staged before this mechanism (no run record) are failed with a message
 to re-stage. Nothing here talks to the target except over SSH with the
 existing operator/control keys; no new credentials, no HTTP.
@@ -99,6 +103,7 @@ ATTEMPT_RE = re.compile(r"^installed; .*\(attempt ([0-9]+) of [0-9]+\)")
 DEFAULT_MAC_LOCK_WAIT = 30
 DEFAULT_INSTALL_TIMEOUT = 21600
 DEFAULT_APPLY_ATTEMPTS = 3
+STORE_STATUS_TIMEOUT = 60
 PROBE_TIMEOUT = 120
 BOOTSTRAP_TIMEOUT = 900
 
@@ -449,6 +454,23 @@ def _int_env(name: str, default: int, minimum: int) -> int:
     return int(raw_v)
 
 
+def publish_store() -> None:
+    """Refresh the image-store status the dashboard shows (best effort, every
+    tick: a failure is logged and never fails the tick). Under the test seam
+    it only runs with an explicit SOLARI_PROV_STATUS_DIR, so a test can never
+    write into the live ctl directory."""
+    if os.environ.get("SOLARI_PROV_LOCAL") == "1" and not os.environ.get("SOLARI_PROV_STATUS_DIR"):
+        return
+    try:
+        status = provlib.store_status(timeout=STORE_STATUS_TIMEOUT)
+        provlib.publish_store_status(status)
+    except Exception as exc:  # noqa: BLE001 — informational only
+        log(f"store status: error: {exc}")
+        return
+    if not status["ok"]:
+        log(f"store status: NOT OK: {status['reason']}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Complete staged reimage runs after first boot.")
     ap.add_argument("--run", help="process only this prov_runs id")
@@ -457,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
         only = provlib.parse_id(a.run, "run") if a.run is not None else None
     except ProvError as exc:
         ap.error(str(exc))
+    if only is None:
+        publish_store()
     try:
         install_timeout = _int_env("SOLARI_PROV_INSTALL_TIMEOUT", DEFAULT_INSTALL_TIMEOUT, 600)
         attempts = _int_env("SOLARI_PROV_APPLY_ATTEMPTS", DEFAULT_APPLY_ATTEMPTS, 1)

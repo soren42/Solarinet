@@ -228,6 +228,9 @@ def publish_run(run_id: int, record: dict, vars_path: str) -> None:
 
 
 def stage(mac: str, image: dict, hostname: str, domain: str, run_id: int, op: str) -> None:
+    # The installers live on the NAS image store: say so plainly in the run
+    # detail (fleet-provision.sh refuses too, but only as "exit 1").
+    provlib.require_store(("installers",))
     script = os.environ.get("SOLARI_FLEET_PROVISION") or os.path.join(HERE, "fleet-provision.sh")
     argv = [script, "--target", mac, "--distro", image["distro"], "--arch", image["arch"],
             "--release", image["release_name"], "--hostname", hostname, "--domain", domain,

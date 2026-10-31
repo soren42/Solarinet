@@ -53,7 +53,8 @@ HELPER_ENTRYPOINTS = (
 HELPER_SUPPORT = (
     "deploy/fleet/fleet-lib.sh", "deploy/fleet/provlib.py", "deploy/fleet/netbootlib.py",
     "deploy/fleet/stackgen.py", "deploy/fleet/fetch-images.sh",
-    "deploy/fleet/provisioning-guard.sh",
+    "deploy/fleet/provisioning-guard.sh", "deploy/fleet/prov-store-guard.sh",
+    "deploy/fleet/prov-store-migrate.py",
     "deploy/fleet/ansible/ansible.cfg", "deploy/fleet/ansible/playbooks/site.yml",
 )
 

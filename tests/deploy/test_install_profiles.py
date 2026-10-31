@@ -63,6 +63,15 @@ fi
 exec bash -c "$*"
 """
 
+# stub findmnt: reports $STUB_STORE as a cifs mount, so the production store
+# check (prov-store-guard.sh) runs; HTTP_ROOT/installers links into the store.
+STUB_FINDMNT = """#!/usr/bin/env bash
+t= m=
+while [ $# -gt 0 ]; do case "$1" in -t) t=$2; shift 2 ;; -M) m=$2; shift 2 ;; *) shift ;; esac; done
+[ "$t" = cifs ] && [ "$m" = "$STUB_STORE" ] && { echo //nas.test/SolariNet; exit 0; }
+exit 1
+"""
+
 
 class _SignStub:
     """Minimal solariCtl SIGN responder on a unix socket."""
@@ -115,12 +124,21 @@ class InstallProfiles(unittest.TestCase):
         with open(os.path.join(bindir, "ssh"), "w") as fh:
             fh.write(STUB_SSH)
         os.chmod(os.path.join(bindir, "ssh"), 0o755)
+        with open(os.path.join(bindir, "findmnt"), "w") as fh:
+            fh.write(STUB_FINDMNT)
+        os.chmod(os.path.join(bindir, "findmnt"), 0o755)
+        store = os.path.join(self.tmp, "store")
+        for sub in ("installers", "images"):
+            os.makedirs(os.path.join(store, sub))
+            os.makedirs(self.http, exist_ok=True)
+            os.symlink(os.path.join(store, sub), os.path.join(self.http, sub))
         self.sign = _SignStub(os.path.join(self.tmp, "ctl.sock"))
         self.env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", HOME=home,
                         BENZENE="p5-test-benzene", HTTP_ROOT=self.http, PROV_ROOT=self.prov,
                         HTTP_BASE=BASE, CTL_SOCK=self.sign.path,
                         FLEET_CONTROL_PUBKEY=CONTROL_KEY,
-                        SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1")
+                        SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1",
+                        PROV_STORE=store, PROV_STORE_FSTYPE="cifs", STUB_STORE=store)
         for k in ("SOLARI_PROV_LOCAL", "ADMIN_USER", "DOMAIN"):
             self.env.pop(k, None)
         for distro, (release, src) in IMAGES.items():

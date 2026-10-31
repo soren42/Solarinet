@@ -92,6 +92,7 @@ if (str_starts_with($path, '/api/')) {
             if ($rest === 'software') fx_out(array_values($s['software']));
             if ($rest === 'targets') fx_out($s['targets']);
             if ($rest === 'runs') fx_out(array_reverse($s['runs']));
+            if ($rest === 'store') fx_out($s['store']);
             if ($rest === 'log') {
                 $k = (string)($_GET['kind'] ?? '') . '-' . (string)($_GET['id'] ?? '');
                 $log = $s['logs'][$k] ?? null;
@@ -233,6 +234,10 @@ function fixtureState() {
         interfaces: [{ name: 'eno1', mac: 'aa:bb:cc:00:00:04', management: true }] },
     ],
     runs: [],
+    store: { known: true, store: '/srv/solari-provision/store', fstype: 'cifs',
+      source: '//nas.akoria.net/Shared/SolariNet-Provisioning', reachable: true, mounted: true, linked: true,
+      ok: true, size_bytes: 33 * 1024 ** 4, avail_bytes: 32 * 1024 ** 4, reason: null,
+      checked_at: new Date(Date.now() - 3 * 60000).toISOString(), stale: false },
     logs: { 'stack-apply-9': 'PLAY [neon] ****\nTASK [chrony] ok\nPLAY RECAP neon ok=3 changed=0\n',
       'image-refresh-6': 'fetch debian 12 arm64 netboot\nsha256 ok\n' },
   };
@@ -278,6 +283,22 @@ async function main() {
     await page.locator('.nav-item').filter({ hasText: /^Images & Stacks$/ }).click();
     await page.getByRole('heading', { name: 'Images & Stacks', level: 1 }).waitFor();
     assert.equal(await page.getByText('Live API unavailable').count(), 0, 'live session shows no offline banner');
+
+    // --- NAS image store indicator (visible text, no hover) -----------------
+    const store = page.getByRole('status', { name: 'Image store status' });
+    await store.getByText('store mounted', { exact: true }).waitFor();
+    assert.match(await store.innerText(), /\/srv\/solari-provision\/store[\s\S]*32\.0 TiB free of 33\.0 TiB[\s\S]*checked 3 min ago/,
+      'store path, free space and check age are shown: ' + JSON.stringify(await store.innerText()));
+    mutate((st) => Object.assign(st.store, { mounted: false, linked: false, ok: false, size_bytes: null, avail_bytes: null,
+      reason: 'provisioning image store not mounted: /srv/solari-provision/store is not a cifs mount' }));
+    await page.getByRole('button', { name: 'Reload', exact: true }).click();
+    await store.getByText('store not mounted', { exact: true }).waitFor();
+    assert.match(await store.innerText(), /is not a cifs mount[\s\S]*refused until it is/, 'an unmounted store says why and what is blocked');
+    assert.doesNotMatch(await store.innerText(), /free/, 'no free space is claimed for an unmounted store');
+    mutate((st) => Object.assign(st.store, { stale: true, checked_at: new Date(Date.now() - 30 * 60000).toISOString() }));
+    await page.getByRole('button', { name: 'Reload', exact: true }).click();
+    await store.getByText('store: status stale', { exact: true }).waitFor();
+    assert.match(await store.innerText(), /Last checked 30 min ago/, 'a stale check is not shown as current');
 
     // --- target + arch filtering ------------------------------------------
     const deploy = page.getByRole('region', { name: 'Deploy' });

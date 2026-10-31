@@ -18,7 +18,9 @@ Every exit — refusal, failure, exception, SIGTERM — leaves the run terminal.
 1. Validate (provlib), connect to the SoR, load the LIVE prov_images row
    (unknown id -> refused before any run is opened). Only boot_method='ipxe'
    rows are refreshed here (a failed run otherwise): Pi-native netboot and
-   write-to-media images are not served by the iPXE menu.
+   write-to-media images are not served by the iPXE menu. The NAS image
+   store must be mounted on benzene with HTTP_ROOT/installers linked into it
+   (provlib.require_store), else the run fails before anything is fetched.
 2. Build the fetch plan from source_url / checksum_url (no hardcoded lists):
      debian    linux + initrd.gz from source_url; checksum_url is the
                installer's SHA256SUMS (paths ./netboot/debian-installer/<arch>/…).
@@ -523,6 +525,8 @@ def refresh(conn, row: dict) -> str:
     """Steps 2-7; returns the success detail. On a post-swap failure the swap
     is undone and ProvError carries the reason + rollback outcome."""
     require_ipxe(row)
+    provlib.require_store(("installers",))   # fail closed: never fetch onto the local disk
+    log("image store mounted and linked")
     today = dt.datetime.now(dt.timezone.utc).date()
     plan = build_plan(row, today)
     preflight(row, plan["version"])

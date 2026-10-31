@@ -17,6 +17,11 @@ set -euo pipefail
 : "${HTTP_BASE:=http://${BENZENE_IP}:${HTTP_PORT}}"
 : "${PROV_ROOT:=/srv/solari-provision}"
 : "${HTTP_ROOT:=${PROV_ROOT}/netboot/http}"
+# The NAS image store (installers/ + images/ live there; HTTP_ROOT links into
+# it) and its required filesystem type — see prov-store-guard.sh. "none" skips
+# the mount check and is accepted only under the SOLARI_PROV_LOCAL=1 test seam.
+: "${PROV_STORE:=${PROV_ROOT}/store}"
+: "${PROV_STORE_FSTYPE:=cifs}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # solariServer exports SOLARI_CTL_SOCK / SOLARI_CA_PEM to the helpers it spawns
 # (an installed release has no run/ tree); the run/ paths are the dev fallback.
@@ -76,6 +81,30 @@ bput() { # <remote-path> [mode]
   local dst="$1" mode="${2:-0644}" tmp="$1.tmp.$$"
   bssh "install -D -m ${mode} /dev/stdin '${tmp}' && mv -f '${tmp}' '${dst}' || { rm -f '${tmp}'; exit 1; }"
 }
+
+# ---- image store guard ------------------------------------------------------
+# fleet_store_knobs: refuse unsafe PROV_STORE / PROV_STORE_FSTYPE values (and
+# "none" outside the test seam) before they reach a remote command line.
+fleet_store_knobs() {
+  [[ "$PROV_STORE" =~ ^/[A-Za-z0-9._/-]+$ ]] && [[ "/$PROV_STORE/" != */../* ]] \
+    || fdie "unsafe PROV_STORE: $PROV_STORE"
+  [[ "$PROV_STORE_FSTYPE" =~ ^[a-z0-9.]{1,16}$ ]] || fdie "unsafe PROV_STORE_FSTYPE: $PROV_STORE_FSTYPE"
+  if [ "$PROV_STORE_FSTYPE" = none ] && [ "${SOLARI_PROV_LOCAL:-}" != "1" ]; then
+    fdie "PROV_STORE_FSTYPE=none is only allowed under SOLARI_PROV_LOCAL=1"
+  fi
+}
+# fleet_require_store <sub>... — fail closed unless the NAS store is mounted on
+# benzene and each HTTP_ROOT/<sub> resolves into it (prov-store-guard.sh).
+fleet_require_store() {
+  fleet_store_knobs
+  local guard cmd a
+  guard="$(cat "${FLEET_DIR}/prov-store-guard.sh")"$'\n''prov_store "$@"'
+  cmd="sh -c $(fleet_sq "$guard") prov-store check"
+  for a in "$PROV_STORE" "$PROV_STORE_FSTYPE" "$HTTP_ROOT" "$@"; do cmd+=" $(fleet_sq "$a")"; done
+  bssh "$cmd" || fdie "provisioning image store check failed on ${BENZENE} (see the [store] line above)"
+}
+# POSIX single-quoting for the remote login shell: one literal word per value.
+fleet_sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # ---- MAC normalization ------------------------------------------------------
 # accepts aa:bb:.., aa-bb-.., aabbcc.. -> lowercase hyphen form aa-bb-cc-dd-ee-ff

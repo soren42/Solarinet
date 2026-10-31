@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount SolariNet provisioning image store (carbon NAS) at boot
+Wants=network-online.target
+After=network-online.target remote-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Waits up to 15 min for the NAS (it may boot slower than benzene after power loss).
+ExecStart=/bin/sh -c "for i in $(seq 1 90); do ls /srv/solari-provision/store/ >/dev/null 2>&1; findmnt -n -t cifs /srv/solari-provision/store >/dev/null && exit 0; sleep 10; done; echo image store not mounted after 15 min >&2; exit 1"
+
+[Install]
+WantedBy=multi-user.target

@@ -174,6 +174,12 @@ export TOK_HOSTNAME="${HOSTNAME_}" TOK_FQDN="${FQDN}" TOK_DOMAIN="${DOMAIN}" \
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
 CERTTMP="${WORK}/cert"
 
+# ---- the installers must be on the mounted NAS image store -------------------
+# HTTP_ROOT/installers is a link into PROV_STORE (prov-store-guard.sh). With the
+# store unmounted the image looks "not fetched" and solari-firstboot.sh would be
+# written to benzene's local disk under the mountpoint: refuse before staging.
+fleet_require_store installers
+
 # ---- the installer image must be fetched + verified before staging ----------
 # image-refresh.py (IMAGE_REFRESH) writes solari-image.json into the image dir
 # only after every file's sha256 checked out. The per-MAC profile is rendered

@@ -269,6 +269,8 @@ jobs:
         run: python3 tests/deploy/test_image_refresh.py
       - name: Rendered install profiles (AutoYaST XML one package per name, preseed, autoinstall)
         run: python3 tests/deploy/test_install_profiles.py
+      - name: NAS image-store migration (dry run, verified copy, resume, conflicts, purge)
+        run: python3 tests/deploy/test_prov_store_migrate.py
       - name: PROV_STAGE / STACK_APPLY / prov-finish helpers (prov_runs lifecycle, F-07 gate, faked ansible)
         env:
           SOLARI_TEST_SOR_DB: '1'

@@ -1233,6 +1233,7 @@
     provDepDelete:   function (id, onId) { return getJSON(EP.provPath("stacks", id, "deps", onId), { method: "DELETE" }); },
     provTargets:     function () { return getJSON(EP.provPath("targets")); },
     provRuns:        function (qs) { return getJSON(EP.provPath("runs") + (qs || "")); },
+    provStore:       function () { return getJSON(EP.provPath("store")); },
     provLog:         function (kind, id) { return getJSON(EP.provPath("log") + "?kind=" + encodeURIComponent(kind) + "&id=" + encodeURIComponent(id)); },
     provIdemKey:     function () { return "prov-" + newDiscoveryScanKey().slice(5); },
     provImageRefresh: function (imageId, key) { return post(EP.provPath("image-refresh"), { image: Number(imageId) }, key ? { "Idempotency-Key": key } : {}); },

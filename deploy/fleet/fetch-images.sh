@@ -35,6 +35,12 @@
 # to stderr. Version dirs are named .<arch>.v.XXXXXXXX (.<arch>.legacy.<pid>
 # for a pre-symlink real directory moved aside).
 #
+# Every operation first runs the image-store guard (prov-store-guard.sh) on
+# benzene inside the same remote script: it fails closed (exit 1, "provisioning
+# image store not mounted ...") unless PROV_STORE is a mounted PROV_STORE_FSTYPE
+# filesystem and HTTP_ROOT/installers resolves into it, so a missing NAS mount
+# never lets a multi-GB download land on benzene's local disk.
+#
 # Every argument is validated against a strict pattern before use, and the
 # remote side is a FIXED script receiving the values as single-quoted
 # positional arguments — no operator text is ever spliced into shell code.
@@ -118,20 +124,24 @@ else
   done
 fi
 [[ "$HTTP_ROOT" =~ $RE_ROOT ]] && [[ "/$HTTP_ROOT/" != */../* ]] || bad "unsafe HTTP_ROOT: $HTTP_ROOT"
+( fleet_store_knobs ) || exit 2
 
 PROTOS="=https,http"; [ "$LOCAL" = 1 ] && PROTOS="=https,http,file"
 
 # ---- the fixed script that runs on benzene ------------------------------------
-# argv: <http_root> <curl protos> <dest> <op> then
+# The guard library is prepended, so the store check and the work run in one
+# ssh session (no window between "checked" and "writing").
+# argv: <http_root> <store> <store fstype> <curl protos> <dest> <op> then
 #   fetch:    records F name url sha | X tb member out | M key val
 #   prune:    <current>
 #   rollback: <previous|-> <new>
 # shellcheck disable=SC2016
-REMOTE_SH='set -euo pipefail
+REMOTE_BODY='set -euo pipefail
 umask 022
 log() { printf "[fetch] %s\n" "$*" >&2; }
 err() { printf "[fetch][error] %s\n" "$*" >&2; exit 1; }
-root=$1 protos=$2 dest=$3 op=$4; shift 4
+root=$1 store=$2 fstype=$3 protos=$4 dest=$5 op=$6; shift 6
+prov_store check "$store" "$fstype" "$root" "${dest%%/*}" || exit 1
 final="$root/$dest"; parent="${final%/*}"; leaf="${final##*/}"
 mkdir -p -- "$parent"
 if command -v flock >/dev/null 2>&1; then
@@ -232,11 +242,12 @@ trap - EXIT
 printf "swapped\n"
 log "swapped $dest -> ${stage##*/} (manifest sha256 $msha); previous ${old:--} kept until --prune"
 printf "manifest-sha256 %s\n" "$msha"'
+REMOTE_SH="$(cat "${FLEET_DIR}/prov-store-guard.sh")"$'\n'"$REMOTE_BODY"
 
 # POSIX single-quoting for the remote login shell: every value becomes one literal word.
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-ARGS=("$HTTP_ROOT" "$PROTOS" "$DEST" "$OP" "${RARGS[@]+"${RARGS[@]}"}" "${OPARGS[@]+"${OPARGS[@]}"}")
+ARGS=("$HTTP_ROOT" "$PROV_STORE" "$PROV_STORE_FSTYPE" "$PROTOS" "$DEST" "$OP" "${RARGS[@]+"${RARGS[@]}"}" "${OPARGS[@]+"${OPARGS[@]}"}")
 if [ "$OP" = fetch ]; then flog "fetching ${DEST} ($NFILES file(s)) into ${HTTP_ROOT}" >&2
 else flog "${OP} ${DEST} ${OPARGS[*]}" >&2; fi
 if [ "$LOCAL" = 1 ]; then
