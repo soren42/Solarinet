@@ -29,6 +29,7 @@ to stdout (the C side redirects it to run/stack-apply-<entity>.log).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -279,12 +280,14 @@ def main(argv: list[str] | None = None) -> int:
     lock_name = apply_lock_name(entity_id)
     run_id = None
     try:
-        with tempfile.TemporaryDirectory(prefix="stack-apply-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="stack-apply-") as tmp, \
+                contextlib.ExitStack() as stack:
             try:
                 # Held for the whole run (released by the server if this process
                 # dies), so a `running` apply row for this entity found while we
                 # hold it belongs to a dead helper and is failed, not obeyed.
                 _lock(conn, lock_name)
+                stack.enter_context(provlib.lock_watch(conn, lock_name))
                 reap_dead_applies(conn, entity_id)
                 with conn.cursor() as cur:
                     entity = load_entity(cur, entity_id)

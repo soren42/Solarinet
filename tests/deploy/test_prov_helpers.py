@@ -31,6 +31,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -295,6 +296,8 @@ if not _hostkey_ok():
     sys.exit(4)
 check = "--check" in argv
 _hook("check" if check else "apply")
+if not check and os.environ.get("FAKE_APPLY_SLEEP"):
+    import time; time.sleep(float(os.environ["FAKE_APPLY_SLEEP"]))
 print("PLAY [Provision SolariNet fleet host] " + ("(check)" if check else "(apply)"))
 rc = int(os.environ.get("FAKE_CHECK_RC" if check else "FAKE_APPLY_RC", "0"))
 print("PLAY RECAP ok=3 failed=%d" % (1 if rc else 0))
@@ -1226,6 +1229,34 @@ class StackApply(Base):
                 self.assertEqual(st, "failed")
                 self.assertIn("helper exited without a result", detail)
                 self.assertEqual(self.last_apply()["status"], "succeeded")
+
+    def test_lost_db_session_aborts_live_apply(self):
+        # the apply lock is session-scoped: if the helper's SoR session drops
+        # mid-apply the server frees it, so the helper must kill its step
+        # rather than keep applying under a run the reaper may fail
+        n1 = ent("p3h-node1")
+        e = dict(self.env, FAKE_APPLY_SLEEP="60", SOLARI_PROV_LOCK_WATCH="0.5")
+        t0 = time.monotonic()
+        helper = subprocess.Popen([PY, STACK_APPLY, "--entity", n1, "--stacks", "core",
+                                   "--op", "jason"], env=e, cwd=ROOT, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: helper.poll() is None and helper.kill())
+        for _ in range(300):
+            if len(self.calls("ansible-playbook")) == 2:     # apply pass is running
+                break
+            subprocess.run(["sleep", "0.1"], check=True)
+        else:
+            self.fail("apply pass never started")
+        cid = admin(f"SELECT IS_USED_LOCK('solari-prov-apply-{n1}')", db=None).strip()
+        self.assertTrue(cid.isdigit(), cid)
+        admin(f"KILL CONNECTION {cid}", db=None)
+        out, err = helper.communicate(timeout=30)
+        self.assertLess(time.monotonic() - t0, 45)              # did not sit out the 60 s
+        self.assertEqual(helper.returncode, 1, out + err)
+        self.assertIn("provisioning lock lost", err)
+        p = self.run_helper(PROV_FINISH, "--run", "999999999")   # reaper closes the row
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.last_apply()["status"], "failed")
 
     def test_prov_finish_reaps_orphaned_apply(self):
         n1 = ent("p3h-node1")

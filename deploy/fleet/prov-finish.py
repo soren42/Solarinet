@@ -479,8 +479,9 @@ def main(argv: list[str] | None = None) -> int:
                 if not fresh:
                     log(f"run {row['id']}: no longer running")
                     continue
-                outcome = process(conn, ctx, fresh[0], install_timeout=install_timeout,
-                                  attempts=attempts)
+                with provlib.lock_watch(conn, name):
+                    outcome = process(conn, ctx, fresh[0], install_timeout=install_timeout,
+                                      attempts=attempts)
                 log(f"run {row['id']}: {outcome}")
             except MacBusy as exc:
                 log(f"run {row['id']}: {exc}; next tick")

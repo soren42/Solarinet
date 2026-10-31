@@ -55,6 +55,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import time
 from typing import Any, Callable, Iterable
 
 # The same rules the C validators in src/server/solariCtl.c enforce.
@@ -328,6 +329,42 @@ def remote_env(env: dict[str, str] | None = None) -> dict[str, str]:
             "HTTP_ROOT": env.get("HTTP_ROOT", f"{prov_root}/netboot/http")}
 
 
+# Active lock watch for remote_run, innermost last: (interval_s, still_held).
+_WATCHES: list[tuple[float, Callable[[], bool]]] = []
+def _watch_interval() -> float:
+    raw_v = os.environ.get("SOLARI_PROV_LOCK_WATCH", "")
+    return float(raw_v) if re.fullmatch(r"[0-9]{1,4}(\.[0-9]{1,3})?", raw_v) and float(raw_v) > 0 else 15.0
+
+
+LOCK_WATCH_INTERVAL = _watch_interval()
+
+
+def holds_lock(conn, name: str) -> bool:
+    """True when this SoR session still owns named lock `name` (False on any error)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT IS_USED_LOCK(%s) = CONNECTION_ID() AS mine", (name,))
+            row = cur.fetchone()
+        conn.commit()
+    except Exception:  # noqa: BLE001 — a dead session no longer owns anything
+        return False
+    mine = row.get("mine") if isinstance(row, dict) else (row[0] if row else None)
+    return mine == 1
+
+
+@contextlib.contextmanager
+def lock_watch(conn, name: str, interval: float = LOCK_WATCH_INTERVAL):
+    """While active, every remote_run re-checks `name` is still held each
+    `interval` seconds and kills its child when it is not. The named locks
+    are session-scoped: if the SoR session drops, the server frees the lock
+    and a reaper may treat the run as orphaned, so the step must not go on."""
+    _WATCHES.append((float(interval), lambda: holds_lock(conn, name)))
+    try:
+        yield
+    finally:
+        _WATCHES.pop()
+
+
 def remote_run(argv: list[str], *, input: bytes | None = None, check: bool = True,
                timeout: float | None = None,
                on_spawn: Callable[[], None] | None = None) -> subprocess.CompletedProcess:
@@ -335,27 +372,47 @@ def remote_run(argv: list[str], *, input: bytes | None = None, check: bool = Tru
 
     `on_spawn` runs once the child exists and before it is waited on; if it
     raises, the child is killed and the exception propagates. prov-finish
-    uses it to commit its run-status gate only after the step is in flight."""
+    uses it to commit its run-status gate only after the step is in flight.
+    Under lock_watch() the child is killed if the watched lock is lost."""
     if not argv or not all(isinstance(a, str) for a in argv):
         raise ProvError("remote_run needs a non-empty list of strings")
     if os.environ.get("SOLARI_PROV_LOCAL") == "1":
         cmd = list(argv)
     else:
         cmd = ["ssh", "-o", "BatchMode=yes", remote_env()["BENZENE"], "--", shlex.join(argv)]
+    watch = _WATCHES[-1] if _WATCHES else None
+    deadline = time.monotonic() + timeout if timeout is not None else None
     with subprocess.Popen(cmd, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        failure: BaseException | None = None
         try:
             if on_spawn is not None:
                 on_spawn()
-            out, err = child.communicate(input, timeout=timeout)
-        except subprocess.TimeoutExpired:
+            while True:
+                wait = watch[0] if watch else None
+                if deadline is not None:
+                    left = max(0.0, deadline - time.monotonic())
+                    wait = left if wait is None else min(wait, left)
+                try:
+                    # retrying communicate() after a timeout loses no output
+                    out, err = child.communicate(input, timeout=wait)
+                    break
+                except subprocess.TimeoutExpired:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        failure = ProvError(f"timed out: {argv[0]}")
+                        break
+                    if watch and not watch[1]():
+                        failure = ProvError(f"{argv[0]} aborted: provisioning lock lost "
+                                            "(SoR session dropped)")
+                        break
+        except BaseException as exc:  # noqa: BLE001 — kill the child, then re-raise
+            failure = exc
+        if failure is not None:
             child.kill()
             child.communicate()
-            raise ProvError(f"timed out: {argv[0]}") from None
-        except BaseException:
-            child.kill()
-            child.communicate()
-            raise
+            if isinstance(failure, ProvError):
+                raise failure from None
+            raise failure
     proc = subprocess.CompletedProcess(cmd, child.returncode, out, err)
     if check and proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-3:]
