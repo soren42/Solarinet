@@ -88,8 +88,10 @@ typedef struct {
      * bridge classifies each connecting peer by its SO_PEERCRED uid and refuses
      * PRIVILEGED (destructive) verbs to the dashboard uid, which must instead
      * REQUEST_SUBMIT them to the ctl_requests queue for the privileged server to
-     * execute. Left false the bridge behaves exactly as before (legacy: caller
-     * uid == server uid), so the hardening is opt-in per deployment. uids of 0
+     * execute. Left false, only root and ctlOperatorUid get PRIVILEGED verbs;
+     * every other peer uid is treated as a dashboard (enqueue only), so the
+     * queue-only boundary holds even un-configured. Enabling it adds the
+     * explicit dashboard uid and refuses unknown peers outright. uids of 0
      * mean "unset": ctlOperatorUid falls back to the server's own euid, and an
      * unset ctlDashboardUid matches no peer (no peer is classed dashboard). */
     bool     ctlEnforcePeer;                  /* default false (opt-in)       */

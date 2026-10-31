@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Restore a backup created by cutover-immutable.sh and restart the prior units.
 set -uo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT=/
 SYSTEMCTL=systemctl
 DRY_RUN=0

@@ -468,9 +468,17 @@ item, the explicit and reviewed path for root code.
 `functions` is unchanged. `functions.package_bundle` MAY name a `prov_stacks`
 slug; nothing enforces that link yet.
 
-No CDC triggers are attached, because nothing consumes these tables yet. The
-dashboard API (P3+) writes them directly, and an outbox binding can follow
-when a consumer exists.
+029 itself attaches no CDC. Migration 030 (`migrations/030_provisioning_cdc.sql`,
+manual rollback [`rollback/030-down.sql`](rollback/030-down.sql)) adds
+AFTER INSERT/UPDATE/DELETE outbox triggers to all nine tables (27 triggers,
+`trg_<table>_ai/_au/_ad`). Nothing consumes these tables yet, so they are
+`optional_tables` in `sor_emitd`. **Deploy order:** ship the updated
+`sor_emitd.py` (and any explicit `optional_tables` in the deployed
+`sorsync.conf`) and restart `sor-emit` BEFORE applying 030, or the first
+unroutable `prov_*` event stalls the emit checkpoint for every table. Apply as
+DB root on cesium. `prov_runs` deletes are refused by the 029 guard, so its
+delete trigger never fires today. Rolling back 029 drops these triggers with the
+tables; re-apply 030 after any 029 forward recovery.
 
 The seed is inserted once and never resurrected; a soft-deleted seed row stays
 deleted on re-run:

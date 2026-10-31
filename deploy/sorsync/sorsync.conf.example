@@ -39,7 +39,7 @@ poll_interval_sec = 2
 reconnect_delay_sec = 5
 # CDC tables with no bound consumer; published without the mandatory flag so
 # they cannot stall the outbox. Remove a table once an applier binds it.
-# optional_tables = sources,functions,entity_functions,function_incompatibility,vlans,dhcp_ranges,external_refs
+# optional_tables = sources,functions,entity_functions,function_incompatibility,vlans,dhcp_ranges,external_refs,prov_images,prov_software,prov_software_artifacts,prov_software_requires,prov_software_conflicts,prov_stacks,prov_stack_members,prov_stack_deps,prov_runs
 # Optional isolated/test queue override; production defaults to sor.apply.dns.
 # dns_queue = sor.apply.dns
 

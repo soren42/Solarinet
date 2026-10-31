@@ -42,6 +42,7 @@ $queuedRoutes = [
     'config.php' => ['CONFIG_SET', 'PROVISION', 'RULE_DEL'],
     'pools.php' => ['POOL_DEL'],
     'assets.php' => ['ASSET_REMOVE', 'LIFECYCLE_SET', 'ASSET_PURGE', 'TARGET_REMOVE'],
+    'provisioning.php' => ['IMAGE_REFRESH', 'PROV_STAGE', 'STACK_APPLY'],
 ];
 foreach ($queuedRoutes as $file => $verbs) {
     $source = (string) file_get_contents($API . '/routes/' . $file);

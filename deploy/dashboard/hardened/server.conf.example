@@ -48,6 +48,11 @@ autoEnroll = false
 allowLegacyReports = false
 
 [ctl]
+# Privileged ctl verbs (SIGN, IMAGE_REFRESH, PROV_STAGE, STACK_APPLY, ...) are
+# allowed only to root and operatorUid (default: the server's own uid), even
+# with enforcePeer = false; every other peer is enqueue-only. Operator scripts
+# that call solariCtlClient directly (deploy-monitor.sh, remote-deploy.sh) must
+# run as root or as operatorUid.
 enforcePeer = true
 operatorUid = solari
 dashboardUid = www-solari

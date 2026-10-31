@@ -29,6 +29,9 @@
  *   DEPLOY* host=<host> op=<operator> [server=] [arch=] [fqdn=]
  *   FLEET_PROVISION* target=<mac|host> distro=<id> arch=<id> hostname=<name> op=<operator> [...]
  *   FLEET_IMAGE* hostname=<name> arch=<id> op=<operator> [distro=] [...]
+ *   IMAGE_REFRESH* image=<id> op=<operator>
+ *   PROV_STAGE* entity=<id> image=<id> stacks=<slug[,slug...]> op=<operator>
+ *   STACK_APPLY* entity=<id> stacks=<slug[,slug...]> dryRun=<0|1> op=<operator>
  *   ADOPT     disc=<id> [pool=<id>] [heartbeat=0|1] [name=] [class=] [tags=] [notes=] [services=]
  *   IGNORE    disc=<id>                             -> suppress discovered row
  *   CONTROL   node=<id> verb=<n> [epoch=<n>] [payload=<blob>]
@@ -50,7 +53,8 @@
  * requires op= for attribution but is not classed as destructive.
  *
  * Destructive verbs (DECOMMISSION, RETIRE, SIGN, DEPLOY, FLEET_PROVISION,
- * FLEET_IMAGE, ASSET_REMOVE, TARGET_REMOVE, POOL_DEL, RULE_DEL) require two
+ * FLEET_IMAGE, IMAGE_REFRESH, PROV_STAGE, STACK_APPLY, ASSET_REMOVE,
+ * TARGET_REMOVE, POOL_DEL, RULE_DEL) require two
  * things: an operator
  * identity (RBAC: the caller must name who is authorizing) and, for the
  * irreversible second step, an explicit `confirm=<token>` echoing the one-time
@@ -479,11 +483,16 @@ static bool ctlVerbIsDestructive(const char *verb)
     /* SIGN mints a trusted certificate and DEPLOY runs a remote install — both
      * privileged, so they require a named operator like the teardown verbs.
      * FLEET_PROVISION stages a bare-metal OS install and FLEET_IMAGE builds a
-     * bootable image; both mint enrollment certs, so they are gated the same. */
+     * bootable image; both mint enrollment certs, so they are gated the same.
+     * IMAGE_REFRESH (re-fetch + verify an OS image on the provisioning host),
+     * PROV_STAGE (stage a reimage + first-boot stacks) and STACK_APPLY (Ansible
+     * against a live machine) command the fleet, so they are gated the same. */
     return strcmp(verb, "DECOMMISSION") == 0 || strcmp(verb, "RETIRE") == 0 ||
            strcmp(verb, "SIGN") == 0 || strcmp(verb, "REVOKE_CERT") == 0 ||
            strcmp(verb, "DEPLOY") == 0 ||
            strcmp(verb, "FLEET_PROVISION") == 0 || strcmp(verb, "FLEET_IMAGE") == 0 ||
+           strcmp(verb, "IMAGE_REFRESH") == 0 || strcmp(verb, "PROV_STAGE") == 0 ||
+           strcmp(verb, "STACK_APPLY") == 0 ||
            strcmp(verb, "DISCOVER") == 0 ||
            strcmp(verb, "ENROLL_TOKEN") == 0 ||
            strcmp(verb, "ASSET_REMOVE") == 0 || strcmp(verb, "TARGET_REMOVE") == 0 ||
@@ -594,6 +603,17 @@ static ctlPeerClass ctlClassifyPeer(uint32_t peerUid, uint32_t operatorUid,
     return CTL_PEER_UNKNOWN;
 }
 
+/* Legacy (enforcePeer=false) classification. Without an explicit dashboard uid
+ * every non-operator peer is treated as a dashboard: it keeps ordinary verbs and
+ * REQUEST_SUBMIT but is refused PRIVILEGED verbs, so an un-hardened deployment
+ * still cannot reach host-side helpers except through the queue. root and the
+ * operator uid (default: the server's own euid) keep full access. Pure. */
+static ctlPeerClass ctlClassifyPeerLegacy(uint32_t peerUid, uint32_t operatorUid)
+{
+    if (peerUid == 0 || peerUid == operatorUid) return CTL_PEER_OPERATOR;
+    return CTL_PEER_DASHBOARD;
+}
+
 /* The authorization matrix. Default-deny: an unknown peer gets nothing, and the
  * dashboard is refused every privileged verb even when it supplies op=. Pure. */
 static bool ctlPeerMayInvoke(ctlPeerClass peer, ctlVerbClass vc)
@@ -627,8 +647,17 @@ static void ctlSanitizeName(const char *in, char *out, size_t cap)
 /* Spawn remote-deploy.sh fully detached (double-fork + setsid), with stdout/err
  * redirected to logPath. Returns once the deploy has been launched — the server
  * loop never blocks on the (multi-minute) deploy. argv must be NULL-terminated. */
+#if defined(SOLARI_CTL_TEST_SPAWN)
+/* Unit-test seam only: the test defines SOLARI_CTL_TEST_SPAWN before including
+ * this file and supplies ctlTestSpawn() to capture argv/logPath instead of
+ * exec'ing. Never defined in a production build, which compiles unchanged. */
+static solariStatus ctlTestSpawn(char *const argv[], const char *logPath);
+#endif
 static solariStatus ctlSpawnDetached(char *const argv[], const char *logPath)
 {
+#if defined(SOLARI_CTL_TEST_SPAWN)
+    return ctlTestSpawn(argv, logPath);
+#else
     pid_t pid = fork();
     if (pid < 0) return ERR_PLATFORM;
     if (pid == 0) {
@@ -648,6 +677,7 @@ static solariStatus ctlSpawnDetached(char *const argv[], const char *logPath)
         (void)waitpid(pid, &status, 0);      /* reap the intermediate; grandchild -> init */
     }
     return SOLARI_OK;
+#endif
 }
 
 /* RBAC gate for destructive verbs: every destructive request must name the
@@ -664,6 +694,204 @@ static solariStatus ctlCheckRbac(const char *verb, const char *args,
         return ERR_AUTH_ROLE;   /* nearest "not authorized" code */
     }
     return SOLARI_OK;
+}
+
+/* ===================================================================== */
+/* Provisioning verb argument validators (IMAGE_REFRESH / PROV_STAGE /    */
+/* STACK_APPLY). Pure. The SAME rules are enforced by the PHP route and   */
+/* by deploy/fleet/provlib.py (defence in depth); keep the three in sync: */
+/*   id        ^[1-9][0-9]{0,9}$ and <= 4294967295                        */
+/*   slug      ^[a-z0-9][a-z0-9-]{0,47}$                                  */
+/*   stacks    1..32 comma-separated slugs; duplicates COLLAPSE (first     */
+/*             occurrence kept, order preserved) and the 32 cap applies to */
+/*             the distinct slugs — exactly provlib.parse_stacks()         */
+/*   dryRun    exactly "0" or "1"                                         */
+/*   principal ^[A-Za-z0-9][A-Za-z0-9._@+:-]{0,127}$                      */
+/* Every check runs on the percent-DECODED value, and a decoded value     */
+/* carrying an embedded NUL is refused (ctlArgStrStrict).                 */
+/* ===================================================================== */
+
+#define CTL_PROV_MAX_STACKS    32
+#define CTL_PROV_SLUG_MAX      48
+#define CTL_PROV_PRINCIPAL_MAX 128
+/* Normalized stacks list: 32 slugs of <=48 chars + 31 commas + NUL. */
+#define CTL_PROV_STACKS_CAP    (CTL_PROV_MAX_STACKS * (CTL_PROV_SLUG_MAX + 1))
+/* Raw (pre-collapse) stacks value cap; generous so duplicates still fit. */
+#define CTL_PROV_STACKS_RAW    4096
+
+/* Locate the RAW (still percent-encoded) value of the FIRST `key` in args,
+ * with exactly ctlArgStr's tokenization and first-match semantics. Pure. */
+static bool ctlArgRawSpan(const char *args, const char *key,
+                          const char **val, size_t *len)
+{
+    size_t klen = strlen(key);
+    const char *p = args;
+    while (p && *p) {
+        const char *eq, *end;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        eq = strchr(p, '=');
+        end = p;
+        while (*end && *end != ' ' && *end != '\t') end++;
+        if (eq && eq < end &&
+            (size_t)(eq - p) == klen && strncmp(p, key, klen) == 0) {
+            *val = eq + 1;
+            *len = (size_t)(end - (eq + 1));
+            return true;
+        }
+        p = end;
+    }
+    return false;
+}
+
+/* ctlArgStr, but refuse a value whose percent-decoding produced an embedded
+ * NUL ("5%00x" would otherwise decode to the C string "5" and pass a charset
+ * check). The decoded length must equal the raw length minus two bytes per
+ * well-formed %XX escape (the same rule ctlPctDecode applies). Returns
+ * SOLARI_OK, ERR_TLV_END (absent), ERR_BUFFER_FULL (too long) or
+ * ERR_INVALID_ARG (embedded NUL). Pure. */
+static solariStatus ctlArgStrStrict(const char *args, const char *key,
+                                    char *out, size_t cap)
+{
+    const char *raw = NULL;
+    size_t rawLen = 0, i = 0, expect;
+    solariStatus st = ctlArgStr(args, key, out, cap);
+    if (st != SOLARI_OK) return st;
+    if (!ctlArgRawSpan(args, key, &raw, &rawLen)) { out[0] = '\0'; return ERR_INVALID_ARG; }
+    expect = rawLen;
+    while (i < rawLen) {
+        if (raw[i] == '%' && i + 2 < rawLen &&
+            isxdigit((unsigned char)raw[i + 1]) &&
+            isxdigit((unsigned char)raw[i + 2])) {
+            expect -= 2;
+            i += 3;
+        } else {
+            i++;
+        }
+    }
+    if (strlen(out) != expect) { out[0] = '\0'; return ERR_INVALID_ARG; }
+    return SOLARI_OK;
+}
+
+/* ^[1-9][0-9]{0,9}$ and <= 4294967295. No sign, space, leading zero, exponent
+ * or overflow. Writes the value to *out on success. Pure. */
+static bool ctlProvValidId(const char *s, uint32_t *out)
+{
+    uint64_t v = 0;
+    size_t n = 0;
+    if (!s || s[0] < '1' || s[0] > '9') return false;
+    for (; s[n]; n++) {
+        if (s[n] < '0' || s[n] > '9' || n >= 10) return false;
+        v = v * 10u + (uint64_t)(s[n] - '0');
+    }
+    if (v > UINT64_C(4294967295)) return false;
+    if (out) *out = (uint32_t)v;
+    return true;
+}
+
+/* [a-z0-9] — the slug lead/body charset without '-'. */
+static bool ctlProvSlugAlnum(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+}
+
+/* ^[a-z0-9][a-z0-9-]{0,47}$ over exactly len bytes of s. Pure. */
+static bool ctlProvValidSlugN(const char *s, size_t len)
+{
+    size_t i;
+    if (!s || len == 0 || len > CTL_PROV_SLUG_MAX || !ctlProvSlugAlnum(s[0]))
+        return false;
+    for (i = 1; i < len; i++)
+        if (!ctlProvSlugAlnum(s[i]) && s[i] != '-') return false;
+    return true;
+}
+
+/* Validate a comma-separated stacks list and write the normalized form (each
+ * distinct slug once, first-occurrence order, ',' joined) to out. Refuses an
+ * empty list, an empty element (leading/trailing/double comma), any invalid
+ * slug, and more than CTL_PROV_MAX_STACKS distinct slugs. Pure. */
+static bool ctlProvValidStacks(const char *s, char *out, size_t cap)
+{
+    const char *p = s;
+    size_t o = 0, distinct = 0;
+    if (out && cap) out[0] = '\0';
+    if (!s || !*s || !out || cap < CTL_PROV_STACKS_CAP) return false;
+    for (;;) {
+        const char *comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        bool dup = false;
+        if (!ctlProvValidSlugN(p, len)) { out[0] = '\0'; return false; }
+        {   /* duplicate? scan the normalized list built so far */
+            const char *q = out;
+            while (*q) {
+                const char *qc = strchr(q, ',');
+                size_t ql = qc ? (size_t)(qc - q) : strlen(q);
+                if (ql == len && strncmp(q, p, len) == 0) { dup = true; break; }
+                if (!qc) break;
+                q = qc + 1;
+            }
+        }
+        if (!dup) {
+            if (++distinct > CTL_PROV_MAX_STACKS) { out[0] = '\0'; return false; }
+            if (o + (o ? 1 : 0) + len + 1 > cap) { out[0] = '\0'; return false; }
+            if (o) out[o++] = ',';
+            memcpy(out + o, p, len);
+            o += len;
+            out[o] = '\0';
+        }
+        if (!comma) break;
+        p = comma + 1;   /* a trailing comma leaves p at "" -> refused above */
+    }
+    return distinct > 0;
+}
+
+/* Exactly "0" or "1". Pure. */
+static bool ctlProvValidDryRun(const char *s, bool *out)
+{
+    if (!s || (s[0] != '0' && s[0] != '1') || s[1] != '\0') return false;
+    if (out) *out = (s[0] == '1');
+    return true;
+}
+
+/* ^[A-Za-z0-9][A-Za-z0-9._@+:-]{0,127}$. Pure. */
+static bool ctlProvValidPrincipal(const char *s)
+{
+    size_t n;
+    if (!s) return false;
+    for (n = 0; s[n]; n++) {
+        char c = s[n];
+        bool alnum = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                     (c >= '0' && c <= '9');
+        if (n >= CTL_PROV_PRINCIPAL_MAX) return false;
+        if (n == 0 ? !alnum
+                   : !(alnum || c == '.' || c == '_' || c == '@' || c == '+' ||
+                       c == ':' || c == '-'))
+            return false;
+    }
+    return n > 0;
+}
+
+/* Extract + validate one id argument (strict decode). Pure. */
+static bool ctlProvArgId(const char *args, const char *key,
+                         char *out, size_t cap)
+{
+    return ctlArgStrStrict(args, key, out, cap) == SOLARI_OK &&
+           ctlProvValidId(out, NULL);
+}
+
+/* Extract + validate the op= principal for a provisioning verb. Pure. */
+static bool ctlProvArgPrincipal(const char *args, char *out, size_t cap)
+{
+    return ctlArgStrStrict(args, "op", out, cap) == SOLARI_OK &&
+           ctlProvValidPrincipal(out);
+}
+
+/* Extract + validate + normalize stacks=. Pure. */
+static bool ctlProvArgStacks(const char *args, char *out, size_t cap)
+{
+    char raw[CTL_PROV_STACKS_RAW];
+    return ctlArgStrStrict(args, "stacks", raw, sizeof raw) == SOLARI_OK &&
+           ctlProvValidStacks(raw, out, cap);
 }
 
 /* Validate that a blob is a PEM CSR by its delimiters. This is the structural
@@ -708,8 +936,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
      * enforced BEFORE the op= RBAC gate so a privileged verb from the dashboard
      * peer is refused regardless of what op= it claims. The dashboard must route
      * privileged verbs through REQUEST_SUBMIT; an unknown peer gets nothing. When
-     * enforcePeer is off, ctlServiceOne sets peerClass=OPERATOR and this is a
-     * no-op (legacy behaviour preserved). */
+     * enforcePeer is off, ctlServiceOne still refuses PRIVILEGED verbs to any
+     * peer other than root / the operator uid (ctlClassifyPeerLegacy). */
     {
         ctlVerbClass vc = ctlVerbPrivClass(verb);
         if (!ctlPeerMayInvoke(peerClass, vc)) {
@@ -1005,6 +1233,99 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         solariLogf(SOLARI_LOG_INFO, "ctl: fleet image hostname=%s arch=%s op=%s -> %s",
                    hostname, arch, operator_, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=imaging", logpath);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    /* ---- provisioning images & stacks (P3; operator-gated, detached) ----
+     * Each verb execs ONE helper with a literal argv (no shell) built only from
+     * values that passed the strict validators above; the log name is built
+     * only from a validated decimal id. Wire contract (keep in sync with
+     * deploy/fleet/provlib.py and the PHP provisioning route):
+     *   IMAGE_REFRESH image=<id> op=<principal>
+     *     -> deploy/fleet/image-refresh.py --image <id> --op <principal>
+     *   PROV_STAGE entity=<id> image=<id> stacks=<a,b> op=<principal>
+     *     -> deploy/fleet/prov-stage.py --entity <id> --image <id> --stacks <a,b> --op <principal>
+     *   STACK_APPLY entity=<id> stacks=<a,b> dryRun=<0|1> op=<principal>
+     *     -> deploy/fleet/stack-apply.py --entity <id> --stacks <a,b> [--dry-run] --op <principal> */
+    if (strcmp(verb, "IMAGE_REFRESH") == 0) {
+        char image[16], op[CTL_PROV_PRINCIPAL_MAX + 1], logpath[64], extra[128];
+        char *argv[6];
+        int   n = 0;
+        if (!ctlProvArgId(args, "image", image, sizeof image))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid image id");
+        if (!ctlProvArgPrincipal(args, op, sizeof op))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
+        (void)snprintf(logpath, sizeof logpath, "run/image-refresh-%s.log", image);
+        argv[n++] = (char *)"deploy/fleet/image-refresh.py";
+        argv[n++] = (char *)"--image"; argv[n++] = image;
+        argv[n++] = (char *)"--op";    argv[n++] = op;
+        argv[n]   = NULL;
+        st = ctlSpawnDetached(argv, logpath);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "image refresh spawn failed");
+        solariLogf(SOLARI_LOG_INFO, "ctl: image refresh image=%s op=%s -> %s",
+                   image, op, logpath);
+        (void)snprintf(extra, sizeof extra, "log=%s status=refreshing", logpath);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    if (strcmp(verb, "PROV_STAGE") == 0) {
+        char entity[16], image[16], stacks[CTL_PROV_STACKS_CAP];
+        char op[CTL_PROV_PRINCIPAL_MAX + 1], logpath[64], extra[128];
+        char *argv[10];
+        int   n = 0;
+        if (!ctlProvArgId(args, "entity", entity, sizeof entity))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid entity id");
+        if (!ctlProvArgId(args, "image", image, sizeof image))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid image id");
+        if (!ctlProvArgStacks(args, stacks, sizeof stacks))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid stacks");
+        if (!ctlProvArgPrincipal(args, op, sizeof op))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
+        (void)snprintf(logpath, sizeof logpath, "run/prov-stage-%s.log", entity);
+        argv[n++] = (char *)"deploy/fleet/prov-stage.py";
+        argv[n++] = (char *)"--entity"; argv[n++] = entity;
+        argv[n++] = (char *)"--image";  argv[n++] = image;
+        argv[n++] = (char *)"--stacks"; argv[n++] = stacks;
+        argv[n++] = (char *)"--op";     argv[n++] = op;
+        argv[n]   = NULL;
+        st = ctlSpawnDetached(argv, logpath);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "prov stage spawn failed");
+        solariLogf(SOLARI_LOG_INFO, "ctl: prov stage entity=%s image=%s stacks=%s op=%s -> %s",
+                   entity, image, stacks, op, logpath);
+        (void)snprintf(extra, sizeof extra, "log=%s status=staging", logpath);
+        return ctlReplyOk(replyOut, replyCap, extra);
+    }
+
+    if (strcmp(verb, "STACK_APPLY") == 0) {
+        char entity[16], stacks[CTL_PROV_STACKS_CAP], dry[4];
+        char op[CTL_PROV_PRINCIPAL_MAX + 1], logpath[64], extra[128];
+        char *argv[10];
+        int   n = 0;
+        bool  dryRun = false;
+        if (!ctlProvArgId(args, "entity", entity, sizeof entity))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid entity id");
+        if (!ctlProvArgStacks(args, stacks, sizeof stacks))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid stacks");
+        if (ctlArgStrStrict(args, "dryRun", dry, sizeof dry) != SOLARI_OK ||
+            !ctlProvValidDryRun(dry, &dryRun))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid dryRun");
+        if (!ctlProvArgPrincipal(args, op, sizeof op))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
+        (void)snprintf(logpath, sizeof logpath, "run/stack-apply-%s.log", entity);
+        argv[n++] = (char *)"deploy/fleet/stack-apply.py";
+        argv[n++] = (char *)"--entity"; argv[n++] = entity;
+        argv[n++] = (char *)"--stacks"; argv[n++] = stacks;
+        if (dryRun) argv[n++] = (char *)"--dry-run";
+        argv[n++] = (char *)"--op";     argv[n++] = op;
+        argv[n]   = NULL;
+        st = ctlSpawnDetached(argv, logpath);
+        if (st != SOLARI_OK)
+            return ctlReplyErr(replyOut, replyCap, st, "stack apply spawn failed");
+        solariLogf(SOLARI_LOG_INFO, "ctl: stack apply entity=%s stacks=%s dryRun=%d op=%s -> %s",
+                   entity, stacks, dryRun ? 1 : 0, op, logpath);
+        (void)snprintf(extra, sizeof extra, "log=%s status=applying", logpath);
         return ctlReplyOk(replyOut, replyCap, extra);
     }
 
@@ -1873,7 +2194,7 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
     size_t  replyLen;
     ssize_t got;
     int     cfd;
-    ctlPeerClass peerClass = CTL_PEER_OPERATOR;  /* legacy default when !enforce */
+    ctlPeerClass peerClass = CTL_PEER_UNKNOWN;   /* set from SO_PEERCRED below */
     uint32_t     peerUid   = (uint32_t)geteuid();
 
     cfd = accept(ctl->listenFd, NULL, NULL);
@@ -1888,9 +2209,9 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
 
     /* Peer credentials (Task #1). Read the connecting process's uid via
      * SO_PEERCRED — a kernel-supplied identity the caller cannot forge — and
-     * classify it. When enforcement is off we keep the legacy behaviour (every
-     * peer treated as operator) but still record the uid for audit. When it is
-     * on, a getsockopt failure fails CLOSED (UNKNOWN → refused). */
+     * classify it. When enforcement is off, only root and the operator uid are
+     * operators; any other uid is a dashboard peer (no PRIVILEGED verbs). A
+     * getsockopt failure fails CLOSED: UNKNOWN when enforcing, dashboard when not. */
     {
         struct ucred cred;
         socklen_t    credLen = (socklen_t)sizeof cred;
@@ -1898,11 +2219,11 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
             peerUid = (uint32_t)cred.uid;
             peerClass = ctl->enforcePeer
                 ? ctlClassifyPeer(peerUid, ctl->operatorUid, ctl->dashboardUid)
-                : CTL_PEER_OPERATOR;
+                : ctlClassifyPeerLegacy(peerUid, ctl->operatorUid);
         } else {
             solariLogf(SOLARI_LOG_WARN, "ctl: SO_PEERCRED failed: %s",
                        strerror(errno));
-            peerClass = ctl->enforcePeer ? CTL_PEER_UNKNOWN : CTL_PEER_OPERATOR;
+            peerClass = ctl->enforcePeer ? CTL_PEER_UNKNOWN : CTL_PEER_DASHBOARD;
         }
     }
 

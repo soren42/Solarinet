@@ -109,7 +109,7 @@ PY
   mv -f "$temporary" "$ALERTBRIDGE_CONF"
 }
 health_check() {
-  local unit="$1" type
+  local unit="$1"
   if grep -Eq '^Type=oneshot([[:space:]]|$)' "$SCRIPT_DIR/$unit.service"; then
     [[ "$("$SYSTEMCTL" show --property=Result --value "$unit.service")" == success ]] || return 1
     [[ "$("$SYSTEMCTL" show --property=ExecMainStatus --value "$unit.service")" == 0 ]] || return 1
