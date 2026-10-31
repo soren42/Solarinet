@@ -521,6 +521,12 @@
       "roleRequired": "operator"
     },
     {
+      "method": "PUT",
+      "pattern": "/api/inventory/models/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
       "method": "GET",
       "pattern": "/api/inventory/locations",
       "csrf": "none",

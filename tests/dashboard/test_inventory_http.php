@@ -143,6 +143,22 @@ try {
     foreach(['/api/inventory/models','/api/inventory/components','/api/inventory/receipts','/api/inventory/projects','/api/inventory/locations','/api/inventory/allocations'] as $p){$r=httpRequest($base.$p.($p==='/api/inventory/locations'?'?flat=1&':'?').'limit=1&offset=0','GET',null,$cookie);check($r['status']===200&&is_array($r['body']['data']['items']??null)&&isset($r['body']['data']['page']['total']),"paged endpoint failed: $p");}
     check(httpRequest($base.'/api/inventory/models?limit=0','GET',null,$cookie)['status']===400,'limit=0 was accepted');
     $aggregate=httpRequest($base.'/api/inventory','GET',null,$cookie);$d=$aggregate['body']['data']??[];check($aggregate['status']===200&&is_array($d['models']??null)&&is_array($d['units']??null)&&!isset($d['page']),'combined inventory shape changed');
+    // 031: operator edit of hardware_models.arch (provisioning's first arch source).
+    $mpath='/api/inventory/models/'.$ids['model'];
+    foreach ([[$viewerCookie,$viewerCsrf],[$cookie,null]] as [$c,$t]) check(httpRequest($base.$mpath,'PUT',['arch'=>'arm64'],$c,$t)['status']===403,'model PUT authorization or CSRF rejection failed');
+    check(httpRequest($base.$mpath,'PUT',['arch'=>'aarch64'],$cookie,$csrf)['status']===400,'model PUT accepted an arch outside the 031 enum');
+    check(httpRequest($base.$mpath,'PUT',['arch'=>7],$cookie,$csrf)['status']===400,'model PUT accepted a non-string arch');
+    check(httpRequest($base.$mpath,'PUT',[],$cookie,$csrf)['status']===400,'model PUT with no fields was accepted');
+    check(httpRequest($base.'/api/inventory/models/999999999','PUT',['arch'=>'arm64'],$cookie,$csrf)['status']===404,'model PUT on a missing model was not 404');
+    $archStmt=$db->prepare('SELECT arch FROM hardware_models WHERE id=?');
+    $archStmt->execute([$ids['model']]); check($archStmt->fetchColumn()===null,'rejected model PUTs changed arch');
+    $put=httpRequest($base.$mpath,'PUT',['arch'=>'arm64','notes'=>'HTTP fixture arch'],$cookie,$csrf);
+    check($put['status']===200&&($put['body']['data']['arch']??null)==='arm64'&&($put['body']['data']['notes']??null)==='HTTP fixture arch','model PUT arch=arm64 failed');
+    $archStmt->execute([$ids['model']]); check($archStmt->fetchColumn()==='arm64','model PUT did not persist arch');
+    $one=httpRequest($base.$mpath,'GET',null,$viewerCookie); check(($one['body']['data']['arch']??null)==='arm64','model GET does not expose arch');
+    $clr=httpRequest($base.$mpath,'PUT',['arch'=>''],$cookie,$csrf);
+    check($clr['status']===200&&array_key_exists('arch',$clr['body']['data']??[])&&$clr['body']['data']['arch']===null,"model PUT arch='' did not clear to NULL");
+    $archStmt->execute([$ids['model']]); check($archStmt->fetchColumn()===null,"model PUT arch='' did not store NULL");
     $overflow=$db->prepare("INSERT INTO receipts(vendor,currency) VALUES(?,'USD')");for($i=0;$i<501;$i++)$overflow->execute([$vendor]);$tooBig=httpRequest($base.'/api/inventory','GET',null,$cookie);check($tooBig['status']===413&&($tooBig['body']['error']['code']??null)==='inventory_page_required','501 receipts did not require paginated inventory');
     echo "inventory HTTP transactions, entity linking, paging, aggregate bound, RackWire profile, barcode lookup, and retired-route assertions passed\n";
 } catch(Throwable $e){fwrite(STDERR,'Inventory HTTP test failed: '.$e->getMessage()."\n");$failure=$e;} finally {if(is_resource($server)){proc_terminate($server);proc_close($server);} $cleanup();if(is_dir($work)){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($work,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);foreach($it as $p)$p->isDir()?rmdir($p->getPathname()):unlink($p->getPathname());rmdir($work);}}
