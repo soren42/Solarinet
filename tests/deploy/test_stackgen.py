@@ -234,6 +234,36 @@ class ItemOrderAndTypes(unittest.TestCase):
         with self.assertRaisesRegex(StackGenError, "debian repo needs suite"):
             render_doc(d, ["x"], "debian")
 
+    def test_repo_fields_cannot_inject_config_lines(self):  # review 2 finding 3
+        bad = [("debian", "suite", "bookworm\ndeb http://evil.invalid/ sid main"),
+               ("debian", "suite", "-bookworm"), ("debian", "suite", "book worm"),
+               ("debian", "components", ["main\rcontrib"]), ("debian", "components", ["main", "-x"]),
+               ("debian", "components", ["main", 1]), ("debian", "components", []),
+               ("debian", "url", "https://example.invalid/apt\ndeb http://evil.invalid/ sid main"),
+               ("debian", "url", "https://example.invalid/apt evil-suite"),
+               ("debian", "key_url", "https://example.invalid/k.asc\r"),
+               ("debian", "fingerprint", FPR + "\n"),
+               ("suse", "url", "https://example.invalid/rpm\ngpgcheck=0"),
+               ("fedora", "url", "https://example.invalid/rpm\u2028gpgcheck=0"),
+               ("suse", "suite", "x\ny")]
+        for fam, key, val in bad:
+            # every family block is checked, not only the rendered one
+            for target in ("debian", "suse"):
+                d = self.mixed()
+                d["stacks"][1]["items"][5]["spec"][fam][key] = val
+                with self.subTest(fam=fam, key=key, val=val, target=target), \
+                        self.assertRaisesRegex(StackGenError, "token|control character|without whitespace"):
+                    render_doc(d, ["x"], target)
+        d = self.mixed()
+        d["stacks"][1]["items"][5]["spec"]["debian"].update(suite="stable/updates", components=["main", "non-free-firmware"])
+        repo = render_doc(d, ["x"], "debian")["solari_stack_repos"][0]
+        self.assertEqual((repo["suite"], repo["components"]), ("stable/updates", ["main", "non-free-firmware"]))
+
+    def test_logical_name_control_chars_rejected(self):  # review 2 finding 3 (repo name -> repo file)
+        for name in ("vendor\nrepo", "vendor\x7frepo", "vendor\u2028repo"):
+            with self.subTest(name=name), self.assertRaisesRegex(StackGenError, "control character"):
+                render_doc(doc_with({"slug": "x", "items": [pkg(name)]}), ["x"])
+
     def test_unsupported_role_family_is_error(self):
         d = doc_with({"slug": "x", "items": [other("r", "role", fedora=False, ansible_role="r")]})
         with self.assertRaisesRegex(StackGenError, "unmapped role for family fedora"):
@@ -326,9 +356,21 @@ class Scripts(unittest.TestCase):
         got = self.one(script("s", check=["/opt/x/bin/x", "--version"]))["solari_stack_scripts"][0]
         self.assertEqual(got["check"], ["/opt/x/bin/x", "--version"])
 
-    def test_secret_env_rejected(self):
-        with self.assertRaisesRegex(StackGenError, "looks like a secret"):
-            self.one(script("s", env={"API_TOKEN": "x"}))
+    def test_secret_env_rejected(self):  # review 2 finding 6: token boundaries, case-insensitive
+        for name in ("API_TOKEN", "api_token", "DB_PASSWORD", "Db_Pass", "AWS_SECRET_ACCESS_KEY",
+                     "APIKEY", "x_apikey", "MY_CREDENTIALS", "JWT", "BEARER_VALUE", "SSH_AUTH_SOCK",
+                     "PRIVATE_PEM", "SESSION_ID", "COOKIE", "REQ_SIGNATURE", "SENTRY_DSN", "KEY",
+                     "DBPASSWORD", "MYSQLPASSWD", "AppCredential", "SERVICEAPIKEY"):
+            with self.subTest(name=name), self.assertRaisesRegex(StackGenError, "looks like a secret"):
+                self.one(script("s", env={name: "x"}))
+        for name in ("MONKEY", "BYPASS", "KEYBOARD", "PASSENGER", "TOKENIZER_PARALLELISM", "AUTHOR",
+                     "SESSIONS_DIR", "PRIVATEER", "GOPATH", "PATH", "LANG"):
+            with self.subTest(name=name):
+                self.assertIn(name, self.one(script("s", env={name: "x"}))["solari_stack_scripts"][0]["env"])
+        # the splitter also honours - and / (names reaching it from other callers)
+        self.assertTrue(stackgen._secret_env_name("github-token"))
+        self.assertTrue(stackgen._secret_env_name("vault/Secret"))
+        self.assertFalse(stackgen._secret_env_name("monkey-bypass"))
         got = self.one(script("s", env={"Z": "1", "A": "2"}))["solari_stack_scripts"][0]
         self.assertEqual(list(got["env"]), ["A", "Z"])
 
@@ -366,11 +408,34 @@ class Builds(unittest.TestCase):
             render_doc(d, ["x"])
 
     def test_build_dep_applicability_enforced(self):  # review finding 4
-        for kw, msg in (({"applies_families": ["debian"]}, "not applicable to family suse"),
-                        ({"applies_arches": ["arm64"]}, "not applicable to arch x86_64")):
+        for kw, msg in (({"applies_families": ["debian"]}, "not applicable to suse/x86_64"),
+                        ({"applies_arches": ["arm64"]}, "not applicable to suse/x86_64")):
             d = doc_with({"slug": "x", "items": [pkg("ninja", **kw), build("t", build_deps=["ninja"])]})
             with self.subTest(kw=kw), self.assertRaisesRegex(StackGenError, msg):
                 render_doc(d, ["x"])
+
+    def test_build_dep_skips_inapplicable_earlier_candidate(self):  # review 2 finding 2
+        # core's debian-only 'libssl' comes first in closure order; the suse one must win on suse.
+        d = doc_with(
+            {"slug": "tc", "items": [pkg("libssl", suse="libopenssl-devel", debian="libssl-dev",
+                                         applies_families=["suse"])]},
+            {"slug": "x", "depends_on": ["tc"], "items": [build("t", build_deps=["libssl"])]})
+        d["stacks"][0]["items"].append(pkg("libssl", suse="WRONG", debian="libssl-dev", applies_families=["debian"]))
+        for fam, want in (("suse", "libopenssl-devel"), ("debian", "libssl-dev")):
+            with self.subTest(family=fam):
+                self.assertEqual(render_doc(d, ["x"], fam)["solari_stack_builds"][0]["build_deps"], [want])
+        d["stacks"][0]["items"][-1]["applies_arches"] = ["arm64"]
+        d["stacks"][0]["items"][-1]["applies_families"] = None  # now also applies on suse/arm64 only
+        self.assertEqual(render_doc(d, ["x"], "suse", "x86_64")["solari_stack_builds"][0]["build_deps"],
+                         ["libopenssl-devel"])
+
+    def test_build_dep_ambiguous_applicable_candidates_rejected(self):  # review 2 finding 2
+        d = doc_with({"slug": "a", "items": [pkg("ninja", debian="ninja-build")]},
+                     {"slug": "x", "depends_on": ["a"], "items": [pkg("ninja"), build("t", build_deps=["ninja"])]})
+        with self.assertRaisesRegex(StackGenError, "build dep 'ninja' is ambiguous for debian/x86_64"):
+            render_doc(d, ["x"], "debian")
+        # same mapping in both stacks is not ambiguous
+        self.assertEqual(render_doc(d, ["x"], "suse")["solari_stack_builds"][0]["build_deps"], ["ninja"])
 
     def test_build_dep_repo_must_precede_build(self):  # review finding 4
         repo = other("vendor repo", "repo", spec={"suse": {"url": "https://r.invalid", "key_url": "https://r.invalid/k",
@@ -433,11 +498,31 @@ class Builds(unittest.TestCase):
         d["stacks"][1]["items"][0]["spec"]["source"]["sha256"] = SHA
         self.assertEqual(render_doc(d, ["x"])["solari_stack_builds"][0]["source"]["sha256"], SHA)
 
-    def test_custom_needs_commands_and_others_refuse_them(self):
-        with self.assertRaisesRegex(StackGenError, "custom build needs commands"):
-            render_doc(doc_with({"slug": "x", "items": [build("t", system="custom")]}), ["x"])
-        with self.assertRaisesRegex(StackGenError, "only valid for system custom"):
-            render_doc(doc_with({"slug": "x", "items": [build("t", commands="make")]}), ["x"])
+    def test_custom_needs_build_and_install_and_others_refuse_them(self):  # review 2 finding 1
+        for spec in ({}, {"build": "make"}, {"install": "make install"}, {"build": " ", "install": "x"},
+                     {"build": ["make"], "install": "make install"}):
+            with self.subTest(spec=spec), self.assertRaisesRegex(StackGenError, "custom build needs a non-empty"):
+                render_doc(doc_with({"slug": "x", "items": [build("t", system="custom", **spec)]}), ["x"])
+        for spec in ({"build": "make"}, {"install": "make install"}):
+            with self.subTest(spec=spec), self.assertRaisesRegex(StackGenError, "only valid for system custom"):
+                render_doc(doc_with({"slug": "x", "items": [build("t", **spec)]}), ["x"])
+        with self.assertRaisesRegex(StackGenError, "unknown spec key.*commands"):
+            render_doc(doc_with({"slug": "x", "items": [build("t", system="custom", commands="make")]}), ["x"])
+        b = render_doc(doc_with({"slug": "x", "items": [build("t", system="custom", build="make", install="make install")]}),
+                       ["x"])["solari_stack_builds"][0]
+        self.assertEqual((b["build"], b["install"]), ("make", "make install"))
+        self.assertNotIn("commands", b)
+        b = render_doc(doc_with({"slug": "x", "items": [build("t")]}), ["x"])["solari_stack_builds"][0]
+        self.assertEqual((b["build"], b["install"], b["prefix"]), (None, None, "/usr/local"))
+
+    def test_prefix_is_plain_absolute_path(self):  # review 2 finding 1 (staged install copies into it)
+        for prefix in ("usr/local", "/", "/usr/../etc", "/usr/./local", "/opt/x y", "/opt/*", "/opt/x\n", "//", ""):
+            with self.subTest(prefix=prefix), self.assertRaisesRegex(StackGenError, "prefix must be"):
+                render_doc(doc_with({"slug": "x", "items": [build("t", prefix=prefix)]}), ["x"])
+        for prefix in ("/usr/local", "/opt/solari/tool-1.2", "/opt/.hidden", "/opt/x..y"):
+            with self.subTest(prefix=prefix):
+                b = render_doc(doc_with({"slug": "x", "items": [build("t", prefix=prefix)]}), ["x"])
+                self.assertEqual(b["solari_stack_builds"][0]["prefix"], prefix)
         with self.assertRaisesRegex(StackGenError, "build system must be"):
             render_doc(doc_with({"slug": "x", "items": [build("t", system="bazel")]}), ["x"])
 

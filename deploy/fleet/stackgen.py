@@ -26,8 +26,10 @@ Rules this generator owns (the schema cannot express them):
   * HARD errors: unknown slug, dependency cycle, unmapped package (NULL family
     name on an applicable item), artifact without a sha256 for the arch,
     unpinned remote script, build without a pinned ref / tarball sha256,
-    unresolvable build dependency, pkg whose repo_ref is not applied first,
-    script/build without an idempotency guard, secret-looking env names.
+    unresolvable or ambiguous build dependency, pkg whose repo_ref is not
+    applied first, script/build without an idempotency guard, repo fields that
+    could inject config lines, control characters in a logical_name,
+    secret-looking env names (a heuristic only, see _secret_env_name).
 
 Input sources:
   --from-json FILE   {"stacks": [...]} (see tests/deploy/fixtures/stacks_seed.json)
@@ -63,14 +65,29 @@ RUN_AS = ("root", "admin")
 PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}$")
 # Git sources are pinned by full commit id only (refs and tags can move).
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
-SECRET_ENV_RE = re.compile(r"PASS|SECRET|TOKEN|KEY|CREDENTIAL|AUTH|PRIVATE", re.IGNORECASE)
+# Env names that look like they carry a secret (see _secret_env_name).
+SECRET_ENV_TERMS = frozenset((
+    "password", "passwd", "pass", "secret", "token", "key", "apikey", "credential", "credentials",
+    "jwt", "bearer", "auth", "private", "session", "cookie", "signature", "dsn"))
+# Long terms that are unambiguous even inside a run-together name (DBPASSWORD).
+SECRET_ENV_SUBSTRINGS = ("password", "passwd", "credential", "apikey")
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FPR_RE = re.compile(r"^[0-9A-F]{40}([0-9A-F]{24})?$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# C0/C1 controls and the Unicode line/paragraph separators: anything that can
+# end a line in a config file the role writes. Mirrored by DB CHECKs.
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+# Repo URLs are one whitespace-free token on an APT line / in a repo file.
+REPO_URL_RE = re.compile(r"[^\s\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+# APT suite / component: a plain token, never a leading '-'.
+REPO_TOKEN_RE = re.compile(r"[A-Za-z0-9._/][A-Za-z0-9._/-]*")
+# Build prefix: absolute, no '.'/'..' components, nothing a shell or find
+# -path pattern would interpret. Never '/' itself.
+PREFIX_RE = re.compile(r"(/(?!\.\.?(?:/|$))[A-Za-z0-9._+-]+)+")
 
 SCRIPT_KEYS = {"body", "url", "sha256", "interpreter", "run_as", "env", "creates", "check", "version_check"}
-BUILD_KEYS = {"source", "system", "configure_args", "build_deps", "prefix", "commands", "env",
+BUILD_KEYS = {"source", "system", "configure_args", "build_deps", "prefix", "build", "install", "env",
               "creates", "check", "version_check"}
 ARTIFACT_KEYS = {"extract", "creates"}
 REPO_FAMILY_KEYS = {"url", "key_url", "fingerprint", "suite", "components"}
@@ -119,6 +136,8 @@ def load_definitions(doc: Any) -> dict[str, dict]:
             where = f"stack {slug!r} item {name!r}"
             if not isinstance(name, str) or not name:
                 raise StackGenError(f"stack {slug!r}: item without logical_name")
+            if CONTROL_RE.search(name):
+                raise StackGenError(f"stack {slug!r} item {name!r}: logical_name contains a control character")
             if name in seen_items:
                 raise StackGenError(f"{where}: duplicate logical_name")
             ident = _ident(name)
@@ -295,6 +314,21 @@ def _guard(spec: dict, it: dict, where: str) -> dict:
     return {"creates": creates, "check": check, "version_check": vcheck}
 
 
+def _secret_env_name(name: str) -> bool:
+    """HEURISTIC: does an env NAME look like it carries a secret?
+
+    Case-insensitive, on token boundaries (split on _ / -): API_TOKEN,
+    db-password and AWS_SECRET_ACCESS_KEY match; MONKEY, BYPASS and
+    TOKENIZER_PARALLELISM do not. A few long, unambiguous terms also match
+    inside a run-together name (DBPASSWORD). This only catches the obvious
+    mistake: specs are stored in the SoR and rendered into Ansible vars, so a
+    secret VALUE must never be put in a spec whatever its variable is called."""
+    lowered = name.lower()
+    if any(t in SECRET_ENV_TERMS for t in re.split(r"[_/-]+", lowered)):
+        return True
+    return any(s in lowered for s in SECRET_ENV_SUBSTRINGS)
+
+
 def _env(spec: dict, where: str) -> dict:
     env = spec.get("env") or {}
     if not isinstance(env, dict):
@@ -302,30 +336,57 @@ def _env(spec: dict, where: str) -> dict:
     for k, v in env.items():
         if not ENV_NAME_RE.fullmatch(k) or not isinstance(v, str):
             raise StackGenError(f"{where}: env {k!r} must be NAME=string")
-        if SECRET_ENV_RE.search(k):
+        if _secret_env_name(k):
             raise StackGenError(f"{where}: env {k!r} looks like a secret; secrets never live in stack specs")
     return dict(sorted(env.items()))
+
+
+def _check_repo_family(fam: Any, family: str, where: str) -> None:
+    """Every field of a repo definition ends up in an APT line, a repo file or
+    an argv: no control characters anywhere (they would add config lines),
+    URLs are one whitespace-free token, suite/components are plain tokens.
+    Applied to every family in the spec, not only the rendered one; mirrored
+    by ck_prov_stack_items_repo."""
+    if not isinstance(fam, dict):
+        raise StackGenError(f"{where}: repo {family} definition must be an object")
+    _check_keys(fam, REPO_FAMILY_KEYS, f"{where} ({family})")
+    for k in ("url", "key_url", "fingerprint"):
+        if not isinstance(fam.get(k), str) or not fam[k]:
+            raise StackGenError(f"{where}: repo {family} definition needs {k}")
+    for k in ("url", "key_url"):
+        if not REPO_URL_RE.fullmatch(fam[k]):
+            raise StackGenError(f"{where}: repo {family} {k} must be one URL without whitespace or "
+                                f"control characters, got {fam[k]!r}")
+    if CONTROL_RE.search(fam["fingerprint"]):
+        raise StackGenError(f"{where}: repo {family} fingerprint contains a control character")
+    if "suite" in fam and not (isinstance(fam["suite"], str) and REPO_TOKEN_RE.fullmatch(fam["suite"])):
+        raise StackGenError(f"{where}: repo {family} suite must be a token "
+                            f"([A-Za-z0-9._/-], no leading '-'), got {fam['suite']!r}")
+    if "components" in fam:
+        comps = fam["components"]
+        if (not isinstance(comps, list) or not comps
+                or not all(isinstance(c, str) and REPO_TOKEN_RE.fullmatch(c) for c in comps)):
+            raise StackGenError(f"{where}: repo {family} components must be a non-empty list of tokens "
+                                f"([A-Za-z0-9._/-], no leading '-'), got {comps!r}")
 
 
 def _render_repo(it: dict, family: str, where: str) -> dict:
     spec = it["spec"]
     _check_keys(spec, set(FAMILIES), where)
+    for f in FAMILIES:
+        if f in spec:
+            _check_repo_family(spec[f], f, where)
     fam = spec.get(family)
-    if not isinstance(fam, dict):
+    if fam is None:
         raise StackGenError(f"{where}: repo has no {family} definition")
-    _check_keys(fam, REPO_FAMILY_KEYS, f"{where} ({family})")
-    for k in ("url", "key_url", "fingerprint"):
-        if not isinstance(fam.get(k), str) or not fam[k]:
-            raise StackGenError(f"{where}: repo {family} definition needs {k}")
     fpr = re.sub(r"\s+", "", fam["fingerprint"]).upper()
     if not FPR_RE.fullmatch(fpr):
         raise StackGenError(f"{where}: repo fingerprint must be a full 40/64-hex key fingerprint")
     out = {"url": fam["url"], "key_url": fam["key_url"], "fingerprint": fpr, "suite": None, "components": None}
     if family == "debian":
-        comps = fam.get("components")
-        if not isinstance(fam.get("suite"), str) or not fam["suite"] or not isinstance(comps, list) or not comps:
+        if "suite" not in fam or "components" not in fam:
             raise StackGenError(f"{where}: debian repo needs suite and components")
-        out["suite"], out["components"] = fam["suite"], [str(c) for c in comps]
+        out["suite"], out["components"] = fam["suite"], list(fam["components"])
     return out
 
 
@@ -401,36 +462,77 @@ def _render_build(it: dict, where: str) -> dict:
     system = spec.get("system")
     if system not in BUILD_SYSTEMS:
         raise StackGenError(f"{where}: build system must be one of {BUILD_SYSTEMS}")
-    commands = spec.get("commands")
-    if system == "custom" and (not isinstance(commands, str) or not commands.strip()):
-        raise StackGenError(f"{where}: custom build needs commands")
-    if system != "custom" and commands is not None:
-        raise StackGenError(f"{where}: commands are only valid for system custom")
+    # custom builds follow the same privilege boundary as the others: `build`
+    # runs as the unprivileged admin user, only `install` runs as root.
+    cmds = {k: spec.get(k) for k in ("build", "install")}
+    if system == "custom":
+        for k, v in cmds.items():
+            if not isinstance(v, str) or not v.strip():
+                raise StackGenError(f"{where}: custom build needs a non-empty {k} command "
+                                    "(build runs unprivileged, install as root)")
+    elif any(v is not None for v in cmds.values()):
+        raise StackGenError(f"{where}: build/install commands are only valid for system custom")
     args = spec.get("configure_args") or []
     deps = spec.get("build_deps") or []
     if not all(isinstance(a, str) for a in args) or not all(isinstance(d, str) for d in deps):
         raise StackGenError(f"{where}: configure_args and build_deps must be lists of strings")
     prefix = spec.get("prefix", "/usr/local")
-    if not isinstance(prefix, str) or not prefix.startswith("/"):
-        raise StackGenError(f"{where}: prefix must be an absolute path")
+    if not isinstance(prefix, str) or not PREFIX_RE.fullmatch(prefix):
+        raise StackGenError(f"{where}: prefix must be an absolute path of plain components "
+                            f"([A-Za-z0-9._+-], no '.'/'..', not '/'), got {prefix!r}")
     out = {"source": source, "system": system, "configure_args": list(args), "prefix": prefix,
-           "commands": commands, "env": _env(spec, where), "build_deps": list(deps)}
+           "build": cmds["build"], "install": cmds["install"], "env": _env(spec, where),
+           "build_deps": list(deps)}
     out.update(_guard(spec, it, where))
     return out
 
 
-def _pkg_index(stacks: dict[str, dict], order: list[str]) -> dict[str, dict]:
-    """logical name -> pkg item, from the render's closure only (first in order wins).
+def _applies(it: dict, family: str, arch: str) -> bool:
+    return ((not it["applies_families"] or family in it["applies_families"])
+            and (not it["applies_arches"] or arch in it["applies_arches"]))
+
+
+def _pkg_index(stacks: dict[str, dict], order: list[str]) -> dict[str, list[dict]]:
+    """logical name -> every pkg item with that name in the render's closure.
 
     Stacks outside the closure are never consulted: selecting a stack must not
     pull definitions (names, repos) from stacks the operator did not select.
-    The locked core stack is always in the closure, so it is the family map."""
-    index: dict[str, dict] = {}
+    The locked core stack is always in the closure, so it is the family map.
+    Resolution (_resolve_build_dep) uses only the candidates applicable to the
+    render target and refuses when they disagree, so the result never depends
+    on closure order."""
+    index: dict[str, list[dict]] = {}
     for slug in order:
         for it in sorted(stacks[slug]["items"], key=_item_key):
             if it["item_type"] == "pkg":
-                index.setdefault(it["logical_name"], {**it, "stack": slug})
+                index.setdefault(it["logical_name"], []).append({**it, "stack": slug})
     return index
+
+
+def _resolve_build_dep(dep: str, candidates: list[dict] | None, family: str, arch: str,
+                       order: list[str], applied_repos: set[str], where: str) -> str:
+    if not candidates:
+        raise StackGenError(f"{where}: build dep {dep!r} is not a pkg item in the selected "
+                            f"stacks {order} (add it to core or to a stack this one depends on)")
+    usable = [c for c in candidates if _applies(c, family, arch)]
+    if not usable:
+        found = ", ".join(f"stack {c['stack']!r}" for c in candidates)
+        raise StackGenError(f"{where}: build dep {dep!r} ({found}): not applicable to {family}/{arch}")
+    variants = {(c["names"][family], c["repo_ref"]) for c in usable}
+    if len(variants) > 1:
+        found = ", ".join(f"stack {c['stack']!r} -> {c['names'][family]!r}"
+                          f"{' via repo ' + repr(c['repo_ref']) if c['repo_ref'] else ''}" for c in usable)
+        raise StackGenError(f"{where}: build dep {dep!r} is ambiguous for {family}/{arch} ({found}); "
+                            "give the pkg items the same mapping or distinct logical names")
+    pkg = usable[0]
+    dwhere = f"{where} build dep {dep!r} (stack {pkg['stack']!r})"
+    real = pkg["names"][family]
+    if real is None:
+        raise StackGenError(f"{dwhere}: unmapped for family {family}")
+    if pkg["repo_ref"] is not None and pkg["repo_ref"] not in applied_repos:
+        raise StackGenError(f"{dwhere}: needs repo {pkg['repo_ref']!r}, which is not applied "
+                            "before this build")
+    return real
 
 
 def render(stacks: dict[str, dict], selected: list[str], family: str, arch: str) -> dict:
@@ -492,24 +594,8 @@ def render(stacks: dict[str, dict], selected: list[str], family: str, arch: str)
                 add_entry("scripts", {**base, **_render_script(it, where)})
             elif itype == "build":
                 entry = {**base, **_render_build(it, where)}
-                resolved = []
-                for dep in entry["build_deps"]:
-                    pkg = pkg_index.get(dep)
-                    if pkg is None:
-                        raise StackGenError(f"{where}: build dep {dep!r} is not a pkg item in the selected "
-                                            f"stacks {order} (add it to core or to a stack this one depends on)")
-                    dwhere = f"{where} build dep {dep!r} (stack {pkg['stack']!r})"
-                    if pkg["applies_families"] and family not in pkg["applies_families"]:
-                        raise StackGenError(f"{dwhere}: not applicable to family {family}")
-                    if pkg["applies_arches"] and arch not in pkg["applies_arches"]:
-                        raise StackGenError(f"{dwhere}: not applicable to arch {arch}")
-                    real = pkg["names"][family]
-                    if real is None:
-                        raise StackGenError(f"{dwhere}: unmapped for family {family}")
-                    if pkg["repo_ref"] is not None and pkg["repo_ref"] not in applied_repos:
-                        raise StackGenError(f"{dwhere}: needs repo {pkg['repo_ref']!r}, which is not applied "
-                                            "before this build")
-                    resolved.append(real)
+                resolved = [_resolve_build_dep(dep, pkg_index.get(dep), family, arch, order, applied_repos, where)
+                            for dep in entry["build_deps"]]
                 entry["build_deps"] = resolved
                 add_packages(resolved)
                 add_entry("builds", entry)

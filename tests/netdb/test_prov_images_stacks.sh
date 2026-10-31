@@ -7,7 +7,10 @@
 #   * seed: core = 19 items, dev-tools role + p10k pin, Tumbleweed x86_64;
 #   * seed-once: a soft-deleted seed row is not resurrected by a re-run;
 #   * constraints: live-unique, self-dep, '=' on pkg, unpinned remote script,
-#     build/role/artifact shape, sha256 format, pi_netboot arch, prov_runs
+#     build/role/artifact shape (custom build+install split, case-sensitive
+#     system), every check element a string, repo fields that could inject
+#     config lines, control chars in logical_name,
+#     sha256 format, pi_netboot arch, prov_runs
 #     mode/image + JSON array, prov_runs immutability and no-delete;
 #   * stackgen --from-db (as an ephemeral SELECT-only user) renders
 #     byte-identically to tests/deploy/fixtures/stacks_seed.json;
@@ -199,6 +202,78 @@ rejects "image with uppercase sha256" \
 eq "p10k seed pinned by full commit SHA with an argv check" \
    "SELECT CONCAT(version_pin,' ',JSON_TYPE(JSON_EXTRACT(spec,'\$.check'))) FROM prov_stack_items WHERE logical_name='powerlevel10k pin' AND deleted_at IS NOT NULL" \
    "ff0311157d6b24fea21aa70699783f362b0f554f ARRAY"
+# ---- review regressions (Luna cross-lab review of b027b22) ----------------------
+# Each reject has a near-identical accept, so a reject cannot pass by tripping
+# some unrelated CHECK. Specs are built with JSON_OBJECT/JSON_ARRAY so values
+# are JSON-escaped exactly as an API would store them.
+TARSRC="JSON_OBJECT('tarball','https://e.invalid/t.tgz','sha256','$H64')"
+bspec() {  # system-SQL [extra JSON_OBJECT key/value pairs...]
+  local sys="$1"; shift; local extra=""; for kv in "$@"; do extra="$extra,$kv"; done
+  echo "JSON_OBJECT('source',$TARSRC,'system',$sys$extra)"
+}
+# 1. custom build = separate build (unprivileged) + install (root) commands
+accepts "custom build with build + install" "$(ins_item r24 build "'1.0'" "$(bspec "'custom'" "'build','make'" "'install','make install'")")"
+rejects "custom build without install" "$(ins_item r25 build "'1.0'" "$(bspec "'custom'" "'build','make'")")"
+rejects "custom build without build" "$(ins_item r26 build "'1.0'" "$(bspec "'custom'" "'install','make install'")")"
+rejects "custom build with whitespace-only install" "$(ins_item r27 build "'1.0'" "$(bspec "'custom'" "'build','make'" "'install','   '")")"
+rejects "custom build with the legacy commands key" "$(ins_item r28 build "'1.0'" "$(bspec "'custom'" "'build','make'" "'install','make install'" "'commands','make install'")")"
+rejects "custom build with a non-string build" "$(ins_item r29 build "'1.0'" "$(bspec "'custom'" "'build',JSON_ARRAY('make')" "'install','make install'")")"
+accepts "cmake build" "$(ins_item r30 build "'1.0'" "$(bspec "'cmake'")")"
+rejects "cmake build carrying an install command" "$(ins_item r31 build "'1.0'" "$(bspec "'cmake'" "'install','make install'")")"
+rejects "cmake build carrying a build command" "$(ins_item r32 build "'1.0'" "$(bspec "'cmake'" "'build','make'")")"
+# 4. build system is matched case-sensitively
+rejects "build system 'CMake' (case-insensitive collation)" "$(ins_item r33 build "'1.0'" "$(bspec "'CMake'")")"
+rejects "build system 'CUSTOM'" "$(ins_item r34 build "'1.0'" "$(bspec "'CUSTOM'" "'build','make'" "'install','make install'")")"
+# 5. every element of check is a string (not just check[0])
+cspec() { echo "JSON_OBJECT('body','true','check',$1)"; }
+accepts "check argv with an escaped quote and an empty later arg" "$(ins_item r35 script NULL "$(cspec "JSON_ARRAY('/x','a\"b\\\\c','')")")"
+rejects "check with a number element" "$(ins_item r36 script NULL "$(cspec "JSON_ARRAY('/x',1)")")"
+rejects "check with a null element" "$(ins_item r37 script NULL "$(cspec "JSON_ARRAY('/x',NULL)")")"
+rejects "check with a boolean element" "$(ins_item r38 script NULL "$(cspec "JSON_ARRAY('/x',TRUE)")")"
+rejects "check with a nested array element" "$(ins_item r39 script NULL "$(cspec "JSON_ARRAY('/x',JSON_ARRAY('y'))")")"
+rejects "check with an object element" "$(ins_item r40 script NULL "$(cspec "JSON_ARRAY('/x',JSON_OBJECT('a','b'))")")"
+rejects "check with an empty argv[0]" "$(ins_item r41 script NULL "$(cspec "JSON_ARRAY('','x')")")"
+# 3. repo fields cannot inject sources.list / .repo lines
+U="'https://repo.e.invalid/deb'"; K="'https://repo.e.invalid/key.asc'"; F="'$C40'"; S="'stable'"; CMP="JSON_ARRAY('main','contrib')"
+NL="CHAR(10)"; LS="_utf8mb4 0xE280A8"
+rspec() {  # family url key fpr suite components (SQL; '-' = omit suite/components)
+  local tail=""
+  [[ "$5" == "-" ]] || tail="$tail,'suite',$5"
+  [[ "$6" == "-" ]] || tail="$tail,'components',$6"
+  echo "JSON_OBJECT('$1',JSON_OBJECT('url',$2,'key_url',$3,'fingerprint',$4$tail))"
+}
+accepts "debian repo with valid fields" "$(ins_item rp1 repo NULL "$(rspec debian "$U" "$K" "$F" "$S" "$CMP")")"
+accepts "debian repo, slash suite + PHP-escaped slash component" \
+  "$(ins_item rp2 repo NULL "'{\"debian\":{\"url\":\"https:\\\\/\\\\/repo.e.invalid\\\\/deb\",\"key_url\":\"https://repo.e.invalid/k\",\"fingerprint\":\"$C40\",\"suite\":\"stable/updates\",\"components\":[\"main\\\\/sub\",\"non-free\"]}}'")"
+rejects "repo suite with a newline" "$(ins_item rp3 repo NULL "$(rspec debian "$U" "$K" "$F" "CONCAT('stable',$NL,'deb [trusted=yes] http://evil.invalid/ x main')" "$CMP")")"
+rejects "repo suite with a leading dash" "$(ins_item rp4 repo NULL "$(rspec debian "$U" "$K" "$F" "'-oAPT::x'" "$CMP")")"
+rejects "repo suite with a space" "$(ins_item rp5 repo NULL "$(rspec debian "$U" "$K" "$F" "'stable main'" "$CMP")")"
+rejects "repo component with a leading dash" "$(ins_item rp6 repo NULL "$(rspec debian "$U" "$K" "$F" "$S" "JSON_ARRAY('main','-x')")")"
+rejects "repo component with a space" "$(ins_item rp7 repo NULL "$(rspec debian "$U" "$K" "$F" "$S" "JSON_ARRAY('main contrib')")")"
+rejects "repo component with a newline" "$(ins_item rp8 repo NULL "$(rspec debian "$U" "$K" "$F" "$S" "JSON_ARRAY(CONCAT('main',$NL,'deb x'))")")"
+rejects "repo components empty list" "$(ins_item rp9 repo NULL "$(rspec debian "$U" "$K" "$F" "$S" "JSON_ARRAY()")")"
+rejects "repo component not a string" "$(ins_item rp10 repo NULL "$(rspec debian "$U" "$K" "$F" "$S" "JSON_ARRAY('main',1)")")"
+rejects "repo components as a string" "$(ins_item rp11 repo NULL "$(rspec debian "$U" "$K" "$F" "$S" "'main contrib'")")"
+rejects "repo url with a space" "$(ins_item rp12 repo NULL "$(rspec debian "'https://a.invalid/ x main'" "$K" "$F" "$S" "$CMP")")"
+rejects "repo url with a newline" "$(ins_item rp13 repo NULL "$(rspec debian "CONCAT('https://a.invalid/',$NL,'deb x')" "$K" "$F" "$S" "$CMP")")"
+rejects "repo url with U+2028" "$(ins_item rp14 repo NULL "$(rspec debian "CONCAT('https://a.invalid/',$LS,'x')" "$K" "$F" "$S" "$CMP")")"
+rejects "repo key_url with a CR" "$(ins_item rp15 repo NULL "$(rspec debian "$U" "CONCAT('https://a.invalid/k',CHAR(13))" "$F" "$S" "$CMP")")"
+rejects "repo fingerprint with a newline" "$(ins_item rp16 repo NULL "$(rspec debian "$U" "$K" "CONCAT('$C40',$NL,'x')" "$S" "$CMP")")"
+rejects "debian repo without suite" "$(ins_item rp17 repo NULL "$(rspec debian "$U" "$K" "$F" - "$CMP")")"
+accepts "suse repo without suite/components" "$(ins_item rp18 repo NULL "$(rspec suse "$U" "$K" "$F" - -)")"
+rejects "suse repo url with a newline" "$(ins_item rp19 repo NULL "$(rspec suse "CONCAT('https://a.invalid/',$NL,'x')" "$K" "$F" - -)")"
+rejects "fedora repo key_url with a tab" "$(ins_item rp20 repo NULL "$(rspec fedora "$U" "CONCAT('https://a',CHAR(9),'b')" "$F" - -)")"
+rejects "repo family block not an object" "$(ins_item rp21 repo NULL "JSON_OBJECT('fedora','https://a.invalid/')")"
+# logical_name carries no control characters
+rejects "logical_name with a newline" \
+  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,CONCAT('ln',$NL,'x'),'x',$SRC)"
+rejects "logical_name with U+2028" \
+  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,CONCAT('ln',$LS,'x'),'x',$SRC)"
+accepts "logical_name with spaces and punctuation" \
+  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,'ln ok (x+y)','x',$SRC)"
+eq "accepted check argv round-trips intact" \
+   "SELECT JSON_LENGTH(spec,'\$.check') FROM prov_stack_items WHERE logical_name='r35'" 3
+q "DELETE FROM prov_stack_items WHERE logical_name IN ('r24','r30','r35','rp1','rp2','rp18','ln ok (x+y)')"
 q "DELETE FROM prov_stack_items WHERE logical_name IN ('r6','r11','r17')"
 q "DELETE FROM prov_stack_items WHERE logical_name IN ('t9','t13')"
 

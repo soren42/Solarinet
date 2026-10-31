@@ -28,7 +28,12 @@
 --   pkg      distro-native package; real name per family. `repo_ref` may name a
 --            repo item that must be applied before it.
 --   repo     third-party zypper/apt/dnf repo added before packages. spec =
---            per-family {url, key_url, fingerprint[, suite, components]}.
+--            per-family {url, key_url, fingerprint[, suite, components]}
+--            (debian needs suite + components). These land in sources.list /
+--            .repo files, so CHECK refuses anything that could add a line:
+--            url/key_url are one token with no whitespace or control
+--            characters, fingerprint has no control characters, suite and
+--            each component match [A-Za-z0-9._/-]+ without a leading '-'.
 --   artifact upstream release binary/tarball; `version_pin` required; per-arch
 --            URL + sha256 in prov_stack_artifacts (arch 'any' = all arches).
 --   script   install script: spec.body (inline, stored here) XOR spec.url +
@@ -42,9 +47,17 @@
 --            {tarball, sha256}; system cmake|make|autotools|meson|custom;
 --            configure_args, build_deps (logical pkg names resolved only
 --            against pkg items of the rendered stacks; locked core is always
---            rendered and is the family map), prefix, commands (custom),
---            same guard (build checks run unprivileged).
+--            rendered and is the family map), prefix, same guard (build
+--            checks run unprivileged). custom builds carry TWO commands:
+--            `build` (runs as the unprivileged admin user, like every other
+--            system's fetch/configure/compile) and `install` (the only phase
+--            run as root); other systems may carry neither. The legacy single
+--            `commands` key is refused.
 --   role     existing Ansible role named by `ansible_role`.
+--
+-- SECRETS: spec env names that look secret-ish are refused by stackgen.py,
+-- but that is a token-boundary HEURISTIC on the name only. Whatever a
+-- variable is called, secret VALUES must never be stored in spec.
 --
 -- WHY A JSON `spec` (not side tables): the per-type fields are heterogeneous,
 -- mostly 1:1 with the item, and are edited as one form (P3). Six side tables
@@ -218,6 +231,9 @@ CREATE TABLE IF NOT EXISTS `prov_stack_items` (
   KEY `ix_prov_stack_items_type` (`item_type`),
   KEY `ix_prov_stack_items_source` (`source_id`),
   CONSTRAINT `ck_prov_stack_items_role`     CHECK ((`item_type` = 'role') = (`ansible_role` IS NOT NULL)),
+  -- logical_name reaches task names, logs and repo descriptions: no control
+  -- characters (C0, DEL, C1, U+2028/2029 line separators).
+  CONSTRAINT `ck_prov_stack_items_name`     CHECK (`logical_name` NOT REGEXP '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]'),
   CONSTRAINT `ck_prov_stack_items_repo_ref` CHECK (`repo_ref` IS NULL OR `item_type` = 'pkg'),
   CONSTRAINT `ck_prov_stack_items_pin`      CHECK (`item_type` NOT IN ('artifact','build') OR `version_pin` IS NOT NULL),
   CONSTRAINT `ck_prov_stack_items_suse`     CHECK (`name_suse`   IS NULL OR (`item_type` = 'pkg') = (`name_suse`   <> '=' AND `name_suse`   <> '')),
@@ -244,11 +260,20 @@ CREATE TABLE IF NOT EXISTS `prov_stack_items` (
        AND JSON_VALUE(`spec`,'$.sha256') REGEXP '(?-i)^[0-9a-f]{64}\\z'
        AND NOT JSON_EXISTS(`spec`,'$.body')), 0)),
   -- build: source is {git} pinned by full commit SHA in version_pin, or
-  -- {tarball, sha256}; system is one of the supported build systems.
+  -- {tarball, sha256}; system is one of the supported build systems, compared
+  -- case-SENSITIVELY (the table collation would accept 'CMake', which the
+  -- generator and role do not know). custom carries non-empty `build` and
+  -- `install` commands; every other system carries neither; `commands` (the
+  -- pre-split single field) is refused.
   CONSTRAINT `ck_prov_stack_items_build`    CHECK (`item_type` <> 'build' OR IFNULL((
       JSON_TYPE(JSON_EXTRACT(`spec`,'$.source')) = 'OBJECT'
-      AND JSON_VALUE(`spec`,'$.system') IN ('cmake','make','autotools','meson','custom')
       AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.system')) = 'STRING'
+      AND JSON_VALUE(`spec`,'$.system') COLLATE utf8mb4_bin IN ('cmake','make','autotools','meson','custom')
+      AND NOT JSON_EXISTS(`spec`,'$.commands')
+      AND (CASE WHEN JSON_VALUE(`spec`,'$.system') COLLATE utf8mb4_bin = 'custom'
+             THEN JSON_TYPE(JSON_EXTRACT(`spec`,'$.build')) = 'STRING' AND JSON_VALUE(`spec`,'$.build') REGEXP '[^[:space:]]'
+              AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.install')) = 'STRING' AND JSON_VALUE(`spec`,'$.install') REGEXP '[^[:space:]]'
+             ELSE NOT JSON_EXISTS(`spec`,'$.build') AND NOT JSON_EXISTS(`spec`,'$.install') END)
       AND ((JSON_TYPE(JSON_EXTRACT(`spec`,'$.source.git')) = 'STRING' AND JSON_VALUE(`spec`,'$.source.git') <> ''
             AND NOT JSON_EXISTS(`spec`,'$.source.tarball')
             AND `version_pin` REGEXP '(?-i)^[0-9a-f]{40}([0-9a-f]{24})?\\z')
@@ -256,10 +281,49 @@ CREATE TABLE IF NOT EXISTS `prov_stack_items` (
             AND NOT JSON_EXISTS(`spec`,'$.source.git')
             AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.source.sha256')) = 'STRING'
             AND JSON_VALUE(`spec`,'$.source.sha256') REGEXP '(?-i)^[0-9a-f]{64}\\z'))), 0)),
-  -- guard check is an argv list (run without a shell), never a string.
+  -- guard check is an argv list (run without a shell), never a string: a
+  -- non-empty array whose EVERY element is a string, the first non-empty.
+  -- No JSON function can quantify over elements inside a CHECK (JSON_TABLE
+  -- needs a subquery; JSON_SEARCH also matches numbers/booleans/null), so the
+  -- compact text form is matched instead: '[' "str" (',' "str")* ']', where a
+  -- JSON string is quote, (non-quote-non-backslash | backslash + any)*, quote.
   CONSTRAINT `ck_prov_stack_items_check`    CHECK (`spec` IS NULL OR NOT JSON_EXISTS(`spec`,'$.check') OR IFNULL(
-      (JSON_TYPE(JSON_EXTRACT(`spec`,'$.check')) = 'ARRAY' AND JSON_LENGTH(`spec`,'$.check') >= 1
-       AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.check[0]')) = 'STRING' AND JSON_VALUE(`spec`,'$.check[0]') <> ''), 0)),
+      (JSON_TYPE(JSON_EXTRACT(`spec`,'$.check')) = 'ARRAY'
+       AND JSON_COMPACT(JSON_EXTRACT(`spec`,'$.check'))
+           REGEXP '(?-i)^\\["(?:[^"\\\\]++|\\\\.)++"(?:,"(?:[^"\\\\]++|\\\\.)*+")*+\\]\\z'), 0)),
+  -- repo: every family block present must be an object whose fields cannot
+  -- inject a config line (see header); debian additionally needs suite and
+  -- components. Same rules as stackgen._check_repo_family.
+  CONSTRAINT `ck_prov_stack_items_repo`     CHECK (`item_type` <> 'repo' OR IFNULL(
+      (NOT JSON_EXISTS(`spec`,'$.suse') OR (JSON_TYPE(JSON_EXTRACT(`spec`,'$.suse')) = 'OBJECT'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.suse.url')) = 'STRING' AND JSON_VALUE(`spec`,'$.suse.url') REGEXP '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.suse.key_url')) = 'STRING' AND JSON_VALUE(`spec`,'$.suse.key_url') REGEXP '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.suse.fingerprint')) = 'STRING' AND JSON_VALUE(`spec`,'$.suse.fingerprint') <> ''
+        AND JSON_VALUE(`spec`,'$.suse.fingerprint') NOT REGEXP '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]'
+        AND (NOT JSON_EXISTS(`spec`,'$.suse.suite') OR (JSON_TYPE(JSON_EXTRACT(`spec`,'$.suse.suite')) = 'STRING'
+             AND JSON_VALUE(`spec`,'$.suse.suite') REGEXP '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z'))
+        AND (NOT JSON_EXISTS(`spec`,'$.suse.components')
+             OR JSON_COMPACT(JSON_EXTRACT(`spec`,'$.suse.components')) REGEXP '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z')))
+      AND
+      (NOT JSON_EXISTS(`spec`,'$.debian') OR (JSON_TYPE(JSON_EXTRACT(`spec`,'$.debian')) = 'OBJECT'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.debian.url')) = 'STRING' AND JSON_VALUE(`spec`,'$.debian.url') REGEXP '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.debian.key_url')) = 'STRING' AND JSON_VALUE(`spec`,'$.debian.key_url') REGEXP '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.debian.fingerprint')) = 'STRING' AND JSON_VALUE(`spec`,'$.debian.fingerprint') <> ''
+        AND JSON_VALUE(`spec`,'$.debian.fingerprint') NOT REGEXP '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]'
+        AND (NOT JSON_EXISTS(`spec`,'$.debian.suite') OR (JSON_TYPE(JSON_EXTRACT(`spec`,'$.debian.suite')) = 'STRING'
+             AND JSON_VALUE(`spec`,'$.debian.suite') REGEXP '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z'))
+        AND (NOT JSON_EXISTS(`spec`,'$.debian.components')
+             OR JSON_COMPACT(JSON_EXTRACT(`spec`,'$.debian.components')) REGEXP '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z') AND JSON_EXISTS(`spec`,'$.debian.suite') AND JSON_EXISTS(`spec`,'$.debian.components')))
+      AND
+      (NOT JSON_EXISTS(`spec`,'$.fedora') OR (JSON_TYPE(JSON_EXTRACT(`spec`,'$.fedora')) = 'OBJECT'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.fedora.url')) = 'STRING' AND JSON_VALUE(`spec`,'$.fedora.url') REGEXP '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.fedora.key_url')) = 'STRING' AND JSON_VALUE(`spec`,'$.fedora.key_url') REGEXP '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z'
+        AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.fedora.fingerprint')) = 'STRING' AND JSON_VALUE(`spec`,'$.fedora.fingerprint') <> ''
+        AND JSON_VALUE(`spec`,'$.fedora.fingerprint') NOT REGEXP '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]'
+        AND (NOT JSON_EXISTS(`spec`,'$.fedora.suite') OR (JSON_TYPE(JSON_EXTRACT(`spec`,'$.fedora.suite')) = 'STRING'
+             AND JSON_VALUE(`spec`,'$.fedora.suite') REGEXP '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z'))
+        AND (NOT JSON_EXISTS(`spec`,'$.fedora.components')
+             OR JSON_COMPACT(JSON_EXTRACT(`spec`,'$.fedora.components')) REGEXP '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z'))), 0)),
   CONSTRAINT `fk_prov_stack_items_stack`    FOREIGN KEY (`stack_id`)  REFERENCES `prov_stacks`(`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_prov_stack_items_source`   FOREIGN KEY (`source_id`) REFERENCES `sources`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

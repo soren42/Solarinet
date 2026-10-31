@@ -7,6 +7,29 @@
     solari_repo: "{{ solari_stack_repos[solari_step.index] }}"
     solari_repo_key: "{{ solari_stack_work_root }}/keys/{{ solari_stack_repos[solari_step.index].id }}.asc"
 
+# Mirrors stackgen's repo rules so a hand-edited render cannot smuggle extra
+# lines into a sources.list / .repo file or extra argv into zypper.
+- name: Refuse repo fields that could inject config lines
+  vars:
+    solari_repo_id_re: '^[A-Za-z0-9][A-Za-z0-9._+~-]*\Z'
+    solari_repo_url_re: '^[^\s\x00-\x1f\x7f-\x9f  ]+\Z'
+    solari_repo_token_re: '^[A-Za-z0-9._/][A-Za-z0-9._/-]*\Z'
+    solari_repo_fpr_re: '^([0-9A-F]{40}|[0-9A-F]{64})\Z'
+    solari_repo_ctl_re: '[\x00-\x1f\x7f-\x9f  ]'
+  ansible.builtin.assert:
+    that:
+      - solari_repo.id | string is match(solari_repo_id_re)
+      - solari_repo.name | string is not search(solari_repo_ctl_re)
+      - solari_repo.url | string is match(solari_repo_url_re)
+      - solari_repo.key_url | string is match(solari_repo_url_re)
+      - solari_repo.fingerprint | string is match(solari_repo_fpr_re)
+      - ansible_os_family != 'Debian' or (solari_repo.suite | string is match(solari_repo_token_re))
+      - ansible_os_family != 'Debian' or (solari_repo.components is sequence and solari_repo.components is not string
+          and solari_repo.components | length > 0
+          and solari_repo.components | map('string') | reject('match', solari_repo_token_re) | list | length == 0)
+    fail_msg: "{{ solari_repo.name | string | regex_replace(solari_repo_ctl_re, '?') }}: repo id/url/key_url/fingerprint/suite/components contain characters that could inject config lines"
+    quiet: true
+
 - name: Fetch signing key for {{ solari_repo.name }}
   ansible.builtin.get_url:
     url: "{{ solari_repo.key_url }}"
