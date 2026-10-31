@@ -5,7 +5,7 @@
   const { useState, useEffect, useRef, useCallback } = React;
   const Icon = window.Icon;
   const S = window.SOLARI;
-  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Inventory, CodesScreen, MaintenanceScreen, GitScreen, CaScreen, DnsScreen, PanelScreen, RackWireScreen } = window;
+  const { Sidebar, TopBar, CommandPalette, Toasts, FleetOverview, NodeDetail, AlertsScreen, Reachability, Topology, Discovery, Provisioning, ConfigScreen, PoolCards, Assets, AssetDetail, ServiceDetail, OpieScreen, Inventory, CodesScreen, MaintenanceScreen, GitScreen, CaScreen, DnsScreen, PanelScreen, RackWireScreen, ProvImagesScreen } = window;
 
     const partialSources = S.source === "live"
       ? Object.values(S.freshness || {}).filter((source) => source.state !== "fresh")
@@ -224,6 +224,7 @@
         { id: "go-rackwire", group: "Navigate", label: "RackWire", icon: "rackwire", action: () => go("rackwire"), sub: "network, power & interconnect planning" },
         { id: "go-disc", group: "Navigate", label: "Discovery", icon: "discovery", action: () => go("discovery"), sub: `${S.discovered.length} new` },
         { id: "go-prov", group: "Navigate", label: "Provisioning", icon: "provision", action: () => go("provision"), sub: `${S.enrollments.length} pending` },
+        { id: "go-provimages", group: "Navigate", label: "Images & Stacks", icon: "layers", action: () => go("provimages"), sub: "OS images · software stacks · deploy" },
         { id: "go-maint", group: "Navigate", label: "Maintenance", icon: "maintenance", action: () => go("maintenance"), sub: `${((S.maintenance || []).filter((w) => w.live || w.status === "active")).length} live` },
         { id: "go-git", group: "Navigate", label: "Git", icon: "git", action: () => go("git"), sub: `${((S.git && S.git.repos) || []).length} repos` },
         { id: "go-ca", group: "Navigate", label: "Certificates", icon: "shield", action: () => go("certificates"), sub: `${((S.ca && S.ca.nodeCerts) || []).length} node certs` },
@@ -286,7 +287,8 @@
             {route.name === "reachability" && <Reachability onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "topology" && <Topology onOpenNode={openNode} onOpenEntity={openEntity} />}
             {route.name === "discovery" && <Discovery onOpenNode={openNode} />}
-            {route.name === "provision" && <Provisioning onOpenNode={openNode} />}
+            {route.name === "provision" && <Provisioning onOpenNode={openNode} onNavigate={go} />}
+            {route.name === "provimages" && ProvImagesScreen && <ProvImagesScreen toast={toast} onNavigate={go} />}
             {route.name === "maintenance" && MaintenanceScreen && <MaintenanceScreen onOpenNode={openNode} toast={toast} />}
             {route.name === "git" && GitScreen && <GitScreen />}
             {route.name === "certificates" && CaScreen && <CaScreen />}

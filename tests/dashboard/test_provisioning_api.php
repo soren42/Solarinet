@@ -44,7 +44,8 @@ register_shutdown_function(static function () use ($SESSION_DIR): void {
 
 /**
  * @param array<string,mixed> $o method, path, body (array|string), query,
- *   auth (bool, default true), role, csrf (bool), origin, idem, db (resolvers)
+ *   auth (bool, default true), role, csrf (bool), origin, idem, db (resolvers),
+ *   env (extra worker env, e.g. PV_NODES / SOLARI_CTL_SOCK)
  */
 function pv(array $o): array
 {
@@ -73,6 +74,9 @@ function pv(array $o): array
     }
     if (($o['csrf'] ?? true) === false) {
         $env['PV_CSRF'] = '0';
+    }
+    foreach ($o['env'] ?? [] as $k => $v) {
+        $env[$k] = (string) $v;
     }
     $proc = proc_open([$PHP, $WORKER], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $env);
     if (!is_resource($proc)) {
@@ -155,7 +159,8 @@ $writes = [
     ['POST', "$P/stacks/3/deps"], ['DELETE', "$P/stacks/3/deps/1"],
     ['POST', "$P/image-refresh"], ['POST', "$P/stage"], ['POST', "$P/apply"],
 ];
-$reads = ["$P/images", "$P/images/4", "$P/software", "$P/software/5", "$P/stacks", "$P/stacks/3", "$P/runs", "$P/runs/8"];
+$reads = ["$P/images", "$P/images/4", "$P/software", "$P/software/5", "$P/stacks", "$P/stacks/3", "$P/runs", "$P/runs/8",
+    "$P/targets", "$P/log"];
 
 // ---------------------------------------------------------------------------
 echo "[1] authorization + CSRF gating\n";
@@ -382,6 +387,95 @@ pv_ok($r['status'] === 200 && ($r['body']['data'][0]['stack_slugs'] ?? null) ===
     'GET runs with filters + limit', "status={$r['status']}");
 $r = pv(['path' => "$P/runs/8", 'db' => [['match' => 'FROM prov_runs r', 'rows' => []]]]);
 pv_ok($r['status'] === 404, 'GET missing run -> 404', "status={$r['status']}");
+
+// ---------------------------------------------------------------------------
+echo "[5a] software list carries live conflict pairs\n";
+$swRow = static fn (int $id, string $n) => ['id' => $id, 'logical_name' => $n, 'item_type' => 'pkg',
+    'name_suse' => $n, 'name_debian' => $n, 'name_fedora' => $n, 'applies_families' => null, 'applies_arches' => null,
+    'ansible_role' => null, 'source_url' => null, 'version_pin' => null, 'spec' => null, 'notes' => null, 'updated_at' => null];
+$r = pv(['path' => "$P/software", 'role' => 'viewer', 'db' => [
+    ['match' => 'FROM prov_software WHERE deleted_at IS NULL ORDER BY', 'rows' => [$swRow(3, 'exim'), $swRow(5, 'postfix'), $swRow(7, 'curl')]],
+    ['match' => 'FROM prov_software_conflicts c', 'rows' => [['lo' => 3, 'hi' => 5]]],
+]]);
+$cw = array_column($r['body']['data'] ?? [], 'conflicts_with', 'logical_name');
+pv_ok($r['status'] === 200 && ($cw['exim'] ?? null) === [5] && ($cw['postfix'] ?? null) === [3] && ($cw['curl'] ?? null) === [],
+    'software list: conflicts_with is symmetric, empty when none', json_encode($cw));
+
+echo "[5b] P4 reads: targets + helper log tail\n";
+$TGT_Q = 'FROM entities e JOIN interfaces i';
+$tgtRows = [
+    ['id' => 9, 'name' => 'neon', 'entity_type' => 'server', 'lifecycle' => 'active', 'role' => 'compute',
+     'hw_make' => 'Raspberry Pi', 'hw_model' => 'Pi 5', 'hw_type' => 'sbc', 'if_name' => 'eth0',
+     'mac' => 'aa:bb:cc:00:00:01', 'is_management' => 1],
+    ['id' => 9, 'name' => 'neon', 'entity_type' => 'server', 'lifecycle' => 'active', 'role' => 'compute',
+     'hw_make' => 'Raspberry Pi', 'hw_model' => 'Pi 5', 'hw_type' => 'sbc', 'if_name' => 'wlan0',
+     'mac' => 'aa:bb:cc:00:00:02', 'is_management' => 0],
+    ['id' => 12, 'name' => 'argon', 'entity_type' => 'vm', 'lifecycle' => 'active', 'role' => null,
+     'hw_make' => null, 'hw_model' => null, 'hw_type' => null, 'if_name' => 'ens18',
+     'mac' => 'aa:bb:cc:00:00:03', 'is_management' => 0],
+];
+$nodes = json_encode([['hostFqdn' => 'neon.akoria.net', 'arch' => 'aarch64'], ['hostFqdn' => 'xenon.akoria.net', 'arch' => 'amd64']]);
+$r = pv(['path' => "$P/targets", 'role' => 'viewer', 'env' => ['PV_NODES' => $nodes],
+    'db' => [['match' => $TGT_Q, 'rows' => $tgtRows]]]);
+$d = $r['body']['data'] ?? [];
+$tsql = $r['sql'][0] ?? '';
+pv_ok($r['status'] === 200 && count($d) === 2 && ($d[0]['id'] ?? null) === '9'
+    && count($d[0]['interfaces'] ?? []) === 2 && ($d[0]['interfaces'][0]['management'] ?? null) === true
+    && ($d[0]['interfaces'][1]['management'] ?? null) === false && count($d[1]['interfaces'] ?? []) === 1,
+    'GET targets groups interface rows per entity (viewer may read)', "status={$r['status']}");
+pv_ok(($d[0]['arch'] ?? null) === 'arm64' && ($d[0]['arch_source'] ?? null) === 'agent'
+    && array_key_exists('arch', $d[1] ?? []) && $d[1]['arch'] === null && $d[1]['arch_source'] === null,
+    'targets: arch from agent node (aarch64 -> arm64) by short host; none -> null', json_encode([$d[0]['arch'] ?? 0, $d[1]['arch'] ?? 0]));
+pv_ok(str_contains($tsql, 'e.deleted_at IS NULL') && str_contains($tsql, 'i.mac IS NOT NULL')
+    && str_contains($tsql, "NOT IN ('retired', 'decommissioned')"),
+    'targets: live, non-retired entities with a MAC only', $tsql);
+$r = pv(['path' => "$P/targets", 'db' => [['match' => $TGT_Q, 'rows' => $tgtRows]]]);
+pv_ok($r['status'] === 200 && count($r['body']['data'] ?? []) === 2 && array_key_exists('arch', $r['body']['data'][0] ?? []) && $r['body']['data'][0]['arch'] === null,
+    'targets still list when the monitoring DB is unavailable (arch null)', "status={$r['status']}");
+$r = pv(['path' => "$P/targets", 'db' => [['match' => $TGT_Q, 'throw' => true, 'message' => 'SQLSTATE[HY000] gone']]]);
+pv_ok($r['status'] >= 500 && pv_clean($r), 'targets SoR failure -> 5xx without driver text', "status={$r['status']}");
+
+$logDir = sys_get_temp_dir() . '/pv-log-' . getmypid();
+@mkdir($logDir, 0700, true);
+$LOGENV = ['SOLARI_CTL_SOCK' => "$logDir/solariCtl.sock"];
+foreach (['', 'kind=../../etc/passwd&id=1', 'kind=PROV-STAGE&id=1'] as $q) {
+    $r = pv(['path' => "$P/log", 'query' => $q, 'env' => $LOGENV]);
+    pv_ok($r['status'] === 400 && str_starts_with(pv_msg($r), 'kind'), "log query '$q' -> 400 on kind", "status={$r['status']}");
+}
+foreach (['kind=prov-stage', 'kind=prov-stage&id=0', 'kind=prov-stage&id=..%2F1', 'kind=prov-stage&id=1.5'] as $q) {
+    $r = pv(['path' => "$P/log", 'query' => $q, 'env' => $LOGENV]);
+    pv_ok($r['status'] === 400 && str_starts_with(pv_msg($r), 'id'), "log query '$q' -> 400 on id", "status={$r['status']}");
+}
+$r = pv(['path' => "$P/log", 'query' => 'kind=stack-apply&id=77', 'env' => $LOGENV]);
+pv_ok($r['status'] === 200 && ($r['body']['data']['exists'] ?? null) === false && ($r['body']['data']['log'] ?? null) === ''
+    && array_key_exists('updated_at', $r['body']['data'] ?? []) && $r['body']['data']['updated_at'] === null, 'log for a run with no file -> exists:false, empty', "status={$r['status']}");
+file_put_contents("$logDir/prov-stage-8.log", "fetch ok\n\x1b[32mstaged\x1b[0m\n");
+$r = pv(['path' => "$P/log", 'query' => 'kind=prov-stage&id=8', 'role' => 'viewer', 'env' => $LOGENV]);
+pv_ok($r['status'] === 200 && ($r['body']['data']['exists'] ?? null) === true
+    && ($r['body']['data']['log'] ?? '') === "fetch ok\nstaged\n" && ($r['body']['data']['truncated'] ?? null) === false
+    && $r['sql'] === [], 'log tail: ANSI colour stripped, not truncated, no SQL', json_encode($r['body']['data']['log'] ?? null));
+$big = '';
+for ($i = 0; strlen($big) < 70000; $i++) {
+    $big .= sprintf("line %05d %s\n", $i, str_repeat('x', 40));
+}
+file_put_contents("$logDir/image-refresh-4.log", $big);
+$r = pv(['path' => "$P/log", 'query' => 'kind=image-refresh&id=4', 'env' => $LOGENV]);
+$tail = (string) ($r['body']['data']['log'] ?? '');
+pv_ok($r['status'] === 200 && ($r['body']['data']['truncated'] ?? null) === true
+    && ($r['body']['data']['size'] ?? 0) === strlen($big) && strlen($tail) <= 65536
+    && str_starts_with($tail, 'line ') && str_ends_with($big, $tail),
+    'log tail over 64 KiB: truncated, bounded, starts on a whole line', 'len=' . strlen($tail));
+$secret = "$logDir/not-a-log.txt";
+file_put_contents($secret, "SECRET-CONTENT\n");
+symlink($secret, "$logDir/stack-apply-5.log");
+$r = pv(['path' => "$P/log", 'query' => 'kind=stack-apply&id=5', 'env' => $LOGENV]);
+pv_ok($r['status'] === 200 && ($r['body']['data']['exists'] ?? null) === false
+    && ($r['body']['data']['log'] ?? null) === '' && !str_contains(json_encode($r['body']), 'SECRET'),
+    'log at a symlinked name is not followed (exists:false, nothing read)', json_encode($r['body']['data'] ?? null));
+foreach (glob("$logDir/*") ?: [] as $f) {
+    @unlink($f);
+}
+@rmdir($logDir);
 
 // ---------------------------------------------------------------------------
 echo "[6] enqueue contract (callQueued, exact verb + args, op never in args)\n";

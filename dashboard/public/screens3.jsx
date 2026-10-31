@@ -733,7 +733,19 @@
   }
 
   /* ===================== PROVISIONING ===================== */
-  function Provisioning({ onOpenNode }) {
+  // Legacy fleet-provision / fleet-image choices (routes/control.php validators).
+  const FLEET_DISTROS = [
+    { id: "debian",   label: "Debian 12",        arches: ["x86_64", "arm64", "arm32"], install: "preseed" },
+    { id: "ubuntu",   label: "Ubuntu 24.04",     arches: ["x86_64", "arm64"],          install: "autoinstall" },
+    { id: "opensuse", label: "openSUSE Leap 15", arches: ["x86_64", "arm64"],          install: "autoyast" },
+    { id: "raspios",  label: "Raspberry Pi OS",  arches: ["arm64", "arm32"],           install: "image" },
+  ];
+  const FLEET_ROLES = [
+    { id: "sensor", label: "Sensor / client" }, { id: "edge", label: "Edge node" }, { id: "appliance", label: "Appliance" },
+  ];
+  const FLEET_PROFILES = [{ id: "standard", label: "Standard stack" }, { id: "minimal", label: "Minimal" }];
+
+  function Provisioning({ onOpenNode, onNavigate }) {
     const [enr, setEnr] = useState(S.enrollments);
     const [allocatorNetworks, setAllocatorNetworks] = useState([]);
     const [allocatorBusy, setAllocatorBusy] = useState(false);
@@ -867,8 +879,10 @@
       });
     }
 
-    // ---- fleet provisioning (bare-metal OS install + Pi imaging) ----
-    const [cat, setCat] = useState(null);
+    // ---- fleet provisioning (legacy OS install + Pi imaging) ----
+    // The choices mirror the fleet-provision / fleet-image validators in
+    // routes/control.php (catalog.json is retired; Images & stacks owns the
+    // SoR-backed image catalog).
     const [fMode, setFMode] = useState("install");     // "install" | "image"
     const [fDistro, setFDistro] = useState("debian");
     const [fArch, setFArch] = useState("x86_64");
@@ -878,19 +892,11 @@
     const [fProfile, setFProfile] = useState("standard");
     const [fLog, setFLog] = useState("");
     const [fBusy, setFBusy] = useState(false);
-    useEffect(function () {
-      const a = api();
-      if (!a || !a.fleetCatalog) return undefined;
-      let live = true;
-      a.fleetCatalog().then(function (c) { if (live) setCat(c); }).catch(function () {});
-      return function () { live = false; };
-    }, []);
-    // distros available for the chosen mode: image builds are Pi (raspios) only
-    const fDistros = (cat && cat.distros ? cat.distros : []).filter(function (d) {
+    const fDistros = FLEET_DISTROS.filter(function (d) {
       return fMode === "image" ? d.install === "image" : d.install !== "image";
     });
     const fArches = (function () {
-      const d = (cat && cat.distros || []).find(function (x) { return x.id === fDistro; });
+      const d = FLEET_DISTROS.find(function (x) { return x.id === fDistro; });
       return (d && d.arches) || (fMode === "image" ? ["arm64", "arm32"] : ["x86_64", "arm64", "arm32"]);
     })();
     function pollProvision(hostname, isImage, tries) {
@@ -1086,18 +1092,16 @@
           <div className="panel__body">
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <select value={fDistro} onChange={(e) => setFDistro(e.target.value)} style={fieldStyle}>
-                {fDistros.length
-                  ? fDistros.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)
-                  : <option value={fDistro}>{fDistro}</option>}
+                {fDistros.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
               </select>
               <select value={fArch} onChange={(e) => setFArch(e.target.value)} style={fieldStyle}>
                 {fArches.map((a) => <option key={a} value={a}>{a}</option>)}
               </select>
               <select value={fRole} onChange={(e) => setFRole(e.target.value)} style={fieldStyle}>
-                {(cat && cat.roles ? cat.roles : [{ id: "sensor", label: "Sensor" }]).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                {FLEET_ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
               </select>
               <select value={fProfile} onChange={(e) => setFProfile(e.target.value)} style={fieldStyle}>
-                {(cat && cat.profiles ? cat.profiles : [{ id: "standard", label: "Standard" }]).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                {FLEET_PROFILES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
@@ -1113,8 +1117,8 @@
             {fLog ? <pre style={{ marginTop: 12, maxHeight: 220, overflow: "auto", background: "rgba(0,0,0,0.30)", padding: 10, borderRadius: 8, fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap", fontFamily: "var(--mono)" }}>{fLog}</pre> : null}
             <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
               {fMode === "install"
-                ? <span>Renders an unattended install (same core package stack across distros) + stages a per-MAC netboot entry on <code>benzene</code>. The machine installs on its next network boot. <b>Live PXE activates once the DHCP switch is flipped</b> — until then, entries are staged.</span>
-                : <span>Builds a customized Raspberry Pi OS image (hostname, SSH key, core stack, SolariNet enrollment) on <code>benzene</code> for flashing to SD/USB. Pi 5 can also native-netboot once PXE is live.</span>}
+                ? <span>Renders an unattended install (same core package stack across distros) + stages a per-MAC netboot entry on <code>benzene</code>. Netboot is live: the machine installs on its next network boot; machines without a staged entry fall back to local disk. For SoR-managed images and software stacks use <button type="button" className="linkbtn" onClick={() => onNavigate && onNavigate("provimages")}>Images &amp; Stacks</button>.</span>
+                : <span>Builds a customized Raspberry Pi OS image (hostname, SSH key, core stack, SolariNet enrollment) on <code>benzene</code> for flashing to SD/USB.</span>}
             </div>
           </div>
         </div>

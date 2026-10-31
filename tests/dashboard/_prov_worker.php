@@ -16,6 +16,8 @@ declare(strict_types=1);
  *   PV_RESOLVERS   JSON list of FakePdo resolvers {match, rows?, affected?,
  *                  insertId?, throw?, driverCode?, sqlState?, message?}
  *   PV_CAPTURE=1   dump executed SQL + params to stderr
+ *   PV_NODES       JSON rows for a fake monitoring Db::rows(); unset = the
+ *                  monitoring Db class is absent (models "monitoring DB down")
  *
  * The real Policy::enforce guard is installed (default-deny + CSRF), the real
  * routes/provisioning.php and lib/ProvCatalog.php run unmodified. Sor's PDO
@@ -57,6 +59,17 @@ function solari_json_body(?int $maxBytes = null): array
 }
 
 /** Fake control client: records the enqueue, never opens a socket. */
+if (getenv('PV_NODES') !== false) {
+    final class Db
+    {
+        public static function rows(string $sql, array $params = []): array
+        {
+            fwrite(STDERR, 'MONSQL:' . preg_replace('/\s+/', ' ', $sql) . "\n");
+            return json_decode((string) getenv('PV_NODES'), true) ?: [];
+        }
+    }
+}
+
 final class SolariCtl
 {
     public static function callQueued(string $verb, array $args, string $op, ?string $idem = null): array

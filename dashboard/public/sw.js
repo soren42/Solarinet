@@ -23,7 +23,7 @@
 "use strict";
 
 // Bump the version to evict API responses cached by earlier service workers.
-const CACHE_VERSION = "solari-v14";
+const CACHE_VERSION = "solari-v15";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
 const TRANSFORM_CACHE = "solari-jsx-transform-v2";
 
@@ -59,6 +59,7 @@ const SHELL_ASSETS = [
   "screens8.jsx",
   "screens-panel.jsx",
   "screens-rackwire.jsx",
+  "screens-prov.jsx",
   "app.jsx",
   // vendored libs (on-prem / air-gapped — §8.1)
   "vendor/react.production.min.js",

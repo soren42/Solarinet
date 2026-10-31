@@ -50,7 +50,7 @@ amber "DEMO DATA" banner. If the API is reachable but returns 401, it shows the 
 | Topology `topology` | `Topology` + engine (layout.jsx) + `GearThroughput` | nodes, gear, edges (monitoring & network views) | `/api/topology?view=`, `/api/gear`, `/api/gear/{id}/interfaces` | — |
 | Alerts `alerts` | `AlertsScreen` (screens.jsx) | alert events + rules (tolerances) | `/api/alerts`, `/api/rules` | ack alert, rule CRUD |
 | Discovery `discovery` | `Discovery` + `AdoptModal` (screens3.jsx) | discovered candidates (mDNS/ARP/portscan/LLDP), enrichment | `/api/discovery?status=` | scan, adopt, ignore, toggle auto |
-| Provisioning `provision` | `Provisioning` + `AgentDirectory`/`AgentModal` (screens3.jsx) | enrollments, build artifacts, remote deploy, fleet imaging | `/api/enrollments`, `/api/builds`, `/api/control/fleet-catalog` | approve/reject, provision, deploy, decommission, image |
+| Provisioning `provision` | `Provisioning` + `AgentDirectory`/`AgentModal` (screens3.jsx) | enrollments, build artifacts, remote deploy, fleet imaging | `/api/enrollments`, `/api/builds`, ~~`/api/control/fleet-catalog`~~ (retired 2026-10-31; Images & Stacks uses `/api/provisioning/*`) | approve/reject, provision, deploy, decommission, image |
 | Config & Rules `settings` | `ConfigScreen` (screens3.jsx) | global config (probe/gossip/discovery), alert rules | `/api/config`, `/api/rules` | save config, rule CRUD |
 | (global) | `CommandPalette`, `TopBar`, `Sidebar`, `Toasts`, login | operator, summary counts, SSE ticks | `/api/auth/*`, `/api/stream` (SSE) | logout |
 

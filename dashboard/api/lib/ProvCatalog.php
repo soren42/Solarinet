@@ -930,6 +930,21 @@ final class ProvCatalog
 
     // ================================================================ mappers
 
+    /**
+     * Agent/uname arch string -> prov_images arch enum (the
+     * deploy/fleet/stack-apply.py ARCH_MAP plus common aliases), or null.
+     */
+    public static function normArch(string $a): ?string
+    {
+        return [
+            'x86_64' => 'x86_64', 'amd64' => 'x86_64',
+            'aarch64' => 'arm64', 'arm64' => 'arm64',
+            'armv7l' => 'armhf', 'armv6l' => 'armhf', 'armhf' => 'armhf', 'arm32' => 'armhf', 'arm' => 'armhf',
+            'riscv64' => 'riscv64',
+            'i386' => 'i386', 'i686' => 'i386', 'x86' => 'i386',
+        ][strtolower(trim($a))] ?? null;
+    }
+
     public static function iso(?string $dt): ?string
     {
         return Coerce::iso($dt);

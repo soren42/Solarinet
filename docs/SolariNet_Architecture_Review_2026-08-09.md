@@ -288,7 +288,7 @@ Coordinator-free target ownership [Observed, map-core §2, `src/monitor/monitorP
 | `/api/nodes/{id}/criticality` | `control.php:115` | tier 0–4 → `CRIT_SET`; operator |
 | `/api/control/survey` | `control.php:133` | → `SURVEY`; **no explicit PHP role gate** (BUG-P3) |
 | `/api/control/deploy` (POST) / (GET) | `control.php:150,173` | remote agent deploy → `DEPLOY` (operator) / tail log (viewer) |
-| `/api/control/fleet-catalog` | `control.php:197` | provisioning reference data |
+| `/api/control/fleet-catalog` | `control.php:197` | provisioning reference data *(retired 2026-10-31, P4: replaced by `/api/provisioning/*`)* |
 | `/api/control/fleet-provision` (POST/GET) | `control.php:236,304` | bare-metal PXE → `FLEET_PROVISION`; tail log |
 | `/api/control/fleet-image` | `control.php:275` | Pi image build → `FLEET_IMAGE` |
 | `/api/config` (GET/POST) | `config.php` | global config; POST validates → `CONFIG_SET` |

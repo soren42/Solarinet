@@ -21,6 +21,8 @@ declare(strict_types=1);
  *     GET  /api/provisioning/software[/{id}]      (+ artifacts/requires/conflicts)
  *     GET  /api/provisioning/stacks[/{id}]        (+ ordered members, deps)
  *     GET  /api/provisioning/runs?entity=&mode=&status=&limit=   GET /runs/{id}
+ *     GET  /api/provisioning/targets              (P4: entities with a MAC + arch)
+ *     GET  /api/provisioning/log?kind=&id=        (P4: helper log tail, 64 KiB)
  *   Writes (operator; Origin + X-Solari-CSRF via Policy):
  *     POST/PUT/DELETE images, software, stacks (DELETE = soft delete)
  *     POST/DELETE software/{id}/artifacts|requires|conflicts
@@ -295,7 +297,22 @@ return static function (Router $router): void {
             $where .= ' AND item_type = :t';
         }
         $rows = ProvCatalog::rows("SELECT $SW_COLS FROM prov_software WHERE $where ORDER BY logical_name, id", $params);
-        Response::ok(array_map([ProvCatalog::class, 'softwareOut'], $rows));
+        // Live conflict pairs ride along so the deploy view can block a
+        // conflicting selection before confirm (the generator refuses it anyway).
+        $cf = [];
+        foreach (ProvCatalog::rows('SELECT c.software_lo_id AS lo, c.software_hi_id AS hi
+                                      FROM prov_software_conflicts c
+                                      JOIN prov_software a ON a.id = c.software_lo_id AND a.deleted_at IS NULL
+                                      JOIN prov_software b ON b.id = c.software_hi_id AND b.deleted_at IS NULL
+                                     WHERE c.deleted_at IS NULL') as $c) {
+            $cf[(int) $c['lo']][] = (int) $c['hi'];
+            $cf[(int) $c['hi']][] = (int) $c['lo'];
+        }
+        Response::ok(array_map(static function (array $r) use ($cf): array {
+            $o = ProvCatalog::softwareOut($r);
+            $o['conflicts_with'] = $cf[(int) $r['id']] ?? [];
+            return $o;
+        }, $rows));
     });
 
     $router->get("$P/software/{id}", static function (array $p) use ($softwareGet, $softwareDetail): void {
@@ -642,6 +659,114 @@ return static function (Router $router): void {
             ProvCatalog::notFound('Stack dependency not found.');
         }
         Response::ok(['stack_id' => $id, 'depends_on_stack_id' => $on, 'deleted' => true]);
+    });
+
+    // ------------------------------------------------------------ targets
+    // Deploy targets for the P4 screen: live SoR entities with at least one
+    // live MAC-bearing interface (PROV_STAGE refuses anything else) plus the
+    // hardware model. The SoR has no CPU-arch column, so arch comes from the
+    // agent-reported monitoring `node.arch` (matched on the short hostname),
+    // normalised to the prov_images arch enum; null = unknown.
+
+    $router->get("$P/targets", static function (): void {
+        $rows = ProvCatalog::rows(
+            "SELECT e.id, e.name, e.entity_type, e.lifecycle, e.role,
+                    hm.make AS hw_make, hm.model AS hw_model, hm.hw_type,
+                    i.name AS if_name, i.mac, i.is_management
+               FROM entities e
+               JOIN interfaces i ON i.entity_id = e.id AND i.deleted_at IS NULL AND i.mac IS NOT NULL
+               LEFT JOIN hardware_units hu ON hu.id = e.hardware_unit_id AND hu.deleted_at IS NULL
+               LEFT JOIN hardware_models hm ON hm.id = hu.model_id AND hm.deleted_at IS NULL
+              WHERE e.deleted_at IS NULL
+                AND e.lifecycle NOT IN ('retired', 'decommissioned')
+                AND e.entity_type IN ('server', 'workstation', 'vm', 'appliance', 'iot_device', 'other')
+              ORDER BY e.name, e.id, i.is_management DESC, i.name");
+        $arch = [];
+        try {
+            foreach (Db::rows("SELECT hostFqdn, arch FROM node WHERE state <> 'retired' AND arch IS NOT NULL") as $n) {
+                $short = strtolower(explode('.', (string) $n['hostFqdn'])[0]);
+                $norm = ProvCatalog::normArch((string) $n['arch']);
+                if ($short !== '' && $norm !== null) {
+                    $arch[$short] = $norm;
+                }
+            }
+        } catch (Throwable $e) {
+            $arch = [];   // monitoring DB unavailable: targets still list, arch unknown
+        }
+        $out = [];
+        foreach ($rows as $r) {
+            $id = (string) $r['id'];
+            if (!isset($out[$id])) {
+                $a = $arch[strtolower((string) $r['name'])] ?? null;
+                $out[$id] = [
+                    'id'          => $id,
+                    'name'        => $r['name'],
+                    'entity_type' => $r['entity_type'],
+                    'lifecycle'   => $r['lifecycle'],
+                    'role'        => $r['role'],
+                    'hw_make'     => $r['hw_make'],
+                    'hw_model'    => $r['hw_model'],
+                    'hw_type'     => $r['hw_type'],
+                    'arch'        => $a,
+                    'arch_source' => $a === null ? null : 'agent',
+                    'interfaces'  => [],
+                ];
+            }
+            $out[$id]['interfaces'][] = [
+                'name' => $r['if_name'], 'mac' => $r['mac'], 'management' => (int) $r['is_management'] === 1,
+            ];
+        }
+        Response::ok(array_values($out));
+    });
+
+    // ---------------------------------------------------------------- log
+    // Tail of a helper's per-run log. The C helpers write
+    // <logDir>/<kind>-<id>.log, 0640 to the ctl socket group (4a6d822) so the
+    // dashboard can read it; logDir defaults to the ctl socket directory, the
+    // same convention GET /api/control/deploy uses. Bounded to the last 64 KiB.
+
+    $router->get("$P/log", static function (): void {
+        $kind = $_GET['kind'] ?? '';
+        if (!is_string($kind) || !in_array($kind, ['image-refresh', 'prov-stage', 'stack-apply'], true)) {
+            ProvCatalog::bad('kind must be one of: image-refresh, prov-stage, stack-apply.');
+        }
+        $id = ProvCatalog::idValue($_GET['id'] ?? null, 'id');
+        $sock = getenv('SOLARI_CTL_SOCK') ?: '/run/solari/solariCtl.sock';
+        $file = dirname($sock) . '/' . $kind . '-' . $id . '.log';
+        $max = 65536;
+        $log = '';
+        $size = 0;
+        $mtime = null;
+        // Never follow a link at the expected name, and read from the very
+        // inode that was checked; size and the byte cap come from the open fd
+        // so a log growing mid-read cannot exceed $max.
+        $st = @lstat($file);
+        $fh = ($st !== false && ($st['mode'] & 0170000) === 0100000) ? @fopen($file, 'rb') : false;
+        if ($fh !== false) {
+            $fs = fstat($fh);
+            if ($fs !== false && $fs['dev'] === $st['dev'] && $fs['ino'] === $st['ino']) {
+                $size = (int) $fs['size'];
+                $mtime = gmdate('Y-m-d\TH:i:s\Z', (int) $fs['mtime']);
+                if ($size > $max) {
+                    fseek($fh, $size - $max, SEEK_SET);
+                }
+                $log = (string) stream_get_contents($fh, $max);
+            }
+            fclose($fh);
+            if ($size > $max && ($nl = strpos($log, "\n")) !== false) {
+                $log = substr($log, $nl + 1);   // start the tail on a whole line
+            }
+            $log = (string) preg_replace('/\x1b\[[0-9;]*m/', '', $log);
+        }
+        Response::ok([
+            'kind'       => $kind,
+            'id'         => $id,
+            'exists'     => $mtime !== null,
+            'log'        => $log,
+            'truncated'  => $size > $max,
+            'size'       => $size,
+            'updated_at' => $mtime,
+        ]);
     });
 
     // --------------------------------------------------------------- runs

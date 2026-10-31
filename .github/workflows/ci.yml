@@ -642,7 +642,7 @@ jobs:
           php tests/dashboard/test_authz_negative.php
       - name: RackWire API route tests
         run: php tests/dashboard/test_rackwire_api.php
-      - name: Provisioning catalog + verb-enqueue API route tests
+      - name: Provisioning catalog, targets/log + verb-enqueue API route tests
         run: php tests/dashboard/test_provisioning_api.php
       - name: RackWire UI parse + token bridge tests
         run: node tests/dashboard/test_rackwire_ui.js
@@ -673,6 +673,10 @@ jobs:
         env:
           NODE_PATH: /tmp/dashboard-playwright/node_modules
         run: node tests/browser/test_provisioning_allocator_e2e.cjs
+      - name: Images & Stacks browser acceptance
+        env:
+          NODE_PATH: /tmp/dashboard-playwright/node_modules
+        run: node tests/browser/test_provisioning_images_e2e.cjs
       - name: Lifecycle UI suite
         run: node tests/dashboard/test_lifecycle_ui.js
       - name: Panel AW UI suite

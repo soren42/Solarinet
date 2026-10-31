@@ -85,7 +85,7 @@ Build as reviewable files; NOTHING deployed to xenon. Mirror Phase-0 pattern
   (solari + sandbox), server.conf [ctl] fragment, tmpfiles, PERMISSIONS.md
   matrix, verify-boundary.sh (asserts www-solari cannot read CA key + socket ACL).
   The hardened pool explicitly maps PHP environment dependencies for SoR,
-  Forgejo, Keycloak, CA, DNS, uploads, and fleet catalog; contract tests check
+  Forgejo, Keycloak, CA, DNS, and uploads; contract tests check
   those mappings, placeholder-only secret values, writable state setup, and
   open_basedir coverage. The separate `solari_dashboard` SoR account has a
   table-scoped grant file; a scratch-schema test confirms its exact 53

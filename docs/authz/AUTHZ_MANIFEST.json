@@ -287,6 +287,18 @@
       "roleRequired": "session"
     },
     {
+      "method": "GET",
+      "pattern": "/api/provisioning/targets",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/log",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
       "method": "POST",
       "pattern": "/api/provisioning/images",
       "csrf": "origin+session-token",
@@ -907,12 +919,6 @@
     {
       "method": "GET",
       "pattern": "/api/control/deploy",
-      "csrf": "none",
-      "roleRequired": "session"
-    },
-    {
-      "method": "GET",
-      "pattern": "/api/control/fleet-catalog",
       "csrf": "none",
       "roleRequired": "session"
     },
