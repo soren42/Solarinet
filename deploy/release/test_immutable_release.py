@@ -72,7 +72,7 @@ class ImmutableReleaseTests(unittest.TestCase):
             base = Path(temp)
             binaries = base / "binaries"
             binaries.mkdir()
-            for name in ("server", "worker", "client", "monitor", "snmp"):
+            for name in ("server", "worker", "client", "monitor", "snmp", "ctlclient"):
                 path = binaries / name
                 path.write_text("#!/bin/sh\nexit 0\n")
                 path.chmod(0o755)
@@ -86,6 +86,7 @@ class ImmutableReleaseTests(unittest.TestCase):
                        "--client-binary", str(binaries / "client"),
                        "--monitor-binary", str(binaries / "monitor"),
                        "--snmp-binary", str(binaries / "snmp"),
+                       "--ctl-client-binary", str(binaries / "ctlclient"),
                        "--output", str(bundle)]
             if dirty:
                 command.append("--allow-dirty")
@@ -96,7 +97,10 @@ class ImmutableReleaseTests(unittest.TestCase):
             for name in ("bin/solariClient", "bin/solariMonitor", "bin/solariSnmpPoll",
                          "apps/sorsync/sor_emitd.py", "apps/notify/notifyd.py",
                          "apps/alertbridge/alertbridge.py", "apps/unifi/unifipolld.py",
-                         "apps/discovery/mdns_inspect.py", "apps/requirements.txt"):
+                         "apps/discovery/mdns_inspect.py", "apps/requirements.txt",
+                         "bin/solariCtlClient", "deploy/remote-deploy.sh",
+                         "deploy/fleet/fleet-provision.sh", "deploy/fleet/provlib.py",
+                         "deploy/fleet/stack-apply.py", "deploy/fleet/ansible/ansible.cfg"):
                 self.assertIn(name, names)
             self.assertFalse(any(Path(name).name.lower().startswith(".env")
                                  or name.endswith((".key", ".pem")) for name in names))
@@ -116,13 +120,23 @@ class ImmutableReleaseTests(unittest.TestCase):
             release = root / "releases/test-daemons"
             self.assertEqual(installer.validate_installed(release, allow_dirty=dirty), "test-daemons")
             self.assertEqual((root / "current").resolve(), release.resolve())
+            for name in ("deploy/remote-deploy.sh", "deploy/fleet/image-refresh.py",
+                         "deploy/fleet/prov-stage.py", "bin/solariCtlClient"):
+                self.assertTrue(os.access(release / name, os.X_OK), name)
+            # a helper that lost its exec bit fails validation (activate/rollback)
+            (release / "deploy/fleet/prov-stage.py").chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "ctl helper is not executable"):
+                installer.validate_installed(release, allow_dirty=dirty)
 
     def make_mock_systemctl(self, path: Path, log: Path) -> None:
         path.write_text("""#!/usr/bin/env bash
 set -u
 printf '%s\\n' "$*" >> "$CALL_LOG"
 case "$1" in
-  is-active) exit 0 ;;
+  is-active)
+    unit="${@: -1}"
+    for inactive in ${INACTIVE_UNITS:-}; do [[ "$unit" == "$inactive" ]] && exit 3; done
+    exit 0 ;;
   restart|start)
     service="${2%.service}"
     if [[ "${FAIL_SERVICE:-}" == "$service" && ! -e "$FAIL_ONCE" ]]; then touch "$FAIL_ONCE"; exit 1; fi
@@ -181,6 +195,55 @@ esac
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual((unit_dir / "notify.service").read_text(), "old-unit=notify\n")
                     self.assertEqual(config.read_text(), original_config)
+
+    def test_cutover_leaves_units_that_were_not_in_service_stopped(self):
+        # sor-apply-pihole is retired (disabled); solarinet-snmp's timer is off;
+        # solari-mdns-inspect is an idle oneshot whose timer IS active.
+        inactive = "sor-apply-pihole.service solarinet-snmp.service solarinet-snmp.timer " \
+                   "solari-mdns-inspect.service"
+        for fail_service in (None, "notify"):
+            with self.subTest(fail_service=fail_service), \
+                    tempfile.TemporaryDirectory(prefix="solarinet-cutover-active-") as temp:
+                base = Path(temp)
+                fake_root = base / "root"
+                unit_dir = fake_root / "etc/systemd/system"
+                unit_dir.mkdir(parents=True)
+                for name in UNIT_NAMES:
+                    (unit_dir / f"{name}.service").write_text(f"old-unit={name}\n")
+                mock, call_log = base / "systemctl", base / "calls.log"
+                self.make_mock_systemctl(mock, call_log)
+                env = os.environ.copy()
+                env.update(CALL_LOG=str(call_log), FAIL_ONCE=str(base / "failed-once"),
+                           INACTIVE_UNITS=inactive)
+                if fail_service:
+                    env["FAIL_SERVICE"] = fail_service
+                result = subprocess.run([str(CUTOVER), "--dry-run", "--root", str(fake_root),
+                                         "--systemctl", str(mock)], capture_output=True, text=True, env=env)
+                self.assertEqual(result.returncode == 0, fail_service is None,
+                                 result.stdout + result.stderr)
+                calls = call_log.read_text().splitlines()
+                acted = {c.split()[-1] for c in calls if c.split()[0] in {"restart", "start", "stop"}}
+                for unit in ("sor-apply-pihole.service", "solarinet-snmp.service"):
+                    self.assertNotIn(unit, acted, calls)
+                self.assertIn("leaving sor-apply-pihole.service stopped", result.stdout)
+                if fail_service is None:
+                    self.assertIn("leaving solarinet-snmp.service stopped", result.stdout)
+                    self.assertIn("start solari-mdns-inspect.service", calls)
+                    for name in set(UNIT_NAMES) - {"sor-apply-pihole", "solarinet-snmp",
+                                                   "solari-mdns-inspect"}:
+                        self.assertIn(f"restart {name}.service", calls)
+                    # the new unit file is installed even though it stays stopped
+                    self.assertIn("/opt/solarinet/current",
+                                  (unit_dir / "sor-apply-pihole.service").read_text())
+                else:
+                    # recovery touches only what the cutover attempted
+                    self.assertEqual((unit_dir / "sor-apply-pihole.service").read_text(),
+                                     "old-unit=sor-apply-pihole\n")
+                record = next((fake_root / "var/backups").glob("solarinet-immutable-*/active"))
+                states = dict(line.split("=") for line in record.read_text().split())
+                self.assertEqual((states["sor-apply-pihole"], states["solarinet-snmp"],
+                                  states["solari-mdns-inspect"], states["notify"]),
+                                 ("0", "0", "1", "1"))
 
     def test_process_verifier_detects_checkout_script_argument(self):
         with tempfile.TemporaryDirectory(prefix="solarinet-proc-") as temp:

@@ -10,14 +10,27 @@ there was no rehearsed rollback path.
 
 ## Design
 
-Package an explicit allowlist: the built server and scan worker binaries,
-`dashboard/api`, and `dashboard/public`. The archive includes a version and SHA-256 manifest and
+Package an explicit allowlist: the built server, scan worker and ctl client
+binaries, `dashboard/api`, `dashboard/public`, and the ctl helper scripts. The archive includes a version and SHA-256 manifest and
 contains no runtime state, configuration, credentials, or CA material. Install
 each release immutably below `/opt/solarinet/releases/<version>` and switch one
 `current` symlink atomically. Activating a retained version is the rollback.
 The server, API, and SPA all resolve through that same symlink.
 The package requires the embedded RackWire application entry point so a missing
 or uninitialized RackWire submodule cannot produce a partial dashboard release.
+
+The server's privileged ctl verbs exec fleet/deploy helpers, so the release also
+ships them: `bin/solariCtlClient` (`--ctl-client-binary`) plus the git-tracked
+files under `deploy/fleet/` and `deploy/remote-deploy.sh`, at their repository
+paths and with their tracked modes. Untracked or ignored files (caches, fetched
+images, `deploy/dist`) are never packaged. The packager fails if a helper entry
+point (`remote-deploy.sh`, `fleet-provision.sh`, `fleet-image.sh`,
+`image-refresh.py`, `prov-stage.py`, `stack-apply.py`) is missing or not
+executable; the installer re-checks presence and the executable bit at load and
+on every `validate_installed`. The server resolves these against `[ctl]
+helperRoot` (default: its working directory, the release root) and writes
+helper logs to `[ctl] logDir` (default: the ctl socket's directory), replying
+ERR when a helper or its log is unusable.
 
 The installer rejects unsafe archive paths, symlinks, undeclared files, and
 hash mismatches. It stages and verifies the full tree before making it active.
@@ -45,15 +58,19 @@ the trusted repository workflow.
   explicit preflight opt-in is recorded in release metadata.
 - PHP-FPM and Apache point into `/opt/solarinet/current`; the service binary
   uses the same root.
+- Every ctl helper entry point and `bin/solariCtlClient` is present and
+  executable in the installed tree; a release missing one, or shipping one
+  non-executable, is rejected.
 - The worker service on both server hosts uses the worker binary from that same
   release symlink. Enable it alongside the server; admitted jobs remain visibly
   queued when the worker service is absent.
 
 ## Verification status
 
-The temporary-root release suite passes **9 tests**, including clean install and
+The temporary-root release suite passes **11 tests**, including clean install and
 rollback, dirty-source opt-in, tampered payload rejection, path traversal and
-symlink rejection, and RackWire entrypoint presence. CI runs this suite through
+symlink rejection, RackWire entrypoint presence, and shipped/executable ctl
+helpers. CI runs this suite through
 `python3 -m unittest discover -s deploy/dashboard -p 'test_release.py' -v`.
 Independent cross-lab review, production host cutover, service health checks,
 and live rollback remain release gates.

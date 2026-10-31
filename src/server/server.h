@@ -98,6 +98,16 @@ typedef struct {
     uint32_t ctlOperatorUid;                  /* uid allowed privileged verbs; 0 = server euid */
     uint32_t ctlDashboardUid;                 /* dashboard/PHP uid (enqueue only); 0 = unset */
     uint32_t ctlSocketGid;                    /* gid to chown the socket to for 0660 access; 0 = leave */
+    /* Host-side helpers the bridge spawns (DEPLOY, FLEET_*, IMAGE_REFRESH,
+     * PROV_STAGE, STACK_APPLY). ctlHelperRoot holds the repo-shaped helper tree
+     * (deploy/remote-deploy.sh, deploy/fleet/...); empty = the server's working
+     * directory at open (a checkout in dev, the release dir in production). It
+     * is resolved to a real path once at open, so helpers stay pinned to the
+     * running release even after `current` is switched. ctlLogDir receives the
+     * per-run helper logs; empty = the directory holding ctlSocket (where the
+     * dashboard's log-tail routes already look). */
+    char     ctlHelperRoot[SERVER_PATH_MAX];
+    char     ctlLogDir[SERVER_PATH_MAX];
 
     /* discovery / provisioning policy (Handoff §7.1) - conservative default */
     bool     autoDiscover;                   /* default true                 */

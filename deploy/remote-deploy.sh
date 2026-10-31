@@ -29,7 +29,8 @@
 #   --server-ip IP       IP to pin the server name to (default: this host's LAN IP).
 #   --fqdn NAME          target FQDN for its node id + cert CN (default: target hostname).
 #   --arch ARCH          override the probed target arch (x86_64/arm64/arm32/mips/mipsel).
-#   --ca-dir DIR         local internal-CA dir with ca.pem (default: run/pki).
+#   --ca-dir DIR         local internal-CA dir with ca.pem (default: $SOLARI_CA_PEM,
+#                        exported by solariServer, else run/pki).
 #   --bin PATH           client binary to deploy (default: by target arch, see below).
 #   --conf-dir DIR       remote config/material dir (default: auto-probed writable dir).
 #   --remote-bin PATH    remote binary path (default: <auto-probed bindir>/solariClient).
@@ -37,17 +38,24 @@
 #   --dry-run            print the plan; change nothing locally or remotely.
 #   -h | --help          this help.
 #
-# Binary selection: --bin wins; else deploy/dist/<arch>/solariClient (build with
-# deploy/cross-build-client.sh <arch>); else, when the target arch equals this
-# host's, build-io/src/client/solariClient. Arch ∈ x86_64/arm64/arm32/mips/mipsel.
+# Binary selection: --bin wins; else <dist>/<arch>/solariClient, where <dist> is
+# $SOLARI_DIST_DIR or deploy/dist (build with deploy/cross-build-client.sh <arch>);
+# else, when the target arch equals this host's, the installed release's
+# bin/solariClient or build-io/src/client/solariClient.
+# Arch ∈ x86_64/arm64/arm32/mips/mipsel.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-HOST=""; SERVER_URL=""; SERVER_IP=""; FQDN=""; ARCH_OVERRIDE=""; CA_DIR="${REPO_ROOT}/run/pki"; BIN=""
+# REPO_ROOT is a dev checkout or an installed release (solariServer's ctl
+# helperRoot), which has no run/ tree: the server exports SOLARI_CTL_SOCK and
+# SOLARI_CA_PEM to the helpers it spawns.
+HOST=""; SERVER_URL=""; SERVER_IP=""; FQDN=""; ARCH_OVERRIDE=""; BIN=""
+CA_PEM="${SOLARI_CA_PEM:-${REPO_ROOT}/run/pki/ca.pem}"
+DIST_DIR="${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}"
 CONF_DIR=""; REMOTE_BIN=""; INTERVAL=15; DRY=0   # bin/conf dirs: empty -> auto-probe
-CTL_SOCK="${REPO_ROOT}/run/solariCtl.sock"; OP="${USER:-deploy}"
+CTL_SOCK="${SOLARI_CTL_SOCK:-${REPO_ROOT}/run/solariCtl.sock}"; OP="${USER:-deploy}"
 SUDO="sudo"; T_INIT="systemd"; T_LIBC="glibc"; T_PKG="none"; STATE_DIR=""
 
 log()  { printf '\033[1;36m[deploy]\033[0m %s\n' "$*"; }
@@ -61,7 +69,7 @@ while [ $# -gt 0 ]; do
     --server-ip)  SERVER_IP="${2:?}"; shift ;;
     --fqdn)       FQDN="${2:?}"; shift ;;
     --arch)       ARCH_OVERRIDE="${2:?}"; shift ;;
-    --ca-dir)     CA_DIR="${2:?}"; shift ;;
+    --ca-dir)     CA_PEM="${2:?}/ca.pem"; shift ;;
     --bin)        BIN="${2:?}"; shift ;;
     --conf-dir)   CONF_DIR="${2:?}"; shift ;;
     --remote-bin) REMOTE_BIN="${2:?}"; shift ;;
@@ -79,7 +87,8 @@ done
 command -v openssl >/dev/null 2>&1 || die "openssl is required locally"
 # solariCtlClient (standard C) speaks the solariCtl SIGN protocol; no python.
 CTL_CLIENT=""
-for c in "${REPO_ROOT}/build-snmp/src/server/solariCtlClient" \
+for c in "${REPO_ROOT}/bin/solariCtlClient" \
+         "${REPO_ROOT}/build-snmp/src/server/solariCtlClient" \
          "${REPO_ROOT}/build-nosnmp/src/server/solariCtlClient" \
          "${REPO_ROOT}/build/src/server/solariCtlClient" \
          "$(command -v solariCtlClient 2>/dev/null || true)"; do
@@ -89,7 +98,7 @@ done
 # Only the CA ROOT cert is needed here (to ship to the client so it trusts the
 # server). The CA PRIVATE key never touches this script — the server's CA signs
 # the CSR over the solariCtl socket (SIGN verb).
-[ -f "${CA_DIR}/ca.pem" ] || die "CA root not found: ${CA_DIR}/ca.pem"
+[ -f "${CA_PEM}" ] || die "CA root not found: ${CA_PEM}"
 # Dial the server by NAME, not IP: older mbedTLS (e.g. 2.28 on Debian bookworm /
 # UniFiOS / many appliances) does NOT match IP-address SANs, so an IP URL fails
 # TLS on those clients. Default to the server hostname (which is in the cert SAN)
@@ -179,12 +188,14 @@ log "install: bin=${REMOTE_BIN} conf=${CONF_DIR}"
 # ---- resolve the client binary --------------------------------------------
 LOCAL_ARCH="$(uname -m)"; LOCAL_ARCH=${LOCAL_ARCH/amd64/x86_64}
 if [ -z "${BIN}" ]; then
-  if [ -x "${REPO_ROOT}/deploy/dist/${ARCH}/solariClient" ]; then
-    BIN="${REPO_ROOT}/deploy/dist/${ARCH}/solariClient"
+  if [ -x "${DIST_DIR}/${ARCH}/solariClient" ]; then
+    BIN="${DIST_DIR}/${ARCH}/solariClient"
+  elif [ "${ARCH}" = "${LOCAL_ARCH}" ] && [ -x "${REPO_ROOT}/bin/solariClient" ]; then
+    BIN="${REPO_ROOT}/bin/solariClient"
   elif [ "${ARCH}" = "${LOCAL_ARCH}" ] && [ -x "${REPO_ROOT}/build-io/src/client/solariClient" ]; then
     BIN="${REPO_ROOT}/build-io/src/client/solariClient"
   else
-    die "no client binary for ${ARCH}. Build one with: deploy/cross-build-client.sh ${ARCH} (-> deploy/dist/${ARCH}/solariClient), or pass --bin."
+    die "no client binary for ${ARCH}. Build one with: deploy/cross-build-client.sh ${ARCH} (-> ${DIST_DIR}/${ARCH}/solariClient), or pass --bin."
   fi
 fi
 log "binary: ${BIN}"
@@ -198,7 +209,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 umask 077
 openssl ecparam -name prime256v1 -genkey -noout -out "${TMP}/node.key"
 openssl req -new -key "${TMP}/node.key" -subj "/CN=client.${FQDN}/O=SolariNet/OU=client" -out "${TMP}/node.csr"
-cp "${CA_DIR}/ca.pem" "${TMP}/ca.pem"
+cp "${CA_PEM}" "${TMP}/ca.pem"
 
 [ -S "${CTL_SOCK}" ] || die "solariCtl socket not found: ${CTL_SOCK} (is the server running? pass --ctl-sock)"
 log "requesting cert from CA via ${CTL_SOCK} (op=${OP})"

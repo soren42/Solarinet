@@ -16,9 +16,11 @@
 #include "solariCtl.c"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -34,8 +36,70 @@ static char gQueuedDecommissionResult[256];
 
 /* ctlSpawnDetached test seam: record what would have been exec'd. */
 static unsigned gSpawnCalls;
-static char gSpawnArgv[1024];      /* argv joined with '|' */
-static char gSpawnLog[256];
+static char gSpawnArgv[2048];      /* argv joined with '|' */
+static char gSpawnLog[SERVER_PATH_MAX];
+
+/* Hermetic helper tree + log dir (mkdtemp) every spawning test runs against:
+ * ctlSpawnHelper's preflight (helper executable, log opens) runs for real. */
+static char gFixture[128];
+static char gHelperRoot[256];
+static char gLogDir[256];
+static const char *const kHelpers[] = {
+    "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
+    "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
+    "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
+};
+
+static void fixture_path(char *out, size_t cap, const char *rel)
+{
+    int n = snprintf(out, cap, "%s/%s", gHelperRoot, rel);
+    TEST_ASSERT_TRUE(n > 0 && (size_t)n < cap);
+}
+
+static void fixture_write_helper(const char *rel, mode_t mode)
+{
+    char path[512];
+    FILE *f;
+    fixture_path(path, sizeof path, rel);
+    f = fopen(path, "w");
+    TEST_ASSERT_NOT_NULL(f);
+    fputs("#!/bin/sh\nexit 0\n", f);
+    fclose(f);
+    TEST_ASSERT_EQUAL_INT(0, chmod(path, mode));
+}
+
+static void fixture_setup(void)
+{
+    char dir[512];
+    size_t i;
+    snprintf(gFixture, sizeof gFixture, "/tmp/solari-ctl-helpers-XXXXXX");
+    TEST_ASSERT_NOT_NULL(mkdtemp(gFixture));
+    snprintf(gHelperRoot, sizeof gHelperRoot, "%s/release", gFixture);
+    snprintf(gLogDir, sizeof gLogDir, "%s/logs", gFixture);
+    TEST_ASSERT_EQUAL_INT(0, mkdir(gHelperRoot, 0755));
+    TEST_ASSERT_EQUAL_INT(0, mkdir(gLogDir, 0755));
+    fixture_path(dir, sizeof dir, "deploy");
+    TEST_ASSERT_EQUAL_INT(0, mkdir(dir, 0755));
+    fixture_path(dir, sizeof dir, "deploy/fleet");
+    TEST_ASSERT_EQUAL_INT(0, mkdir(dir, 0755));
+    for (i = 0; i < sizeof kHelpers / sizeof kHelpers[0]; i++)
+        fixture_write_helper(kHelpers[i], 0755);
+}
+
+static void fixture_teardown(void)
+{
+    char cmd[256];
+    if (!gFixture[0]) return;
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", gFixture);
+    (void)system(cmd);
+}
+
+/* Point a test serverCtl at the fixture (what serverCtlOpen resolves). */
+static void ctl_use_fixture(serverCtl *ctl)
+{
+    snprintf(ctl->helperRoot, sizeof ctl->helperRoot, "%s", gHelperRoot);
+    snprintf(ctl->logDir, sizeof ctl->logDir, "%s", gLogDir);
+}
 
 static solariStatus ctlTestSpawn(char *const argv[], const char *logPath)
 {
@@ -934,6 +998,7 @@ static void prov_call(const char *line, ctlPeerClass peer, char *reply, size_t c
     serverCtl ctl;
     char buf[CTL_REQ_CAP];
     memset(&ctl, 0, sizeof ctl);
+    ctl_use_fixture(&ctl);
     TEST_ASSERT_TRUE(strlen(line) < sizeof buf);
     snprintf(buf, sizeof buf, "%s", line);
     gSpawnCalls = 0;
@@ -957,16 +1022,21 @@ static void prov_expect_err(const char *line, solariStatus code)
 }
 
 /* Assert `line` is accepted and execs exactly `argv` (|-joined) logging to `log`. */
+/* argv[0] and log are given relative; the helper must run as
+ * <helperRoot>/<argv0> and log to <logDir>/<log>. */
 static void prov_expect_spawn(const char *line, const char *argv, const char *log,
                               const char *status)
 {
-    char reply[512], want[256];
+    char reply[1024], want[1024], wantArgv[2048], wantLog[512];
     prov_call(line, CTL_PEER_OPERATOR, reply, sizeof reply);
+    snprintf(wantArgv, sizeof wantArgv, "%s/%s", gHelperRoot, argv);
+    snprintf(wantLog, sizeof wantLog, "%s/%s", gLogDir, log);
     TEST_ASSERT_EQUAL_UINT_MESSAGE(1, gSpawnCalls, line);
-    TEST_ASSERT_EQUAL_STRING_MESSAGE(argv, gSpawnArgv, line);
-    TEST_ASSERT_EQUAL_STRING_MESSAGE(log, gSpawnLog, line);
-    snprintf(want, sizeof want, "OK log=%s status=%s\n", log, status);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(wantArgv, gSpawnArgv, line);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(wantLog, gSpawnLog, line);
+    snprintf(want, sizeof want, "OK log=%s status=%s\n", wantLog, status);
     TEST_ASSERT_EQUAL_STRING_MESSAGE(want, reply, line);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, access(wantLog, W_OK), line);   /* opened */
 }
 
 static bool ctlProvValidSlug(const char *s)
@@ -1102,27 +1172,27 @@ static void test_prov_verbs_exec_exact_argv(void)
 {
     prov_expect_spawn("IMAGE_REFRESH image=7 op=alice",
         "deploy/fleet/image-refresh.py|--image|7|--op|alice",
-        "run/image-refresh-7.log", "refreshing");
+        "image-refresh-7.log", "refreshing");
     prov_expect_spawn("IMAGE_REFRESH op=alice image=4294967295 junk=ignored",
         "deploy/fleet/image-refresh.py|--image|4294967295|--op|alice",
-        "run/image-refresh-4294967295.log", "refreshing");
+        "image-refresh-4294967295.log", "refreshing");
     prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core,dev-tools op=jason@akoria.org",
         "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core,dev-tools|--op|jason@akoria.org",
-        "run/prov-stage-42.log", "staging");
+        "prov-stage-42.log", "staging");
     /* duplicates collapse before reaching the helper */
     prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=web,core,web op=alice",
         "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|web,core|--op|alice",
-        "run/prov-stage-42.log", "staging");
+        "prov-stage-42.log", "staging");
     /* pct-encoded principal is decoded once (queue replay encodes requestedBy) */
     prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core op=a%2Bb",
         "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core|--op|a+b",
-        "run/prov-stage-42.log", "staging");
+        "prov-stage-42.log", "staging");
     prov_expect_spawn("STACK_APPLY entity=9 stacks=core dryRun=1 op=alice",
         "deploy/fleet/stack-apply.py|--entity|9|--stacks|core|--dry-run|--op|alice",
-        "run/stack-apply-9.log", "applying");
+        "stack-apply-9.log", "applying");
     prov_expect_spawn("STACK_APPLY entity=9 stacks=core,web dryRun=0 op=alice",
         "deploy/fleet/stack-apply.py|--entity|9|--stacks|core,web|--op|alice",
-        "run/stack-apply-9.log", "applying");
+        "stack-apply-9.log", "applying");
 }
 
 static void test_prov_verbs_refuse_bad_args(void)
@@ -1281,6 +1351,7 @@ static void test_prov_queue_replay_binds_requester(void)
     ctx.db = (serverDb *)1;
     ctx.role = SRV_ACTIVE;
     ctl.ctx = &ctx;
+    ctl_use_fixture(&ctl);
 
     gQueuedCustomReady = true;
     snprintf(gQueuedVerb, sizeof gQueuedVerb, "STACK_APPLY");
@@ -1291,12 +1362,15 @@ static void test_prov_queue_replay_binds_requester(void)
     gQueuedDecommissionCompleted = false;
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverCtlQueuePoll(&ctl));
     TEST_ASSERT_EQUAL_UINT(1, gSpawnCalls);
-    TEST_ASSERT_EQUAL_STRING(
-        "deploy/fleet/stack-apply.py|--entity|12|--stacks|core,web|--op|jason+ops@akoria.org",
-        gSpawnArgv);
-    TEST_ASSERT_TRUE(gQueuedDecommissionCompleted);
-    TEST_ASSERT_EQUAL_STRING("OK log=run/stack-apply-12.log status=applying",
-                             gQueuedDecommissionResult);
+    {
+        char want[1024];
+        snprintf(want, sizeof want, "%s/deploy/fleet/stack-apply.py|--entity|12|"
+                 "--stacks|core,web|--op|jason+ops@akoria.org", gHelperRoot);
+        TEST_ASSERT_EQUAL_STRING(want, gSpawnArgv);
+        TEST_ASSERT_TRUE(gQueuedDecommissionCompleted);
+        snprintf(want, sizeof want, "OK log=%s/stack-apply-12.log status=applying", gLogDir);
+        TEST_ASSERT_EQUAL_STRING(want, gQueuedDecommissionResult);
+    }
 
     /* a bad queued arg fails the row cleanly and spawns nothing */
     gQueuedCustomReady = true;
@@ -1311,8 +1385,269 @@ static void test_prov_queue_replay_binds_requester(void)
     TEST_ASSERT_NOT_NULL(strstr(gQueuedDecommissionResult, "invalid stacks"));
 }
 
+/* ===================================================================== */
+/* Helper root / log dir resolution and the fail-loud spawn preflight      */
+/* ===================================================================== */
+
+static void test_helper_path_primitives(void)
+{
+    char out[64], small[8];
+    TEST_ASSERT_TRUE(ctlJoinPath(out, sizeof out, "/a", "b/c"));
+    TEST_ASSERT_EQUAL_STRING("/a/b/c", out);
+    TEST_ASSERT_TRUE(ctlJoinPath(out, sizeof out, "/", "x"));
+    TEST_ASSERT_EQUAL_STRING("/x", out);
+    TEST_ASSERT_FALSE(ctlJoinPath(out, sizeof out, "", "x"));
+    TEST_ASSERT_FALSE(ctlJoinPath(small, sizeof small, "/abcd", "efgh"));
+    TEST_ASSERT_EQUAL_STRING("", small);
+
+    ctlDirName("/run/solari/solariCtl.sock", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("/run/solari", out);
+    ctlDirName("run/solariCtl.sock", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("run", out);
+    ctlDirName("solariCtl.sock", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING(".", out);
+    ctlDirName("/sock", out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("/", out);
+
+    snprintf(out, sizeof out, "run");
+    TEST_ASSERT_TRUE(ctlAbsolutize(out, sizeof out, "/repo"));
+    TEST_ASSERT_EQUAL_STRING("/repo/run", out);
+    snprintf(out, sizeof out, "/abs");
+    TEST_ASSERT_TRUE(ctlAbsolutize(out, sizeof out, "/repo"));
+    TEST_ASSERT_EQUAL_STRING("/abs", out);
+    snprintf(out, sizeof out, ".");
+    TEST_ASSERT_TRUE(ctlAbsolutize(out, sizeof out, "/repo"));
+    TEST_ASSERT_EQUAL_STRING("/repo", out);
+    snprintf(out, sizeof out, "run");
+    TEST_ASSERT_FALSE(ctlAbsolutize(out, sizeof out, ""));       /* no cwd */
+}
+
+static void test_helper_paths_resolve_defaults_and_config(void)
+{
+    char root[SERVER_PATH_MAX], logd[SERVER_PATH_MAX], link[512], real[512];
+
+    /* production defaults: root = cwd, logs beside the ctl socket */
+    TEST_ASSERT_TRUE(ctlResolveHelperPaths("", "", "/run/solari/solariCtl.sock",
+                                           "/nonexistent/rel-a", root, sizeof root,
+                                           logd, sizeof logd));
+    TEST_ASSERT_EQUAL_STRING("/nonexistent/rel-a", root);
+    TEST_ASSERT_EQUAL_STRING("/run/solari", logd);
+
+    /* dev checkout: relative ctlSocket run/solariCtl.sock -> <repo>/run */
+    TEST_ASSERT_TRUE(ctlResolveHelperPaths(NULL, NULL, "run/solariCtl.sock",
+                                           "/nonexistent/repo", root, sizeof root,
+                                           logd, sizeof logd));
+    TEST_ASSERT_EQUAL_STRING("/nonexistent/repo", root);
+    TEST_ASSERT_EQUAL_STRING("/nonexistent/repo/run", logd);
+
+    /* explicit [ctl] keys win; relative ones anchor at cwd */
+    TEST_ASSERT_TRUE(ctlResolveHelperPaths("helpers", "/var/lib/solarinet/run",
+                                           "/run/solari/solariCtl.sock", "/nonexistent/c",
+                                           root, sizeof root, logd, sizeof logd));
+    TEST_ASSERT_EQUAL_STRING("/nonexistent/c/helpers", root);
+    TEST_ASSERT_EQUAL_STRING("/var/lib/solarinet/run", logd);
+
+    /* a `current` symlink is pinned to the release it points at */
+    snprintf(link, sizeof link, "%s/current", gFixture);
+    TEST_ASSERT_EQUAL_INT(0, symlink("release", link));
+    TEST_ASSERT_TRUE(ctlResolveHelperPaths(link, "", "/run/solari/solariCtl.sock", "/",
+                                           root, sizeof root, logd, sizeof logd));
+    TEST_ASSERT_NOT_NULL(realpath(gHelperRoot, real));
+    TEST_ASSERT_EQUAL_STRING(real, root);
+    TEST_ASSERT_EQUAL_INT(0, unlink(link));
+
+    /* unusable: relative root with no cwd */
+    TEST_ASSERT_FALSE(ctlResolveHelperPaths("rel", "", "/run/solari/s.sock", "",
+                                            root, sizeof root, logd, sizeof logd));
+    TEST_ASSERT_EQUAL_STRING("", root);
+}
+
+static void test_helper_env_overrides_socket_and_ca(void)
+{
+    serverCtl ctl;
+    ctlHelperEnv he;
+    char *parent[] = {
+        (char *)"PATH=/usr/bin", (char *)"SOLARI_CTL_SOCK=/stale.sock",
+        (char *)"HOME=/home/x", (char *)"SOLARI_CA_PEM=/stale.pem",
+        (char *)"SOLARI_CTL_SOCKET=keep", NULL
+    };
+    memset(&ctl, 0, sizeof ctl);
+    snprintf(ctl.helperSock, sizeof ctl.helperSock, "/run/solari/solariCtl.sock");
+    snprintf(ctl.caFile, sizeof ctl.caFile, "/var/lib/solarinet/pki/ca.pem");
+    TEST_ASSERT_TRUE(ctlHelperEnvBuild(&ctl, parent, &he));
+    TEST_ASSERT_EQUAL_STRING("PATH=/usr/bin", he.envp[0]);
+    TEST_ASSERT_EQUAL_STRING("HOME=/home/x", he.envp[1]);
+    TEST_ASSERT_EQUAL_STRING("SOLARI_CTL_SOCKET=keep", he.envp[2]);
+    TEST_ASSERT_EQUAL_STRING("SOLARI_CTL_SOCK=/run/solari/solariCtl.sock", he.envp[3]);
+    TEST_ASSERT_EQUAL_STRING("SOLARI_CA_PEM=/var/lib/solarinet/pki/ca.pem", he.envp[4]);
+    TEST_ASSERT_NULL(he.envp[5]);
+    ctlHelperEnvFree(&he);
+
+    /* no CA configured: the stale value is still dropped, none is added */
+    ctl.caFile[0] = '\0';
+    TEST_ASSERT_TRUE(ctlHelperEnvBuild(&ctl, parent, &he));
+    TEST_ASSERT_EQUAL_STRING("SOLARI_CTL_SOCK=/run/solari/solariCtl.sock", he.envp[3]);
+    TEST_ASSERT_NULL(he.envp[4]);
+    ctlHelperEnvFree(&he);
+
+    TEST_ASSERT_TRUE(ctlHelperEnvBuild(&ctl, NULL, &he));
+    TEST_ASSERT_EQUAL_STRING("SOLARI_CTL_SOCK=/run/solari/solariCtl.sock", he.envp[0]);
+    TEST_ASSERT_NULL(he.envp[1]);
+    ctlHelperEnvFree(&he);
+}
+
+static void test_fleet_and_deploy_verbs_exec_from_helper_root(void)
+{
+    prov_expect_spawn("DEPLOY host=nas.akoria.net arch=arm64 op=alice",
+        "deploy/remote-deploy.sh|--host|nas.akoria.net|--arch|arm64|--op|alice",
+        "deploy-nas.akoria.net.log", "deploying");
+    prov_expect_spawn("FLEET_PROVISION target=aa:bb:cc:dd:ee:ff distro=debian arch=x86_64 "
+                      "hostname=h1 op=alice",
+        "deploy/fleet/fleet-provision.sh|--target|aa:bb:cc:dd:ee:ff|--distro|debian|"
+        "--arch|x86_64|--hostname|h1|--op|alice",
+        "provision-h1.log", "provisioning");
+    prov_expect_spawn("FLEET_IMAGE hostname=pi1 arch=arm64 op=alice",
+        "deploy/fleet/fleet-image.sh|--hostname|pi1|--arch|arm64|--distro|raspios|--op|alice",
+        "image-pi1.log", "imaging");
+}
+
+/* Assert line answers ERR -70 naming `needle` and spawns nothing. */
+static void helper_expect_refusal(const char *line, const char *needle)
+{
+    char reply[1024], msg[1400];
+    prov_call(line, CTL_PEER_OPERATOR, reply, sizeof reply);
+    snprintf(msg, sizeof msg, "line <%s> reply <%s>", line, reply);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, strncmp(reply, "ERR -70 ", 8), msg);
+    TEST_ASSERT_NOT_NULL_MESSAGE(strstr(reply, needle), msg);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0, gSpawnCalls, msg);
+    TEST_ASSERT_NULL_MESSAGE(strstr(reply, gFixture), msg);   /* no abs paths */
+}
+
+static void test_missing_helper_fails_loudly(void)
+{
+    static const struct { const char *line, *helper; } cases[] = {
+        { "DEPLOY host=nas op=alice", "deploy/remote-deploy.sh" },
+        { "FLEET_PROVISION target=t distro=debian arch=x86_64 hostname=h op=alice",
+          "deploy/fleet/fleet-provision.sh" },
+        { "FLEET_IMAGE hostname=pi1 arch=arm64 op=alice", "deploy/fleet/fleet-image.sh" },
+        { "IMAGE_REFRESH image=7 op=alice", "deploy/fleet/image-refresh.py" },
+        { "PROV_STAGE entity=4 image=3 stacks=core op=alice", "deploy/fleet/prov-stage.py" },
+        { "STACK_APPLY entity=4 stacks=core dryRun=1 op=alice", "deploy/fleet/stack-apply.py" },
+    };
+    char path[512], want[160];
+    size_t i;
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        snprintf(want, sizeof want, "helper not installed or not executable: %s",
+                 cases[i].helper);
+        fixture_path(path, sizeof path, cases[i].helper);
+        /* present but not executable */
+        TEST_ASSERT_EQUAL_INT(0, chmod(path, 0644));
+        helper_expect_refusal(cases[i].line, want);
+        /* absent */
+        TEST_ASSERT_EQUAL_INT(0, unlink(path));
+        helper_expect_refusal(cases[i].line, want);
+        /* a directory in its place */
+        TEST_ASSERT_EQUAL_INT(0, mkdir(path, 0755));
+        helper_expect_refusal(cases[i].line, want);
+        TEST_ASSERT_EQUAL_INT(0, rmdir(path));
+        fixture_write_helper(cases[i].helper, 0755);
+    }
+}
+
+static void test_unwritable_log_dir_fails_loudly(void)
+{
+    char saved[sizeof gLogDir];
+    memcpy(saved, gLogDir, sizeof saved);
+    snprintf(gLogDir, sizeof gLogDir, "%s/no-such-dir", gFixture);
+    helper_expect_refusal("IMAGE_REFRESH image=7 op=alice",
+                          "helper log not writable: image-refresh-7.log");
+    helper_expect_refusal("STACK_APPLY entity=4 stacks=core dryRun=0 op=alice",
+                          "helper log not writable: stack-apply-4.log");
+    memcpy(gLogDir, saved, sizeof saved);
+
+    /* a symlinked log name is refused (O_NOFOLLOW), not followed */
+    {
+        char link[512];
+        snprintf(link, sizeof link, "%s/prov-stage-5.log", gLogDir);
+        TEST_ASSERT_EQUAL_INT(0, symlink("/etc/passwd", link));
+        helper_expect_refusal("PROV_STAGE entity=5 image=3 stacks=core op=alice",
+                              "helper log not writable: prov-stage-5.log");
+        TEST_ASSERT_EQUAL_INT(0, unlink(link));
+    }
+}
+
+/* Helper logs are handed to the ctl socket group (the dashboard reads them via
+ * solari-ctl membership, not the server's primary group) at mode 0640. */
+static void test_helper_log_group_is_socket_gid(void)
+{
+    serverCtl ctl;
+    char line[128], reply[512], log[512];
+    struct stat sb;
+    gid_t groups[64];
+    int n = getgroups(64, groups), i;
+    gid_t want = getegid();
+    for (i = 0; i < n; i++)                       /* prefer a non-primary group */
+        if (groups[i] != getegid()) { want = groups[i]; break; }
+    memset(&ctl, 0, sizeof ctl);
+    ctl_use_fixture(&ctl);
+    ctl.socketGid = (uint32_t)want;
+    snprintf(line, sizeof line, "IMAGE_REFRESH image=9 op=alice");
+    gSpawnCalls = 0;
+    (void)ctlHandleLine(&ctl, line, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, strncmp(reply, "OK ", 3), reply);
+    snprintf(log, sizeof log, "%s/image-refresh-9.log", gLogDir);
+    TEST_ASSERT_EQUAL_INT(0, stat(log, &sb));
+    TEST_ASSERT_EQUAL_UINT((unsigned)want, (unsigned)sb.st_gid);
+    TEST_ASSERT_EQUAL_UINT(0640u, (unsigned)(sb.st_mode & 07777));
+}
+
+static void test_unconfigured_helper_root_fails_loudly(void)
+{
+    serverCtl ctl;
+    char line[128], reply[512];
+    memset(&ctl, 0, sizeof ctl);                 /* never opened: no root */
+    snprintf(line, sizeof line, "PROV_STAGE entity=4 image=3 stacks=core op=alice");
+    gSpawnCalls = 0;
+    (void)ctlHandleLine(&ctl, line, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
+    TEST_ASSERT_EQUAL_INT(0, strncmp(reply, "ERR -70 ", 8));
+    TEST_ASSERT_NOT_NULL(strstr(reply, "helper root/log dir not configured"));
+    TEST_ASSERT_EQUAL_UINT(0, gSpawnCalls);
+}
+
+/* A queued privileged verb whose helper is missing fails its ctl_requests row
+ * with the inner ERR line (the PHP poller surfaces it) and spawns nothing. */
+static void test_queued_verb_with_missing_helper_fails_row(void)
+{
+    serverCtl ctl;
+    serverContext ctx;
+    char path[512];
+    memset(&ctl, 0, sizeof ctl);
+    memset(&ctx, 0, sizeof ctx);
+    ctx.db = (serverDb *)1;
+    ctx.role = SRV_ACTIVE;
+    ctl.ctx = &ctx;
+    ctl_use_fixture(&ctl);
+    fixture_path(path, sizeof path, "deploy/fleet/image-refresh.py");
+    TEST_ASSERT_EQUAL_INT(0, unlink(path));
+
+    gQueuedCustomReady = true;
+    snprintf(gQueuedVerb, sizeof gQueuedVerb, "IMAGE_REFRESH");
+    snprintf(gQueuedArgs, sizeof gQueuedArgs, "image=7");
+    snprintf(gQueuedRequester, sizeof gQueuedRequester, "alice");
+    gSpawnCalls = 0;
+    gQueuedDecommissionCompleted = true;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverCtlQueuePoll(&ctl));
+    TEST_ASSERT_EQUAL_UINT(0, gSpawnCalls);
+    TEST_ASSERT_FALSE(gQueuedDecommissionCompleted);
+    TEST_ASSERT_NOT_NULL(strstr(gQueuedDecommissionResult,
+        "ERR -70 helper not installed or not executable: deploy/fleet/image-refresh.py"));
+    fixture_write_helper("deploy/fleet/image-refresh.py", 0755);
+}
+
 int main(void)
 {
+    int rc;
+    fixture_setup();
     UNITY_BEGIN();
     RUN_TEST(test_trim_line);
     RUN_TEST(test_arg_str);
@@ -1347,5 +1682,16 @@ int main(void)
     RUN_TEST(test_prov_verbs_refuse_bad_args);
     RUN_TEST(test_prov_verbs_dashboard_must_queue);
     RUN_TEST(test_prov_queue_replay_binds_requester);
-    return UNITY_END();
+    RUN_TEST(test_helper_path_primitives);
+    RUN_TEST(test_helper_paths_resolve_defaults_and_config);
+    RUN_TEST(test_helper_env_overrides_socket_and_ca);
+    RUN_TEST(test_fleet_and_deploy_verbs_exec_from_helper_root);
+    RUN_TEST(test_missing_helper_fails_loudly);
+    RUN_TEST(test_unwritable_log_dir_fails_loudly);
+    RUN_TEST(test_unconfigured_helper_root_fails_loudly);
+    RUN_TEST(test_helper_log_group_is_socket_gid);
+    RUN_TEST(test_queued_verb_with_missing_helper_fails_row);
+    rc = UNITY_END();
+    fixture_teardown();
+    return rc;
 }

@@ -40,6 +40,21 @@ RENDERER_FILES = {
     "netdb/sor/source_sor.py": "apps/netdb/sor/source_sor.py",
     "deploy/dns-bare/gen-bare.py": "apps/netdb/dns-bare/gen-bare.py",
 }
+# Host-side helpers solariServer's privileged ctl verbs exec ([ctl] helperRoot
+# defaults to the release root). Shipped repo-shaped, Git-tracked files only, so
+# their sibling imports, templates and the Ansible tree resolve unchanged.
+HELPER_TREES = ("deploy/fleet", "deploy/remote-deploy.sh")
+HELPER_ENTRYPOINTS = (
+    "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
+    "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
+    "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
+)
+HELPER_SUPPORT = (
+    "deploy/fleet/fleet-lib.sh", "deploy/fleet/provlib.py", "deploy/fleet/netbootlib.py",
+    "deploy/fleet/stackgen.py", "deploy/fleet/fetch-images.sh",
+    "deploy/fleet/provisioning-guard.sh",
+    "deploy/fleet/ansible/ansible.cfg", "deploy/fleet/ansible/playbooks/site.yml",
+)
 
 
 def digest(path: Path) -> str:
@@ -108,6 +123,19 @@ def copy_file(source: Path, destination: Path, name: str, files: dict[str, str])
     files[name] = digest(target)
 
 
+def tracked_files(*paths: str) -> list[str]:
+    """Git-tracked regular files under paths (ignored build droppings excluded)."""
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(ROOT), "ls-files", "-z", "--", *paths], stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(f"cannot list tracked release inputs: {paths}") from exc
+    names = sorted(n for n in out.decode("utf-8").split("\0") if n)
+    if not names:
+        raise ValueError(f"no tracked release inputs under: {paths}")
+    return names
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="immutable release directory name")
@@ -117,6 +145,8 @@ def main() -> int:
     parser.add_argument("--client-binary", type=Path, default=ROOT / "build-release/src/client/solariClient")
     parser.add_argument("--monitor-binary", type=Path, default=ROOT / "build-release/src/monitor/solariMonitor")
     parser.add_argument("--snmp-binary", type=Path, default=ROOT / "build-release/src/server/solariSnmpPoll")
+    parser.add_argument("--ctl-client-binary", type=Path,
+                        default=ROOT / "build-server/src/server/solariCtlClient")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--allow-dirty", action="store_true",
                         help="allow a source-dirty preflight bundle; never use for production")
@@ -131,6 +161,7 @@ def main() -> int:
         "bin/solariClient": args.client_binary.resolve(),
         "bin/solariMonitor": args.monitor_binary.resolve(),
         "bin/solariSnmpPoll": args.snmp_binary.resolve(),
+        "bin/solariCtlClient": args.ctl_client_binary.resolve(),
     }
     for name, path in binaries.items():
         if not path.is_file() or not os.access(path, os.X_OK):
@@ -180,10 +211,17 @@ def main() -> int:
             copy_file(ROOT / source_name, stage, target_name, files)
         copy_file(ROOT / "deploy/release/requirements.txt", stage,
                   "apps/requirements.txt", files)
+        for name in tracked_files(*HELPER_TREES):
+            copy_file(ROOT / name, stage, name, files)
+        not_exec = [name for name in HELPER_ENTRYPOINTS
+                    if name not in files or not os.access(stage / name, os.X_OK)]
+        if not_exec:
+            raise ValueError(f"ctl helper entry points missing or not executable: {not_exec}")
         required = {
             "dashboard/api/index.php",
             "dashboard/public/index.html",
             "dashboard/public/rackwire/index.html",
+            *HELPER_SUPPORT,
         }
         missing = sorted(required - files.keys())
         if missing:
@@ -191,7 +229,8 @@ def main() -> int:
         unexpected = [
             name for name in files
             if not (name in {"bin/solariServer", *binaries.keys(), "apps/requirements.txt"}
-                    or name.startswith("apps/")
+                    or name.startswith("apps/") or name.startswith("deploy/fleet/")
+                    or name == "deploy/remote-deploy.sh"
                     or name.startswith("dashboard/api/") or name.startswith("dashboard/public/"))
         ]
         if unexpected:

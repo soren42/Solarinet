@@ -16,7 +16,13 @@ import subprocess
 import sys
 import tempfile
 
-from migrate import EXPECTED_CHARACTER_SET, EXPECTED_COLLATION, migrationFiles
+# Sibling tools resolve from this file's directory, so they also import under
+# `python3 -I` (which drops the script directory from sys.path).
+_TOOLS = str(pathlib.Path(__file__).resolve().parent)
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+
+from migrate import EXPECTED_CHARACTER_SET, EXPECTED_COLLATION, migrationFiles  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")

@@ -96,6 +96,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
@@ -105,6 +106,7 @@
 
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -155,6 +157,10 @@ struct serverCtl {
     uint32_t       operatorUid;              /* resolved (server euid if unset) */
     uint32_t       dashboardUid;             /* dashboard/PHP uid; 0 = unset    */
     uint32_t       socketGid;                /* chown socket to this gid; 0=skip */
+    /* Spawned host helpers (resolved absolute at open; see serverConfig). */
+    char           helperRoot[SERVER_PATH_MAX];/* repo-shaped helper tree      */
+    char           logDir[SERVER_PATH_MAX];  /* per-run helper logs            */
+    char           helperSock[SERVER_PATH_MAX];/* sockPath made absolute (helper env) */
 };
 
 solariStatus serverCtlCaFingerprint(serverCtl *ctl, char out[65])
@@ -644,32 +650,187 @@ static void ctlSanitizeName(const char *in, char *out, size_t cap)
     out[o] = '\0';
 }
 
-/* Spawn remote-deploy.sh fully detached (double-fork + setsid), with stdout/err
- * redirected to logPath. Returns once the deploy has been launched — the server
- * loop never blocks on the (multi-minute) deploy. argv must be NULL-terminated. */
+/* ---- host helper spawning ------------------------------------------------
+ * Helpers are named by their repo-relative path (deploy/fleet/...), resolved
+ * against ctl->helperRoot, and log to ctl->logDir. Everything that can fail is
+ * checked in the server BEFORE the reply: the helper must be an executable
+ * regular file and its log must open, otherwise the verb answers ERR and no
+ * child runs. (A detached child that _exit(127)s cannot report back, so a
+ * silent "OK status=..." with nothing running is the failure this prevents.) */
+
+/* Join dir + "/" + name into out. False (out = "") on overflow or empty dir. */
+static bool ctlJoinPath(char *out, size_t cap, const char *dir, const char *name)
+{
+    int n;
+    if (!out || cap == 0) return false;
+    out[0] = '\0';
+    if (!dir || !dir[0] || !name || !name[0]) return false;
+    n = snprintf(out, cap, "%s%s%s", dir,
+                 dir[strlen(dir) - 1] == '/' ? "" : "/", name);
+    if (n < 0 || (size_t)n >= cap) { out[0] = '\0'; return false; }
+    return true;
+}
+
+/* Directory part of path ("." when it has none; "/" for a root entry). Pure. */
+static void ctlDirName(const char *path, char *out, size_t cap)
+{
+    const char *slash;
+    size_t len;
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+    if (!path || !(slash = strrchr(path, '/'))) {
+        (void)snprintf(out, cap, ".");
+        return;
+    }
+    len = (slash == path) ? 1 : (size_t)(slash - path);
+    if (len >= cap) return;                    /* overflow -> "" (unusable) */
+    memcpy(out, path, len);
+    out[len] = '\0';
+}
+
+/* Make `path` absolute against `base` in place (no-op when already absolute).
+ * False when the result does not fit. Pure. */
+static bool ctlAbsolutize(char *path, size_t cap, const char *base)
+{
+    char tmp[SERVER_PATH_MAX];
+    if (!path || !path[0]) return false;
+    if (path[0] == '/') return true;
+    if (!base || base[0] != '/') return false;
+    if (strcmp(path, ".") == 0) {
+        int n = snprintf(path, cap, "%s", base);
+        return n >= 0 && (size_t)n < cap;
+    }
+    if (!ctlJoinPath(tmp, sizeof tmp, base, path)) return false;
+    if (strlen(tmp) >= cap) return false;
+    memcpy(path, tmp, strlen(tmp) + 1);
+    return true;
+}
+
+/* Resolve the helper root and log dir from cfg (empty = derive; see
+ * serverConfig) into absolute paths. cwd is the server's working directory.
+ * The helper root is canonicalized with realpath() when it exists so a
+ * `current` symlink is pinned to the release this server was started from.
+ * Returns false only on an unusable (overlong / non-absolute) result. */
+static bool ctlResolveHelperPaths(const char *cfgRoot, const char *cfgLogDir,
+                                  const char *ctlSocket, const char *cwd,
+                                  char *rootOut, size_t rootCap,
+                                  char *logOut, size_t logCap)
+{
+    char real[PATH_MAX];
+    int n;
+    if (!rootOut || !logOut || rootCap == 0 || logCap == 0) return false;
+    rootOut[0] = logOut[0] = '\0';
+    n = snprintf(rootOut, rootCap, "%s", (cfgRoot && cfgRoot[0]) ? cfgRoot : ".");
+    if (n < 0 || (size_t)n >= rootCap || !ctlAbsolutize(rootOut, rootCap, cwd)) {
+        rootOut[0] = '\0';
+        return false;
+    }
+    if (realpath(rootOut, real) && strlen(real) < rootCap)
+        memcpy(rootOut, real, strlen(real) + 1);
+    if (cfgLogDir && cfgLogDir[0])
+        n = snprintf(logOut, logCap, "%s", cfgLogDir);
+    else {
+        ctlDirName(ctlSocket ? ctlSocket : "", logOut, logCap);
+        n = (int)strlen(logOut);
+    }
+    if (n <= 0 || (size_t)n >= logCap || !ctlAbsolutize(logOut, logCap, cwd)) {
+        logOut[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+/* Environment handed to every helper: the parent's, minus any stale copy of
+ * the keys below, plus the server's own ctl socket and CA certificate so a
+ * helper running from a release tree (which has no run/ dir) reaches the right
+ * bridge and CA. Built in the parent so nothing allocates between fork and
+ * exec. envp borrows the inherited entries; owned[] holds the two we add. */
+#define CTL_HELPER_ENV_KEYS 2
+typedef struct {
+    char **envp;
+    char  *owned[CTL_HELPER_ENV_KEYS];
+} ctlHelperEnv;
+
+static void ctlHelperEnvFree(ctlHelperEnv *he)
+{
+    size_t k;
+    if (!he) return;
+    for (k = 0; k < CTL_HELPER_ENV_KEYS; k++) { free(he->owned[k]); he->owned[k] = NULL; }
+    free(he->envp);
+    he->envp = NULL;
+}
+
+static bool ctlHelperEnvBuild(const serverCtl *ctl, char *const *parent,
+                              ctlHelperEnv *he)
+{
+    static const char *const keys[CTL_HELPER_ENV_KEYS] = {
+        "SOLARI_CTL_SOCK=", "SOLARI_CA_PEM="
+    };
+    const char *vals[CTL_HELPER_ENV_KEYS];
+    size_t count = 0, o = 0, i, k;
+    memset(he, 0, sizeof *he);
+    vals[0] = ctl->helperSock;
+    vals[1] = ctl->caFile;
+    while (parent && parent[count]) count++;
+    he->envp = (char **)calloc(count + CTL_HELPER_ENV_KEYS + 1, sizeof *he->envp);
+    if (!he->envp) return false;
+    for (i = 0; i < count; i++) {
+        bool drop = false;
+        for (k = 0; k < CTL_HELPER_ENV_KEYS; k++)
+            if (strncmp(parent[i], keys[k], strlen(keys[k])) == 0) drop = true;
+        if (!drop) he->envp[o++] = parent[i];
+    }
+    for (k = 0; k < CTL_HELPER_ENV_KEYS; k++) {
+        size_t len;
+        if (!vals[k][0]) continue;
+        len = strlen(keys[k]) + strlen(vals[k]) + 1;
+        he->owned[k] = (char *)malloc(len);
+        if (!he->owned[k]) { ctlHelperEnvFree(he); return false; }
+        (void)snprintf(he->owned[k], len, "%s%s", keys[k], vals[k]);
+        he->envp[o++] = he->owned[k];
+    }
+    he->envp[o] = NULL;
+    return true;
+}
+
+/* Launch argv fully detached (double-fork + setsid) with stdout/stderr on the
+ * already-open logFd, stdin on /dev/null, cwd = the helper root, and envp. The
+ * server loop never blocks on the (multi-minute) helper. argv[0] is an absolute
+ * path and argv is NULL-terminated. */
 #if defined(SOLARI_CTL_TEST_SPAWN)
 /* Unit-test seam only: the test defines SOLARI_CTL_TEST_SPAWN before including
  * this file and supplies ctlTestSpawn() to capture argv/logPath instead of
- * exec'ing. Never defined in a production build, which compiles unchanged. */
+ * exec'ing. Never defined in a production build, which compiles unchanged.
+ * The preflight in ctlSpawnHelper (helper + log checks) still runs for real. */
 static solariStatus ctlTestSpawn(char *const argv[], const char *logPath);
 #endif
-static solariStatus ctlSpawnDetached(char *const argv[], const char *logPath)
+#if !defined(SOLARI_CTL_TEST_SPAWN)
+static solariStatus ctlSpawnDetached(char *const argv[], int logFd,
+                                     const char *cwd, char *const envp[])
 {
-#if defined(SOLARI_CTL_TEST_SPAWN)
-    return ctlTestSpawn(argv, logPath);
-#else
     pid_t pid = fork();
     if (pid < 0) return ERR_PLATFORM;
     if (pid == 0) {
         pid_t g = fork();
+        int nullFd;
         if (g < 0) _exit(127);
         if (g > 0) _exit(0);                 /* intermediate exits immediately */
         setsid();                            /* detach from the server */
-        {
-            int fd = open(logPath, O_WRONLY | O_CREAT | O_TRUNC, 0640);
-            if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); if (fd > 2) close(fd); }
+        nullFd = open("/dev/null", O_RDONLY);
+        if (nullFd >= 0 && nullFd != 0) { dup2(nullFd, 0); close(nullFd); }
+        dup2(logFd, 1);
+        dup2(logFd, 2);
+        if (logFd > 2) close(logFd);
+#if defined(SYS_close_range)
+        /* Do not leak the ctl listener / DB / TLS sockets into the helper. */
+        (void)syscall(SYS_close_range, 3u, ~0u, 0u);
+#endif
+        if (chdir(cwd) != 0) {
+            dprintf(2, "solariServer: chdir %s failed: %s\n", cwd, strerror(errno));
+            _exit(126);
         }
-        execv(argv[0], argv);                /* no shell — args passed literally */
+        execve(argv[0], argv, envp);         /* no shell — args passed literally */
+        dprintf(2, "solariServer: exec %s failed: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
     {
@@ -677,7 +838,87 @@ static solariStatus ctlSpawnDetached(char *const argv[], const char *logPath)
         (void)waitpid(pid, &status, 0);      /* reap the intermediate; grandchild -> init */
     }
     return SOLARI_OK;
+}
 #endif
+
+/* Preflight + launch one helper. `helper` is the repo-relative helper path
+ * (also what the reply's error names); argv[0] is overwritten with its absolute
+ * path. `logName` is a bare file name inside ctl->logDir. On success logOut
+ * holds the absolute log path for the reply. On failure nothing is spawned,
+ * `why` names the problem (no absolute paths; those go to the server log) and
+ * the verb must answer ERR. */
+static solariStatus ctlSpawnHelper(serverCtl *ctl, const char *helper,
+                                   char *argv[], const char *logName,
+                                   char *logOut, size_t logCap,
+                                   char *why, size_t whyCap)
+{
+    char exe[SERVER_PATH_MAX];
+    struct stat sb;
+    solariStatus st;
+    int fd;
+
+    if (logOut && logCap) logOut[0] = '\0';
+    if (why && whyCap) why[0] = '\0';
+    if (!ctl || !helper || !argv || !logName || !logOut || !why) return ERR_INVALID_ARG;
+    if (!ctl->helperRoot[0] || !ctl->logDir[0]) {
+        (void)snprintf(why, whyCap, "helper root/log dir not configured");
+        solariLogf(SOLARI_LOG_ERROR, "ctl: cannot run %s: helper root/log dir unset", helper);
+        return ERR_PLATFORM;
+    }
+    if (!ctlJoinPath(exe, sizeof exe, ctl->helperRoot, helper)) {
+        (void)snprintf(why, whyCap, "helper path too long: %s", helper);
+        return ERR_PLATFORM;
+    }
+    if (stat(exe, &sb) != 0 || !S_ISREG(sb.st_mode) || access(exe, X_OK) != 0) {
+        (void)snprintf(why, whyCap, "helper not installed or not executable: %s", helper);
+        solariLogf(SOLARI_LOG_ERROR, "ctl: helper %s is missing, not a regular file, "
+                   "or not executable (helperRoot=%s)", exe, ctl->helperRoot);
+        return ERR_PLATFORM;
+    }
+    if (!ctlJoinPath(logOut, logCap, ctl->logDir, logName)) {
+        (void)snprintf(why, whyCap, "helper log path too long");
+        return ERR_PLATFORM;
+    }
+    fd = open(logOut, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY, 0640);
+    if (fd < 0) {
+        solariLogf(SOLARI_LOG_ERROR, "ctl: cannot open helper log %s: %s",
+                   logOut, strerror(errno));
+        (void)snprintf(why, whyCap, "helper log not writable: %s", logName);
+        logOut[0] = '\0';
+        return ERR_PLATFORM;
+    }
+    /* The dashboard reads these logs via its solari-ctl membership, not the
+     * server's primary group: hand the file to socketGid (0 = unset, skip). */
+    if ((ctl->socketGid != 0 && fchown(fd, (uid_t)-1, (gid_t)ctl->socketGid) != 0)
+        || fchmod(fd, 0640) != 0) {
+        solariLogf(SOLARI_LOG_ERROR, "ctl: cannot set group/mode on helper log %s: %s",
+                   logOut, strerror(errno));
+        close(fd);
+        (void)snprintf(why, whyCap, "helper log not writable: %s", logName);
+        logOut[0] = '\0';
+        return ERR_PLATFORM;
+    }
+    argv[0] = exe;
+#if defined(SOLARI_CTL_TEST_SPAWN)
+    st = ctlTestSpawn(argv, logOut);
+#else
+    {
+        ctlHelperEnv he;
+        if (!ctlHelperEnvBuild(ctl, environ, &he)) {
+            close(fd);
+            argv[0] = NULL;
+            (void)snprintf(why, whyCap, "oom");
+            return ERR_PLATFORM;
+        }
+        st = ctlSpawnDetached(argv, fd, ctl->helperRoot, he.envp);
+        ctlHelperEnvFree(&he);
+    }
+#endif
+    close(fd);
+    argv[0] = NULL;                          /* exe is about to go out of scope */
+    if (st != SOLARI_OK)
+        (void)snprintf(why, whyCap, "helper spawn failed: %s", helper);
+    return st;
 }
 
 /* RBAC gate for destructive verbs: every destructive request must name the
@@ -1130,7 +1371,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
 
     /* ---- deploy the client to a remote host (operator-gated, detached) ---- */
     if (strcmp(verb, "DEPLOY") == 0) {
-        char host[128], server[256], arch[16], fqdn[160], sanit[160], logpath[256], extra[300];
+        char host[128], server[256], arch[16], fqdn[160], sanit[160], logname[192];
+        char logpath[SERVER_PATH_MAX], extra[SERVER_PATH_MAX + 64], why[160];
         char *argv[16];
         int   n = 0;
         if (ctlArgStr(args, "host", host, sizeof host) != SOLARI_OK || !host[0])
@@ -1139,17 +1381,18 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         if (ctlArgStr(args, "arch",   arch,   sizeof arch)   != SOLARI_OK) arch[0]   = '\0';
         if (ctlArgStr(args, "fqdn",   fqdn,   sizeof fqdn)   != SOLARI_OK) fqdn[0]   = '\0';
         ctlSanitizeName(host, sanit, sizeof sanit);
-        (void)snprintf(logpath, sizeof logpath, "run/deploy-%s.log", sanit);
-        argv[n++] = (char *)"deploy/remote-deploy.sh";
+        (void)snprintf(logname, sizeof logname, "deploy-%s.log", sanit);
+        argv[n++] = NULL;                    /* helper path, set by ctlSpawnHelper */
         argv[n++] = (char *)"--host";   argv[n++] = host;
         if (server[0]) { argv[n++] = (char *)"--server"; argv[n++] = server; }
         if (arch[0])   { argv[n++] = (char *)"--arch";   argv[n++] = arch; }
         if (fqdn[0])   { argv[n++] = (char *)"--fqdn";   argv[n++] = fqdn; }
         argv[n++] = (char *)"--op"; argv[n++] = operator_;
         argv[n]   = NULL;
-        st = ctlSpawnDetached(argv, logpath);
+        st = ctlSpawnHelper(ctl, "deploy/remote-deploy.sh", argv, logname,
+                            logpath, sizeof logpath, why, sizeof why);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "deploy spawn failed");
+            return ctlReplyErr(replyOut, replyCap, st, why);
         solariLogf(SOLARI_LOG_INFO, "ctl: deploy launched host=%s op=%s -> %s",
                    host, operator_, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=deploying", logpath);
@@ -1163,7 +1406,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
      * the server loop never blocks. */
     if (strcmp(verb, "FLEET_PROVISION") == 0) {
         char target[128], distro[24], arch[16], profile[48], hostname[160];
-        char role[32], server[256], ip[64], sanit[160], logpath[256], extra[300];
+        char role[32], server[256], ip[64], sanit[160], logname[192];
+        char logpath[SERVER_PATH_MAX], extra[SERVER_PATH_MAX + 64], why[160];
         char *argv[28];
         int   n = 0;
         if (ctlArgStr(args, "target", target, sizeof target) != SOLARI_OK || !target[0])
@@ -1179,8 +1423,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         if (ctlArgStr(args, "server", server, sizeof server) != SOLARI_OK) server[0] = '\0';
         if (ctlArgStr(args, "ip", ip, sizeof ip) != SOLARI_OK) ip[0] = '\0';
         ctlSanitizeName(hostname, sanit, sizeof sanit);
-        (void)snprintf(logpath, sizeof logpath, "run/provision-%s.log", sanit);
-        argv[n++] = (char *)"deploy/fleet/fleet-provision.sh";
+        (void)snprintf(logname, sizeof logname, "provision-%s.log", sanit);
+        argv[n++] = NULL;                    /* helper path, set by ctlSpawnHelper */
         argv[n++] = (char *)"--target";   argv[n++] = target;
         argv[n++] = (char *)"--distro";   argv[n++] = distro;
         argv[n++] = (char *)"--arch";     argv[n++] = arch;
@@ -1191,9 +1435,10 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         if (ip[0])      { argv[n++] = (char *)"--server-ip"; argv[n++] = ip; }
         argv[n++] = (char *)"--op"; argv[n++] = operator_;
         argv[n]   = NULL;
-        st = ctlSpawnDetached(argv, logpath);
+        st = ctlSpawnHelper(ctl, "deploy/fleet/fleet-provision.sh", argv, logname,
+                            logpath, sizeof logpath, why, sizeof why);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "provision spawn failed");
+            return ctlReplyErr(replyOut, replyCap, st, why);
         solariLogf(SOLARI_LOG_INFO, "ctl: fleet provision target=%s distro=%s arch=%s op=%s -> %s",
                    target, distro, arch, operator_, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=provisioning", logpath);
@@ -1203,7 +1448,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
     /* ---- fleet imaging: build a bootable image (Raspberry Pi etc., detached) ---- */
     if (strcmp(verb, "FLEET_IMAGE") == 0) {
         char hostname[160], arch[16], distro[24], profile[48], role[32];
-        char server[256], ip[64], sanit[160], logpath[256], extra[300];
+        char server[256], ip[64], sanit[160], logname[192];
+        char logpath[SERVER_PATH_MAX], extra[SERVER_PATH_MAX + 64], why[160];
         char *argv[26];
         int   n = 0;
         if (ctlArgStr(args, "hostname", hostname, sizeof hostname) != SOLARI_OK || !hostname[0])
@@ -1216,8 +1462,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         if (ctlArgStr(args, "server", server, sizeof server) != SOLARI_OK) server[0] = '\0';
         if (ctlArgStr(args, "ip", ip, sizeof ip) != SOLARI_OK) ip[0] = '\0';
         ctlSanitizeName(hostname, sanit, sizeof sanit);
-        (void)snprintf(logpath, sizeof logpath, "run/image-%s.log", sanit);
-        argv[n++] = (char *)"deploy/fleet/fleet-image.sh";
+        (void)snprintf(logname, sizeof logname, "image-%s.log", sanit);
+        argv[n++] = NULL;                    /* helper path, set by ctlSpawnHelper */
         argv[n++] = (char *)"--hostname"; argv[n++] = hostname;
         argv[n++] = (char *)"--arch";     argv[n++] = arch;
         argv[n++] = (char *)"--distro";   argv[n++] = distro;
@@ -1227,9 +1473,10 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         if (ip[0])      { argv[n++] = (char *)"--server-ip"; argv[n++] = ip; }
         argv[n++] = (char *)"--op"; argv[n++] = operator_;
         argv[n]   = NULL;
-        st = ctlSpawnDetached(argv, logpath);
+        st = ctlSpawnHelper(ctl, "deploy/fleet/fleet-image.sh", argv, logname,
+                            logpath, sizeof logpath, why, sizeof why);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "image spawn failed");
+            return ctlReplyErr(replyOut, replyCap, st, why);
         solariLogf(SOLARI_LOG_INFO, "ctl: fleet image hostname=%s arch=%s op=%s -> %s",
                    hostname, arch, operator_, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=imaging", logpath);
@@ -1241,6 +1488,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
      * values that passed the strict validators above; the log name is built
      * only from a validated decimal id. Wire contract (keep in sync with
      * deploy/fleet/provlib.py and the PHP provisioning route):
+     * Helper paths are relative to ctl->helperRoot; logs land in ctl->logDir
+     * and the reply's log= is that absolute path (see ctlSpawnHelper).
      *   IMAGE_REFRESH image=<id> op=<principal>
      *     -> deploy/fleet/image-refresh.py --image <id> --op <principal>
      *   PROV_STAGE entity=<id> image=<id> stacks=<a,b> op=<principal>
@@ -1248,21 +1497,23 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
      *   STACK_APPLY entity=<id> stacks=<a,b> dryRun=<0|1> op=<principal>
      *     -> deploy/fleet/stack-apply.py --entity <id> --stacks <a,b> [--dry-run] --op <principal> */
     if (strcmp(verb, "IMAGE_REFRESH") == 0) {
-        char image[16], op[CTL_PROV_PRINCIPAL_MAX + 1], logpath[64], extra[128];
+        char image[16], op[CTL_PROV_PRINCIPAL_MAX + 1], logname[64];
+        char logpath[SERVER_PATH_MAX], extra[SERVER_PATH_MAX + 64], why[160];
         char *argv[6];
         int   n = 0;
         if (!ctlProvArgId(args, "image", image, sizeof image))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid image id");
         if (!ctlProvArgPrincipal(args, op, sizeof op))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
-        (void)snprintf(logpath, sizeof logpath, "run/image-refresh-%s.log", image);
-        argv[n++] = (char *)"deploy/fleet/image-refresh.py";
+        (void)snprintf(logname, sizeof logname, "image-refresh-%s.log", image);
+        argv[n++] = NULL;                    /* helper path, set by ctlSpawnHelper */
         argv[n++] = (char *)"--image"; argv[n++] = image;
         argv[n++] = (char *)"--op";    argv[n++] = op;
         argv[n]   = NULL;
-        st = ctlSpawnDetached(argv, logpath);
+        st = ctlSpawnHelper(ctl, "deploy/fleet/image-refresh.py", argv, logname,
+                            logpath, sizeof logpath, why, sizeof why);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "image refresh spawn failed");
+            return ctlReplyErr(replyOut, replyCap, st, why);
         solariLogf(SOLARI_LOG_INFO, "ctl: image refresh image=%s op=%s -> %s",
                    image, op, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=refreshing", logpath);
@@ -1271,7 +1522,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
 
     if (strcmp(verb, "PROV_STAGE") == 0) {
         char entity[16], image[16], stacks[CTL_PROV_STACKS_CAP];
-        char op[CTL_PROV_PRINCIPAL_MAX + 1], logpath[64], extra[128];
+        char op[CTL_PROV_PRINCIPAL_MAX + 1], logname[64];
+        char logpath[SERVER_PATH_MAX], extra[SERVER_PATH_MAX + 64], why[160];
         char *argv[10];
         int   n = 0;
         if (!ctlProvArgId(args, "entity", entity, sizeof entity))
@@ -1282,16 +1534,17 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid stacks");
         if (!ctlProvArgPrincipal(args, op, sizeof op))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
-        (void)snprintf(logpath, sizeof logpath, "run/prov-stage-%s.log", entity);
-        argv[n++] = (char *)"deploy/fleet/prov-stage.py";
+        (void)snprintf(logname, sizeof logname, "prov-stage-%s.log", entity);
+        argv[n++] = NULL;                    /* helper path, set by ctlSpawnHelper */
         argv[n++] = (char *)"--entity"; argv[n++] = entity;
         argv[n++] = (char *)"--image";  argv[n++] = image;
         argv[n++] = (char *)"--stacks"; argv[n++] = stacks;
         argv[n++] = (char *)"--op";     argv[n++] = op;
         argv[n]   = NULL;
-        st = ctlSpawnDetached(argv, logpath);
+        st = ctlSpawnHelper(ctl, "deploy/fleet/prov-stage.py", argv, logname,
+                            logpath, sizeof logpath, why, sizeof why);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "prov stage spawn failed");
+            return ctlReplyErr(replyOut, replyCap, st, why);
         solariLogf(SOLARI_LOG_INFO, "ctl: prov stage entity=%s image=%s stacks=%s op=%s -> %s",
                    entity, image, stacks, op, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=staging", logpath);
@@ -1300,7 +1553,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
 
     if (strcmp(verb, "STACK_APPLY") == 0) {
         char entity[16], stacks[CTL_PROV_STACKS_CAP], dry[4];
-        char op[CTL_PROV_PRINCIPAL_MAX + 1], logpath[64], extra[128];
+        char op[CTL_PROV_PRINCIPAL_MAX + 1], logname[64];
+        char logpath[SERVER_PATH_MAX], extra[SERVER_PATH_MAX + 64], why[160];
         char *argv[10];
         int   n = 0;
         bool  dryRun = false;
@@ -1313,16 +1567,17 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid dryRun");
         if (!ctlProvArgPrincipal(args, op, sizeof op))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
-        (void)snprintf(logpath, sizeof logpath, "run/stack-apply-%s.log", entity);
-        argv[n++] = (char *)"deploy/fleet/stack-apply.py";
+        (void)snprintf(logname, sizeof logname, "stack-apply-%s.log", entity);
+        argv[n++] = NULL;                    /* helper path, set by ctlSpawnHelper */
         argv[n++] = (char *)"--entity"; argv[n++] = entity;
         argv[n++] = (char *)"--stacks"; argv[n++] = stacks;
         if (dryRun) argv[n++] = (char *)"--dry-run";
         argv[n++] = (char *)"--op";     argv[n++] = op;
         argv[n]   = NULL;
-        st = ctlSpawnDetached(argv, logpath);
+        st = ctlSpawnHelper(ctl, "deploy/fleet/stack-apply.py", argv, logname,
+                            logpath, sizeof logpath, why, sizeof why);
         if (st != SOLARI_OK)
-            return ctlReplyErr(replyOut, replyCap, st, "stack apply spawn failed");
+            return ctlReplyErr(replyOut, replyCap, st, why);
         solariLogf(SOLARI_LOG_INFO, "ctl: stack apply entity=%s stacks=%s dryRun=%d op=%s -> %s",
                    entity, stacks, dryRun ? 1 : 0, op, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=applying", logpath);
@@ -1987,6 +2242,36 @@ solariStatus serverCtlOpen(const serverConfig *cfg, serverContext *ctx,
                                             : (uint32_t)geteuid();
     ctl->dashboardUid = cfg->ctlDashboardUid;
     ctl->socketGid    = cfg->ctlSocketGid;
+
+    /* Helper tree + log dir (absolute; the socket path too, so helpers that
+     * get SOLARI_CTL_SOCK from a different cwd still find it). Unusable paths
+     * are logged here and every helper verb then answers ERR — the bridge
+     * itself still comes up. */
+    {
+        char cwd[SERVER_PATH_MAX], probe[SERVER_PATH_MAX];
+        if (!getcwd(cwd, sizeof cwd)) cwd[0] = '\0';
+        (void)snprintf(ctl->helperSock, sizeof ctl->helperSock, "%s", ctl->sockPath);
+        if (ctl->helperSock[0] != '/' &&
+            !ctlAbsolutize(ctl->helperSock, sizeof ctl->helperSock, cwd))
+            ctl->helperSock[0] = '\0';
+        if (!ctlResolveHelperPaths(cfg->ctlHelperRoot, cfg->ctlLogDir, ctl->sockPath,
+                                   cwd, ctl->helperRoot, sizeof ctl->helperRoot,
+                                   ctl->logDir, sizeof ctl->logDir))
+            solariLogf(SOLARI_LOG_ERROR, "ctl: helper root/log dir unusable "
+                       "(helperRoot='%s' logDir='%s'); helper verbs will refuse",
+                       cfg->ctlHelperRoot, cfg->ctlLogDir);
+        else {
+            if (!ctlJoinPath(probe, sizeof probe, ctl->helperRoot,
+                             "deploy/fleet/fleet-provision.sh") || access(probe, X_OK) != 0)
+                solariLogf(SOLARI_LOG_WARN, "ctl: helper root %s has no executable "
+                           "deploy/fleet helpers; helper verbs will refuse", ctl->helperRoot);
+            if (access(ctl->logDir, W_OK | X_OK) != 0)
+                solariLogf(SOLARI_LOG_WARN, "ctl: helper log dir %s is not writable: %s",
+                           ctl->logDir, strerror(errno));
+            solariLogf(SOLARI_LOG_INFO, "ctl: helpers from %s, logs to %s",
+                       ctl->helperRoot, ctl->logDir);
+        }
+    }
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {

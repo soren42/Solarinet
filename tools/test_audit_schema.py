@@ -48,6 +48,33 @@ class SchemaAuditTests(unittest.TestCase):
         self.assertEqual(audit_schema.normalizeSchemaDdl(old_dump),
                          audit_schema.normalizeSchemaDdl(new_dump))
 
+    def test_view_column_stub_indentation_is_normalized(self) -> None:
+        # 11.8 as committed in netdb/sor/schema.snapshot.sql: first alias
+        # indented one space, the rest two.
+        snapshot = (
+            "/*!50001 CREATE VIEW `v_dns_cnames` AS SELECT\n"
+            " 1 AS `alias`,\n  1 AS `target_host` */;\n"
+        )
+        canonical = (
+            "/*!50001 CREATE VIEW `v_dns_cnames` AS SELECT\n"
+            " NULL AS `alias`,\n NULL AS `target_host` */;\n"
+        )
+        for live in (
+            snapshot,
+            "/*!50001 CREATE VIEW `v_dns_cnames` AS SELECT\n"
+            "NULL AS `alias`,\nNULL AS `target_host` */;\n",
+            "/*!50001 CREATE VIEW `v_dns_cnames` AS SELECT\n"
+            "  NULL AS `alias`,\n  NULL AS `target_host` */;\n",
+            "/*!50001 CREATE VIEW `v_dns_cnames` AS SELECT\n"
+            "\tNULL AS `alias`,\n NULL AS `target_host` */;\n",
+        ):
+            with self.subTest(live=live):
+                self.assertEqual(canonical, audit_schema.normalizeSchemaDdl(live))
+        # alias drift inside a stub is still visible
+        renamed = snapshot.replace("`target_host`", "`target`")
+        self.assertNotEqual(audit_schema.normalizeSchemaDdl(snapshot),
+                            audit_schema.normalizeSchemaDdl(renamed))
+
     def test_view_placeholder_normalization_does_not_hide_real_view_drift(self) -> None:
         expected = "/*!50001 CREATE ALGORITHM=UNDEFINED VIEW `v_sample` AS SELECT 1 AS `value` */;\n"
         actual = "/*!50001 CREATE ALGORITHM=UNDEFINED VIEW `v_sample` AS SELECT NULL AS `value` */;\n"

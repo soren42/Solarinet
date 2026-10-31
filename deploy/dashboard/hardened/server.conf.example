@@ -57,3 +57,12 @@ enforcePeer = true
 operatorUid = solari
 dashboardUid = www-solari
 socketGid = solari-ctl
+# Fleet/deploy helpers (deploy/remote-deploy.sh, deploy/fleet/*) are exec'd by
+# absolute path under helperRoot; default = the server's working directory
+# (the release root, /opt/solarinet/current), pinned with realpath at start so
+# an in-flight cutover cannot swap helpers mid-run. Helper logs
+# (deploy-<host>.log, provision-<host>.log, ...) land in logDir; default = the
+# ctl socket's directory, which is where the dashboard tails them. A verb whose
+# helper is missing/non-executable or whose log cannot be opened replies ERR.
+# helperRoot = /opt/solarinet/current
+# logDir = /run/solari

@@ -13,7 +13,13 @@ import re
 import subprocess
 import sys
 
-from export_schema import commonClientArgs, normalizeDefiners
+# Sibling tools resolve from this file's directory, so they also import under
+# `python3 -I` (which drops the script directory from sys.path).
+_TOOLS = str(pathlib.Path(__file__).resolve().parent)
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+
+from export_schema import commonClientArgs, normalizeDefiners  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -45,11 +51,13 @@ def normalizeSchemaDdl(sql: str) -> str:
     # mariadb-dump serializes the temporary view-column stubs differently
     # across server versions (11.8 emits 1; 12.3 emits NULL). These are replaced
     # by the full view definition later in the dump, so compare only the column
-    # aliases in these generated stubs.
+    # aliases in these generated stubs. The stub indentation differs too (11.8
+    # indents the first alias one space and the rest two), so it is
+    # canonicalized to a single space.
     def normalizeViewPlaceholder(match: re.Match[str]) -> str:
         body = re.sub(
             r"(?m)^([ \t]*)(?:1|NULL)([ \t]+AS[ \t]+`[^`]+`)(,?)([ \t]*)(?=\*/;|$)",
-            r"\1NULL\2\3\4",
+            r" NULL\2\3\4",
             match.group(2),
         )
         return match.group(1) + body + match.group(3)

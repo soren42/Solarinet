@@ -295,6 +295,11 @@ solariStatus serverConfigFromFile(const char *path, serverConfig *out)
                                                out->ctlDashboardUid);
     out->ctlSocketGid    = serverCfgResolveGid(c, "ctl", "socketGid",
                                                out->ctlSocketGid);
+    /* Helper tree + helper log dir (empty = derived at serverCtlOpen). */
+    serverStrCpy(out->ctlHelperRoot, sizeof out->ctlHelperRoot,
+                 solariConfigGetStr(c, "ctl", "helperRoot", out->ctlHelperRoot));
+    serverStrCpy(out->ctlLogDir, sizeof out->ctlLogDir,
+                 solariConfigGetStr(c, "ctl", "logDir", out->ctlLogDir));
 
     solariConfigFree(c);
     return SOLARI_OK;
