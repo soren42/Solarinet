@@ -23,6 +23,16 @@
     msg: "{{ solari_stack_skipped }}"
   when: solari_stack_skipped | length > 0
 
+- name: Report pool entries a later stack shares with an earlier one (installed once)
+  ansible.builtin.debug:
+    msg: "{{ solari_stack_shared }}"
+  when: solari_stack_shared | length > 0
+
+- name: Report requirements installed implicitly from the software pool
+  ansible.builtin.debug:
+    msg: "{{ solari_stack_implicit }}"
+  when: solari_stack_implicit | length > 0
+
 - name: Prepare stack work directories
   ansible.builtin.file:
     path: "{{ item }}"

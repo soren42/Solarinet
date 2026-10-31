@@ -22,19 +22,23 @@ BEGIN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'refusing rollback: prov_runs holds audit records';
   END IF;
-  IF EXISTS (SELECT 1 FROM prov_stack_artifacts) THEN
+  IF EXISTS (SELECT 1 FROM prov_software_artifacts) OR EXISTS (SELECT 1 FROM prov_software_conflicts) THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'refusing rollback: prov_stack_artifacts has rows (029 seeds none)';
+      SET MESSAGE_TEXT = 'refusing rollback: prov_software_artifacts/conflicts have rows (029 seeds none)';
   END IF;
   IF EXISTS (SELECT 1 FROM prov_stacks WHERE slug NOT IN ('core','dev-tools'))
-     OR (SELECT COUNT(*) FROM prov_stack_items) > 21
+     OR (SELECT COUNT(*) FROM prov_software) > 21
+     OR (SELECT COUNT(*) FROM prov_stack_members) > 21
+     OR (SELECT COUNT(*) FROM prov_software_requires) > 1
      OR (SELECT COUNT(*) FROM prov_stack_deps) > 1
      OR (SELECT COUNT(*) FROM prov_images) > 6 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'refusing rollback: prov_* holds rows beyond the 029 seed';
   END IF;
   IF EXISTS (SELECT 1 FROM prov_stacks WHERE source_id <> prov OR deleted_at IS NOT NULL OR updated_at > created_at)
-     OR EXISTS (SELECT 1 FROM prov_stack_items WHERE source_id <> prov OR deleted_at IS NOT NULL OR updated_at > created_at)
+     OR EXISTS (SELECT 1 FROM prov_software WHERE source_id <> prov OR deleted_at IS NOT NULL OR updated_at > created_at)
+     OR EXISTS (SELECT 1 FROM prov_stack_members WHERE source_id <> prov OR deleted_at IS NOT NULL OR updated_at > created_at)
+     OR EXISTS (SELECT 1 FROM prov_software_requires WHERE source_id <> prov OR deleted_at IS NOT NULL OR updated_at > created_at)
      OR EXISTS (SELECT 1 FROM prov_stack_deps WHERE source_id <> prov OR deleted_at IS NOT NULL OR updated_at > created_at)
      OR EXISTS (SELECT 1 FROM prov_images WHERE source_id <> prov OR deleted_at IS NOT NULL OR updated_at > created_at
                                           OR sha256 IS NOT NULL OR fetched_at IS NOT NULL OR netboot_verified <> 0) THEN
@@ -49,8 +53,11 @@ DROP PROCEDURE `_solarinet_rollback_m029_assert_seed_only`;
 DROP TRIGGER IF EXISTS `trg_prov_runs_bd`;
 DROP TRIGGER IF EXISTS `trg_prov_runs_bu`;
 DROP TABLE IF EXISTS `prov_runs`;
-DROP TABLE IF EXISTS `prov_stack_artifacts`;
 DROP TABLE IF EXISTS `prov_stack_deps`;
-DROP TABLE IF EXISTS `prov_stack_items`;
+DROP TABLE IF EXISTS `prov_stack_members`;
 DROP TABLE IF EXISTS `prov_stacks`;
+DROP TABLE IF EXISTS `prov_software_conflicts`;
+DROP TABLE IF EXISTS `prov_software_requires`;
+DROP TABLE IF EXISTS `prov_software_artifacts`;
+DROP TABLE IF EXISTS `prov_software`;
 DROP TABLE IF EXISTS `prov_images`;

@@ -1,38 +1,56 @@
 #!/usr/bin/env python3
 """stackgen — render SolariNet provisioning stacks into Ansible vars.
 
-Reads stack definitions (the SoR prov_stacks / prov_stack_items /
-prov_stack_artifacts / prov_stack_deps tables from migration 029, or the same
-shape as JSON) and renders, for ONE target family + arch, the deterministic
-JSON vars consumed by the `stack-items` Ansible role (via common-stack):
+Reads the software POOL and the stacks that reference it (the SoR tables
+prov_software / prov_software_artifacts / prov_software_requires /
+prov_software_conflicts / prov_stacks / prov_stack_members / prov_stack_deps
+from migration 029, or the same shape as JSON) and renders, for ONE target
+family + arch, the deterministic JSON vars consumed by the `stack-items`
+Ansible role (via common-stack):
 
   solari_stack_family / solari_stack_arch   target the vars were rendered for
   solari_stack_order       dependency-closed stack slugs, locked (Core) first
   solari_stack_repos       third-party repos      (item_type repo)
-  solari_stack_packages    distro package names   (pkg + resolved build deps)
+  solari_stack_packages    distro package names   (item_type pkg)
   solari_stack_artifacts   pinned downloads       (item_type artifact)
   solari_stack_builds      source builds          (item_type build)
   solari_stack_scripts     install scripts        (item_type script)
   solari_stack_roles       Ansible roles          (item_type role)
   solari_stack_steps       the execution sequence over the lists above
-  solari_stack_skipped     items not applicable to this family/arch
+  solari_stack_skipped     member occurrences not applicable to this family/arch
+  solari_stack_shared      member occurrences already installed earlier (once only)
+  solari_stack_implicit    entries installed only because another entry requires them
 
 Rules this generator owns (the schema cannot express them):
   * closure = requested stacks + every locked stack + transitive depends_on;
   * order = topological; every unlocked stack implicitly depends on every
     locked stack; ties broken by (locked first, sort_order, slug);
-  * within a stack: item_order when set, else repo 100 -> pkg 200 ->
+  * within a stack: member item_order when set, else repo 100 -> pkg 200 ->
     artifact 300 -> build 400 -> script 500 -> role 600;
-  * HARD errors: unknown slug, dependency cycle, unmapped package (NULL family
-    name on an applicable item), artifact without a sha256 for the arch,
-    unpinned remote script, build without a pinned ref / tarball sha256,
-    unresolvable or ambiguous build dependency, pkg whose repo_ref is not
-    applied first, script/build without an idempotency guard, repo fields that
-    could inject config lines, control characters in a logical_name,
+  * install once: a pool entry is installed at its FIRST position in run
+    order; every later occurrence is reported in solari_stack_shared;
+  * requirements (A requires B) resolve against the POOL: B is installed
+    before A. If no selected stack lists B it is installed implicitly just
+    before A (reported in solari_stack_implicit); if a selected stack lists B
+    LATER, a pkg is pulled forward and anything else is a hard error. B must
+    apply to the target family/arch;
+  * HARD errors: unknown slug, stack dependency or requirement cycle, unknown
+    member / requirement / conflict target, conflicting entries both in the
+    installed set (from stacks or via requirements), requirement not
+    applicable to the target or installed after its dependent, unmapped
+    package (NULL family name on an applicable entry), artifact without a
+    sha256 for the arch, unpinned remote script, build without a pinned ref /
+    tarball sha256, script/build without an idempotency guard, repo fields
+    that could inject config lines, control characters in a logical_name,
     secret-looking env names (a heuristic only, see _secret_env_name).
 
+Entry ids (`id` in the typed lists) are derived from the pool logical_name
+alone, so a repo file, key, artifact dir or build dir keeps the same host
+path whichever stack happens to install the entry first.
+
 Input sources:
-  --from-json FILE   {"stacks": [...]} (see tests/deploy/fixtures/stacks_seed.json)
+  --from-json FILE   {"software": [...], "stacks": [...]}
+                     (see tests/deploy/fixtures/stacks_seed.json)
   --from-db          SoR over pymysql, read-only transaction. Connection from
                      the environment only (never argv): SOR_DB_NAME (required),
                      SOR_DB_HOST (127.0.0.1), SOR_DB_PORT (3306), SOR_DB_USER,
@@ -61,7 +79,7 @@ SAME = "="
 BUILD_SYSTEMS = ("cmake", "make", "autotools", "meson", "custom")
 RUN_AS = ("root", "admin")
 # version_pin becomes a directory name on hosts: one safe path component
-# (no '/', never '.', '..' or a leading '-'). Mirrors ck_prov_stack_items_pin_fmt.
+# (no '/', never '.', '..' or a leading '-'). Mirrors ck_prov_software_pin_fmt.
 PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}$")
 # Git sources are pinned by full commit id only (refs and tags can move).
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
@@ -77,9 +95,9 @@ FPR_RE = re.compile(r"^[0-9A-F]{40}([0-9A-F]{24})?$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # C0/C1 controls and the Unicode line/paragraph separators: anything that can
 # end a line in a config file the role writes. Mirrored by DB CHECKs.
-CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
 # Repo URLs are one whitespace-free token on an APT line / in a repo file.
-REPO_URL_RE = re.compile(r"[^\s\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+REPO_URL_RE = re.compile(r"[^\s\x00-\x1f\x7f-\x9f  ]+")
 # APT suite / component: a plain token, never a leading '-'.
 REPO_TOKEN_RE = re.compile(r"[A-Za-z0-9._/][A-Za-z0-9._/-]*")
 # Build prefix: absolute, no '.'/'..' components, nothing a shell or find
@@ -87,7 +105,7 @@ REPO_TOKEN_RE = re.compile(r"[A-Za-z0-9._/][A-Za-z0-9._/-]*")
 PREFIX_RE = re.compile(r"(/(?!\.\.?(?:/|$))[A-Za-z0-9._+-]+)+")
 
 SCRIPT_KEYS = {"body", "url", "sha256", "interpreter", "run_as", "env", "creates", "check", "version_check"}
-BUILD_KEYS = {"source", "system", "configure_args", "build_deps", "prefix", "build", "install", "env",
+BUILD_KEYS = {"source", "system", "configure_args", "prefix", "build", "install", "env",
               "creates", "check", "version_check"}
 ARTIFACT_KEYS = {"extract", "creates"}
 REPO_FAMILY_KEYS = {"url", "key_url", "fingerprint", "suite", "components"}
@@ -117,10 +135,144 @@ def _set_list(value: Any, allowed: tuple[str, ...], what: str) -> list[str] | No
     return [v for v in allowed if v in vals]
 
 
+def _name_list(value: Any, where: str, what: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+        raise StackGenError(f"{where}: {what} must be a list of logical names")
+    return sorted(set(value))
+
+
+def _load_software(raw: Any, seen_ids: dict[str, str]) -> dict:
+    if not isinstance(raw, dict):
+        raise StackGenError("pool entry must be an object")
+    name = raw.get("logical_name")
+    if not isinstance(name, str) or not name:
+        raise StackGenError("pool entry without logical_name")
+    where = f"pool entry {name!r}"
+    if CONTROL_RE.search(name):
+        raise StackGenError(f"{where}: logical_name contains a control character")
+    ident = _ident(name)
+    if seen_ids.get(ident) == name:
+        raise StackGenError(f"duplicate pool entry {name!r}")
+    if not ident or ident in seen_ids:
+        raise StackGenError(f"{where}: logical_name does not yield a unique identifier"
+                            + (f" (clashes with {seen_ids[ident]!r})" if ident in seen_ids else ""))
+    seen_ids[ident] = name
+    itype = raw.get("item_type", "pkg")
+    if itype not in ITEM_TYPES:
+        raise StackGenError(f"{where}: unknown item_type {itype!r}")
+    names = raw.get("names") or {}
+    for fam in names:
+        if fam not in FAMILIES:
+            raise StackGenError(f"{where}: unknown family {fam!r} in names")
+    for fam in FAMILIES:
+        val = names.get(fam)
+        if val is None:
+            continue
+        if itype == "pkg" and (val == SAME or not val):
+            raise StackGenError(f"{where}: pkg {fam} name must be a real package name, not {val!r}")
+        if itype != "pkg" and val != SAME:
+            raise StackGenError(f"{where}: {itype} {fam} name must be '=' or null, not {val!r}")
+    role = raw.get("ansible_role")
+    if (itype == "role") != (role is not None):
+        raise StackGenError(f"{where}: ansible_role is required for role entries and only for them")
+    if "repo_ref" in raw:
+        raise StackGenError(f"{where}: repo_ref is gone; express it as a requires edge to the repo entry")
+    artifacts = raw.get("artifacts") or {}
+    if artifacts and itype != "artifact":
+        raise StackGenError(f"{where}: per-arch artifacts on a {itype} entry")
+    for arch in artifacts:
+        if arch not in ARTIFACT_ARCHES:
+            raise StackGenError(f"{where}: unknown artifact arch {arch!r}")
+    spec = raw.get("spec")
+    if spec is not None and not isinstance(spec, dict):
+        raise StackGenError(f"{where}: spec must be an object")
+    if itype in ("pkg", "role") and spec is not None:
+        raise StackGenError(f"{where}: {itype} entries take no spec")
+    if itype in ("repo", "script", "build") and spec is None:
+        raise StackGenError(f"{where}: {itype} entries require a spec")
+    pin = raw.get("version_pin")
+    if pin is not None and (not isinstance(pin, str) or not PIN_RE.fullmatch(pin)):
+        raise StackGenError(f"{where}: version_pin {pin!r} must be one safe path component "
+                            "([A-Za-z0-9][A-Za-z0-9._+~-]*, max 64)")
+    return {
+        "logical_name": name,
+        "ident": ident,
+        "item_type": itype,
+        "names": {f: names.get(f) for f in FAMILIES},
+        "applies_families": _set_list(raw.get("applies_families"), FAMILIES, f"{where} applies_families"),
+        "applies_arches": _set_list(raw.get("applies_arches"), ARCHES, f"{where} applies_arches"),
+        "ansible_role": role,
+        "version_pin": pin,
+        "spec": spec,
+        "artifacts": artifacts,
+        "requires": _name_list(raw.get("requires"), where, "requires"),
+        "conflicts_with": _name_list(raw.get("conflicts_with"), where, "conflicts_with"),
+    }
+
+
+def _requirement_cycle(software: dict[str, dict]) -> list[str] | None:
+    state: dict[str, int] = {}          # 1 = on the DFS path, 2 = done
+    path: list[str] = []
+
+    def visit(n: str) -> list[str] | None:
+        state[n] = 1
+        path.append(n)
+        for r in software[n]["requires"]:
+            if state.get(r) == 1:
+                cyc = path[path.index(r):] + [r]
+                return list(reversed(cyc))   # requirement first, like install order
+            if r not in state:
+                found = visit(r)
+                if found:
+                    return found
+        path.pop()
+        state[n] = 2
+        return None
+
+    for n in sorted(software):
+        if n not in state:
+            found = visit(n)
+            if found:
+                return found
+    return None
+
+
 def load_definitions(doc: Any) -> dict[str, dict]:
-    """Validate the {"stacks": [...]} document; return slug -> stack."""
-    if not isinstance(doc, dict) or not isinstance(doc.get("stacks"), list):
-        raise StackGenError('definitions must be an object with a "stacks" list')
+    """Validate the {"software": [...], "stacks": [...]} document.
+
+    Returns {"software": logical_name -> entry, "stacks": slug -> stack,
+    "conflicts": sorted list of (a, b) name pairs with a < b}."""
+    if (not isinstance(doc, dict) or not isinstance(doc.get("software"), list)
+            or not isinstance(doc.get("stacks"), list)):
+        raise StackGenError('definitions must be an object with "software" and "stacks" lists')
+    software: dict[str, dict] = {}
+    seen_ids: dict[str, str] = {}
+    for raw in doc["software"]:
+        entry = _load_software(raw, seen_ids)
+        software[entry["logical_name"]] = entry
+
+    conflicts: set[tuple[str, str]] = set()
+    for name, e in software.items():
+        for r in e["requires"]:
+            if r == name:
+                raise StackGenError(f"pool entry {name!r} requires itself")
+            if r not in software:
+                raise StackGenError(f"pool entry {name!r} requires unknown entry {r!r}")
+        for c in e["conflicts_with"]:
+            if c == name:
+                raise StackGenError(f"pool entry {name!r} conflicts with itself")
+            if c not in software:
+                raise StackGenError(f"pool entry {name!r} conflicts with unknown entry {c!r}")
+            conflicts.add((min(name, c), max(name, c)))
+    for a, b in sorted(conflicts):
+        if b in software[a]["requires"] or a in software[b]["requires"]:
+            raise StackGenError(f"pool entries {a!r} and {b!r} both conflict and require each other")
+    cycle = _requirement_cycle(software)
+    if cycle:
+        raise StackGenError("requirement cycle: " + " -> ".join(repr(n) for n in cycle))
+
     stacks: dict[str, dict] = {}
     for raw in doc["stacks"]:
         slug = raw.get("slug")
@@ -128,82 +280,27 @@ def load_definitions(doc: Any) -> dict[str, dict]:
             raise StackGenError(f"invalid stack slug {slug!r}")
         if slug in stacks:
             raise StackGenError(f"duplicate stack slug {slug!r}")
-        items = []
-        seen_items: set[str] = set()
-        seen_ids: set[str] = set()
-        for it in raw.get("items") or []:
-            name = it.get("logical_name")
-            where = f"stack {slug!r} item {name!r}"
-            if not isinstance(name, str) or not name:
-                raise StackGenError(f"stack {slug!r}: item without logical_name")
-            if CONTROL_RE.search(name):
-                raise StackGenError(f"stack {slug!r} item {name!r}: logical_name contains a control character")
-            if name in seen_items:
-                raise StackGenError(f"{where}: duplicate logical_name")
-            ident = _ident(name)
-            if not ident or ident in seen_ids:
-                raise StackGenError(f"{where}: logical_name does not yield a unique identifier")
-            seen_items.add(name)
-            seen_ids.add(ident)
-            itype = it.get("item_type", "pkg")
-            if itype not in ITEM_TYPES:
-                raise StackGenError(f"{where}: unknown item_type {itype!r}")
-            names = it.get("names") or {}
-            for fam in names:
-                if fam not in FAMILIES:
-                    raise StackGenError(f"{where}: unknown family {fam!r} in names")
-            for fam in FAMILIES:
-                val = names.get(fam)
-                if val is None:
-                    continue
-                if itype == "pkg" and (val == SAME or not val):
-                    raise StackGenError(f"{where}: pkg {fam} name must be a real package name, not {val!r}")
-                if itype != "pkg" and val != SAME:
-                    raise StackGenError(f"{where}: {itype} {fam} name must be '=' or null, not {val!r}")
-            role = it.get("ansible_role")
-            if (itype == "role") != (role is not None):
-                raise StackGenError(f"{where}: ansible_role is required for role items and only for them")
-            if it.get("repo_ref") is not None and itype != "pkg":
-                raise StackGenError(f"{where}: repo_ref is only valid on pkg items")
-            artifacts = it.get("artifacts") or {}
-            if artifacts and itype != "artifact":
-                raise StackGenError(f"{where}: per-arch artifacts on a {itype} item")
-            for arch in artifacts:
-                if arch not in ARTIFACT_ARCHES:
-                    raise StackGenError(f"{where}: unknown artifact arch {arch!r}")
-            spec = it.get("spec")
-            if spec is not None and not isinstance(spec, dict):
-                raise StackGenError(f"{where}: spec must be an object")
-            if itype in ("pkg", "role") and spec is not None:
-                raise StackGenError(f"{where}: {itype} items take no spec")
-            if itype in ("repo", "script", "build") and spec is None:
-                raise StackGenError(f"{where}: {itype} items require a spec")
-            pin = it.get("version_pin")
-            if pin is not None and (not isinstance(pin, str) or not PIN_RE.fullmatch(pin)):
-                raise StackGenError(f"{where}: version_pin {pin!r} must be one safe path component "
-                                    "([A-Za-z0-9][A-Za-z0-9._+~-]*, max 64)")
-            item_order = it.get("item_order")
-            items.append({
-                "logical_name": name,
-                "ident": ident,
-                "item_type": itype,
-                "names": {f: names.get(f) for f in FAMILIES},
-                "applies_families": _set_list(it.get("applies_families"), FAMILIES, f"{where} applies_families"),
-                "applies_arches": _set_list(it.get("applies_arches"), ARCHES, f"{where} applies_arches"),
-                "ansible_role": role,
-                "repo_ref": it.get("repo_ref"),
-                "version_pin": pin,
-                "spec": spec,
-                "artifacts": artifacts,
-                "item_order": int(item_order) if item_order is not None else None,
-                "sort_order": int(it.get("sort_order", 100)),
-            })
+        members = []
+        seen: set[str] = set()
+        for m in raw.get("members") or []:
+            ref = m.get("software") if isinstance(m, dict) else None
+            if not isinstance(ref, str) or not ref:
+                raise StackGenError(f"stack {slug!r}: member without a software reference")
+            if ref not in software:
+                raise StackGenError(f"stack {slug!r}: member {ref!r} is not in the software pool")
+            if ref in seen:
+                raise StackGenError(f"stack {slug!r}: duplicate member {ref!r}")
+            seen.add(ref)
+            item_order = m.get("item_order")
+            members.append({"software": ref,
+                            "item_order": int(item_order) if item_order is not None else None,
+                            "sort_order": int(m.get("sort_order", 100))})
         stacks[slug] = {
             "slug": slug,
             "locked": bool(raw.get("locked", False)),
             "sort_order": int(raw.get("sort_order", 100)),
             "depends_on": sorted(set(raw.get("depends_on") or [])),
-            "items": items,
+            "members": members,
         }
     for s in stacks.values():
         for dep in s["depends_on"]:
@@ -211,7 +308,7 @@ def load_definitions(doc: Any) -> dict[str, dict]:
                 raise StackGenError(f"stack {dep!r} depends on itself")
             if dep not in stacks:
                 raise StackGenError(f"stack {s['slug']!r} depends on unknown stack {dep!r}")
-    return stacks
+    return {"software": software, "stacks": stacks, "conflicts": sorted(conflicts)}
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +371,17 @@ def _find_cycle(deps: dict[str, set[str]], remaining: set[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Per-type validation + rendering
 # ---------------------------------------------------------------------------
-def _item_key(it: dict) -> tuple:
-    pos = it["item_order"] if it["item_order"] is not None else TYPE_DEFAULT_ORDER[it["item_type"]]
-    return (pos, TYPE_RANK[it["item_type"]], it["sort_order"], it["logical_name"])
+def _member_key(member: dict, entry: dict) -> tuple:
+    itype = entry["item_type"]
+    pos = member["item_order"] if member["item_order"] is not None else TYPE_DEFAULT_ORDER[itype]
+    return (pos, TYPE_RANK[itype], member["sort_order"], entry["logical_name"])
+
+
+def _stack_members(defs: dict, slug: str) -> list[tuple[dict, dict]]:
+    """(member, entry) pairs of one stack in install order."""
+    sw = defs["software"]
+    pairs = [(m, sw[m["software"]]) for m in defs["stacks"][slug]["members"]]
+    return sorted(pairs, key=lambda p: _member_key(*p))
 
 
 def _check_keys(spec: dict, allowed: set[str], where: str) -> None:
@@ -346,7 +451,7 @@ def _check_repo_family(fam: Any, family: str, where: str) -> None:
     an argv: no control characters anywhere (they would add config lines),
     URLs are one whitespace-free token, suite/components are plain tokens.
     Applied to every family in the spec, not only the rendered one; mirrored
-    by ck_prov_stack_items_repo."""
+    by ck_prov_software_repo."""
     if not isinstance(fam, dict):
         raise StackGenError(f"{where}: repo {family} definition must be an object")
     _check_keys(fam, REPO_FAMILY_KEYS, f"{where} ({family})")
@@ -433,6 +538,9 @@ def _render_script(it: dict, where: str) -> dict:
 
 def _render_build(it: dict, where: str) -> dict:
     spec = it["spec"]
+    if "build_deps" in spec:
+        raise StackGenError(f"{where}: spec.build_deps is refused; build dependencies are requires "
+                            "edges to pkg entries in the pool")
     _check_keys(spec, BUILD_KEYS, where)
     src = spec.get("source")
     if not isinstance(src, dict):
@@ -473,80 +581,54 @@ def _render_build(it: dict, where: str) -> dict:
     elif any(v is not None for v in cmds.values()):
         raise StackGenError(f"{where}: build/install commands are only valid for system custom")
     args = spec.get("configure_args") or []
-    deps = spec.get("build_deps") or []
-    if not all(isinstance(a, str) for a in args) or not all(isinstance(d, str) for d in deps):
-        raise StackGenError(f"{where}: configure_args and build_deps must be lists of strings")
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        raise StackGenError(f"{where}: configure_args must be a list of strings")
     prefix = spec.get("prefix", "/usr/local")
     if not isinstance(prefix, str) or not PREFIX_RE.fullmatch(prefix):
         raise StackGenError(f"{where}: prefix must be an absolute path of plain components "
                             f"([A-Za-z0-9._+-], no '.'/'..', not '/'), got {prefix!r}")
     out = {"source": source, "system": system, "configure_args": list(args), "prefix": prefix,
            "build": cmds["build"], "install": cmds["install"], "env": _env(spec, where),
-           "build_deps": list(deps)}
+           "build_deps": []}   # filled by render() from the entry's pkg requirements
     out.update(_guard(spec, it, where))
     return out
 
 
-def _applies(it: dict, family: str, arch: str) -> bool:
-    return ((not it["applies_families"] or family in it["applies_families"])
-            and (not it["applies_arches"] or arch in it["applies_arches"]))
+def _not_applicable(it: dict, family: str, arch: str) -> str | None:
+    if it["applies_families"] and family not in it["applies_families"]:
+        return f"not for family {family}"
+    if it["applies_arches"] and arch not in it["applies_arches"]:
+        return f"not for arch {arch}"
+    return None
 
 
-def _pkg_index(stacks: dict[str, dict], order: list[str]) -> dict[str, list[dict]]:
-    """logical name -> every pkg item with that name in the render's closure.
-
-    Stacks outside the closure are never consulted: selecting a stack must not
-    pull definitions (names, repos) from stacks the operator did not select.
-    The locked core stack is always in the closure, so it is the family map.
-    Resolution (_resolve_build_dep) uses only the candidates applicable to the
-    render target and refuses when they disagree, so the result never depends
-    on closure order."""
-    index: dict[str, list[dict]] = {}
-    for slug in order:
-        for it in sorted(stacks[slug]["items"], key=_item_key):
-            if it["item_type"] == "pkg":
-                index.setdefault(it["logical_name"], []).append({**it, "stack": slug})
-    return index
+def _origin(inst: dict) -> str:
+    if inst["required_by"] is None:
+        return f"stack {inst['stack']!r}"
+    return f"{inst['via']}, required by {inst['required_by']!r} in stack {inst['stack']!r}"
 
 
-def _resolve_build_dep(dep: str, candidates: list[dict] | None, family: str, arch: str,
-                       order: list[str], applied_repos: set[str], where: str) -> str:
-    if not candidates:
-        raise StackGenError(f"{where}: build dep {dep!r} is not a pkg item in the selected "
-                            f"stacks {order} (add it to core or to a stack this one depends on)")
-    usable = [c for c in candidates if _applies(c, family, arch)]
-    if not usable:
-        found = ", ".join(f"stack {c['stack']!r}" for c in candidates)
-        raise StackGenError(f"{where}: build dep {dep!r} ({found}): not applicable to {family}/{arch}")
-    variants = {(c["names"][family], c["repo_ref"]) for c in usable}
-    if len(variants) > 1:
-        found = ", ".join(f"stack {c['stack']!r} -> {c['names'][family]!r}"
-                          f"{' via repo ' + repr(c['repo_ref']) if c['repo_ref'] else ''}" for c in usable)
-        raise StackGenError(f"{where}: build dep {dep!r} is ambiguous for {family}/{arch} ({found}); "
-                            "give the pkg items the same mapping or distinct logical names")
-    pkg = usable[0]
-    dwhere = f"{where} build dep {dep!r} (stack {pkg['stack']!r})"
-    real = pkg["names"][family]
-    if real is None:
-        raise StackGenError(f"{dwhere}: unmapped for family {family}")
-    if pkg["repo_ref"] is not None and pkg["repo_ref"] not in applied_repos:
-        raise StackGenError(f"{dwhere}: needs repo {pkg['repo_ref']!r}, which is not applied "
-                            "before this build")
-    return real
-
-
-def render(stacks: dict[str, dict], selected: list[str], family: str, arch: str) -> dict:
+def render(defs: dict, selected: list[str], family: str, arch: str) -> dict:
     if family not in FAMILIES:
         raise StackGenError(f"unknown family {family!r} (expected one of {FAMILIES})")
     if arch not in ARCHES:
         raise StackGenError(f"unknown arch {arch!r} (expected one of {ARCHES})")
-    order = resolve_order(stacks, selected)
-    pkg_index = _pkg_index(stacks, order)
+    software = defs["software"]
+    order = resolve_order(defs["stacks"], selected)
+    occurrences = [(slug, entry) for slug in order for _, entry in _stack_members(defs, slug)]
+    # First position of every entry the selected stacks list (requirement checks).
+    first_pos: dict[str, tuple[int, str]] = {}
+    for pos, (slug, entry) in enumerate(occurrences):
+        first_pos.setdefault(entry["logical_name"], (pos, slug))
+
     lists: dict[str, list] = {"repos": [], "packages": [], "artifacts": [], "builds": [],
                               "scripts": [], "roles": []}
     steps: list[dict] = []
     skipped: list[dict] = []
-    applied_repos: set[str] = set()
+    shared: list[dict] = []
+    implicit: list[dict] = []
+    installed: dict[str, dict] = {}     # logical_name -> {"stack", "required_by", "via"}
+    in_progress: set[str] = set()
 
     def add_packages(names: list[str]) -> None:
         new = [n for n in names if n not in lists["packages"]]
@@ -562,47 +644,79 @@ def render(stacks: dict[str, dict], selected: list[str], family: str, arch: str)
         steps.append({"type": kind[:-1], "index": len(lists[kind])})
         lists[kind].append(entry)
 
-    for slug in order:
-        for it in sorted(stacks[slug]["items"], key=_item_key):
-            where = f"stack {slug!r} item {it['logical_name']!r}"
-            itype = it["item_type"]
-            if it["applies_families"] and family not in it["applies_families"]:
-                skipped.append({"stack": slug, "item": it["logical_name"], "reason": f"not for family {family}"})
+    def install(it: dict, slug: str, pos: int, required_by: str | None, via: str | None,
+                where: str) -> None:
+        name = it["logical_name"]
+        if name in in_progress:   # load_definitions rejects cycles; belt and braces
+            raise StackGenError(f"{where}: requirement cycle through {name!r}")
+        in_progress.add(name)
+        for req in sorted(it["requires"], key=lambda r: (TYPE_RANK[software[r]["item_type"]], r)):
+            if req in installed:
                 continue
-            if it["applies_arches"] and arch not in it["applies_arches"]:
-                skipped.append({"stack": slug, "item": it["logical_name"], "reason": f"not for arch {arch}"})
-                continue
-            fam_name = it["names"][family]
-            if fam_name is None:
-                kind = "package" if itype == "pkg" else itype
-                raise StackGenError(f"{where}: unmapped {kind} for family {family} (null {family} name)")
-            base = {"name": it["logical_name"], "id": f"{slug}--{it['ident']}", "stack": slug,
-                    "version": it["version_pin"]}
-            if itype == "pkg":
-                ref = it["repo_ref"]
-                if ref is not None and ref not in applied_repos:
-                    raise StackGenError(f"{where}: repo_ref {ref!r} is not a repo applied before it")
-                add_packages([fam_name])
-            elif itype == "repo":
-                add_entry("repos", {**base, **_render_repo(it, family, where)})
-                applied_repos.add(it["logical_name"])
-            elif itype == "artifact":
-                if not it["version_pin"]:
-                    raise StackGenError(f"{where}: artifact needs a version_pin")
-                add_entry("artifacts", {**base, **_render_artifact(it, arch, where)})
-            elif itype == "script":
-                add_entry("scripts", {**base, **_render_script(it, where)})
-            elif itype == "build":
-                entry = {**base, **_render_build(it, where)}
-                resolved = [_resolve_build_dep(dep, pkg_index.get(dep), family, arch, order, applied_repos, where)
-                            for dep in entry["build_deps"]]
-                entry["build_deps"] = resolved
-                add_packages(resolved)
-                add_entry("builds", entry)
-            else:  # role
-                role = it["ansible_role"]
-                if role not in lists["roles"]:
-                    add_entry("roles", role)
+            dep = software[req]
+            rwhere = f"{where} requirement {req!r}"
+            why = _not_applicable(dep, family, arch)
+            if why:
+                raise StackGenError(f"{rwhere}: {why}; a requirement must apply to {family}/{arch}")
+            listed = first_pos.get(req)
+            if listed is not None and listed[0] > pos and dep["item_type"] != "pkg":
+                raise StackGenError(f"{rwhere}: {dep['item_type']} is installed later in run order "
+                                    f"(stack {listed[1]!r}); it must come before {name!r} — fix "
+                                    "item_order or the stack dependencies")
+            if listed is None:
+                install(dep, slug, pos, name, "implicit", f"stack {slug!r} item {req!r} (required by {name!r})")
+                implicit.append({"item": req, "required_by": name, "stack": slug})
+            else:
+                # Listed later by a selected stack: a pkg is pulled forward (its
+                # later occurrence is then reported as shared).
+                install(dep, slug, pos, name, "pulled forward",
+                        f"stack {slug!r} item {req!r} (pulled forward for {name!r})")
+        in_progress.discard(name)
+
+        itype = it["item_type"]
+        fam_name = it["names"][family]
+        if fam_name is None:
+            kind = "package" if itype == "pkg" else itype
+            raise StackGenError(f"{where}: unmapped {kind} for family {family} (null {family} name)")
+        base = {"name": name, "id": it["ident"], "stack": slug, "version": it["version_pin"]}
+        if itype == "pkg":
+            add_packages([fam_name])
+        elif itype == "repo":
+            add_entry("repos", {**base, **_render_repo(it, family, where)})
+        elif itype == "artifact":
+            if not it["version_pin"]:
+                raise StackGenError(f"{where}: artifact needs a version_pin")
+            add_entry("artifacts", {**base, **_render_artifact(it, arch, where)})
+        elif itype == "script":
+            add_entry("scripts", {**base, **_render_script(it, where)})
+        elif itype == "build":
+            entry = {**base, **_render_build(it, where)}
+            # The pkg requirements, all installed by now, in install order.
+            entry["build_deps"] = sorted({software[r]["names"][family] for r in it["requires"]
+                                          if software[r]["item_type"] == "pkg"},
+                                         key=lists["packages"].index)
+            add_entry("builds", entry)
+        else:  # role
+            role = it["ansible_role"]
+            if role not in lists["roles"]:
+                add_entry("roles", role)
+        installed[name] = {"stack": slug, "required_by": required_by, "via": via}
+
+    for pos, (slug, it) in enumerate(occurrences):
+        name = it["logical_name"]
+        why = _not_applicable(it, family, arch)
+        if why:
+            skipped.append({"stack": slug, "item": name, "reason": why})
+            continue
+        if name in installed:
+            shared.append({"stack": slug, "item": name, "installed_in": installed[name]["stack"]})
+            continue
+        install(it, slug, pos, None, None, f"stack {slug!r} item {name!r}")
+
+    for a, b in defs["conflicts"]:
+        if a in installed and b in installed:
+            raise StackGenError(f"conflicting entries {a!r} ({_origin(installed[a])}) and {b!r} "
+                                f"({_origin(installed[b])}) cannot be installed together")
 
     out = {
         "solari_stack_family": family,
@@ -610,6 +724,8 @@ def render(stacks: dict[str, dict], selected: list[str], family: str, arch: str)
         "solari_stack_order": order,
         "solari_stack_steps": steps,
         "solari_stack_skipped": skipped,
+        "solari_stack_shared": shared,
+        "solari_stack_implicit": implicit,
     }
     for kind, values in lists.items():
         out[f"solari_stack_{kind}"] = values
@@ -633,40 +749,67 @@ def load_json_file(path: str) -> dict[str, dict]:
 
 
 def fetch_db_document(conn) -> dict:
-    """Read live (non-deleted) rows into the --from-json document shape."""
+    """Read live (non-deleted) rows into the --from-json document shape.
+
+    A live membership or requirement that points at a soft-deleted pool entry
+    is an error (the stack would silently lose software); a conflict pair with
+    a soft-deleted side is moot and ignored."""
     cur = conn.cursor()
-    cur.execute("SELECT id, slug, locked, sort_order FROM prov_stacks WHERE deleted_at IS NULL")
-    by_id = {r[0]: {"slug": r[1], "locked": bool(r[2]), "sort_order": int(r[3]),
-                    "depends_on": [], "items": []} for r in cur.fetchall()}
-    cur.execute("SELECT stack_id, depends_on_stack_id FROM prov_stack_deps WHERE deleted_at IS NULL")
-    for sid, did in cur.fetchall():
-        if sid in by_id and did in by_id:
-            by_id[sid]["depends_on"].append(by_id[did]["slug"])
     cur.execute(
-        "SELECT id, stack_id, logical_name, item_type, name_suse, name_debian, name_fedora,"
-        " CAST(applies_families AS CHAR), CAST(applies_arches AS CHAR), ansible_role, repo_ref,"
-        " version_pin, spec, item_order, sort_order FROM prov_stack_items WHERE deleted_at IS NULL")
-    items: dict[int, dict] = {}
-    for (iid, sid, name, itype, ns, nd, nf, fams, arches, role, repo_ref,
-         pin, spec, item_order, sort_order) in cur.fetchall():
-        if sid not in by_id:
+        "SELECT id, logical_name, item_type, name_suse, name_debian, name_fedora,"
+        " CAST(applies_families AS CHAR), CAST(applies_arches AS CHAR), ansible_role,"
+        " version_pin, spec, deleted_at IS NULL FROM prov_software")
+    live: dict[int, dict] = {}
+    all_names: dict[int, str] = {}
+    for (sid, name, itype, ns, nd, nf, fams, arches, role, pin, spec, is_live) in cur.fetchall():
+        all_names[sid] = name
+        if not is_live:
             continue
         try:
             spec_obj = json.loads(spec) if spec is not None else None
         except ValueError as exc:
-            raise StackGenError(f"item {name!r}: spec is not JSON: {exc}") from None
-        item = {"logical_name": name, "item_type": itype,
-                "names": {"suse": ns, "debian": nd, "fedora": nf},
-                "applies_families": fams or None, "applies_arches": arches or None,
-                "ansible_role": role, "repo_ref": repo_ref, "version_pin": pin, "spec": spec_obj,
-                "item_order": item_order, "sort_order": sort_order, "artifacts": {}}
-        items[iid] = item
-        by_id[sid]["items"].append(item)
-    cur.execute("SELECT item_id, arch, url, sha256 FROM prov_stack_artifacts WHERE deleted_at IS NULL")
-    for iid, arch, url, sha in cur.fetchall():
-        if iid in items:
-            items[iid]["artifacts"][arch] = {"url": url, "sha256": sha}
-    return {"stacks": sorted(by_id.values(), key=lambda s: s["slug"])}
+            raise StackGenError(f"pool entry {name!r}: spec is not JSON: {exc}") from None
+        live[sid] = {"logical_name": name, "item_type": itype,
+                     "names": {"suse": ns, "debian": nd, "fedora": nf},
+                     "applies_families": fams or None, "applies_arches": arches or None,
+                     "ansible_role": role, "version_pin": pin, "spec": spec_obj,
+                     "artifacts": {}, "requires": [], "conflicts_with": []}
+    cur.execute("SELECT software_id, arch, url, sha256 FROM prov_software_artifacts WHERE deleted_at IS NULL")
+    for sid, arch, url, sha in cur.fetchall():
+        if sid in live:
+            live[sid]["artifacts"][arch] = {"url": url, "sha256": sha}
+    cur.execute("SELECT software_id, requires_software_id FROM prov_software_requires WHERE deleted_at IS NULL")
+    for sid, rid in cur.fetchall():
+        if sid not in live:
+            continue
+        if rid not in live:
+            raise StackGenError(f"pool entry {live[sid]['logical_name']!r} requires "
+                                f"{all_names.get(rid, rid)!r}, which is soft-deleted")
+        live[sid]["requires"].append(live[rid]["logical_name"])
+    cur.execute("SELECT software_lo_id, software_hi_id FROM prov_software_conflicts WHERE deleted_at IS NULL")
+    for lo, hi in cur.fetchall():
+        if lo in live and hi in live:
+            live[lo]["conflicts_with"].append(live[hi]["logical_name"])
+
+    cur.execute("SELECT id, slug, locked, sort_order FROM prov_stacks WHERE deleted_at IS NULL")
+    by_id = {r[0]: {"slug": r[1], "locked": bool(r[2]), "sort_order": int(r[3]),
+                    "depends_on": [], "members": []} for r in cur.fetchall()}
+    cur.execute("SELECT stack_id, depends_on_stack_id FROM prov_stack_deps WHERE deleted_at IS NULL")
+    for sid, did in cur.fetchall():
+        if sid in by_id and did in by_id:
+            by_id[sid]["depends_on"].append(by_id[did]["slug"])
+    cur.execute("SELECT stack_id, software_id, item_order, sort_order FROM prov_stack_members"
+                " WHERE deleted_at IS NULL")
+    for stid, sid, item_order, sort_order in cur.fetchall():
+        if stid not in by_id:
+            continue
+        if sid not in live:
+            raise StackGenError(f"stack {by_id[stid]['slug']!r} references pool entry "
+                                f"{all_names.get(sid, sid)!r}, which is soft-deleted")
+        by_id[stid]["members"].append({"software": live[sid]["logical_name"],
+                                       "item_order": item_order, "sort_order": sort_order})
+    return {"software": sorted(live.values(), key=lambda e: e["logical_name"]),
+            "stacks": sorted(by_id.values(), key=lambda s: s["slug"])}
 
 
 def load_db_from_env() -> dict[str, dict]:
@@ -716,8 +859,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output", metavar="FILE", help="write vars here instead of stdout")
     args = ap.parse_args(argv)
     try:
-        stacks = load_db_from_env() if args.from_db else load_json_file(args.from_json)
-        text = dumps(render(stacks, args.stack, args.family, args.arch))
+        defs = load_db_from_env() if args.from_db else load_json_file(args.from_json)
+        text = dumps(render(defs, args.stack, args.family, args.arch))
     except StackGenError as exc:
         print(f"stackgen: error: {exc}", file=sys.stderr)
         return 1

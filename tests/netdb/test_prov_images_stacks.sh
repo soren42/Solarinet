@@ -4,8 +4,13 @@
 # on a SCRATCH database this script creates and drops itself.
 #
 #   * applies schema.sql + every migration (incl. 029), then 029 again;
-#   * seed: core = 19 items, dev-tools role + p10k pin, Tumbleweed x86_64;
+#   * seed: pool of 21 entries; core = 19 pkg members, dev-tools = role +
+#     p10k pin with a requires edge pin -> role; no conflicts; Tumbleweed x86_64;
 #   * seed-once: a soft-deleted seed row is not resurrected by a re-run;
+#   * pool: every prov_software CHECK with a paired accept/reject, live-unique
+#     logical_name, members (live-unique, shared across stacks, RESTRICT),
+#     requires (self, duplicate, RESTRICT), conflicts (canonical lo<hi,
+#     self-pair, duplicate, CASCADE), spec.build_deps refused;
 #   * constraints: live-unique, self-dep, '=' on pkg, unpinned remote script,
 #     build/role/artifact shape (custom build+install split, case-sensitive
 #     system), every check element a string, repo fields that could inject
@@ -13,7 +18,8 @@
 #     sha256 format, pi_netboot arch, prov_runs
 #     mode/image + JSON array, prov_runs immutability and no-delete;
 #   * stackgen --from-db (as an ephemeral SELECT-only user) renders
-#     byte-identically to tests/deploy/fixtures/stacks_seed.json;
+#     byte-identically to tests/deploy/fixtures/stacks_seed.json, rejects a
+#     DB conflict pair, and refuses a live member of a soft-deleted entry;
 #   * rollback 029-down.sql refuses non-seed state, then succeeds, then 029
 #     re-applies cleanly (forward recovery).
 #
@@ -76,11 +82,18 @@ accepts() { "${ADMIN[@]}" "$DB" -e "$2" >/dev/null 2>&1 || die "rejected but sho
 
 seed_counts() {
   eq "seed stacks ($1)" "SELECT GROUP_CONCAT(slug ORDER BY slug) FROM prov_stacks" "core,dev-tools"
-  eq "seed core = 19 pkg items ($1)" \
-     "SELECT COUNT(*) FROM prov_stack_items i JOIN prov_stacks s ON s.id=i.stack_id WHERE s.slug='core' AND i.item_type='pkg' AND i.deleted_at IS NULL" 19
-  eq "seed dev-tools items ($1)" \
-     "SELECT GROUP_CONCAT(CONCAT(i.item_type,':',i.logical_name) ORDER BY i.logical_name) FROM prov_stack_items i JOIN prov_stacks s ON s.id=i.stack_id WHERE s.slug='dev-tools'" \
-     "role:dev-tools role,script:powerlevel10k pin"
+  eq "seed pool = 21 live entries, 19 pkg ($1)" \
+     "SELECT CONCAT(COUNT(*),'/',SUM(item_type='pkg')) FROM prov_software WHERE deleted_at IS NULL" "21/19"
+  eq "seed core = 19 pkg members ($1)" \
+     "SELECT COUNT(*) FROM prov_stack_members m JOIN prov_stacks s ON s.id=m.stack_id JOIN prov_software p ON p.id=m.software_id WHERE s.slug='core' AND p.item_type='pkg' AND m.deleted_at IS NULL" 19
+  eq "seed dev-tools members ($1)" \
+     "SELECT GROUP_CONCAT(CONCAT(p.item_type,':',p.logical_name,'@',IFNULL(m.item_order,'-')) ORDER BY p.logical_name) FROM prov_stack_members m JOIN prov_stacks s ON s.id=m.stack_id JOIN prov_software p ON p.id=m.software_id WHERE s.slug='dev-tools'" \
+     "role:dev-tools role@-,script:powerlevel10k pin@700"
+  eq "seed requires p10k pin -> dev-tools role ($1)" \
+     "SELECT GROUP_CONCAT(CONCAT(a.logical_name,'->',b.logical_name)) FROM prov_software_requires r JOIN prov_software a ON a.id=r.software_id JOIN prov_software b ON b.id=r.requires_software_id" \
+     "powerlevel10k pin->dev-tools role"
+  eq "seed no conflicts, no artifacts ($1)" \
+     "SELECT (SELECT COUNT(*) FROM prov_software_conflicts)+(SELECT COUNT(*) FROM prov_software_artifacts)" 0
   eq "seed deps dev-tools->core ($1)" \
      "SELECT CONCAT(a.slug,'->',b.slug) FROM prov_stack_deps d JOIN prov_stacks a ON a.id=d.stack_id JOIN prov_stacks b ON b.id=d.depends_on_stack_id" "dev-tools->core"
   eq "seed images = 6 ($1)" "SELECT COUNT(*) FROM prov_images" 6
@@ -100,17 +113,22 @@ ok "schema.sql + $(ls "$SOR"/migrations/*.sql | wc -l) migrations applied"
 apply "$SOR/migrations/029_provisioning_images_stacks.sql"
 ok "029 re-applied (idempotent)"
 
-eq "six prov_* tables" "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('prov_images','prov_stacks','prov_stack_items','prov_stack_artifacts','prov_stack_deps','prov_runs')" 6
+eq "nine prov_* tables, exactly" "SELECT GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'prov\\_%'" \
+   "prov_images,prov_runs,prov_software,prov_software_artifacts,prov_software_conflicts,prov_software_requires,prov_stacks,prov_stack_deps,prov_stack_members"
+eq "no repo_ref column (dependencies are requires edges)" \
+   "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'prov\\_%' AND COLUMN_NAME='repo_ref'" 0
 eq "prov_runs guard triggers" "SELECT GROUP_CONCAT(TRIGGER_NAME ORDER BY TRIGGER_NAME) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE LIKE 'prov\\_%'" "trg_prov_runs_bd,trg_prov_runs_bu"
 eq "no CDC on prov_* (no consumer yet)" "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND ACTION_STATEMENT LIKE '%prov\\_%' AND ACTION_STATEMENT LIKE '%sor_outbox%'" 0
 eq "functions table untouched by 029" "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='functions' AND COLUMN_NAME LIKE 'prov%'" 0
 seed_counts "after double apply"
 
 # ---- seed-once ----------------------------------------------------------------
-q "UPDATE prov_stack_items SET deleted_at=NOW() WHERE logical_name='powerlevel10k pin'"
+q "UPDATE prov_software SET deleted_at=NOW() WHERE logical_name='powerlevel10k pin'"
 apply "$SOR/migrations/029_provisioning_images_stacks.sql"
 eq "re-run does not resurrect a soft-deleted seed row" \
-   "SELECT CONCAT(COUNT(*),'/',SUM(deleted_at IS NULL)) FROM prov_stack_items WHERE logical_name='powerlevel10k pin'" "1/0"
+   "SELECT CONCAT(COUNT(*),'/',SUM(deleted_at IS NULL)) FROM prov_software WHERE logical_name='powerlevel10k pin'" "1/0"
+eq "re-run adds no second member or edge for it" \
+   "SELECT CONCAT((SELECT COUNT(*) FROM prov_stack_members m JOIN prov_software p ON p.id=m.software_id WHERE p.logical_name='powerlevel10k pin'),'/',(SELECT COUNT(*) FROM prov_software_requires))" "1/1"
 
 # ---- constraints ----------------------------------------------------------------
 SRC="(SELECT id FROM sources WHERE slug='provisioner')"
@@ -127,43 +145,47 @@ accepts "same slug once the first is soft-deleted" \
   "UPDATE prov_stacks SET deleted_at=NOW() WHERE slug='tmp-live'; INSERT INTO prov_stacks (slug,name,source_id) VALUES ('tmp-live','Tmp again',$SRC)"
 q "DELETE FROM prov_stacks WHERE slug='tmp-live'"
 rejects "self dependency" "INSERT INTO prov_stack_deps (stack_id,depends_on_stack_id,source_id) VALUES ($CORE,$CORE,$SRC)"
-rejects "duplicate live item in a stack" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,'git','git',$SRC)"
+rejects "duplicate live logical_name in the pool" \
+  "INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES ('git','git',$SRC)"
+accepts "pool entry" "INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES ('tmp-sw','x',$SRC)"
+rejects "same logical_name while the first is live" \
+  "INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES ('tmp-sw','y',$SRC)"
+accepts "same logical_name once the first is soft-deleted" \
+  "UPDATE prov_software SET deleted_at=NOW() WHERE logical_name='tmp-sw'; INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES ('tmp-sw','y',$SRC)"
+q "DELETE FROM prov_software WHERE logical_name='tmp-sw'"
 rejects "'=' as a pkg name" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,'t1','=',$SRC)"
+  "INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES ('t1','=',$SRC)"
 rejects "real name on a role item" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,ansible_role,source_id) VALUES ($CORE,'t2','role','dev-tools','dev-tools',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,ansible_role,source_id) VALUES ('t2','role','dev-tools','dev-tools',$SRC)"
 rejects "role without ansible_role" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,source_id) VALUES ($CORE,'t3','role','=',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,source_id) VALUES ('t3','role','=',$SRC)"
 rejects "spec on a pkg item" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,spec,source_id) VALUES ($CORE,'t4','x','{}',$SRC)"
-rejects "repo_ref on a non-pkg item" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,ansible_role,repo_ref,source_id) VALUES ($CORE,'t5','role','=','r','x',$SRC)"
+  "INSERT INTO prov_software (logical_name,name_suse,spec,source_id) VALUES ('t4','x','{}',$SRC)"
 rejects "unpinned remote script (url, no sha256)" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,spec,source_id) VALUES ($CORE,'t6','script','=','{\"url\":\"https://get.example.invalid/i.sh\",\"creates\":\"/x\"}',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,spec,source_id) VALUES ('t6','script','=','{\"url\":\"https://get.example.invalid/i.sh\",\"creates\":\"/x\"}',$SRC)"
 rejects "script with both body and url" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,spec,source_id) VALUES ($CORE,'t7','script','=','{\"body\":\"true\",\"url\":\"u\",\"sha256\":\"$(printf 'a%.0s' {1..64})\"}',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,spec,source_id) VALUES ('t7','script','=','{\"body\":\"true\",\"url\":\"u\",\"sha256\":\"$(printf 'a%.0s' {1..64})\"}',$SRC)"
 rejects "script without spec" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,source_id) VALUES ($CORE,'t8','script','=',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,source_id) VALUES ('t8','script','=',$SRC)"
 accepts "pinned remote script" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,spec,source_id) VALUES ($CORE,'t9','script','=','{\"url\":\"https://get.example.invalid/i.sh\",\"sha256\":\"$(printf 'a%.0s' {1..64})\",\"creates\":\"/x\"}',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,spec,source_id) VALUES ('t9','script','=','{\"url\":\"https://get.example.invalid/i.sh\",\"sha256\":\"$(printf 'a%.0s' {1..64})\",\"creates\":\"/x\"}',$SRC)"
 rejects "build without source" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ($CORE,'t10','build','=','v1','{\"system\":\"make\"}',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ('t10','build','=','v1','{\"system\":\"make\"}',$SRC)"
 rejects "build without version_pin" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,spec,source_id) VALUES ($CORE,'t11','build','=','{\"source\":{\"git\":\"u\"},\"system\":\"make\"}',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,spec,source_id) VALUES ('t11','build','=','{\"source\":{\"git\":\"u\"},\"system\":\"make\"}',$SRC)"
 rejects "artifact without version_pin" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,source_id) VALUES ($CORE,'t12','artifact','=',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,source_id) VALUES ('t12','artifact','=',$SRC)"
 accepts "artifact item" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,version_pin,source_id) VALUES ($CORE,'t13','artifact','=','1.0',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,version_pin,source_id) VALUES ('t13','artifact','=','1.0',$SRC)"
 rejects "malformed artifact sha256" \
-  "INSERT INTO prov_stack_artifacts (item_id,arch,url,sha256,source_id) VALUES ((SELECT id FROM prov_stack_items WHERE logical_name='t13'),'any','u','XYZ',$SRC)"
+  "INSERT INTO prov_software_artifacts (software_id,arch,url,sha256,source_id) VALUES ((SELECT id FROM prov_software WHERE logical_name='t13'),'any','u','XYZ',$SRC)"
 rejects "invalid spec JSON" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,spec,source_id) VALUES ($CORE,'t14','repo','=','{nope',$SRC)"
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,spec,source_id) VALUES ('t14','repo','=','{nope',$SRC)"
 
 # ---- review regressions (cross-lab review of 11db0e9/f01e45a) ------------------
 H64="$(printf 'a%.0s' {1..64})"; C40="$(printf 'b%.0s' {1..40})"
 ins_item() {  # logical_name, item_type, version_pin-SQL, spec-SQL
-  echo "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ($CORE,'$1','$2','=',$3,$4,$SRC)"
+  echo "INSERT INTO prov_software (logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ('$1','$2','=',$3,$4,$SRC)"
 }
 # 1. version_pin is one safe path component
 rejects "path-escaping version_pin" "$(ins_item r1 artifact "'../../../../etc/cron.d'" NULL)"
@@ -194,13 +216,13 @@ rejects "script url + uppercase sha256" "$(ins_item r21 script NULL "'{\"url\":\
 rejects "script body JSON null" "$(ins_item r22 script NULL "'{\"body\":null}'")"
 rejects "script empty body" "$(ins_item r23 script NULL "'{\"body\":\"\"}'")"
 rejects "artifact row without sha256" \
-  "INSERT INTO prov_stack_artifacts (item_id,arch,url,source_id) VALUES ((SELECT id FROM prov_stack_items WHERE logical_name='t13'),'any','https://e.invalid/a',$SRC)"
+  "INSERT INTO prov_software_artifacts (software_id,arch,url,source_id) VALUES ((SELECT id FROM prov_software WHERE logical_name='t13'),'any','https://e.invalid/a',$SRC)"
 rejects "artifact row with uppercase sha256" \
-  "INSERT INTO prov_stack_artifacts (item_id,arch,url,sha256,source_id) VALUES ((SELECT id FROM prov_stack_items WHERE logical_name='t13'),'any','https://e.invalid/a','${H64^^}',$SRC)"
+  "INSERT INTO prov_software_artifacts (software_id,arch,url,sha256,source_id) VALUES ((SELECT id FROM prov_software WHERE logical_name='t13'),'any','https://e.invalid/a','${H64^^}',$SRC)"
 rejects "image with uppercase sha256" \
   "INSERT INTO prov_images (distro,family,release_name,arch,boot_method,sha256,source_id) VALUES ('debian','debian','13','x86_64','ipxe','${H64^^}',$SRC)"
 eq "p10k seed pinned by full commit SHA with an argv check" \
-   "SELECT CONCAT(version_pin,' ',JSON_TYPE(JSON_EXTRACT(spec,'\$.check'))) FROM prov_stack_items WHERE logical_name='powerlevel10k pin' AND deleted_at IS NOT NULL" \
+   "SELECT CONCAT(version_pin,' ',JSON_TYPE(JSON_EXTRACT(spec,'\$.check'))) FROM prov_software WHERE logical_name='powerlevel10k pin' AND deleted_at IS NOT NULL" \
    "ff0311157d6b24fea21aa70699783f362b0f554f ARRAY"
 # ---- review regressions (Luna cross-lab review of b027b22) ----------------------
 # Each reject has a near-identical accept, so a reject cannot pass by tripping
@@ -221,6 +243,9 @@ rejects "custom build with a non-string build" "$(ins_item r29 build "'1.0'" "$(
 accepts "cmake build" "$(ins_item r30 build "'1.0'" "$(bspec "'cmake'")")"
 rejects "cmake build carrying an install command" "$(ins_item r31 build "'1.0'" "$(bspec "'cmake'" "'install','make install'")")"
 rejects "cmake build carrying a build command" "$(ins_item r32 build "'1.0'" "$(bspec "'cmake'" "'build','make'")")"
+# build deps are requires edges, never spec.build_deps (pair: r30 accepted above)
+rejects "build with spec.build_deps" "$(ins_item r32b build "'1.0'" "$(bspec "'cmake'" "'build_deps',JSON_ARRAY('git')")")"
+accepts "build with an optional configure_args list" "$(ins_item r32c build "'1.0'" "$(bspec "'cmake'" "'configure_args',JSON_ARRAY('-DX=1')")")"
 # 4. build system is matched case-sensitively
 rejects "build system 'CMake' (case-insensitive collation)" "$(ins_item r33 build "'1.0'" "$(bspec "'CMake'")")"
 rejects "build system 'CUSTOM'" "$(ins_item r34 build "'1.0'" "$(bspec "'CUSTOM'" "'build','make'" "'install','make install'")")"
@@ -266,16 +291,92 @@ rejects "fedora repo key_url with a tab" "$(ins_item rp20 repo NULL "$(rspec fed
 rejects "repo family block not an object" "$(ins_item rp21 repo NULL "JSON_OBJECT('fedora','https://a.invalid/')")"
 # logical_name carries no control characters
 rejects "logical_name with a newline" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,CONCAT('ln',$NL,'x'),'x',$SRC)"
+  "INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES (CONCAT('ln',$NL,'x'),'x',$SRC)"
 rejects "logical_name with U+2028" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,CONCAT('ln',$LS,'x'),'x',$SRC)"
+  "INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES (CONCAT('ln',$LS,'x'),'x',$SRC)"
 accepts "logical_name with spaces and punctuation" \
-  "INSERT INTO prov_stack_items (stack_id,logical_name,name_suse,source_id) VALUES ($CORE,'ln ok (x+y)','x',$SRC)"
+  "INSERT INTO prov_software (logical_name,name_suse,source_id) VALUES ('ln ok (x+y)','x',$SRC)"
 eq "accepted check argv round-trips intact" \
-   "SELECT JSON_LENGTH(spec,'\$.check') FROM prov_stack_items WHERE logical_name='r35'" 3
-q "DELETE FROM prov_stack_items WHERE logical_name IN ('r24','r30','r35','rp1','rp2','rp18','ln ok (x+y)')"
-q "DELETE FROM prov_stack_items WHERE logical_name IN ('r6','r11','r17')"
-q "DELETE FROM prov_stack_items WHERE logical_name IN ('t9','t13')"
+   "SELECT JSON_LENGTH(spec,'\$.check') FROM prov_software WHERE logical_name='r35'" 3
+q "DELETE FROM prov_software WHERE logical_name IN ('r24','r30','r32c','r35','rp1','rp2','rp18','ln ok (x+y)')"
+q "DELETE FROM prov_software WHERE logical_name IN ('r6','r11','r17')"
+q "DELETE FROM prov_software WHERE logical_name IN ('t9','t13')"
+
+# ---- pool: each prov_software CHECK as an accept/reject pair --------------------
+# Every reject differs from its accept in the one column the CHECK guards.
+SW() { echo "(SELECT id FROM prov_software WHERE logical_name='$1' AND deleted_at IS NULL)"; }
+pk() {  # logical_name item_type suse debian fedora role spec  (SQL literals)
+  echo "INSERT INTO prov_software (logical_name,item_type,name_suse,name_debian,name_fedora,ansible_role,spec,source_id) VALUES ('$1','$2',$3,$4,$5,$6,$7,$SRC)"
+}
+accepts "ck_role: role with ansible_role"          "$(pk c1 role "'='" "'='" "'='" "'r'" NULL)"
+rejects "ck_role: role without ansible_role"       "$(pk c2 role "'='" "'='" "'='" NULL NULL)"
+rejects "ck_role: ansible_role on a pkg"           "$(pk c3 pkg "'x'" "'x'" "'x'" "'r'" NULL)"
+accepts "ck_suse/debian/fedora: pkg real names"     "$(pk c4 pkg "'a'" "'b'" "'c'" NULL NULL)"
+accepts "ck_suse/debian/fedora: pkg unsupported (NULL)" "$(pk c5 pkg NULL NULL NULL NULL NULL)"
+rejects "ck_suse: '=' as a pkg name"                "$(pk c6 pkg "'='" "'b'" "'c'" NULL NULL)"
+rejects "ck_debian: '=' as a pkg name"              "$(pk c7 pkg "'a'" "'='" "'c'" NULL NULL)"
+rejects "ck_fedora: '=' as a pkg name"              "$(pk c8 pkg "'a'" "'b'" "'='" NULL NULL)"
+rejects "ck_debian: empty pkg name"                 "$(pk c9 pkg "'a'" "''" "'c'" NULL NULL)"
+rejects "ck_suse: real name on a role"              "$(pk c10 role "'x'" "'='" "'='" "'r'" NULL)"
+rejects "ck_debian: real name on a role"            "$(pk c11 role "'='" "'x'" "'='" "'r'" NULL)"
+rejects "ck_fedora: real name on a role"            "$(pk c12 role "'='" "'='" "'x'" "'r'" NULL)"
+accepts "ck_spec: artifact with a JSON object spec" "INSERT INTO prov_software (logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ('c13','artifact','=','1','{}',$SRC)"
+rejects "ck_spec: artifact with a JSON array spec"  "INSERT INTO prov_software (logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ('c14','artifact','=','1','[]',$SRC)"
+rejects "ck_spec: artifact with invalid JSON"       "INSERT INTO prov_software (logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ('c15','artifact','=','1','{x',$SRC)"
+rejects "ck_spec_req: spec on a role"               "$(pk c16 role "'='" "'='" "'='" "'r'" "'{}'")"
+rejects "ck_spec_req: repo without spec"            "$(pk c17 repo "'='" "'='" "'='" NULL NULL)"
+accepts "ck_pin: artifact with version_pin"         "INSERT INTO prov_software (logical_name,item_type,name_suse,version_pin,source_id) VALUES ('c18','artifact','=','2.0',$SRC)"
+rejects "ck_pin: build without version_pin" \
+  "INSERT INTO prov_software (logical_name,item_type,name_suse,spec,source_id) VALUES ('c19','build','=',$(bspec "'cmake'"),$SRC)"
+accepts "ck_artifacts: well-formed artifact row" \
+  "INSERT INTO prov_software_artifacts (software_id,arch,url,sha256,source_id) VALUES ($(SW c18),'any','https://e.invalid/a','$H64',$SRC)"
+rejects "ck_artifacts_url: empty url" \
+  "INSERT INTO prov_software_artifacts (software_id,arch,url,sha256,source_id) VALUES ($(SW c18),'arm64','','$H64',$SRC)"
+rejects "ck_artifacts_sha256: short sha256" \
+  "INSERT INTO prov_software_artifacts (software_id,arch,url,sha256,source_id) VALUES ($(SW c18),'arm64','https://e.invalid/a','${H64:1}',$SRC)"
+rejects "artifacts live-unique (entry, arch)" \
+  "INSERT INTO prov_software_artifacts (software_id,arch,url,sha256,source_id) VALUES ($(SW c18),'any','https://e.invalid/b','$H64',$SRC)"
+accepts "deleting an entry cascades its artifact rows" "DELETE FROM prov_software WHERE logical_name='c18'"
+eq "no orphan artifact rows" "SELECT COUNT(*) FROM prov_software_artifacts" 0
+
+# ---- pool: memberships ------------------------------------------------------------
+q "INSERT INTO prov_stacks (slug,name,source_id) VALUES ('tmp-a','Tmp A',$SRC)"
+TMPA="(SELECT id FROM prov_stacks WHERE slug='tmp-a')"
+rejects "duplicate live member (core, git)" \
+  "INSERT INTO prov_stack_members (stack_id,software_id,source_id) VALUES ($CORE,$(SW git),$SRC)"
+accepts "same entry in a second stack" \
+  "INSERT INTO prov_stack_members (stack_id,software_id,item_order,source_id) VALUES ($TMPA,$(SW git),50,$SRC)"
+accepts "member re-added once the first is soft-deleted" \
+  "UPDATE prov_stack_members SET deleted_at=NOW() WHERE stack_id=$TMPA; INSERT INTO prov_stack_members (stack_id,software_id,source_id) VALUES ($TMPA,$(SW git),$SRC)"
+rejects "hard-deleting an entry a stack includes (RESTRICT)" "DELETE FROM prov_software WHERE logical_name='git'"
+accepts "hard-deleting a stack cascades its members" "DELETE FROM prov_stacks WHERE slug='tmp-a'"
+eq "only core/dev-tools members remain" "SELECT COUNT(*) FROM prov_stack_members" 21
+
+# ---- pool: requirements -------------------------------------------------------------
+rejects "requires itself" \
+  "INSERT INTO prov_software_requires (software_id,requires_software_id,source_id) VALUES ($(SW c4),$(SW c4),$SRC)"
+accepts "requires edge c4 -> c5" \
+  "INSERT INTO prov_software_requires (software_id,requires_software_id,source_id) VALUES ($(SW c4),$(SW c5),$SRC)"
+rejects "duplicate live requires edge" \
+  "INSERT INTO prov_software_requires (software_id,requires_software_id,source_id) VALUES ($(SW c4),$(SW c5),$SRC)"
+rejects "hard-deleting a required entry (RESTRICT)" "DELETE FROM prov_software WHERE logical_name='c5'"
+accepts "hard-deleting the dependent cascades its edges" "DELETE FROM prov_software WHERE logical_name='c4'"
+eq "only the seeded requires edge remains" "SELECT COUNT(*) FROM prov_software_requires" 1
+
+# ---- pool: conflicts (canonical lo < hi) ------------------------------------------------
+q "$(pk cf1 pkg "'a'" "'a'" "'a'" NULL NULL); $(pk cf2 pkg "'b'" "'b'" "'b'" NULL NULL)"
+accepts "canonical conflict pair (lo < hi)" \
+  "INSERT INTO prov_software_conflicts (software_lo_id,software_hi_id,source_id) SELECT LEAST(a.id,b.id),GREATEST(a.id,b.id),$SRC FROM prov_software a, prov_software b WHERE a.logical_name='cf1' AND b.logical_name='cf2'"
+rejects "non-canonical conflict pair (hi, lo)" \
+  "INSERT INTO prov_software_conflicts (software_lo_id,software_hi_id,source_id) SELECT GREATEST(a.id,b.id),LEAST(a.id,b.id),$SRC FROM prov_software a, prov_software b WHERE a.logical_name='cf1' AND b.logical_name='cf2'"
+rejects "conflict self-pair" \
+  "INSERT INTO prov_software_conflicts (software_lo_id,software_hi_id,source_id) VALUES ($(SW cf1),$(SW cf1),$SRC)"
+rejects "duplicate live conflict pair" \
+  "INSERT INTO prov_software_conflicts (software_lo_id,software_hi_id,source_id) SELECT LEAST(a.id,b.id),GREATEST(a.id,b.id),$SRC FROM prov_software a, prov_software b WHERE a.logical_name='cf1' AND b.logical_name='cf2'"
+accepts "hard-deleting a side cascades the pair" "DELETE FROM prov_software WHERE logical_name='cf2'"
+eq "no conflict rows remain" "SELECT COUNT(*) FROM prov_software_conflicts" 0
+q "DELETE FROM prov_software WHERE logical_name IN ('c1','c5','c13','cf1')"
+eq "pool back to the 21 seeded rows" "SELECT COUNT(*) FROM prov_software" 21
 
 # ---- prov_runs ------------------------------------------------------------------
 q "INSERT INTO entities (name, entity_type, source_id) VALUES ('prov029-test', 'server', $SRC)"
@@ -298,13 +399,18 @@ rejects "changing a terminal run" "UPDATE prov_runs SET detail='rewritten' WHERE
 rejects "deleting a run" "DELETE FROM prov_runs WHERE id=$RUN"
 
 # ---- stackgen --from-db as a SELECT-only user -----------------------------------
-q "DELETE FROM prov_stack_items WHERE logical_name='powerlevel10k pin'"   # drop the soft-deleted copy
+q "DELETE FROM prov_stack_members WHERE software_id=(SELECT id FROM prov_software WHERE logical_name='powerlevel10k pin')"
+q "DELETE FROM prov_software WHERE logical_name='powerlevel10k pin'"   # drop the soft-deleted copy (its requires edge cascades)
 apply "$SOR/migrations/029_provisioning_images_stacks.sql"                # seed-once re-adds it fresh
 RO_PASS="$("$PY" -c 'import secrets; print(secrets.token_hex(16))')"
 "${ADMIN[@]}" -e "CREATE USER '$RO_USER'@'$RO_HOST' IDENTIFIED BY '$RO_PASS'"
 user_created=1
 "${ADMIN[@]}" -e "GRANT SELECT ON \`$DB\`.* TO '$RO_USER'@'$RO_HOST'"
 TMP_A="$(mktemp)"; TMP_B="$(mktemp)"
+dbgen() {
+  SOR_DB_HOST=127.0.0.1 SOR_DB_PORT="$DB_PORT" SOR_DB_NAME="$DB" SOR_DB_USER="$RO_USER" SOR_DB_PASS="$RO_PASS" \
+    "$PY" "$ROOT/deploy/fleet/stackgen.py" --from-db "$@"
+}
 for target in "suse x86_64" "debian arm64" "debian x86_64"; do
   set -- $target
   SOR_DB_HOST=127.0.0.1 SOR_DB_PORT="$DB_PORT" SOR_DB_NAME="$DB" SOR_DB_USER="$RO_USER" SOR_DB_PASS="$RO_PASS" \
@@ -321,10 +427,40 @@ if SOR_DB_HOST=127.0.0.1 SOR_DB_PORT="$DB_PORT" SOR_DB_NAME="$DB" SOR_DB_USER="$
 fi
 ok "stackgen --from-db fedora core is a hard error"
 
+# a conflict pair from the DB is enforced by the generator, naming both stacks
+q "$(pk ntp pkg "'ntp'" "'ntp'" "'ntp'" NULL NULL)"
+q "INSERT INTO prov_software_conflicts (software_lo_id,software_hi_id,source_id) SELECT LEAST(a.id,b.id),GREATEST(a.id,b.id),$SRC FROM prov_software a, prov_software b WHERE a.logical_name='chrony' AND b.logical_name='ntp' AND a.deleted_at IS NULL AND b.deleted_at IS NULL"
+q "INSERT INTO prov_stacks (slug,name,source_id) VALUES ('timesync','Timesync',$SRC)"
+q "INSERT INTO prov_stack_members (stack_id,software_id,source_id) VALUES ((SELECT id FROM prov_stacks WHERE slug='timesync'),$(SW ntp),$SRC)"
+if dbgen --family suse --arch x86_64 --stack timesync > "$TMP_A" 2>"$TMP_B"; then die "DB conflict pair not enforced"; fi
+grep -q "conflicting entries 'chrony' (stack 'core') and 'ntp' (stack 'timesync')" "$TMP_B" \
+  || { cat "$TMP_B" >&2; die "conflict error does not name both entries and stacks"; }
+ok "stackgen --from-db rejects a DB conflict pair, naming both entries and stacks"
+dbgen --family suse --arch x86_64 --stack dev-tools > /dev/null || die "unrelated selection broken by the pair"
+ok "stackgen --from-db: the pair does not affect selections without both sides"
+q "DELETE FROM prov_stacks WHERE slug='timesync'; DELETE FROM prov_software WHERE logical_name='ntp'"
+# a live membership of a soft-deleted entry is an error, never a silent drop
+# (scratch rows only: seed rows stay unedited for the rollback legs below)
+q "$(pk gone pkg "'gone'" "'gone'" "'gone'" NULL NULL); INSERT INTO prov_stacks (slug,name,source_id) VALUES ('tmp-b','Tmp B',$SRC)"
+q "INSERT INTO prov_stack_members (stack_id,software_id,source_id) VALUES ((SELECT id FROM prov_stacks WHERE slug='tmp-b'),$(SW gone),$SRC)"
+q "UPDATE prov_software SET deleted_at=NOW() WHERE logical_name='gone'"
+if dbgen --family suse --arch x86_64 > "$TMP_A" 2>"$TMP_B"; then die "live member of a soft-deleted entry rendered"; fi
+grep -q "'gone', which is soft-deleted" "$TMP_B" || { cat "$TMP_B" >&2; die "soft-deleted member error unclear"; }
+ok "stackgen --from-db refuses a live member of a soft-deleted entry"
+q "DELETE FROM prov_stacks WHERE slug='tmp-b'; DELETE FROM prov_software WHERE logical_name='gone'"
+
 # ---- rollback -----------------------------------------------------------------------
 if "${ADMIN[@]}" "$DB" < "$SOR/rollback/029-down.sql" >/dev/null 2>&1; then die "rollback accepted recorded runs"; fi
 ok "rollback refuses while prov_runs holds records"
 q "DROP TRIGGER trg_prov_runs_bd; DELETE FROM prov_runs; DROP PROCEDURE IF EXISTS _solarinet_rollback_m029_assert_seed_only"
+q "INSERT INTO prov_software_conflicts (software_lo_id,software_hi_id,source_id) SELECT LEAST(a.id,b.id),GREATEST(a.id,b.id),$SRC FROM prov_software a, prov_software b WHERE a.logical_name='chrony' AND b.logical_name='git'"
+if "${ADMIN[@]}" "$DB" < "$SOR/rollback/029-down.sql" >/dev/null 2>&1; then die "rollback accepted a conflict row"; fi
+ok "rollback refuses operator conflict pairs"
+q "DROP PROCEDURE IF EXISTS _solarinet_rollback_m029_assert_seed_only; DELETE FROM prov_software_conflicts"
+q "INSERT INTO prov_software_requires (software_id,requires_software_id,source_id) VALUES ($(SW git),$(SW curl),$SRC)"
+if "${ADMIN[@]}" "$DB" < "$SOR/rollback/029-down.sql" >/dev/null 2>&1; then die "rollback accepted an operator requires edge"; fi
+ok "rollback refuses operator requires edges"
+q "DROP PROCEDURE IF EXISTS _solarinet_rollback_m029_assert_seed_only; DELETE FROM prov_software_requires WHERE software_id=$(SW git)"
 q "UPDATE prov_images SET netboot_verified=1 WHERE release_name='tumbleweed'"
 if "${ADMIN[@]}" "$DB" < "$SOR/rollback/029-down.sql" >/dev/null 2>&1; then die "rollback accepted an edited image"; fi
 ok "rollback refuses operator-edited rows"

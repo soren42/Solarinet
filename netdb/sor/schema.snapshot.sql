@@ -16,7 +16,7 @@
 --   026_unifi_network_cdc sha256=1c6c092d08783729c506edb8ae41dd22f0bb21b19d299b124ce4822b174901dc
 --   027_interconnect_cable_details sha256=0ed1ed961fe13366195191a2038df5468f8ca75f5865a6b8963e0b72d07bb0e3
 --   028_entity_unit_association sha256=35f30382d3bede4cb98165b2bd61d77c96da5bea873a6a984f7faf497b4760db
---   029_provisioning_images_stacks sha256=b5d6de1f432eacb8873ace5d553712bc11717195d99e8d8cb2f0f87e9f9bf0a7
+--   029_provisioning_images_stacks sha256=84e78ef8938d630d9094c311c546f46bacdb8ca28da9b173d170ad9b8cca9e23
 
 /*M!999999\- enable the sandbox mode */
 
@@ -1549,7 +1549,7 @@ DROP TABLE IF EXISTS `prov_images`;
 CREATE TABLE `prov_images` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
   `distro` varchar(32) NOT NULL COMMENT 'distro handle as used by fetch-images.sh: opensuse, debian, ubuntu, fedora, raspios',
-  `family` enum('suse','debian','fedora') NOT NULL COMMENT 'package family; selects prov_stack_items.name_<family>',
+  `family` enum('suse','debian','fedora') NOT NULL COMMENT 'package family; selects prov_software.name_<family>',
   `release_name` varchar(48) NOT NULL COMMENT 'release handle, e.g. 12, 13, tumbleweed, 15.6, 24.04, bookworm',
   `release_label` varchar(96) DEFAULT NULL COMMENT 'operator-facing release label, e.g. 12 (bookworm)',
   `arch` enum('x86_64','arm64','armhf','riscv64','i386') NOT NULL COMMENT 'CPU architecture',
@@ -1664,14 +1664,58 @@ DELIMITER ;
 /*!50003 SET character_set_client  = @saved_cs_client */ ;
 /*!50003 SET character_set_results = @saved_cs_results */ ;
 /*!50003 SET collation_connection  = @saved_col_connection */ ;
-DROP TABLE IF EXISTS `prov_stack_artifacts`;
+DROP TABLE IF EXISTS `prov_software`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `prov_stack_artifacts` (
+CREATE TABLE `prov_software` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
-  `item_id` int(10) unsigned NOT NULL COMMENT 'FK: the artifact stack item',
+  `logical_name` varchar(96) NOT NULL COMMENT 'arch/distro-independent entry name, e.g. netcat, docker-ce repo; unique among live rows',
+  `item_type` enum('pkg','repo','artifact','script','build','role') NOT NULL DEFAULT 'pkg' COMMENT 'pkg | repo | artifact | script | build | role (see migration header)',
+  `name_suse` varchar(128) DEFAULT NULL COMMENT 'pkg: real openSUSE name; other types: = when supported; NULL = unsupported',
+  `name_debian` varchar(128) DEFAULT NULL COMMENT 'pkg: real Debian/Ubuntu name; other types: = when supported; NULL = unsupported',
+  `name_fedora` varchar(128) DEFAULT NULL COMMENT 'pkg: real Fedora name; other types: = when supported; NULL = unsupported',
+  `applies_families` set('suse','debian','fedora') DEFAULT NULL COMMENT 'families this entry applies to; NULL = all; non-applicable targets skip it',
+  `applies_arches` set('x86_64','arm64','armhf','riscv64','i386') DEFAULT NULL COMMENT 'arches this entry applies to; NULL = all; non-applicable targets skip it',
+  `ansible_role` varchar(64) DEFAULT NULL COMMENT 'role items only: Ansible role under deploy/fleet/ansible/roles',
+  `source_url` varchar(512) DEFAULT NULL COMMENT 'informational project/release home',
+  `version_pin` varchar(64) DEFAULT NULL COMMENT 'pinned version: one safe path component; git builds = full 40/64-hex commit SHA; required for artifact and build; compared by version_check',
+  `spec` longtext DEFAULT NULL COMMENT 'per-type JSON object (repo/script/build required, artifact optional, pkg/role none); validated by stackgen.py',
+  `notes` varchar(255) DEFAULT NULL COMMENT 'free-form operator note',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_software_name_live` (`logical_name`,`live_flag`),
+  KEY `ix_prov_software_type` (`item_type`),
+  KEY `ix_prov_software_source` (`source_id`),
+  CONSTRAINT `fk_prov_software_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `ck_prov_software_role` CHECK (`item_type` = 'role' = (`ansible_role` is not null)),
+  CONSTRAINT `ck_prov_software_name` CHECK (!(`logical_name` regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]')),
+  CONSTRAINT `ck_prov_software_pin` CHECK (`item_type` not in ('artifact','build') or `version_pin` is not null),
+  CONSTRAINT `ck_prov_software_suse` CHECK (`name_suse` is null or `item_type` = 'pkg' = (`name_suse` <> '=' and `name_suse` <> '')),
+  CONSTRAINT `ck_prov_software_debian` CHECK (`name_debian` is null or `item_type` = 'pkg' = (`name_debian` <> '=' and `name_debian` <> '')),
+  CONSTRAINT `ck_prov_software_fedora` CHECK (`name_fedora` is null or `item_type` = 'pkg' = (`name_fedora` <> '=' and `name_fedora` <> '')),
+  CONSTRAINT `ck_prov_software_spec` CHECK (`spec` is null or json_valid(`spec`) and json_type(`spec`) = 'OBJECT'),
+  CONSTRAINT `ck_prov_software_spec_req` CHECK (case `item_type` when 'pkg' then `spec` is null when 'role' then `spec` is null when 'artifact' then 1 else `spec` is not null end),
+  CONSTRAINT `ck_prov_software_pin_fmt` CHECK (`version_pin` is null or `version_pin` regexp '(?-i)^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}\\z'),
+  CONSTRAINT `ck_prov_software_script` CHECK (`item_type` <> 'script' or ifnull(json_type(json_extract(`spec`,'$.body')) = 'STRING' and json_value(`spec`,'$.body') <> '' and !json_exists(`spec`,'$.url') and !json_exists(`spec`,'$.sha256') or json_type(json_extract(`spec`,'$.url')) = 'STRING' and json_value(`spec`,'$.url') <> '' and json_type(json_extract(`spec`,'$.sha256')) = 'STRING' and json_value(`spec`,'$.sha256') regexp '(?-i)^[0-9a-f]{64}\\z' and !json_exists(`spec`,'$.body'),0)),
+  CONSTRAINT `ck_prov_software_build` CHECK (`item_type` <> 'build' or ifnull(json_type(json_extract(`spec`,'$.source')) = 'OBJECT' and json_type(json_extract(`spec`,'$.system')) = 'STRING' and json_value(`spec`,'$.system') collate utf8mb4_bin in ('cmake','make','autotools','meson','custom') and !json_exists(`spec`,'$.commands') and !json_exists(`spec`,'$.build_deps') and case when json_value(`spec`,'$.system') collate utf8mb4_bin = 'custom' then json_type(json_extract(`spec`,'$.build')) = 'STRING' and json_value(`spec`,'$.build') regexp '[^[:space:]]' and json_type(json_extract(`spec`,'$.install')) = 'STRING' and json_value(`spec`,'$.install') regexp '[^[:space:]]' else !json_exists(`spec`,'$.build') and !json_exists(`spec`,'$.install') end and (json_type(json_extract(`spec`,'$.source.git')) = 'STRING' and json_value(`spec`,'$.source.git') <> '' and !json_exists(`spec`,'$.source.tarball') and `version_pin` regexp '(?-i)^[0-9a-f]{40}([0-9a-f]{24})?\\z' or json_type(json_extract(`spec`,'$.source.tarball')) = 'STRING' and json_value(`spec`,'$.source.tarball') <> '' and !json_exists(`spec`,'$.source.git') and json_type(json_extract(`spec`,'$.source.sha256')) = 'STRING' and json_value(`spec`,'$.source.sha256') regexp '(?-i)^[0-9a-f]{64}\\z'),0)),
+  CONSTRAINT `ck_prov_software_check` CHECK (`spec` is null or !json_exists(`spec`,'$.check') or ifnull(json_type(json_extract(`spec`,'$.check')) = 'ARRAY' and json_compact(json_extract(`spec`,'$.check')) regexp '(?-i)^\\["(?:[^"\\\\]++|\\\\.)++"(?:,"(?:[^"\\\\]++|\\\\.)*+")*+\\]\\z',0)),
+  CONSTRAINT `ck_prov_software_repo` CHECK (`item_type` <> 'repo' or ifnull((!json_exists(`spec`,'$.suse') or json_type(json_extract(`spec`,'$.suse')) = 'OBJECT' and json_type(json_extract(`spec`,'$.suse.url')) = 'STRING' and json_value(`spec`,'$.suse.url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.suse.key_url')) = 'STRING' and json_value(`spec`,'$.suse.key_url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.suse.fingerprint')) = 'STRING' and json_value(`spec`,'$.suse.fingerprint') <> '' and !(json_value(`spec`,'$.suse.fingerprint') regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]') and (!json_exists(`spec`,'$.suse.suite') or json_type(json_extract(`spec`,'$.suse.suite')) = 'STRING' and json_value(`spec`,'$.suse.suite') regexp '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z') and (!json_exists(`spec`,'$.suse.components') or json_compact(json_extract(`spec`,'$.suse.components')) regexp '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z')) and (!json_exists(`spec`,'$.debian') or json_type(json_extract(`spec`,'$.debian')) = 'OBJECT' and json_type(json_extract(`spec`,'$.debian.url')) = 'STRING' and json_value(`spec`,'$.debian.url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.debian.key_url')) = 'STRING' and json_value(`spec`,'$.debian.key_url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.debian.fingerprint')) = 'STRING' and json_value(`spec`,'$.debian.fingerprint') <> '' and !(json_value(`spec`,'$.debian.fingerprint') regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]') and (!json_exists(`spec`,'$.debian.suite') or json_type(json_extract(`spec`,'$.debian.suite')) = 'STRING' and json_value(`spec`,'$.debian.suite') regexp '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z') and (!json_exists(`spec`,'$.debian.components') or json_compact(json_extract(`spec`,'$.debian.components')) regexp '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z') and json_exists(`spec`,'$.debian.suite') and json_exists(`spec`,'$.debian.components')) and (!json_exists(`spec`,'$.fedora') or json_type(json_extract(`spec`,'$.fedora')) = 'OBJECT' and json_type(json_extract(`spec`,'$.fedora.url')) = 'STRING' and json_value(`spec`,'$.fedora.url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.fedora.key_url')) = 'STRING' and json_value(`spec`,'$.fedora.key_url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.fedora.fingerprint')) = 'STRING' and json_value(`spec`,'$.fedora.fingerprint') <> '' and !(json_value(`spec`,'$.fedora.fingerprint') regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]') and (!json_exists(`spec`,'$.fedora.suite') or json_type(json_extract(`spec`,'$.fedora.suite')) = 'STRING' and json_value(`spec`,'$.fedora.suite') regexp '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z') and (!json_exists(`spec`,'$.fedora.components') or json_compact(json_extract(`spec`,'$.fedora.components')) regexp '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z')),0))
+) ENGINE=InnoDB AUTO_INCREMENT=34 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Shared software pool: one definition per logical name (pkg/repo/artifact/script/build/role), per-family names, per-type JSON spec';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_software_artifacts`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_software_artifacts` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `software_id` int(10) unsigned NOT NULL COMMENT 'FK: the artifact pool entry',
   `arch` enum('any','x86_64','arm64','armhf','riscv64','i386') NOT NULL COMMENT 'target arch; any = arch-independent',
-  `url` varchar(512) NOT NULL COMMENT 'download URL for this arch at the item''s version_pin',
+  `url` varchar(512) NOT NULL COMMENT 'download URL for this arch at the entry''s version_pin',
   `sha256` char(64) NOT NULL COMMENT 'expected sha256 of the download (64 lowercase hex); never invented, so no row until it is known',
   `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
@@ -1681,13 +1725,64 @@ CREATE TABLE `prov_stack_artifacts` (
   `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
   `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_prov_stack_artifacts_live` (`item_id`,`arch`,`live_flag`),
-  KEY `ix_prov_stack_artifacts_source` (`source_id`),
-  CONSTRAINT `fk_prov_stack_artifacts_item` FOREIGN KEY (`item_id`) REFERENCES `prov_stack_items` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_prov_stack_artifacts_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
-  CONSTRAINT `ck_prov_stack_artifacts_sha256` CHECK (`sha256` regexp '(?-i)^[0-9a-f]{64}\\z'),
-  CONSTRAINT `ck_prov_stack_artifacts_url` CHECK (`url` <> '')
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Per-arch download URL + sha256 for artifact stack items (any = arch-independent)';
+  UNIQUE KEY `uq_prov_software_artifacts_live` (`software_id`,`arch`,`live_flag`),
+  KEY `ix_prov_software_artifacts_source` (`source_id`),
+  CONSTRAINT `fk_prov_software_artifacts_item` FOREIGN KEY (`software_id`) REFERENCES `prov_software` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_prov_software_artifacts_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `ck_prov_software_artifacts_sha256` CHECK (`sha256` regexp '(?-i)^[0-9a-f]{64}\\z'),
+  CONSTRAINT `ck_prov_software_artifacts_url` CHECK (`url` <> '')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Per-arch download URL + sha256 for artifact pool entries (any = arch-independent)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_software_conflicts`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_software_conflicts` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `software_lo_id` int(10) unsigned NOT NULL COMMENT 'FK: the pool entry with the lower id',
+  `software_hi_id` int(10) unsigned NOT NULL COMMENT 'FK: the pool entry with the higher id',
+  `notes` varchar(255) DEFAULT NULL COMMENT 'why the two cannot coexist',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_software_conflicts_live` (`software_lo_id`,`software_hi_id`,`live_flag`),
+  KEY `ix_prov_software_conflicts_hi` (`software_hi_id`),
+  KEY `ix_prov_software_conflicts_source` (`source_id`),
+  CONSTRAINT `fk_prov_software_conflicts_hi` FOREIGN KEY (`software_hi_id`) REFERENCES `prov_software` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_prov_software_conflicts_lo` FOREIGN KEY (`software_lo_id`) REFERENCES `prov_software` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_prov_software_conflicts_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `ck_prov_software_conflicts_self` CHECK (`software_lo_id` <> `software_hi_id`),
+  CONSTRAINT `ck_prov_software_conflicts_canonical` CHECK (`software_lo_id` < `software_hi_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Unordered conflict pairs between pool entries, stored once with lo id < hi id';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_software_requires`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_software_requires` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `software_id` int(10) unsigned NOT NULL COMMENT 'FK: the dependent pool entry',
+  `requires_software_id` int(10) unsigned NOT NULL COMMENT 'FK: the pool entry it requires (installed first)',
+  `notes` varchar(255) DEFAULT NULL COMMENT 'why the requirement exists',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_software_requires_live` (`software_id`,`requires_software_id`,`live_flag`),
+  KEY `ix_prov_software_requires_on` (`requires_software_id`),
+  KEY `ix_prov_software_requires_source` (`source_id`),
+  CONSTRAINT `fk_prov_software_requires_on` FOREIGN KEY (`requires_software_id`) REFERENCES `prov_software` (`id`),
+  CONSTRAINT `fk_prov_software_requires_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `fk_prov_software_requires_sw` FOREIGN KEY (`software_id`) REFERENCES `prov_software` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `ck_prov_software_requires_self` CHECK (`software_id` <> `requires_software_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Pool entry requirement edges (pkg->repo, build->build-dep pkg, ...); self rejected, cycles rejected by the generator';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `prov_stack_deps`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -1713,24 +1808,13 @@ CREATE TABLE `prov_stack_deps` (
   CONSTRAINT `ck_prov_stack_deps_self` CHECK (`stack_id` <> `depends_on_stack_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Stack dependency edges; self-dependency rejected, cycles rejected by the generator';
 /*!40101 SET character_set_client = @saved_cs_client */;
-DROP TABLE IF EXISTS `prov_stack_items`;
+DROP TABLE IF EXISTS `prov_stack_members`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `prov_stack_items` (
+CREATE TABLE `prov_stack_members` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
-  `stack_id` int(10) unsigned NOT NULL COMMENT 'FK: owning stack',
-  `logical_name` varchar(96) NOT NULL COMMENT 'arch/distro-independent item name, e.g. netcat, docker-ce repo',
-  `item_type` enum('pkg','repo','artifact','script','build','role') NOT NULL DEFAULT 'pkg' COMMENT 'pkg | repo | artifact | script | build | role (see migration header)',
-  `name_suse` varchar(128) DEFAULT NULL COMMENT 'pkg: real openSUSE name; other types: = when supported; NULL = unsupported',
-  `name_debian` varchar(128) DEFAULT NULL COMMENT 'pkg: real Debian/Ubuntu name; other types: = when supported; NULL = unsupported',
-  `name_fedora` varchar(128) DEFAULT NULL COMMENT 'pkg: real Fedora name; other types: = when supported; NULL = unsupported',
-  `applies_families` set('suse','debian','fedora') DEFAULT NULL COMMENT 'families this item applies to; NULL = all; non-applicable targets skip it',
-  `applies_arches` set('x86_64','arm64','armhf','riscv64','i386') DEFAULT NULL COMMENT 'arches this item applies to; NULL = all; non-applicable targets skip it',
-  `ansible_role` varchar(64) DEFAULT NULL COMMENT 'role items only: Ansible role under deploy/fleet/ansible/roles',
-  `repo_ref` varchar(96) DEFAULT NULL COMMENT 'pkg items only: logical_name of a repo item that must be applied first',
-  `source_url` varchar(512) DEFAULT NULL COMMENT 'informational project/release home',
-  `version_pin` varchar(64) DEFAULT NULL COMMENT 'pinned version: one safe path component; git builds = full 40/64-hex commit SHA; required for artifact and build; compared by version_check',
-  `spec` longtext DEFAULT NULL COMMENT 'per-type JSON object (repo/script/build required, artifact optional, pkg/role none); validated by stackgen.py',
+  `stack_id` int(10) unsigned NOT NULL COMMENT 'FK: the stack',
+  `software_id` int(10) unsigned NOT NULL COMMENT 'FK: the pool entry it includes',
   `item_order` smallint(5) unsigned DEFAULT NULL COMMENT 'explicit position within the stack; NULL = type default (repo 100 .. role 600)',
   `sort_order` smallint(5) unsigned NOT NULL DEFAULT 100 COMMENT 'tie-break within the same position (lower first, then logical_name)',
   `notes` varchar(255) DEFAULT NULL COMMENT 'free-form operator note',
@@ -1742,26 +1826,13 @@ CREATE TABLE `prov_stack_items` (
   `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
   `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_prov_stack_items_live` (`stack_id`,`logical_name`,`live_flag`),
-  KEY `ix_prov_stack_items_type` (`item_type`),
-  KEY `ix_prov_stack_items_source` (`source_id`),
-  CONSTRAINT `fk_prov_stack_items_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
-  CONSTRAINT `fk_prov_stack_items_stack` FOREIGN KEY (`stack_id`) REFERENCES `prov_stacks` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `ck_prov_stack_items_role` CHECK (`item_type` = 'role' = (`ansible_role` is not null)),
-  CONSTRAINT `ck_prov_stack_items_name` CHECK (!(`logical_name` regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]')),
-  CONSTRAINT `ck_prov_stack_items_repo_ref` CHECK (`repo_ref` is null or `item_type` = 'pkg'),
-  CONSTRAINT `ck_prov_stack_items_pin` CHECK (`item_type` not in ('artifact','build') or `version_pin` is not null),
-  CONSTRAINT `ck_prov_stack_items_suse` CHECK (`name_suse` is null or `item_type` = 'pkg' = (`name_suse` <> '=' and `name_suse` <> '')),
-  CONSTRAINT `ck_prov_stack_items_debian` CHECK (`name_debian` is null or `item_type` = 'pkg' = (`name_debian` <> '=' and `name_debian` <> '')),
-  CONSTRAINT `ck_prov_stack_items_fedora` CHECK (`name_fedora` is null or `item_type` = 'pkg' = (`name_fedora` <> '=' and `name_fedora` <> '')),
-  CONSTRAINT `ck_prov_stack_items_spec` CHECK (`spec` is null or json_valid(`spec`) and json_type(`spec`) = 'OBJECT'),
-  CONSTRAINT `ck_prov_stack_items_spec_req` CHECK (case `item_type` when 'pkg' then `spec` is null when 'role' then `spec` is null when 'artifact' then 1 else `spec` is not null end),
-  CONSTRAINT `ck_prov_stack_items_pin_fmt` CHECK (`version_pin` is null or `version_pin` regexp '(?-i)^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}\\z'),
-  CONSTRAINT `ck_prov_stack_items_script` CHECK (`item_type` <> 'script' or ifnull(json_type(json_extract(`spec`,'$.body')) = 'STRING' and json_value(`spec`,'$.body') <> '' and !json_exists(`spec`,'$.url') and !json_exists(`spec`,'$.sha256') or json_type(json_extract(`spec`,'$.url')) = 'STRING' and json_value(`spec`,'$.url') <> '' and json_type(json_extract(`spec`,'$.sha256')) = 'STRING' and json_value(`spec`,'$.sha256') regexp '(?-i)^[0-9a-f]{64}\\z' and !json_exists(`spec`,'$.body'),0)),
-  CONSTRAINT `ck_prov_stack_items_build` CHECK (`item_type` <> 'build' or ifnull(json_type(json_extract(`spec`,'$.source')) = 'OBJECT' and json_type(json_extract(`spec`,'$.system')) = 'STRING' and json_value(`spec`,'$.system') collate utf8mb4_bin in ('cmake','make','autotools','meson','custom') and !json_exists(`spec`,'$.commands') and case when json_value(`spec`,'$.system') collate utf8mb4_bin = 'custom' then json_type(json_extract(`spec`,'$.build')) = 'STRING' and json_value(`spec`,'$.build') regexp '[^[:space:]]' and json_type(json_extract(`spec`,'$.install')) = 'STRING' and json_value(`spec`,'$.install') regexp '[^[:space:]]' else !json_exists(`spec`,'$.build') and !json_exists(`spec`,'$.install') end and (json_type(json_extract(`spec`,'$.source.git')) = 'STRING' and json_value(`spec`,'$.source.git') <> '' and !json_exists(`spec`,'$.source.tarball') and `version_pin` regexp '(?-i)^[0-9a-f]{40}([0-9a-f]{24})?\\z' or json_type(json_extract(`spec`,'$.source.tarball')) = 'STRING' and json_value(`spec`,'$.source.tarball') <> '' and !json_exists(`spec`,'$.source.git') and json_type(json_extract(`spec`,'$.source.sha256')) = 'STRING' and json_value(`spec`,'$.source.sha256') regexp '(?-i)^[0-9a-f]{64}\\z'),0)),
-  CONSTRAINT `ck_prov_stack_items_check` CHECK (`spec` is null or !json_exists(`spec`,'$.check') or ifnull(json_type(json_extract(`spec`,'$.check')) = 'ARRAY' and json_compact(json_extract(`spec`,'$.check')) regexp '(?-i)^\\["(?:[^"\\\\]++|\\\\.)++"(?:,"(?:[^"\\\\]++|\\\\.)*+")*+\\]\\z',0)),
-  CONSTRAINT `ck_prov_stack_items_repo` CHECK (`item_type` <> 'repo' or ifnull((!json_exists(`spec`,'$.suse') or json_type(json_extract(`spec`,'$.suse')) = 'OBJECT' and json_type(json_extract(`spec`,'$.suse.url')) = 'STRING' and json_value(`spec`,'$.suse.url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.suse.key_url')) = 'STRING' and json_value(`spec`,'$.suse.key_url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.suse.fingerprint')) = 'STRING' and json_value(`spec`,'$.suse.fingerprint') <> '' and !(json_value(`spec`,'$.suse.fingerprint') regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]') and (!json_exists(`spec`,'$.suse.suite') or json_type(json_extract(`spec`,'$.suse.suite')) = 'STRING' and json_value(`spec`,'$.suse.suite') regexp '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z') and (!json_exists(`spec`,'$.suse.components') or json_compact(json_extract(`spec`,'$.suse.components')) regexp '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z')) and (!json_exists(`spec`,'$.debian') or json_type(json_extract(`spec`,'$.debian')) = 'OBJECT' and json_type(json_extract(`spec`,'$.debian.url')) = 'STRING' and json_value(`spec`,'$.debian.url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.debian.key_url')) = 'STRING' and json_value(`spec`,'$.debian.key_url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.debian.fingerprint')) = 'STRING' and json_value(`spec`,'$.debian.fingerprint') <> '' and !(json_value(`spec`,'$.debian.fingerprint') regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]') and (!json_exists(`spec`,'$.debian.suite') or json_type(json_extract(`spec`,'$.debian.suite')) = 'STRING' and json_value(`spec`,'$.debian.suite') regexp '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z') and (!json_exists(`spec`,'$.debian.components') or json_compact(json_extract(`spec`,'$.debian.components')) regexp '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z') and json_exists(`spec`,'$.debian.suite') and json_exists(`spec`,'$.debian.components')) and (!json_exists(`spec`,'$.fedora') or json_type(json_extract(`spec`,'$.fedora')) = 'OBJECT' and json_type(json_extract(`spec`,'$.fedora.url')) = 'STRING' and json_value(`spec`,'$.fedora.url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.fedora.key_url')) = 'STRING' and json_value(`spec`,'$.fedora.key_url') regexp '(?-i)^[^[:space:][:cntrl:]\\x{80}-\\x{9f}\\p{Z}]+\\z' and json_type(json_extract(`spec`,'$.fedora.fingerprint')) = 'STRING' and json_value(`spec`,'$.fedora.fingerprint') <> '' and !(json_value(`spec`,'$.fedora.fingerprint') regexp '[[:cntrl:]\\x{80}-\\x{9f}\\x{2028}\\x{2029}]') and (!json_exists(`spec`,'$.fedora.suite') or json_type(json_extract(`spec`,'$.fedora.suite')) = 'STRING' and json_value(`spec`,'$.fedora.suite') regexp '(?-i)^[A-Za-z0-9._/][A-Za-z0-9._/-]*\\z') and (!json_exists(`spec`,'$.fedora.components') or json_compact(json_extract(`spec`,'$.fedora.components')) regexp '(?-i)^\\["(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+"(?:,"(?:[A-Za-z0-9._/]|\\\\/)(?:[A-Za-z0-9._/-]|\\\\/)*+")*+\\]\\z')),0))
-) ENGINE=InnoDB AUTO_INCREMENT=34 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Logical stack items: pkg/repo/artifact/script/build/role, per-family names, per-type JSON spec';
+  UNIQUE KEY `uq_prov_stack_members_live` (`stack_id`,`software_id`,`live_flag`),
+  KEY `ix_prov_stack_members_software` (`software_id`),
+  KEY `ix_prov_stack_members_source` (`source_id`),
+  CONSTRAINT `fk_prov_stack_members_software` FOREIGN KEY (`software_id`) REFERENCES `prov_software` (`id`),
+  CONSTRAINT `fk_prov_stack_members_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `fk_prov_stack_members_stack` FOREIGN KEY (`stack_id`) REFERENCES `prov_stacks` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB AUTO_INCREMENT=32 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Stack membership: references into the software pool with per-stack ordering';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `prov_stacks`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;

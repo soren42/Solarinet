@@ -1,198 +1,291 @@
 {
-  "_comment": "Mirror of the migration 029 seed (netdb/sor/migrations/029_provisioning_images_stacks.sql) in stackgen --from-json shape. tests/netdb/test_prov_images_stacks.sh proves a --from-db render of the seeded scratch SoR is byte-identical to a render of this file; tests/deploy/test_stackgen.py proves core equals group_vars/all.yml.",
+  "_comment": "Mirror of the migration 029 seed (netdb/sor/migrations/029_provisioning_images_stacks.sql) in stackgen --from-json shape: the software pool plus stacks referencing it. tests/netdb/test_prov_images_stacks.sh proves a --from-db render of the seeded scratch SoR is byte-identical to a render of this file; tests/deploy/test_stackgen.py proves core equals group_vars/all.yml.",
+  "software": [
+    {
+      "logical_name": "sudo",
+      "item_type": "pkg",
+      "names": {
+        "suse": "sudo",
+        "debian": "sudo",
+        "fedora": "sudo"
+      }
+    },
+    {
+      "logical_name": "curl",
+      "item_type": "pkg",
+      "names": {
+        "suse": "curl",
+        "debian": "curl",
+        "fedora": "curl"
+      }
+    },
+    {
+      "logical_name": "wget",
+      "item_type": "pkg",
+      "names": {
+        "suse": "wget",
+        "debian": "wget",
+        "fedora": "wget"
+      }
+    },
+    {
+      "logical_name": "ca-certificates",
+      "item_type": "pkg",
+      "names": {
+        "suse": "ca-certificates",
+        "debian": "ca-certificates",
+        "fedora": "ca-certificates"
+      }
+    },
+    {
+      "logical_name": "gnupg",
+      "item_type": "pkg",
+      "names": {
+        "suse": "gnupg",
+        "debian": "gnupg",
+        "fedora": "gnupg2"
+      }
+    },
+    {
+      "logical_name": "htop",
+      "item_type": "pkg",
+      "names": {
+        "suse": "htop",
+        "debian": "htop",
+        "fedora": "htop"
+      }
+    },
+    {
+      "logical_name": "tmux",
+      "item_type": "pkg",
+      "names": {
+        "suse": "tmux",
+        "debian": "tmux",
+        "fedora": "tmux"
+      }
+    },
+    {
+      "logical_name": "git",
+      "item_type": "pkg",
+      "names": {
+        "suse": "git",
+        "debian": "git",
+        "fedora": "git"
+      }
+    },
+    {
+      "logical_name": "vim",
+      "item_type": "pkg",
+      "names": {
+        "suse": "vim",
+        "debian": "vim",
+        "fedora": "vim-enhanced"
+      }
+    },
+    {
+      "logical_name": "rsync",
+      "item_type": "pkg",
+      "names": {
+        "suse": "rsync",
+        "debian": "rsync",
+        "fedora": "rsync"
+      }
+    },
+    {
+      "logical_name": "jq",
+      "item_type": "pkg",
+      "names": {
+        "suse": "jq",
+        "debian": "jq",
+        "fedora": "jq"
+      }
+    },
+    {
+      "logical_name": "unzip",
+      "item_type": "pkg",
+      "names": {
+        "suse": "unzip",
+        "debian": "unzip",
+        "fedora": "unzip"
+      }
+    },
+    {
+      "logical_name": "lsof",
+      "item_type": "pkg",
+      "names": {
+        "suse": "lsof",
+        "debian": "lsof",
+        "fedora": "lsof"
+      }
+    },
+    {
+      "logical_name": "chrony",
+      "item_type": "pkg",
+      "names": {
+        "suse": "chrony",
+        "debian": "chrony",
+        "fedora": "chrony"
+      }
+    },
+    {
+      "logical_name": "python3",
+      "item_type": "pkg",
+      "names": {
+        "suse": "python3",
+        "debian": "python3",
+        "fedora": "python3"
+      }
+    },
+    {
+      "logical_name": "netcat",
+      "item_type": "pkg",
+      "names": {
+        "suse": "netcat-openbsd",
+        "debian": "netcat-openbsd"
+      }
+    },
+    {
+      "logical_name": "iproute2",
+      "item_type": "pkg",
+      "names": {
+        "suse": "iproute2",
+        "debian": "iproute2",
+        "fedora": "iproute"
+      }
+    },
+    {
+      "logical_name": "net-tools",
+      "item_type": "pkg",
+      "names": {
+        "suse": "net-tools",
+        "debian": "net-tools",
+        "fedora": "net-tools"
+      }
+    },
+    {
+      "logical_name": "openssh-server",
+      "item_type": "pkg",
+      "names": {
+        "suse": "openssh",
+        "debian": "openssh-server",
+        "fedora": "openssh-server"
+      }
+    },
+    {
+      "logical_name": "dev-tools role",
+      "item_type": "role",
+      "names": {
+        "suse": "=",
+        "debian": "="
+      },
+      "ansible_role": "dev-tools"
+    },
+    {
+      "logical_name": "powerlevel10k pin",
+      "item_type": "script",
+      "names": {
+        "suse": "=",
+        "debian": "="
+      },
+      "version_pin": "ff0311157d6b24fea21aa70699783f362b0f554f",
+      "spec": {
+        "body": "set -eu\nd=/usr/share/oh-my-zsh/custom/themes/powerlevel10k\n[ -d \"$d/.git\" ] || { echo \"powerlevel10k clone missing at $d (dev-tools ohmyzsh disabled?)\" >&2; exit 1; }\ngit -C \"$d\" fetch --quiet --depth 1 origin tag v1.20.0\n[ \"$(git -C \"$d\" rev-parse 'v1.20.0^{commit}')\" = ff0311157d6b24fea21aa70699783f362b0f554f ] || { echo \"powerlevel10k tag v1.20.0 moved upstream\" >&2; exit 1; }\ngit -C \"$d\" -c advice.detachedHead=false checkout --quiet ff0311157d6b24fea21aa70699783f362b0f554f",
+        "interpreter": "/bin/sh",
+        "run_as": "root",
+        "check": [
+          "git",
+          "-C",
+          "/usr/share/oh-my-zsh/custom/themes/powerlevel10k",
+          "rev-parse",
+          "HEAD"
+        ],
+        "version_check": "^([0-9a-f]{40})$"
+      },
+      "requires": [
+        "dev-tools role"
+      ]
+    }
+  ],
   "stacks": [
     {
       "slug": "core",
       "locked": true,
       "sort_order": 0,
-      "items": [
+      "members": [
         {
-          "logical_name": "sudo",
-          "item_type": "pkg",
-          "names": {
-            "suse": "sudo",
-            "debian": "sudo",
-            "fedora": "sudo"
-          },
+          "software": "sudo",
           "sort_order": 10
         },
         {
-          "logical_name": "curl",
-          "item_type": "pkg",
-          "names": {
-            "suse": "curl",
-            "debian": "curl",
-            "fedora": "curl"
-          },
+          "software": "curl",
           "sort_order": 20
         },
         {
-          "logical_name": "wget",
-          "item_type": "pkg",
-          "names": {
-            "suse": "wget",
-            "debian": "wget",
-            "fedora": "wget"
-          },
+          "software": "wget",
           "sort_order": 30
         },
         {
-          "logical_name": "ca-certificates",
-          "item_type": "pkg",
-          "names": {
-            "suse": "ca-certificates",
-            "debian": "ca-certificates",
-            "fedora": "ca-certificates"
-          },
+          "software": "ca-certificates",
           "sort_order": 40
         },
         {
-          "logical_name": "gnupg",
-          "item_type": "pkg",
-          "names": {
-            "suse": "gnupg",
-            "debian": "gnupg",
-            "fedora": "gnupg2"
-          },
+          "software": "gnupg",
           "sort_order": 50
         },
         {
-          "logical_name": "htop",
-          "item_type": "pkg",
-          "names": {
-            "suse": "htop",
-            "debian": "htop",
-            "fedora": "htop"
-          },
+          "software": "htop",
           "sort_order": 60
         },
         {
-          "logical_name": "tmux",
-          "item_type": "pkg",
-          "names": {
-            "suse": "tmux",
-            "debian": "tmux",
-            "fedora": "tmux"
-          },
+          "software": "tmux",
           "sort_order": 70
         },
         {
-          "logical_name": "git",
-          "item_type": "pkg",
-          "names": {
-            "suse": "git",
-            "debian": "git",
-            "fedora": "git"
-          },
+          "software": "git",
           "sort_order": 80
         },
         {
-          "logical_name": "vim",
-          "item_type": "pkg",
-          "names": {
-            "suse": "vim",
-            "debian": "vim",
-            "fedora": "vim-enhanced"
-          },
+          "software": "vim",
           "sort_order": 90
         },
         {
-          "logical_name": "rsync",
-          "item_type": "pkg",
-          "names": {
-            "suse": "rsync",
-            "debian": "rsync",
-            "fedora": "rsync"
-          },
+          "software": "rsync",
           "sort_order": 100
         },
         {
-          "logical_name": "jq",
-          "item_type": "pkg",
-          "names": {
-            "suse": "jq",
-            "debian": "jq",
-            "fedora": "jq"
-          },
+          "software": "jq",
           "sort_order": 110
         },
         {
-          "logical_name": "unzip",
-          "item_type": "pkg",
-          "names": {
-            "suse": "unzip",
-            "debian": "unzip",
-            "fedora": "unzip"
-          },
+          "software": "unzip",
           "sort_order": 120
         },
         {
-          "logical_name": "lsof",
-          "item_type": "pkg",
-          "names": {
-            "suse": "lsof",
-            "debian": "lsof",
-            "fedora": "lsof"
-          },
+          "software": "lsof",
           "sort_order": 130
         },
         {
-          "logical_name": "chrony",
-          "item_type": "pkg",
-          "names": {
-            "suse": "chrony",
-            "debian": "chrony",
-            "fedora": "chrony"
-          },
+          "software": "chrony",
           "sort_order": 140
         },
         {
-          "logical_name": "python3",
-          "item_type": "pkg",
-          "names": {
-            "suse": "python3",
-            "debian": "python3",
-            "fedora": "python3"
-          },
+          "software": "python3",
           "sort_order": 150
         },
         {
-          "logical_name": "netcat",
-          "item_type": "pkg",
-          "names": {
-            "suse": "netcat-openbsd",
-            "debian": "netcat-openbsd"
-          },
+          "software": "netcat",
           "sort_order": 160
         },
         {
-          "logical_name": "iproute2",
-          "item_type": "pkg",
-          "names": {
-            "suse": "iproute2",
-            "debian": "iproute2",
-            "fedora": "iproute"
-          },
+          "software": "iproute2",
           "sort_order": 170
         },
         {
-          "logical_name": "net-tools",
-          "item_type": "pkg",
-          "names": {
-            "suse": "net-tools",
-            "debian": "net-tools",
-            "fedora": "net-tools"
-          },
+          "software": "net-tools",
           "sort_order": 180
         },
         {
-          "logical_name": "openssh-server",
-          "item_type": "pkg",
-          "names": {
-            "suse": "openssh",
-            "debian": "openssh-server",
-            "fedora": "openssh-server"
-          },
+          "software": "openssh-server",
           "sort_order": 190
         }
       ]
@@ -204,38 +297,13 @@
       "depends_on": [
         "core"
       ],
-      "items": [
+      "members": [
         {
-          "logical_name": "dev-tools role",
-          "item_type": "role",
-          "names": {
-            "suse": "=",
-            "debian": "="
-          },
-          "ansible_role": "dev-tools",
+          "software": "dev-tools role",
           "sort_order": 10
         },
         {
-          "logical_name": "powerlevel10k pin",
-          "item_type": "script",
-          "names": {
-            "suse": "=",
-            "debian": "="
-          },
-          "version_pin": "ff0311157d6b24fea21aa70699783f362b0f554f",
-          "spec": {
-            "body": "set -eu\nd=/usr/share/oh-my-zsh/custom/themes/powerlevel10k\n[ -d \"$d/.git\" ] || { echo \"powerlevel10k clone missing at $d (dev-tools ohmyzsh disabled?)\" >&2; exit 1; }\ngit -C \"$d\" fetch --quiet --depth 1 origin tag v1.20.0\n[ \"$(git -C \"$d\" rev-parse 'v1.20.0^{commit}')\" = ff0311157d6b24fea21aa70699783f362b0f554f ] || { echo \"powerlevel10k tag v1.20.0 moved upstream\" >&2; exit 1; }\ngit -C \"$d\" -c advice.detachedHead=false checkout --quiet ff0311157d6b24fea21aa70699783f362b0f554f",
-            "interpreter": "/bin/sh",
-            "run_as": "root",
-            "check": [
-              "git",
-              "-C",
-              "/usr/share/oh-my-zsh/custom/themes/powerlevel10k",
-              "rev-parse",
-              "HEAD"
-            ],
-            "version_check": "^([0-9a-f]{40})$"
-          },
+          "software": "powerlevel10k pin",
           "item_order": 700,
           "sort_order": 10
         }

@@ -172,7 +172,7 @@ cmake = [{"logical_name": "cmakething", "item_type": "build", "names": same, "ve
           "spec": {"source": {"tarball": f"file://{t}/cmakething-1.0.tar.gz", "sha256": os.environ["CMAKE_SHA"]},
                    "system": "cmake", "prefix": f"{t}/prefix", "creates": f"{t}/prefix/proof/cmake/stage"}}
          ] if os.environ["HAVE_CMAKE"] == "1" else []
-print(json.dumps({"stacks": [{"slug": "smoke", "items": [
+software = [
     {"logical_name": "smoke role", "item_type": "role", "names": same, "ansible_role": "smoke-role"},
     {"logical_name": "marker script", "item_type": "script", "names": same, "version_pin": "2.1",
      "spec": {"body": f'echo "2.1" > {t}/out/version.txt\necho "$GREETING" > {t}/out/greeting.txt',
@@ -198,7 +198,9 @@ print(json.dumps({"stacks": [{"slug": "smoke", "items": [
     *cmake,
     {"logical_name": "tool", "item_type": "artifact", "names": same, "version_pin": "3.0",
      "artifacts": {"any": {"url": f"file://{t}/tool.bin", "sha256": os.environ["ART_SHA"]}}},
-]}]}))
+]
+print(json.dumps({"software": software, "stacks": [
+    {"slug": "smoke", "members": [{"software": e["logical_name"]} for e in software]}]}))
 PY
 python3 "$ROOT/deploy/fleet/stackgen.py" --from-json "$T/defs.json" --family "$FAMILY" --arch "$ARCH" \
   --stack smoke > "$T/render.json"
@@ -243,7 +245,7 @@ run_play() {
 run_play 1
 [ "$(cat "$T/out/greeting.txt")" = "hi from env" ] || die "script env/body"
 [ "$("$T/prefix/bin/hello")" = "hello" ] || die "custom build install"
-cmp -s "$T/tool.bin" "$T/opt/smoke--tool/3.0/tool.bin" || die "artifact download"
+cmp -s "$T/tool.bin" "$T/opt/tool/3.0/tool.bin" || die "artifact download"
 [ -f "$T/out/role.txt" ] || die "role step"
 [ "$(cat "$T/prefix/git-marker")" = "pinned" ] || die "git build did not use the pinned commit"
 ok "first run applied artifact, builds (tarball + git at pinned commit, not branch tip), script (env), role"
@@ -265,13 +267,13 @@ ok "custom + make: compile ran as $ADMIN (uid $MYUID), install as root"
 if [ "$HAVE_CMAKE" = 1 ]; then
   want "$T/prefix/proof/cmake/compile" "$ADMIN" "cmake compile"
   want "$T/prefix/proof/cmake/stage" "$ADMIN" "cmake --install (DESTDIR stage)"
-  [ -f "$T/work/build/smoke--cmakething/1.0/_stage$T/prefix/proof/cmake/compile" ] \
+  [ -f "$T/work/build/cmakething/1.0/_stage$T/prefix/proof/cmake/compile" ] \
     || die "cmake install was not staged via DESTDIR"
   ok "cmake: compile + DESTDIR stage ran as $ADMIN, root copied the stage into the prefix"
 else
   echo "skip - cmake not installed: cmake staged-install leg"
 fi
-[ "$(stat -c %U "$T/work/build/smoke--hello/1.0")" = "$ADMIN" ] || die "build dir not owned by the admin user"
+[ "$(stat -c %U "$T/work/build/hello/1.0")" = "$ADMIN" ] || die "build dir not owned by the admin user"
 ok "build dir owned by $ADMIN"
 
 # ---- 4. second run: idempotent ----------------------------------------------

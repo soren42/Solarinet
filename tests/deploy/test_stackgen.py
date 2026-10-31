@@ -34,8 +34,34 @@ def seed_doc() -> dict:
         return json.load(fh)
 
 
+MEMBER_KEYS = ("item_order", "sort_order")
+
+
+def to_pool(doc):
+    """Test helper: turn the compact {"stacks": [{"items": [entry...]}]} shape
+    (entries written inline where a stack uses them, plus optional "pool":
+    pool-only entries) into the stackgen {"software", "stacks"} document.
+    item_order / sort_order on an inline entry are member-level. An entry
+    written in two stacks must be written identically (it is ONE pool row)."""
+    if "software" in doc:
+        return doc
+    software = {e["logical_name"]: copy.deepcopy(e) for e in doc.get("pool", [])}
+    stacks = []
+    for st in doc["stacks"]:
+        members = []
+        for it in st.get("items", []):
+            entry = {k: v for k, v in it.items() if k not in MEMBER_KEYS}
+            name = entry["logical_name"]
+            if name in software and software[name] != entry:
+                raise AssertionError(f"test helper: {name!r} defined twice differently")
+            software.setdefault(name, copy.deepcopy(entry))
+            members.append({"software": name, **{k: it[k] for k in MEMBER_KEYS if k in it}})
+        stacks.append({**{k: v for k, v in st.items() if k != "items"}, "members": members})
+    return {"software": list(software.values()), "stacks": stacks}
+
+
 def render_doc(doc, stacks=(), family="suse", arch="x86_64"):
-    return stackgen.render(stackgen.load_definitions(doc), list(stacks), family, arch)
+    return stackgen.render(stackgen.load_definitions(to_pool(doc)), list(stacks), family, arch)
 
 
 def pkg(name, suse=None, debian=None, fedora=None, **kw):
@@ -49,20 +75,27 @@ def other(name, itype, fedora=True, **kw):
             "names": {"suse": "=", "debian": "=", "fedora": "=" if fedora else None}, **kw}
 
 
+GRAPH_KEYS = ("requires", "conflicts_with")
+
+
 def script(name, **spec):
+    graph = {k: spec.pop(k) for k in GRAPH_KEYS if k in spec}
     spec.setdefault("body", "echo hi")
     spec.setdefault("creates", "/opt/x")
-    return other(name, "script", spec=spec)
+    return other(name, "script", spec=spec, **graph)
 
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
-def build(name, pin=COMMIT, **spec):
+def build(name, pin=COMMIT, requires=None, **spec):
     spec.setdefault("source", {"git": "https://example.invalid/x.git"})
     spec.setdefault("system", "cmake")
     spec.setdefault("creates", "/usr/local/bin/x")
-    return other(name, "build", version_pin=pin, spec=spec)
+    entry = other(name, "build", version_pin=pin, spec=spec)
+    if requires is not None:
+        entry["requires"] = requires
+    return entry
 
 
 def doc_with(*stacks):
@@ -97,7 +130,7 @@ class GoldenAgainstAllYml(unittest.TestCase):
         self.assertEqual(got["solari_stack_packages"], self.expected("Suse"))
         self.assertEqual(got["solari_stack_steps"],
                          [{"type": "pkg", "packages": self.expected("Suse")}])
-        for k in ("repos", "artifacts", "builds", "scripts", "roles", "skipped"):
+        for k in ("repos", "artifacts", "builds", "scripts", "roles", "skipped", "shared", "implicit"):
             self.assertEqual(got[f"solari_stack_{k}"], [], k)
 
     def test_core_debian_x86_64_equals_all_yml(self):
@@ -178,10 +211,11 @@ class StackOrder(unittest.TestCase):
         base = stackgen.dumps(render_doc(self.stacks(), ["ai", "db"]))
         rng = random.Random(42)
         for _ in range(10):
-            d = copy.deepcopy(self.stacks())
+            d = to_pool(copy.deepcopy(self.stacks()))
+            rng.shuffle(d["software"])
             rng.shuffle(d["stacks"])
             for s in d["stacks"]:
-                rng.shuffle(s["items"])
+                rng.shuffle(s["members"])
             self.assertEqual(stackgen.dumps(render_doc(d, ["db", "ai"])), base)
 
 
@@ -198,7 +232,7 @@ class ItemOrderAndTypes(unittest.TestCase):
             script("s"),
             build("b"),
             other("a", "artifact", version_pin="1.0", artifacts={"any": {"url": "https://e.invalid/a", "sha256": SHA}}),
-            pkg("p", repo_ref="vendor repo"),
+            pkg("p", requires=["vendor repo"]),
             other("vendor repo", "repo", spec=repo_spec),
         ]})
 
@@ -218,11 +252,16 @@ class ItemOrderAndTypes(unittest.TestCase):
         self.assertEqual([s["type"] for s in got["solari_stack_steps"]],
                          ["pkg", "build", "repo", "pkg", "artifact", "role", "script"])
 
-    def test_repo_ref_must_be_applied_first(self):
+    def test_required_repo_must_be_applied_first(self):
         d = self.mixed()
         d["stacks"][1]["items"][4]["item_order"] = 50  # pkg before its repo
-        with self.assertRaisesRegex(StackGenError, "repo_ref 'vendor repo' is not a repo applied before it"):
+        with self.assertRaisesRegex(StackGenError, "item 'p' requirement 'vendor repo': repo is installed "
+                                                   "later in run order"):
             render_doc(d, ["x"], "suse")
+
+    def test_repo_ref_key_is_gone(self):
+        with self.assertRaisesRegex(StackGenError, "repo_ref is gone; express it as a requires edge"):
+            render_doc(doc_with({"slug": "x", "items": [pkg("p", repo_ref="vendor repo")]}), ["x"])
 
     def test_repo_bad_fingerprint_and_missing_suite(self):
         d = self.mixed()
@@ -312,7 +351,7 @@ class Artifacts(unittest.TestCase):
             render_doc(self.art({"any": {"url": "u", "sha256": SHA}}, pin=None), ["x"])
 
     def test_artifacts_on_pkg_rejected(self):
-        with self.assertRaisesRegex(StackGenError, "per-arch artifacts on a pkg item"):
+        with self.assertRaisesRegex(StackGenError, "per-arch artifacts on a pkg entry"):
             render_doc(doc_with({"slug": "x", "items": [pkg("p", artifacts={"any": {"url": "u"}})]}), ["x"])
 
 
@@ -386,7 +425,7 @@ class Builds(unittest.TestCase):
         d = doc_with(
             {"slug": "toolchain", "items": [pkg("cmake"), pkg("libssl-dev", suse="libopenssl-devel")]},
             {"slug": "x", "depends_on": ["toolchain"],
-             "items": [build("thing", build_deps=["git", "cmake", "libssl-dev"])]},
+             "items": [build("thing", requires=["git", "cmake", "libssl-dev"])]},
         )
         got = render_doc(d, ["x"], "suse")
         self.assertEqual(got["solari_stack_order"], ["core", "toolchain", "x"])
@@ -395,63 +434,64 @@ class Builds(unittest.TestCase):
             {"type": "build", "index": 0}])
         self.assertEqual(got["solari_stack_packages"], ["git", "make", "cmake", "libopenssl-devel"])
         b = got["solari_stack_builds"][0]
-        self.assertEqual(b["build_deps"], ["git", "cmake", "libopenssl-devel"])
+        self.assertEqual(b["build_deps"], ["git", "cmake", "libopenssl-devel"])  # install order
+        self.assertEqual(got["solari_stack_implicit"], [])
         self.assertEqual(b["source"], {"git": "https://example.invalid/x.git", "commit": COMMIT, "tag": None,
                                        "tarball": None, "sha256": None})
 
-    def test_build_deps_never_resolve_from_unselected_stacks(self):  # review finding 4
+    def test_build_dep_resolves_from_the_pool_implicitly(self):  # supersedes closure-only (review finding 4)
         d = doc_with(
             {"slug": "toolchain", "items": [pkg("cmake")]},
-            {"slug": "x", "items": [build("thing", build_deps=["cmake"])]},
+            {"slug": "x", "items": [build("thing", requires=["cmake"])]},
         )
-        with self.assertRaisesRegex(StackGenError, r"build dep 'cmake' is not a pkg item in the selected stacks"):
-            render_doc(d, ["x"])
+        got = render_doc(d, ["x"])
+        self.assertEqual(got["solari_stack_order"], ["core", "x"])
+        self.assertEqual(got["solari_stack_steps"], [
+            {"type": "pkg", "packages": ["git", "make", "cmake"]}, {"type": "build", "index": 0}])
+        self.assertEqual(got["solari_stack_builds"][0]["build_deps"], ["cmake"])
+        self.assertEqual(got["solari_stack_implicit"],
+                         [{"item": "cmake", "required_by": "thing", "stack": "x"}])
 
     def test_build_dep_applicability_enforced(self):  # review finding 4
-        for kw, msg in (({"applies_families": ["debian"]}, "not applicable to suse/x86_64"),
-                        ({"applies_arches": ["arm64"]}, "not applicable to suse/x86_64")):
-            d = doc_with({"slug": "x", "items": [pkg("ninja", **kw), build("t", build_deps=["ninja"])]})
-            with self.subTest(kw=kw), self.assertRaisesRegex(StackGenError, msg):
-                render_doc(d, ["x"])
+        for kw, msg in (({"applies_families": ["debian"]}, "'ninja': not for family suse"),
+                        ({"applies_arches": ["arm64"]}, "'ninja': not for arch x86_64")):
+            for listed in (True, False):   # listed by the stack (and skipped) or pool-only
+                items = [pkg("ninja", **kw), build("t", requires=["ninja"])] if listed else \
+                    [build("t", requires=["ninja"])]
+                d = doc_with({"slug": "x", "items": items})
+                d["pool"] = [pkg("ninja", **kw)]
+                with self.subTest(kw=kw, listed=listed), \
+                        self.assertRaisesRegex(StackGenError, msg + "; a requirement must apply to suse/x86_64"):
+                    render_doc(d, ["x"])
 
-    def test_build_dep_skips_inapplicable_earlier_candidate(self):  # review 2 finding 2
-        # core's debian-only 'libssl' comes first in closure order; the suse one must win on suse.
-        d = doc_with(
-            {"slug": "tc", "items": [pkg("libssl", suse="libopenssl-devel", debian="libssl-dev",
-                                         applies_families=["suse"])]},
-            {"slug": "x", "depends_on": ["tc"], "items": [build("t", build_deps=["libssl"])]})
-        d["stacks"][0]["items"].append(pkg("libssl", suse="WRONG", debian="libssl-dev", applies_families=["debian"]))
+    def test_build_dep_uses_the_target_family_name(self):  # replaces per-stack candidate selection
+        d = doc_with({"slug": "x", "items": [build("t", requires=["libssl"])]})
+        d["pool"] = [pkg("libssl", suse="libopenssl-devel", debian="libssl-dev")]
         for fam, want in (("suse", "libopenssl-devel"), ("debian", "libssl-dev")):
             with self.subTest(family=fam):
                 self.assertEqual(render_doc(d, ["x"], fam)["solari_stack_builds"][0]["build_deps"], [want])
-        d["stacks"][0]["items"][-1]["applies_arches"] = ["arm64"]
-        d["stacks"][0]["items"][-1]["applies_families"] = None  # now also applies on suse/arm64 only
-        self.assertEqual(render_doc(d, ["x"], "suse", "x86_64")["solari_stack_builds"][0]["build_deps"],
-                         ["libopenssl-devel"])
 
-    def test_build_dep_ambiguous_applicable_candidates_rejected(self):  # review 2 finding 2
-        d = doc_with({"slug": "a", "items": [pkg("ninja", debian="ninja-build")]},
-                     {"slug": "x", "depends_on": ["a"], "items": [pkg("ninja"), build("t", build_deps=["ninja"])]})
-        with self.assertRaisesRegex(StackGenError, "build dep 'ninja' is ambiguous for debian/x86_64"):
-            render_doc(d, ["x"], "debian")
-        # same mapping in both stacks is not ambiguous
-        self.assertEqual(render_doc(d, ["x"], "suse")["solari_stack_builds"][0]["build_deps"], ["ninja"])
+    def test_same_logical_name_twice_in_the_pool_rejected(self):  # replaces the ambiguity check
+        d = {"software": [pkg("ninja", debian="ninja-build"), pkg("ninja")], "stacks": []}
+        with self.assertRaisesRegex(StackGenError, "duplicate pool entry 'ninja'"):
+            render_doc(d)
 
     def test_build_dep_repo_must_precede_build(self):  # review finding 4
         repo = other("vendor repo", "repo", spec={"suse": {"url": "https://r.invalid", "key_url": "https://r.invalid/k",
                                                            "fingerprint": "A" * 40}})
-        dep = pkg("vendor-lib", repo_ref="vendor repo")
+        dep = pkg("vendor-lib", requires=["vendor repo"])
         d = doc_with({"slug": "x", "items": [
-            dict(repo, item_order=900), dict(dep, item_order=950), build("t", build_deps=["vendor-lib"])]})
-        with self.assertRaisesRegex(StackGenError, "needs repo 'vendor repo', which is not applied before this build"):
+            dict(repo, item_order=900), dict(dep, item_order=950), build("t", requires=["vendor-lib"])]})
+        with self.assertRaisesRegex(StackGenError, "item 'vendor-lib' \\(pulled forward for 't'\\) requirement "
+                                                   "'vendor repo': repo is installed later in run order"):
             render_doc(d, ["x"])
-        d = doc_with({"slug": "x", "items": [repo, dep, build("t", build_deps=["vendor-lib"])]})
+        d = doc_with({"slug": "x", "items": [repo, dep, build("t", requires=["vendor-lib"])]})
         self.assertEqual([s["type"] for s in render_doc(d, ["x"])["solari_stack_steps"]],
                          ["pkg", "repo", "pkg", "build"])
 
     def test_build_dep_pkg_step_inserted_mid_stack(self):
         d = doc_with({"slug": "x", "items": [
-            build("thing", build_deps=["ninja"]),
+            build("thing", requires=["ninja"]),
             other("r", "role", ansible_role="r"),
             pkg("ninja", debian="ninja-build", item_order=900),
         ]})
@@ -459,16 +499,29 @@ class Builds(unittest.TestCase):
         self.assertEqual(got["solari_stack_steps"], [
             {"type": "pkg", "packages": ["git", "make", "ninja-build"]},
             {"type": "build", "index": 0}, {"type": "role", "index": 0}])
+        # pulled forward for the build: its own later position is a shared occurrence
+        self.assertEqual(got["solari_stack_shared"], [{"stack": "x", "item": "ninja", "installed_in": "x"}])
+        self.assertEqual(got["solari_stack_implicit"], [])
 
     def test_unresolvable_build_dep(self):
-        with self.assertRaisesRegex(StackGenError, "build dep 'libfoo' is not a pkg item"):
-            render_doc(doc_with({"slug": "x", "items": [build("t", build_deps=["libfoo"])]}), ["x"])
+        with self.assertRaisesRegex(StackGenError, "pool entry 't' requires unknown entry 'libfoo'"):
+            render_doc(doc_with({"slug": "x", "items": [build("t", requires=["libfoo"])]}), ["x"])
 
     def test_unmapped_build_dep(self):
-        d = doc_with({"slug": "x", "items": [pkg("only-deb", suse=None), build("t", build_deps=["only-deb"])]})
+        d = doc_with({"slug": "x", "items": [pkg("only-deb", suse=None), build("t", requires=["only-deb"])]})
         d["stacks"][1]["items"][0]["names"]["suse"] = None
         with self.assertRaisesRegex(StackGenError, "unmapped"):
             render_doc(d, ["x"], "suse")
+        d = doc_with({"slug": "x", "items": [build("t", requires=["only-deb"])]})
+        d["pool"] = [pkg("only-deb")]
+        d["pool"][0]["names"]["suse"] = None
+        with self.assertRaisesRegex(StackGenError, r"item 'only-deb' \(required by 't'\): unmapped package "
+                                                   "for family suse"):
+            render_doc(d, ["x"], "suse")
+
+    def test_spec_build_deps_refused(self):
+        with self.assertRaisesRegex(StackGenError, "spec.build_deps is refused; build dependencies are requires"):
+            render_doc(doc_with({"slug": "x", "items": [build("t", build_deps=["git"])]}), ["x"])
 
     def test_git_build_requires_full_commit_sha(self):  # review finding 2
         for ref in ("master", "feature/release", "release", "v1.0.0", COMMIT[:12], COMMIT.upper(), None):
@@ -525,6 +578,135 @@ class Builds(unittest.TestCase):
                 self.assertEqual(b["solari_stack_builds"][0]["prefix"], prefix)
         with self.assertRaisesRegex(StackGenError, "build system must be"):
             render_doc(doc_with({"slug": "x", "items": [build("t", system="bazel")]}), ["x"])
+
+
+class Pool(unittest.TestCase):
+    """Shared software pool: install-once, shared/implicit reporting, conflicts,
+    requirements resolved against the pool."""
+
+    REPO_SPEC = {"suse": {"url": "https://r.invalid", "key_url": "https://r.invalid/k", "fingerprint": FPR},
+                 "debian": {"url": "https://r.invalid", "key_url": "https://r.invalid/k", "fingerprint": FPR,
+                            "suite": "stable", "components": ["main"]}}
+
+    def test_entry_in_two_stacks_installed_once(self):
+        d = doc_with({"slug": "x", "items": [pkg("git"), pkg("tool")]})
+        got = render_doc(d, ["x"])
+        self.assertEqual(got["solari_stack_packages"], ["git", "make", "tool"])
+        self.assertEqual(got["solari_stack_steps"], [{"type": "pkg", "packages": ["git", "make", "tool"]}])
+        self.assertEqual(got["solari_stack_shared"], [{"stack": "x", "item": "git", "installed_in": "core"}])
+
+    def test_shared_non_pkg_reported_and_installed_once(self):
+        d = doc_with({"slug": "a", "sort_order": 10, "items": [script("hello")]},
+                     {"slug": "b", "sort_order": 20, "items": [script("hello"), script("bye")]})
+        got = render_doc(d, ["a", "b"])
+        self.assertEqual([x["id"] for x in got["solari_stack_scripts"]], ["hello", "bye"])
+        self.assertEqual([st["type"] for st in got["solari_stack_steps"]], ["pkg", "script", "script"])
+        self.assertEqual(got["solari_stack_shared"], [{"stack": "b", "item": "hello", "installed_in": "a"}])
+
+    def test_ids_are_pool_stable_whichever_stack_installs(self):
+        d = doc_with({"slug": "a", "sort_order": 10, "items": [script("hello world")]},
+                     {"slug": "b", "sort_order": 20, "items": [script("hello world")]})
+        ids = {tuple(sel): render_doc(d, sel)["solari_stack_scripts"][0]["id"] for sel in (["a"], ["b"], ["a", "b"])}
+        self.assertEqual(set(ids.values()), {"hello-world"})
+
+    def test_conflict_direct_names_both_entries_and_stacks(self):
+        d = doc_with({"slug": "timesync", "items": [pkg("ntp")]})
+        d["stacks"][0]["items"].append(pkg("chrony", conflicts_with=["ntp"]))
+        with self.assertRaisesRegex(StackGenError, "conflicting entries 'chrony' \\(stack 'core'\\) and "
+                                                   "'ntp' \\(stack 'timesync'\\) cannot be installed together"):
+            render_doc(d, ["timesync"])
+        self.assertEqual(render_doc(d)["solari_stack_packages"], ["chrony", "git", "make"])  # alone is fine
+
+    def test_conflict_via_implicit_dep(self):
+        d = doc_with({"slug": "x", "items": [script("tool", requires=["ntp"])]})
+        d["stacks"][0]["items"].append(pkg("chrony"))
+        d["pool"] = [pkg("ntp", conflicts_with=["chrony"])]
+        with self.assertRaisesRegex(StackGenError, "conflicting entries 'chrony' \\(stack 'core'\\) and "
+                                                   "'ntp' \\(implicit, required by 'tool' in stack 'x'\\)"):
+            render_doc(d, ["x"])
+
+    def test_skipped_side_does_not_conflict(self):
+        d = doc_with({"slug": "timesync", "items": [pkg("ntp", applies_families=["debian"])]})
+        d["stacks"][0]["items"].append(pkg("chrony", conflicts_with=["ntp"]))
+        got = render_doc(d, ["timesync"], "suse")
+        self.assertIn("chrony", got["solari_stack_packages"])
+        self.assertEqual(got["solari_stack_skipped"][0]["item"], "ntp")
+        with self.assertRaisesRegex(StackGenError, "conflicting entries"):
+            render_doc(d, ["timesync"], "debian")
+
+    def test_conflict_declared_on_either_or_both_sides_is_one_pair(self):
+        def defs(a_kw, b_kw):
+            return stackgen.load_definitions({"software": [pkg("a", **a_kw), pkg("b", **b_kw)], "stacks": []})
+        want = [("a", "b")]
+        self.assertEqual(defs({"conflicts_with": ["b"]}, {})["conflicts"], want)
+        self.assertEqual(defs({}, {"conflicts_with": ["a"]})["conflicts"], want)
+        self.assertEqual(defs({"conflicts_with": ["b"]}, {"conflicts_with": ["a"]})["conflicts"], want)
+
+    def test_implicit_dep_from_pool_reported_and_ordered_first(self):
+        d = doc_with({"slug": "x", "items": [script("tool", requires=["helper"])]})
+        d["pool"] = [script("helper")]
+        got = render_doc(d, ["x"])
+        self.assertEqual([x["id"] for x in got["solari_stack_scripts"]], ["helper", "tool"])
+        self.assertEqual(got["solari_stack_implicit"], [{"item": "helper", "required_by": "tool", "stack": "x"}])
+        self.assertEqual(got["solari_stack_shared"], [])
+
+    def test_implicit_deps_resolve_recursively_in_dependency_order(self):
+        d = doc_with({"slug": "x", "items": [script("a", requires=["b"])]})
+        d["pool"] = [script("b", requires=["c"]), script("c"), script("unused")]
+        got = render_doc(d, ["x"])
+        self.assertEqual([x["id"] for x in got["solari_stack_scripts"]], ["c", "b", "a"])
+        self.assertEqual(got["solari_stack_implicit"], [
+            {"item": "c", "required_by": "b", "stack": "x"},
+            {"item": "b", "required_by": "a", "stack": "x"}])
+
+    def test_implicit_repo_installed_before_its_pkg(self):
+        d = doc_with({"slug": "x", "items": [pkg("vendor-tool", requires=["vendor repo"])]})
+        d["pool"] = [other("vendor repo", "repo", fedora=False, spec=self.REPO_SPEC)]
+        got = render_doc(d, ["x"], "debian")
+        self.assertEqual(got["solari_stack_steps"], [
+            {"type": "pkg", "packages": ["git", "make"]}, {"type": "repo", "index": 0},
+            {"type": "pkg", "packages": ["vendor-tool"]}])
+        self.assertEqual(got["solari_stack_implicit"],
+                         [{"item": "vendor repo", "required_by": "vendor-tool", "stack": "x"}])
+
+    def test_inapplicable_pool_dep_rejected(self):
+        d = doc_with({"slug": "x", "items": [script("tool", requires=["helper"])]})
+        d["pool"] = [dict(script("helper"), applies_families=["debian"])]
+        with self.assertRaisesRegex(StackGenError, "requirement 'helper': not for family suse; "
+                                                   "a requirement must apply to suse/x86_64"):
+            render_doc(d, ["x"])
+        self.assertEqual(len(render_doc(d, ["x"], "debian")["solari_stack_scripts"]), 2)
+
+    def test_skipped_dependent_does_not_pull_its_requirements(self):
+        d = doc_with({"slug": "x", "items": [dict(script("tool", requires=["helper"]), applies_arches=["arm64"])]})
+        d["pool"] = [script("helper")]
+        got = render_doc(d, ["x"], "suse", "x86_64")
+        self.assertEqual(got["solari_stack_scripts"], [])
+        self.assertEqual(got["solari_stack_implicit"], [])
+
+    def test_graph_errors(self):
+        cases = (
+            ([script("a", requires=["a"])], "pool entry 'a' requires itself"),
+            ([script("a", requires=["b"]), script("b", requires=["a"])], "requirement cycle: 'a' -> 'b' -> 'a'"),
+            ([script("a", conflicts_with=["a"])], "pool entry 'a' conflicts with itself"),
+            ([script("a", conflicts_with=["zz"])], "conflicts with unknown entry 'zz'"),
+            ([script("a", requires=["b"]), script("b", conflicts_with=["a"])],
+             "pool entries 'a' and 'b' both conflict and require each other"),
+            ([script("a b"), script("a-b")], "'a-b': logical_name does not yield a unique identifier "
+                                             "\\(clashes with 'a b'\\)"),
+        )
+        for software, msg in cases:
+            with self.subTest(msg=msg), self.assertRaisesRegex(StackGenError, msg):
+                stackgen.load_definitions({"software": software, "stacks": []})
+
+    def test_member_errors(self):
+        sw = [pkg("git")]
+        with self.assertRaisesRegex(StackGenError, "stack 'x': member 'nope' is not in the software pool"):
+            stackgen.load_definitions({"software": sw, "stacks": [
+                {"slug": "x", "members": [{"software": "nope"}]}]})
+        with self.assertRaisesRegex(StackGenError, "stack 'x': duplicate member 'git'"):
+            stackgen.load_definitions({"software": sw, "stacks": [
+                {"slug": "x", "members": [{"software": "git"}, {"software": "git", "item_order": 5}]}]})
 
 
 class Cli(unittest.TestCase):
