@@ -182,9 +182,10 @@ function fixtureState() {
     ],
     software: {
       10: sw(10, 'chrony', 'pkg', ['chrony', 'chrony', 'chrony']),
-      11: sw(11, 'nginx', 'pkg', ['nginx', 'nginx', 'nginx']),
+      11: sw(11, 'nginx', 'pkg', ['nginx', 'nginx', 'nginx'], { conflicts_with: [14] }),
       12: sw(12, 'node-exporter', 'artifact', ['=', '=', '='], { version_pin: '1.8.2' }),
       13: sw(13, 'prom-tools', 'pkg', ['golang-github-prometheus', null, 'golang-github-prometheus']),
+      14: sw(14, 'apache2', 'pkg', ['apache2', 'apache2', 'httpd'], { conflicts_with: [11] }),
     },
     stacks: {
       1: { id: 1, slug: 'core', name: 'Core', description: 'Baseline every host gets', locked: true, sort_order: 0,
@@ -193,6 +194,8 @@ function fixtureState() {
         depends_on: [], members: [11], updated_at: '2026-10-30T12:00:00Z' },
       2: { id: 2, slug: 'monitoring', name: 'Monitoring', description: null, locked: false, sort_order: 200,
         depends_on: ['web'], members: [12, 13], updated_at: '2026-10-30T12:00:00Z' },
+      4: { id: 4, slug: 'apache', name: 'Apache', description: null, locked: false, sort_order: 300,
+        depends_on: [], members: [14], updated_at: '2026-10-30T12:00:00Z' },
     },
     targets: [
       { id: '9', name: 'neon', entity_type: 'server', lifecycle: 'active', role: 'compute', hw_make: 'Raspberry Pi',
@@ -363,6 +366,15 @@ async function main() {
     assert.equal(writes().length, 4, 'cancelled delete sent nothing');
     assert.equal(await page.getByRole('button', { name: 'Delete stack Core' }).isDisabled(), true,
       'locked stack cannot be deleted');
+
+    // --- pool conflicts block before confirm -------------------------------
+    const alt = page.getByRole('checkbox', { name: 'Apache' });
+    await alt.check();
+    await deploy.getByText('Conflicting entries selected: nginx (Web) ✕ apache2 (Apache).').waitFor();
+    assert.equal(await deployBtn.isDisabled(), true, 'a conflicting selection blocks deploy before confirm');
+    await alt.uncheck();
+    assert.equal(await deployBtn.isDisabled(), false, 'clearing the conflict re-arms deploy');
+    assert.equal(writes().length, 4, 'a blocked conflict sent nothing');
 
     if (process.env.SOLARI_PROVIMAGES_SCREENSHOT) {
       await page.screenshot({ path: process.env.SOLARI_PROVIMAGES_SCREENSHOT, fullPage: true });

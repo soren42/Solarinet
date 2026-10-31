@@ -389,6 +389,18 @@ $r = pv(['path' => "$P/runs/8", 'db' => [['match' => 'FROM prov_runs r', 'rows' 
 pv_ok($r['status'] === 404, 'GET missing run -> 404', "status={$r['status']}");
 
 // ---------------------------------------------------------------------------
+echo "[5a] software list carries live conflict pairs\n";
+$swRow = static fn (int $id, string $n) => ['id' => $id, 'logical_name' => $n, 'item_type' => 'pkg',
+    'name_suse' => $n, 'name_debian' => $n, 'name_fedora' => $n, 'applies_families' => null, 'applies_arches' => null,
+    'ansible_role' => null, 'source_url' => null, 'version_pin' => null, 'spec' => null, 'notes' => null, 'updated_at' => null];
+$r = pv(['path' => "$P/software", 'role' => 'viewer', 'db' => [
+    ['match' => 'FROM prov_software WHERE deleted_at IS NULL ORDER BY', 'rows' => [$swRow(3, 'exim'), $swRow(5, 'postfix'), $swRow(7, 'curl')]],
+    ['match' => 'FROM prov_software_conflicts c', 'rows' => [['lo' => 3, 'hi' => 5]]],
+]]);
+$cw = array_column($r['body']['data'] ?? [], 'conflicts_with', 'logical_name');
+pv_ok($r['status'] === 200 && ($cw['exim'] ?? null) === [5] && ($cw['postfix'] ?? null) === [3] && ($cw['curl'] ?? null) === [],
+    'software list: conflicts_with is symmetric, empty when none', json_encode($cw));
+
 echo "[5b] P4 reads: targets + helper log tail\n";
 $TGT_Q = 'FROM entities e JOIN interfaces i';
 $tgtRows = [
@@ -453,6 +465,13 @@ pv_ok($r['status'] === 200 && ($r['body']['data']['truncated'] ?? null) === true
     && ($r['body']['data']['size'] ?? 0) === strlen($big) && strlen($tail) <= 65536
     && str_starts_with($tail, 'line ') && str_ends_with($big, $tail),
     'log tail over 64 KiB: truncated, bounded, starts on a whole line', 'len=' . strlen($tail));
+$secret = "$logDir/not-a-log.txt";
+file_put_contents($secret, "SECRET-CONTENT\n");
+symlink($secret, "$logDir/stack-apply-5.log");
+$r = pv(['path' => "$P/log", 'query' => 'kind=stack-apply&id=5', 'env' => $LOGENV]);
+pv_ok($r['status'] === 200 && ($r['body']['data']['exists'] ?? null) === false
+    && ($r['body']['data']['log'] ?? null) === '' && !str_contains(json_encode($r['body']), 'SECRET'),
+    'log at a symlinked name is not followed (exists:false, nothing read)', json_encode($r['body']['data'] ?? null));
 foreach (glob("$logDir/*") ?: [] as $f) {
     @unlink($f);
 }

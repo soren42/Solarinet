@@ -464,12 +464,34 @@
       return out;
     }, [fam, plan.order.join(","), bySlug, swById, tArch]);
 
+    // Pool conflicts across the whole run: the generator refuses these, so
+    // block before confirm and name the pair (and the stacks pulling them in).
+    const conflicts = useMemo(() => {
+      const from = {};
+      plan.order.forEach((slug) => {
+        const s = bySlug[slug];
+        if (!s || !s.members) return;
+        s.members.forEach((m) => { (from[m.software_id] = from[m.software_id] || []).push(s.name); });
+      });
+      const out = [];
+      Object.keys(from).forEach((id) => {
+        const sw = swById[id];
+        (sw && sw.conflicts_with || []).forEach((other) => {
+          if (other > sw.id && from[other] && swById[other]) {
+            out.push(sw.logical_name + " (" + from[id].join(", ") + ") ✕ " + swById[other].logical_name + " (" + from[other].join(", ") + ")");
+          }
+        });
+      });
+      return out;
+    }, [plan.order.join(","), bySlug, swById]);
+
     let blocked = "";
     if (!live) blocked = "Live API unavailable — actions are paused.";
     else if (!op) blocked = OP_ONLY + " to deploy.";
     else if (!target) blocked = "Choose a target machine.";
     else if (plan.cycle) blocked = "Stack dependency cycle: " + plan.cycle.join(" → ") + ".";
     else if (!plan.order.length) blocked = "No stacks to run.";
+    else if (conflicts.length) blocked = "Conflicting entries selected: " + conflicts.join("; ") + ".";
     else if (mode === "reimage" && !selOk) blocked = selImage ? "Image not deployable: " + pickReason(selImage) + "." : "Select an image.";
 
     let warnline = "";

@@ -297,7 +297,22 @@ return static function (Router $router): void {
             $where .= ' AND item_type = :t';
         }
         $rows = ProvCatalog::rows("SELECT $SW_COLS FROM prov_software WHERE $where ORDER BY logical_name, id", $params);
-        Response::ok(array_map([ProvCatalog::class, 'softwareOut'], $rows));
+        // Live conflict pairs ride along so the deploy view can block a
+        // conflicting selection before confirm (the generator refuses it anyway).
+        $cf = [];
+        foreach (ProvCatalog::rows('SELECT c.software_lo_id AS lo, c.software_hi_id AS hi
+                                      FROM prov_software_conflicts c
+                                      JOIN prov_software a ON a.id = c.software_lo_id AND a.deleted_at IS NULL
+                                      JOIN prov_software b ON b.id = c.software_hi_id AND b.deleted_at IS NULL
+                                     WHERE c.deleted_at IS NULL') as $c) {
+            $cf[(int) $c['lo']][] = (int) $c['hi'];
+            $cf[(int) $c['hi']][] = (int) $c['lo'];
+        }
+        Response::ok(array_map(static function (array $r) use ($cf): array {
+            $o = ProvCatalog::softwareOut($r);
+            $o['conflicts_with'] = $cf[(int) $r['id']] ?? [];
+            return $o;
+        }, $rows));
     });
 
     $router->get("$P/software/{id}", static function (array $p) use ($softwareGet, $softwareDetail): void {
@@ -722,17 +737,22 @@ return static function (Router $router): void {
         $log = '';
         $size = 0;
         $mtime = null;
-        if (is_file($file) && is_readable($file)) {
-            $size = (int) filesize($file);
-            $mtime = gmdate('Y-m-d\TH:i:s\Z', (int) filemtime($file));
-            $fh = fopen($file, 'rb');
-            if ($fh !== false) {
+        // Never follow a link at the expected name, and read from the very
+        // inode that was checked; size and the byte cap come from the open fd
+        // so a log growing mid-read cannot exceed $max.
+        $st = @lstat($file);
+        $fh = ($st !== false && ($st['mode'] & 0170000) === 0100000) ? @fopen($file, 'rb') : false;
+        if ($fh !== false) {
+            $fs = fstat($fh);
+            if ($fs !== false && $fs['dev'] === $st['dev'] && $fs['ino'] === $st['ino']) {
+                $size = (int) $fs['size'];
+                $mtime = gmdate('Y-m-d\TH:i:s\Z', (int) $fs['mtime']);
                 if ($size > $max) {
-                    fseek($fh, -$max, SEEK_END);
+                    fseek($fh, $size - $max, SEEK_SET);
                 }
-                $log = (string) stream_get_contents($fh);
-                fclose($fh);
+                $log = (string) stream_get_contents($fh, $max);
             }
+            fclose($fh);
             if ($size > $max && ($nl = strpos($log, "\n")) !== false) {
                 $log = substr($log, $nl + 1);   // start the tail on a whole line
             }
