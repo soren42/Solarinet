@@ -66,8 +66,20 @@ Operator sketch: `IMG_1662.png` (T3 attachment, 2026-10-31; not committed).
 5. **Stack editor is where arch-independence comes from.**
    - A stack is a list of *logical* packages, with a per-distro name map wherever
      names differ (e.g. SUSE `apache2` + `php8` vs Debian `apache2` + `php`).
-   - **Upstream installs** are a first-class item type, with a pinned version and
-     per-arch artifacts. Examples: AI CLIs, T3 Code, powerlevel10k.
+   - **Item types** (operator, 2026-10-31: at least native packages, shell
+     scripts, and source builds):
+     | Type | What it is |
+     |---|---|
+     | `pkg` | Distro-native package, with a name per family |
+     | `repo` | Third-party repository plus signing key, added before `pkg` items |
+     | `artifact` | Upstream release binary or tarball, per arch, sha256-pinned (AI CLIs, T3 Code) |
+     | `script` | Download/install shell script. Body is inline, or a remote URL with a mandatory sha256. Has an idempotency guard (`creates` / `check` command / version regex) |
+     | `build` | Source build (cmake / make / autotools / meson / custom). Pinned git ref or checksummed tarball; build deps resolve through the package map |
+     | `role` | Existing Ansible role |
+
+     Default order within a stack is repo → pkg → artifact → build → script → role,
+     and an explicit item order overrides it. An unpinned remote script is
+     rejected; there is no blind `curl | sh`.
    - Stacks may depend on others (AI → Core).
    - **Core is always included** (locked on).
    - Stacks are stored as data in the SoR. The backend renders them to Ansible
