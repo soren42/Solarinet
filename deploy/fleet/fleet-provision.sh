@@ -237,8 +237,11 @@ bssh "test -e '${HTTP_ROOT}/ipxe/boot.ipxe' || install -D -m 0644 /dev/stdin '${
 # ---- stage the first-boot installer + enrollment material -------------------
 # solari-firstboot.sh runs on the freshly installed node; the cert material is
 # placed under an unguessable enroll dir (LAN-only, removed after first fetch).
+# Into the store at its resolved path, re-checked in the same remote shell
+# (the up-front fleet_require_store is minutes old by now).
 render_template "${FLEET_DIR}/netboot/installers/solari-firstboot.sh" \
-  | bput "${HTTP_ROOT}/installers/solari-firstboot.sh" 0755
+  | bput_store installers solari-firstboot.sh 0755 \
+  || fdie "cannot write installers/solari-firstboot.sh into the image store (see the [store] line above)"
 for f in ca.pem node.pem node.key; do
   [ -f "${CERTTMP}/${f}" ] && bput "${HTTP_ROOT}/enroll/${ENROLL_TOKEN}/${f}" 0640 < "${CERTTMP}/${f}"
 done

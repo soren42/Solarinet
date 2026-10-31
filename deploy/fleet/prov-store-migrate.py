@@ -22,8 +22,7 @@ For each of installers/ and images/ under HTTP_ROOT:
       flushed, read BACK from the store and its sha256 compared with the
       source's before it is renamed into place. A destination that already
       has the same size + sha256 is skipped, so an interrupted run is simply
-      re-run (resumable). A destination with different content is a CONFLICT:
-      nothing is swapped and the run fails. Relative symlinks that stay inside
+      re-run (resumable). A destination with different content is a CONFLICT. Relative symlinks that stay inside
       the tree (fetch-images' <arch> -> .<arch>.v.XXXXXXXX) are recreated;
       absolute or escaping links and special files are refused.
     After the copy every source file is re-checked (size + mtime unchanged
@@ -35,6 +34,12 @@ For each of installers/ and images/ under HTTP_ROOT:
     Between those two renames (microseconds) a client fetching a kernel gets a
     404; run it with no netboot install in progress.
 
+Order (--apply): BOTH subtrees are planned first, and any conflict or refused
+entry in either stops the run before anything is copied or swapped. Then both
+are copied, both verified, and only then both swapped, so a failure while
+copying or verifying swaps nothing. A failure during the swap phase itself
+(rename errors) says exactly which subtree was swapped and which was not.
+
 Preflight (all modes): <store> must be a mounted <fstype> filesystem
 (findmnt, after touching the path to trigger the automount), else exit 1
 "provisioning image store not mounted" — the whole point is never to copy
@@ -42,8 +47,20 @@ onto the local disk under an unmounted mountpoint. With --apply, a self-test
 in a scratch dir in the store first proves the operations fetch-images.sh and
 this script rely on: create/read a symlink (CIFS needs mfsymlinks), rename a
 new symlink OVER an existing one (`mv -T`), rename a directory, chmod, flock,
-mkdtemp. While copying, every fetch-images lock file found in the tree is
-held (non-blocking: a refresh in progress aborts the run).
+mkdtemp.
+
+Store maintenance lock (--apply and --purge --apply): .prov-store-migrate.lock
+beside the web root is taken EXCLUSIVELY (non-blocking) before planning and
+held through the swap. Every helper that writes to the store (fetch-images.sh,
+fleet-provision.sh's store write, build-pi-image.sh; image-refresh.py and
+prov-stage.py through them) takes it SHARED via prov-store-guard.sh, so a
+refresh, stage or image build in progress makes the migrate refuse, and none
+can start while it runs. Every fetch-images lock file found in the tree is
+also held (non-blocking), for helpers from releases before the shared lock.
+
+Hung NAS: the touch that triggers the automount and findmnt run in a child
+process bounded by PROV_STORE_TIMEOUT seconds (default 20); a store that does
+not answer is "not responding", exit 1, never a hang.
 
 --fstype none skips the mount check and is accepted only with
 SOLARI_PROV_LOCAL=1 (tests). Defaults come from the same environment names
@@ -108,20 +125,47 @@ def human(n: int) -> str:
 
 
 # ---- preflight -------------------------------------------------------------
-def require_mounted(store: str, fstype: str) -> None:
+def store_timeout() -> int:
+    raw = os.environ.get("PROV_STORE_TIMEOUT", "20")
+    if not raw.isdigit() or not 1 <= int(raw) <= 600:
+        raise MigrateError(f"PROV_STORE_TIMEOUT {raw!r} is not a number of seconds (1-600)")
+    return int(raw)
+
+
+def bounded(argv: list[str], timeout: int, what: str) -> tuple[int, str]:
+    """Run argv in a child, never blocking past timeout (+5 s to reap a kill).
+
+    A child stuck in the kernel on a hard-mounted hung share may not even die
+    on SIGKILL; it is then abandoned rather than waited for."""
     try:
-        os.listdir(store)          # trigger the systemd automount
-    except OSError:
-        pass
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+    except OSError as exc:
+        raise MigrateError(f"cannot run {argv[0]} to {what}: {exc}") from None
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        raise MigrateError(f"provisioning image store not responding: {what} timed out after "
+                           f"{timeout}s (NAS hung or unreachable); refusing") from None
+    return proc.returncode, out
+
+
+def require_mounted(store: str, fstype: str) -> None:
+    timeout = store_timeout()
+    # trigger the systemd automount; the exit status does not matter, a hang does
+    bounded(["ls", "--", store + "/"], timeout, f"touching {store}")
     if fstype == "none":
         if not os.path.isdir(store):
             raise MigrateError(f"provisioning image store not mounted: {store} is not a directory")
         return
-    try:
-        out = subprocess.run(["findmnt", "-n", "-o", "SOURCE", "-t", fstype, "-M", store],
-                             capture_output=True, text=True, timeout=30).stdout.strip()
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise MigrateError(f"cannot run findmnt: {exc}") from None
+    _rc, out = bounded(["findmnt", "-n", "-o", "SOURCE", "-t", fstype, "-M", store], timeout,
+                       f"findmnt on {store}")
+    out = out.strip()
     if not out:
         raise MigrateError(f"provisioning image store not mounted: {store} is not a {fstype} "
                            "mount (check the NAS, /etc/fstab and solari-prov-store-mount.service); "
@@ -275,29 +319,39 @@ def hold_locks(paths: list[str]) -> list:
     return held
 
 
-def migrate_sub(sub: str, http_root: str, store: str, *, apply: bool) -> bool:
-    """Returns True when the sub needs (or got) no further work; raises on failure."""
-    src = os.path.join(http_root, sub)
-    dst = os.path.join(store, sub)
-    real_dst = os.path.join(os.path.realpath(store), sub)
-    if os.path.islink(src):
-        if os.path.realpath(src) == real_dst and os.path.isdir(real_dst):
-            log(f"{sub}: already linked -> {dst}")
-            return True
-        raise MigrateError(f"{src} is a symlink to {os.readlink(src)}, not into the store; "
-                           "fix it by hand")
-    if not os.path.lexists(src):
-        log(f"{sub}: no local tree; {'creating' if apply else 'would create'} {dst} + link")
-        if apply:
-            os.makedirs(dst, exist_ok=True)
-            swap_in(src, dst, backup=None)
-        return True
-    if not os.path.isdir(src):
-        raise MigrateError(f"{src} is not a directory")
-    if os.path.lexists(dst) and (os.path.islink(dst) or not os.path.isdir(dst)):
-        raise MigrateError(f"{dst} exists and is not a directory")
+class Sub:
+    """One subtree's preflight result: kind is linked | missing | tree."""
 
-    plan = plan_tree(src, dst, hash_sources=apply)
+    def __init__(self, sub: str, http_root: str, store: str) -> None:
+        self.sub = sub
+        self.src = os.path.join(http_root, sub)
+        self.dst = os.path.join(store, sub)
+        self.kind = ""
+        self.plan: Plan | None = None
+        self.backup = ""
+
+
+def prepare_sub(sub: str, http_root: str, store: str, *, apply: bool) -> Sub:
+    """Classify + plan one subtree; reads only. Conflicts are collected, not raised."""
+    s = Sub(sub, http_root, store)
+    real_dst = os.path.join(os.path.realpath(store), sub)
+    if os.path.islink(s.src):
+        if os.path.realpath(s.src) == real_dst and os.path.isdir(real_dst):
+            log(f"{sub}: already linked -> {s.dst}")
+            s.kind = "linked"
+            return s
+        raise MigrateError(f"{s.src} is a symlink to {os.readlink(s.src)}, not into the store; "
+                           "fix it by hand")
+    if not os.path.lexists(s.src):
+        log(f"{sub}: no local tree; {'creating' if apply else 'would create'} {s.dst} + link")
+        s.kind = "missing"
+        return s
+    if not os.path.isdir(s.src):
+        raise MigrateError(f"{s.src} is not a directory")
+    if os.path.lexists(s.dst) and (os.path.islink(s.dst) or not os.path.isdir(s.dst)):
+        raise MigrateError(f"{s.dst} exists and is not a directory")
+    s.kind = "tree"
+    s.plan = plan = plan_tree(s.src, s.dst, hash_sources=apply)
     total = sum(n for _, n in plan.copy)
     log(f"{sub}: {len(plan.src_state)} file(s), {len(plan.copy)} to copy ({human(total)}), "
         f"{len(plan.same)} already in the store, {len(plan.links)} link(s), "
@@ -309,34 +363,88 @@ def migrate_sub(sub: str, http_root: str, store: str, *, apply: bool) -> bool:
         log(f"  CONFLICT {sub}/{msg}")
     for msg in plan.refused:
         log(f"  REFUSED {sub}/{msg}")
-    if plan.conflicts or plan.refused:
-        raise MigrateError(f"{sub}: {len(plan.conflicts)} conflict(s), {len(plan.refused)} refused "
-                           "entr(y/ies); nothing swapped — resolve them by hand and re-run")
+    return s
+
+
+def preflight(http_root: str, store: str, *, apply: bool) -> list[Sub]:
+    """Plan EVERY subtree before anything is copied or swapped; one conflict or
+    refusal in any of them stops the whole run."""
+    subs = [prepare_sub(sub, http_root, store, apply=apply) for sub in SUBS]
+    bad = [(s.sub, len(s.plan.conflicts), len(s.plan.refused)) for s in subs
+           if s.plan and (s.plan.conflicts or s.plan.refused)]
+    if bad:
+        detail = ", ".join(f"{sub}: {c} conflict(s), {r} refused" for sub, c, r in bad)
+        raise MigrateError(f"{detail}; nothing copied, nothing swapped (neither "
+                           f"{' nor '.join(SUBS)}) — resolve them by hand and re-run")
+    total = sum(n for s in subs if s.plan for _, n in s.plan.copy)
     free = shutil.disk_usage(store).free if os.path.isdir(store) else 0
     if total > free:
-        raise MigrateError(f"{sub}: needs {human(total)} but the store has {human(free)} free")
-    if not apply:
-        log(f"{sub}: dry run — would copy, verify, keep the original as "
-            f"{backup_dir(http_root)}/.{sub}.pre-store.<stamp> and link {src} -> {dst}")
-        return False
+        raise MigrateError(f"needs {human(total)} but the store has {human(free)} free; "
+                           "nothing copied, nothing swapped")
+    return subs
 
-    held = hold_locks(plan.locks)
+
+def outcome(subs: list[Sub], swapped: list[Sub]) -> str:
+    todo = [s for s in subs if s.kind != "linked"]
+    if not swapped:
+        return ("nothing swapped: " + ", ".join(f"{s.src} is unchanged" for s in todo)
+                + " (store copies kept; a re-run resumes)")
+    rest = [s for s in todo if s not in swapped]
+    done = ", ".join(f"{s.sub} -> {s.dst}" + (f" (original kept at {s.backup})" if s.backup else "")
+                     for s in swapped)
+    left = ", ".join(f"{s.sub} (still the local directory {s.src})" for s in rest) or "none"
+    return f"PARTIAL: swapped {done}; NOT swapped: {left}; re-run to finish"
+
+
+def apply_subs(subs: list[Sub], http_root: str) -> None:
+    """Copy all, verify all, then swap all. Any failure names what was swapped."""
+    todo = [s for s in subs if s.kind != "linked"]
+    held = hold_locks([lk for s in todo if s.plan for lk in s.plan.locks])
+    swapped: list[Sub] = []
     try:
-        os.makedirs(dst, exist_ok=True)
-        for rel in plan.dirs:
-            os.makedirs(os.path.join(dst, rel), exist_ok=True)
-        for i, (rel, n) in enumerate(plan.copy, 1):
-            log(f"  [{i}/{len(plan.copy)}] copying {sub}/{rel} ({human(n)})")
-            copy_verified(os.path.join(src, rel), os.path.join(dst, rel), plan.src_state[rel][2])
-        for rel, target in plan.links:
-            os.symlink(target, os.path.join(dst, rel))
-        verify_unchanged(sub, src, dst, plan)
+        for s in todo:
+            os.makedirs(s.dst, exist_ok=True)
+            if s.plan is None:
+                continue
+            for rel in s.plan.dirs:
+                os.makedirs(os.path.join(s.dst, rel), exist_ok=True)
+            for i, (rel, n) in enumerate(s.plan.copy, 1):
+                log(f"  [{i}/{len(s.plan.copy)}] copying {s.sub}/{rel} ({human(n)})")
+                copy_verified(os.path.join(s.src, rel), os.path.join(s.dst, rel),
+                              s.plan.src_state[rel][2])
+            for rel, target in s.plan.links:
+                os.symlink(target, os.path.join(s.dst, rel))
+        for s in todo:
+            if s.plan is not None:
+                verify_unchanged(s.sub, s.src, s.dst, s.plan)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        swap_in(src, dst, backup=os.path.join(backup_dir(http_root), f".{sub}.pre-store.{stamp}"))
+        for s in todo:
+            if s.plan is not None:
+                s.backup = os.path.join(backup_dir(http_root), f".{s.sub}.pre-store.{stamp}")
+            swap_in(s.src, s.dst, backup=s.backup or None)
+            swapped.append(s)
+    except (MigrateError, OSError) as exc:
+        raise MigrateError(f"{exc}; {outcome(subs, swapped)}") from None
     finally:
         for fh in held:
             fh.close()
-    return True
+
+
+def take_maintenance_lock(http_root: str) -> int:
+    """The store maintenance lock, EXCLUSIVE, non-blocking; held (fd kept open)
+    until the process exits. Beside the web root, not in it (nginx would list
+    it). Opened read-only (+create, 0644) so a lock file created by another
+    user (root's image build) still works."""
+    path = os.path.join(os.path.dirname(http_root), ".prov-store-migrate.lock")
+    fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise MigrateError(f"the image store maintenance lock {path} is held: another prov-store-migrate, "
+                           "or an image refresh / stage / image build, is running; retry when it "
+                           "has finished") from None
+    return fd
 
 
 def backup_dir(http_root: str) -> str:
@@ -348,13 +456,13 @@ def backup_dir(http_root: str) -> str:
 def verify_unchanged(sub: str, src: str, dst: str, plan: Plan) -> None:
     again = plan_tree(src, dst, hash_sources=False)
     if set(again.src_state) != set(plan.src_state):
-        raise MigrateError(f"{sub}: files were added or removed during the copy; nothing swapped, re-run")
+        raise MigrateError(f"{sub}: files were added or removed during the copy")
     for rel, (size, mtime, _sha) in plan.src_state.items():
         size2, mtime2, _ = again.src_state[rel]
         if (size2, mtime2) != (size, mtime):
-            raise MigrateError(f"{sub}/{rel} changed during the copy; nothing swapped, re-run")
+            raise MigrateError(f"{sub}/{rel} changed during the copy")
     if again.copy or again.conflicts or again.refused or again.links or again.dirs:
-        raise MigrateError(f"{sub}: the store copy is incomplete after copying; nothing swapped")
+        raise MigrateError(f"{sub}: the store copy is incomplete after copying")
     log(f"{sub}: verified {len(plan.src_state)} file(s) in the store (sha256 read-back + unchanged source)")
 
 
@@ -422,30 +530,38 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"--fstype {a.fstype!r} is not a filesystem type name")
     if a.fstype == "none" and env.get("SOLARI_PROV_LOCAL") != "1":
         ap.error("--fstype none is only allowed under SOLARI_PROV_LOCAL=1")
-    if os.path.realpath(store).startswith(os.path.realpath(http_root) + "/"):
+    if os.path.abspath(store).startswith(os.path.abspath(http_root) + "/"):
         ap.error("the store may not live inside the HTTP root")
     if not os.path.isdir(http_root):
         ap.error(f"--http-root {http_root} is not a directory")
+    lock_fd = None
     try:
-        require_mounted(store, a.fstype)
+        require_mounted(store, a.fstype)    # bounded: before anything else touches the store
+        if os.path.realpath(store).startswith(os.path.realpath(http_root) + "/"):
+            ap.error("the store may not live inside the HTTP root")
         if a.selftest_only:
             selftest(store)
             return 0
+        if a.apply:
+            lock_fd = take_maintenance_lock(http_root)   # held through the swap, until return
         if a.purge:
             purge(http_root, store, apply=a.apply)
             return 0
         if a.apply:
-            # beside the web root, not in it (nginx would list it)
-            lock = open(os.path.join(os.path.dirname(http_root), ".prov-store-migrate.lock"), "a+b")
-            try:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                raise MigrateError("another prov-store-migrate is running") from None
             selftest(store)
         else:
             log("dry run (pass --apply to copy and swap); the store self-test runs with --apply")
-        done = [migrate_sub(sub, http_root, store, apply=a.apply) for sub in SUBS]
-        log("all done" if all(done) else "dry run complete; nothing blocks --apply")
+        subs = preflight(http_root, store, apply=a.apply)
+        if not a.apply:
+            for s in subs:
+                if s.kind == "tree":
+                    log(f"{s.sub}: dry run — would copy, verify, keep the original as "
+                        f"{backup_dir(http_root)}/.{s.sub}.pre-store.<stamp> and link {s.src} -> {s.dst}")
+            log("all done" if all(s.kind == "linked" for s in subs)
+                else "dry run complete; nothing blocks --apply")
+            return 0
+        apply_subs(subs, http_root)
+        log("all done")
         return 0
     except MigrateError as exc:
         print(f"[store-migrate][error] {exc}", file=sys.stderr, flush=True)
@@ -453,6 +569,9 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"[store-migrate][error] {exc}", file=sys.stderr, flush=True)
         return 1
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
 
 
 if __name__ == "__main__":

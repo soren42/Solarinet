@@ -130,7 +130,8 @@ PROTOS="=https,http"; [ "$LOCAL" = 1 ] && PROTOS="=https,http,file"
 
 # ---- the fixed script that runs on benzene ------------------------------------
 # The guard library is prepended, so the store check and the work run in one
-# ssh session (no window between "checked" and "writing").
+# ssh session, under the shared store maintenance lock, writing to the resolved
+# store path (no window between "checked" and "writing").
 # argv: <http_root> <store> <store fstype> <curl protos> <dest> <op> then
 #   fetch:    records F name url sha | X tb member out | M key val
 #   prune:    <current>
@@ -142,7 +143,10 @@ log() { printf "[fetch] %s\n" "$*" >&2; }
 err() { printf "[fetch][error] %s\n" "$*" >&2; exit 1; }
 root=$1 store=$2 fstype=$3 protos=$4 dest=$5 op=$6; shift 6
 prov_store check "$store" "$fstype" "$root" "${dest%%/*}" || exit 1
-final="$root/$dest"; parent="${final%/*}"; leaf="${final##*/}"
+# Work on the resolved store path, not through $root/<sub>: a link swapped for a
+# real directory mid-download cannot redirect the write onto the local disk.
+# fd 7 (the shared store maintenance lock) stays held until this script exits.
+final="$PROV_STORE_REAL/$dest"; parent="${final%/*}"; leaf="${final##*/}"
 mkdir -p -- "$parent"
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$parent/.$leaf.lock"

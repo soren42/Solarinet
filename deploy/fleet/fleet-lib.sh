@@ -103,6 +103,26 @@ fleet_require_store() {
   for a in "$PROV_STORE" "$PROV_STORE_FSTYPE" "$HTTP_ROOT" "$@"; do cmd+=" $(fleet_sq "$a")"; done
   bssh "$cmd" || fdie "provisioning image store check failed on ${BENZENE} (see the [store] line above)"
 }
+# bput_store <sub> <rel-path> [mode] < data — write stdin into the NAS image
+# store at <sub>/<rel-path>. The store check, the shared maintenance lock and
+# the write run in ONE remote shell, and the destination is built from the
+# RESOLVED store path (PROV_STORE_REAL), never through HTTP_ROOT/<sub>: a check
+# made earlier in the run proves nothing about the link by the time we write.
+bput_store() {
+  local sub="$1" rel="$2" mode="${3:-0644}" body cmd a
+  fleet_store_knobs
+  [[ "$sub" =~ ^(installers|images)$ ]] || fdie "bput_store: bad store subdir: $sub"
+  [[ "$rel" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ ]] && [[ "/$rel/" != */../* ]] \
+    || fdie "bput_store: unsafe path: $rel"
+  [[ "$mode" =~ ^0[0-7]{3}$ ]] || fdie "bput_store: bad mode: $mode"
+  # shellcheck disable=SC2016
+  body='prov_store check "$1" "$2" "$3" "$4" || exit 1
+dst="$PROV_STORE_REAL/$4/$5"; tmp="${dst%/*}/.${dst##*/}.tmp.$$"
+install -D -m "$6" /dev/stdin "$tmp" && mv -f "$tmp" "$dst" || { rm -f "$tmp"; exit 1; }'
+  cmd="sh -c $(fleet_sq "$(cat "${FLEET_DIR}/prov-store-guard.sh")"$'\n'"$body") prov-store"
+  for a in "$PROV_STORE" "$PROV_STORE_FSTYPE" "$HTTP_ROOT" "$sub" "$rel" "$mode"; do cmd+=" $(fleet_sq "$a")"; done
+  bssh "$cmd"
+}
 # POSIX single-quoting for the remote login shell: one literal word per value.
 fleet_sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 

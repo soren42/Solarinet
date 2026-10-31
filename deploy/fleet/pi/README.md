@@ -41,9 +41,16 @@ sudo ./build-pi-image.sh \
     --server-url tls+tcp://benzene.lan:7701 \
     --server-name benzene --server-ip 10.5.2.50 \
     --packages "vim htop" \
-    --out /srv/solari-provision/images/pi-sensor-01.img
+    --out /srv/solari-provision/netboot/http/images/pi-sensor-01.img
 # then: sudo dd if=...pi-sensor-01.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
+
+`--out` must be `$HTTP_ROOT/images/<name>.img`. The builder writes the image
+into the NAS image store through the path that link resolves to, after
+checking the store once before the download and again right before the write.
+See [`deploy/host-configs/benzene/README.md`](../../host-configs/benzene/README.md).
+The store guard and `provisioning-guard.sh` must sit one directory up from this
+script; `fleet-image.sh` ships them there.
 
 Downloads the Pi OS Lite base if `--base-img` is omitted, loop-mounts boot+root,
 enables SSH, sets the admin user (key-only, passwordless sudo), hostname, and

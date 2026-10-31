@@ -8,20 +8,34 @@ prov-store-guard.sh check must accept the result.
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
+import importlib.util
+import io
 import os
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FLEET = os.path.join(ROOT, "deploy", "fleet")
 MIGRATE = os.path.join(FLEET, "prov-store-migrate.py")
 GUARD = os.path.join(FLEET, "prov-store-guard.sh")
+FETCH_SH = os.path.join(FLEET, "fetch-images.sh")
+with open(GUARD, encoding="utf-8") as _fh:
+    GUARD_TEXT = _fh.read()
+
+
+def load_migrate():
+    spec = importlib.util.spec_from_file_location("prov_store_migrate", MIGRATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def sha(path: str) -> str:
@@ -98,7 +112,7 @@ class Migrate(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.http)), ["configs", "images", "installers", "ipxe"])
 
     def guard(self, mode="check"):
-        script = open(GUARD).read() + '\nprov_store "$@"'
+        script = GUARD_TEXT + '\nprov_store "$@"'
         return subprocess.run(["sh", "-c", script, "prov-store", mode, self.store, "none", self.http,
                                "installers", "images"], capture_output=True, text=True, timeout=60)
 
@@ -185,10 +199,15 @@ class Migrate(unittest.TestCase):
                 p = self.run_m(*args)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIn("CONFLICT images/node-arm64.img", p.stdout)
-                self.assertIn("nothing swapped", p.stderr)
-        self.assertEqual(open(os.path.join(self.store, rel), "rb").read(), b"something else")
-        self.assertFalse(os.path.islink(os.path.join(self.http, "images")))
-        self.assertEqual(tree(os.path.join(self.http, "images")), self.orig["images"])
+                self.assertIn("nothing copied, nothing swapped (neither installers nor images)",
+                              p.stderr)
+                # preflight covers EVERY subtree: installers (conflict-free, planned first)
+                # is neither copied nor swapped either
+                self.assert_untouched()
+                self.assertFalse(os.path.exists(os.path.join(self.store, "installers")))
+        with open(os.path.join(self.store, rel), "rb") as fh:
+            self.assertEqual(fh.read(), b"something else")
+        self.assertEqual(os.listdir(self.store), ["images"])
 
     def test_escaping_and_absolute_links_refused(self):
         inst = os.path.join(self.http, "installers")
@@ -217,8 +236,100 @@ class Migrate(unittest.TestCase):
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             p = self.run_m("--apply")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertIn("another prov-store-migrate is running", p.stderr)
+        self.assertIn("maintenance lock", p.stderr)
+        self.assertIn("another prov-store-migrate", p.stderr)
         self.assert_untouched()
+
+    def test_helper_writing_into_store_blocks_migrate(self):
+        # a re-run after a partial migration: installers is linked, images is not.
+        # fetch-images into installers holds the maintenance lock SHARED while it
+        # downloads; the migrate must refuse instead of swapping images under it.
+        os.rename(os.path.join(self.http, "installers"), os.path.join(self.store, "installers"))
+        os.symlink(os.path.join(self.store, "installers"), os.path.join(self.http, "installers"))
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_dir)
+        ready = os.path.join(self.tmp, "fetch-started")
+        with open(os.path.join(bin_dir, "curl"), "w") as fh:
+            fh.write(f"#!/bin/sh\necho started > {ready}\nexec sleep 60\n")
+        os.chmod(os.path.join(bin_dir, "curl"), 0o755)
+        env = dict(self.env, PATH=bin_dir + os.pathsep + os.environ["PATH"], HTTP_ROOT=self.http,
+                   PROV_STORE=self.store, PROV_STORE_FSTYPE="none", PROV_ROOT=self.netboot,
+                   BENZENE="p6-test-no-ssh")
+        fetch = subprocess.Popen(["bash", FETCH_SH, "--dest", "installers/debian/13/x86_64",
+                                  "--file", "linux", "https://example.invalid/linux", "0" * 64],
+                                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+        self.addCleanup(fetch.wait)
+        self.addCleanup(os.killpg, fetch.pid, 9)
+        deadline = time.monotonic() + 30
+        while not os.path.exists(ready) and fetch.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(ready), "fetch-images never reached its download")
+        p = self.run_m("--apply")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("maintenance lock", p.stderr)
+        self.assertFalse(os.path.islink(os.path.join(self.http, "images")))
+        self.assertEqual(tree(os.path.join(self.http, "images")), self.orig["images"])
+        self.assertFalse(os.path.exists(os.path.join(self.store, "images")))
+        self.assertEqual(self.backups(), [])
+
+    def test_hung_store_touch_is_bounded(self):
+        # touching the store never returns (stalled hard CIFS mount): refuse, do not hang
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_dir)
+        with open(os.path.join(bin_dir, "ls"), "w") as fh:
+            fh.write("#!/bin/sh\nexec sleep 600\n")
+        os.chmod(os.path.join(bin_dir, "ls"), 0o755)
+        env = dict(self.env, PATH=bin_dir + os.pathsep + os.environ["PATH"], PROV_STORE_TIMEOUT="2")
+        for args in ((), ("--apply",)):
+            with self.subTest(args=args):
+                t0 = time.monotonic()
+                p = self.run_m(*args, env=env)
+                self.assertLess(time.monotonic() - t0, 15)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("provisioning image store not responding", p.stderr)
+                self.assert_untouched()
+        self.assertEqual(os.listdir(self.store), [])
+        p = self.run_m(env=dict(self.env, PROV_STORE_TIMEOUT="soon"))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("PROV_STORE_TIMEOUT", p.stderr)
+
+    def test_swap_failure_reports_partial_outcome(self):
+        # installers swaps, then swapping images fails: the error must say exactly that
+        mod = load_migrate()
+        real_swap = mod.swap_in
+
+        def swap_in(src, dst, *, backup):
+            if src.endswith("/images"):
+                raise OSError(28, "No space left on device", src)
+            real_swap(src, dst, backup=backup)
+
+        mod.swap_in = swap_in
+        out, err = io.StringIO(), io.StringIO()
+        old_env = {k: os.environ.get(k) for k in ("SOLARI_PROV_LOCAL",)}
+        os.environ["SOLARI_PROV_LOCAL"] = "1"
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = mod.main(["--http-root", self.http, "--store", self.store, "--fstype", "none",
+                               "--apply"])
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        msg = err.getvalue()
+        self.assertEqual(rc, 1, out.getvalue() + msg)
+        self.assertIn("PARTIAL: swapped installers ->", msg)
+        self.assertIn("NOT swapped: images (still the local directory", msg)
+        self.assertNotIn("nothing swapped", msg)
+        self.assertTrue(os.path.islink(os.path.join(self.http, "installers")))
+        self.assertFalse(os.path.islink(os.path.join(self.http, "images")))
+        self.assertEqual(tree(os.path.join(self.http, "images")), self.orig["images"])
+        self.assertEqual(tree(os.path.join(self.store, "images")), self.orig["images"])
+        p = self.run_m("--apply")                            # a re-run finishes the job
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assert_migrated()
 
     def test_store_not_mounted_and_usage_refusals(self):
         before = tree(self.tmp)

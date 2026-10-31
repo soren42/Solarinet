@@ -54,11 +54,17 @@ VERSIONS = {"ubuntu": "24.04.3"}
 STUB_SSH = """#!/usr/bin/env bash
 # test stub: run the "remote" command locally; refuse any host but the test one.
 # STUB_SSH_FAIL_ON=<text>: fail (without running) any remote command containing it.
+# STUB_SSH_SWAP_ON=<text> + STUB_SSH_SWAP_LINK=<path>: before running a command
+# containing <text>, replace the symlink <path> with an empty real directory
+# (HTTP_ROOT/installers falling back onto the local disk between check and write).
 while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
 [ "${1:-}" = "p5-test-benzene" ] || { echo "stub ssh: refusing host ${1:-?}" >&2; exit 97; }
 shift
 if [ -n "${STUB_SSH_FAIL_ON:-}" ] && [[ "$*" == *"${STUB_SSH_FAIL_ON}"* ]]; then
   echo "stub ssh: injected failure" >&2; exit 1
+fi
+if [ -n "${STUB_SSH_SWAP_ON:-}" ] && [[ "$*" == *"${STUB_SSH_SWAP_ON}"* ]] && [ -L "${STUB_SSH_SWAP_LINK}" ]; then
+  rm -f "${STUB_SSH_SWAP_LINK}" && mkdir "${STUB_SSH_SWAP_LINK}"
 fi
 exec bash -c "$*"
 """
@@ -317,6 +323,21 @@ class InstallProfiles(unittest.TestCase):
         self.assertTrue(self.armed())
         p = self.provision("opensuse", "--run-id", "6", STUB_SSH_FAIL_ON="/profile.env")
         self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.armed())
+
+
+    # -- store writes re-check the store at write time ---------------------------
+    def test_firstboot_write_rechecks_store(self):
+        # installers/ stops resolving into the store after the up-front check:
+        # the firstboot write must refuse, not land on benzene's local disk
+        link = os.path.join(self.http, "installers")
+        p = self.provision("debian", STUB_SSH_SWAP_ON="solari-firstboot.sh", STUB_SSH_SWAP_LINK=link)
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("cannot write installers/solari-firstboot.sh into the image store", p.stderr)
+        self.assertFalse(os.path.islink(link))
+        self.assertEqual(os.listdir(link), [], "nothing may be written onto the local disk")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "store", "installers",
+                                                     "solari-firstboot.sh")))
         self.assertFalse(self.armed())
 
 

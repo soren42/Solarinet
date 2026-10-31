@@ -26,8 +26,18 @@
 #       --server-url tls+tcp://benzene.lan:7701 \
 #       --server-name benzene --server-ip 10.5.2.50 \
 #       --packages "vim htop" \
-#       --out /srv/solari-provision/images/pi-sensor-01.img \
+#       --out /srv/solari-provision/netboot/http/images/pi-sensor-01.img \
 #       [--base-img /path/or/https-url/to/raspios-lite.img[.xz]]
+#
+# IMAGE STORE: --out must be <HTTP_ROOT>/images/<name>.img. That directory is a
+# link into the NAS image store (deploy/host-configs/benzene/README.md), so the
+# store is checked with ../prov-store-guard.sh (env PROV_STORE, default
+# /srv/solari-provision/store; PROV_STORE_FSTYPE, default cifs; HTTP_ROOT,
+# default /srv/solari-provision/netboot/http) before the download AND again
+# immediately before the image is written, and the image is written to the
+# RESOLVED store path (<store>/images/<name>.img), never through the link. The
+# shared store maintenance lock is held for the whole build. PROV_STORE_FSTYPE
+# none (no mount check) is accepted only with SOLARI_PROV_LOCAL=1 (tests).
 #
 # NOTES
 #   * Requires root (loop mounts). Requires: losetup, mount, curl, and either
@@ -100,6 +110,35 @@ esac
 for tool in losetup mount umount curl; do
   command -v "$tool" >/dev/null 2>&1 || die "required tool missing: $tool"
 done
+
+# ---- the NAS image store ----------------------------------------------------
+PROV_STORE="${PROV_STORE:-/srv/solari-provision/store}"
+PROV_STORE_FSTYPE="${PROV_STORE_FSTYPE:-cifs}"
+HTTP_ROOT="${HTTP_ROOT:-/srv/solari-provision/netboot/http}"
+for v in "${PROV_STORE}" "${HTTP_ROOT}"; do
+  [[ "$v" =~ ^/[A-Za-z0-9._/-]+$ ]] && [[ "/$v/" != */../* ]] || die "unsafe store path: $v"
+done
+[[ "${PROV_STORE_FSTYPE}" =~ ^[a-z0-9.]{1,16}$ ]] || die "unsafe PROV_STORE_FSTYPE: ${PROV_STORE_FSTYPE}"
+if [ "${PROV_STORE_FSTYPE}" = none ] && [ "${SOLARI_PROV_LOCAL:-}" != "1" ]; then
+  die "PROV_STORE_FSTYPE=none is only allowed under SOLARI_PROV_LOCAL=1"
+fi
+OUT_NAME="${OUT##*/}"
+{ [ "${OUT}" = "${HTTP_ROOT}/images/${OUT_NAME}" ] && [[ "${OUT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.img$ ]]; } \
+  || die "--out must be ${HTTP_ROOT}/images/<name>.img (the image is written into the NAS image store)"
+STORE_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/prov-store-guard.sh"
+[ -r "${STORE_GUARD}" ] || die "missing ${STORE_GUARD} (fleet-image.sh ships it beside pi/)"
+# shellcheck source=../prov-store-guard.sh
+. "${STORE_GUARD}"
+# require_store_out: (re)check the store and set OUT_REAL, the image's path at
+# the RESOLVED store location. Runs in this shell, so the shared maintenance
+# lock (fd 7) stays held until the script exits.
+OUT_REAL=""
+require_store_out() {
+  prov_store check "${PROV_STORE}" "${PROV_STORE_FSTYPE}" "${HTTP_ROOT}" images \
+    || die "provisioning image store check failed (see the [store] line above); refusing to write ${OUT_NAME}"
+  OUT_REAL="${PROV_STORE_REAL}/images/${OUT_NAME}"
+}
+require_store_out          # before minutes of download: fail fast
 
 # ---- teardown trap ----------------------------------------------------------
 # These globals are populated as we set things up; the trap uses them to unwind
@@ -179,18 +218,21 @@ truncate -s +1G "${RAW_IMG}"
 # =============================================================================
 # 3. copy to the output path, then loop-mount THE COPY
 # =============================================================================
-# We do all edits on ${OUT} so a failure never corrupts a cached base image.
-mkdir -p "$(dirname "${OUT}")"
-log "writing output image ${OUT}"
-cp -f "${RAW_IMG}" "${OUT}"
+# We do all edits on the copy so a failure never corrupts a cached base image.
+# Re-check the store immediately before writing GBs: the check above is minutes
+# old, and HTTP_ROOT/images may have been replaced by a real directory (local
+# disk) meanwhile. From here on only OUT_REAL (inside the store) is used.
+require_store_out
+log "writing output image ${OUT} (store path ${OUT_REAL})"
+cp -f "${RAW_IMG}" "${OUT_REAL}"
 
 # ---- loop-mount (RISKY: creates a block device backed by the file) ---------
 # losetup -P scans the partition table and creates ${LOOPDEV}p1 (boot, FAT32)
 # and ${LOOPDEV}p2 (root, ext4). --show prints the device we grabbed so we only
 # ever act on OUR loop device, never a host disk.
-log "attaching loop device for ${OUT}"
-LOOPDEV="$(losetup --find --partscan --show "${OUT}")"
-[ -n "${LOOPDEV}" ] || die "losetup failed to attach ${OUT}"
+log "attaching loop device for ${OUT_REAL}"
+LOOPDEV="$(losetup --find --partscan --show "${OUT_REAL}")"
+[ -n "${LOOPDEV}" ] || die "losetup failed to attach ${OUT_REAL}"
 log "loop device: ${LOOPDEV}"
 
 # Wait for the kernel to create the partition nodes (udev can lag).
