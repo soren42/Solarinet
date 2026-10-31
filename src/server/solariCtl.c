@@ -887,6 +887,17 @@ static solariStatus ctlSpawnHelper(serverCtl *ctl, const char *helper,
         logOut[0] = '\0';
         return ERR_PLATFORM;
     }
+    /* The dashboard reads these logs via its solari-ctl membership, not the
+     * server's primary group: hand the file to socketGid (0 = unset, skip). */
+    if ((ctl->socketGid != 0 && fchown(fd, (uid_t)-1, (gid_t)ctl->socketGid) != 0)
+        || fchmod(fd, 0640) != 0) {
+        solariLogf(SOLARI_LOG_ERROR, "ctl: cannot set group/mode on helper log %s: %s",
+                   logOut, strerror(errno));
+        close(fd);
+        (void)snprintf(why, whyCap, "helper log not writable: %s", logName);
+        logOut[0] = '\0';
+        return ERR_PLATFORM;
+    }
     argv[0] = exe;
 #if defined(SOLARI_CTL_TEST_SPAWN)
     st = ctlTestSpawn(argv, logOut);

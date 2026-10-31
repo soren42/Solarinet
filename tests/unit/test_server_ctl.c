@@ -1576,6 +1576,31 @@ static void test_unwritable_log_dir_fails_loudly(void)
     }
 }
 
+/* Helper logs are handed to the ctl socket group (the dashboard reads them via
+ * solari-ctl membership, not the server's primary group) at mode 0640. */
+static void test_helper_log_group_is_socket_gid(void)
+{
+    serverCtl ctl;
+    char line[128], reply[512], log[512];
+    struct stat sb;
+    gid_t groups[64];
+    int n = getgroups(64, groups), i;
+    gid_t want = getegid();
+    for (i = 0; i < n; i++)                       /* prefer a non-primary group */
+        if (groups[i] != getegid()) { want = groups[i]; break; }
+    memset(&ctl, 0, sizeof ctl);
+    ctl_use_fixture(&ctl);
+    ctl.socketGid = (uint32_t)want;
+    snprintf(line, sizeof line, "IMAGE_REFRESH image=9 op=alice");
+    gSpawnCalls = 0;
+    (void)ctlHandleLine(&ctl, line, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, strncmp(reply, "OK ", 3), reply);
+    snprintf(log, sizeof log, "%s/image-refresh-9.log", gLogDir);
+    TEST_ASSERT_EQUAL_INT(0, stat(log, &sb));
+    TEST_ASSERT_EQUAL_UINT((unsigned)want, (unsigned)sb.st_gid);
+    TEST_ASSERT_EQUAL_UINT(0640u, (unsigned)(sb.st_mode & 07777));
+}
+
 static void test_unconfigured_helper_root_fails_loudly(void)
 {
     serverCtl ctl;
@@ -1664,6 +1689,7 @@ int main(void)
     RUN_TEST(test_missing_helper_fails_loudly);
     RUN_TEST(test_unwritable_log_dir_fails_loudly);
     RUN_TEST(test_unconfigured_helper_root_fails_loudly);
+    RUN_TEST(test_helper_log_group_is_socket_gid);
     RUN_TEST(test_queued_verb_with_missing_helper_fails_row);
     rc = UNITY_END();
     fixture_teardown();
