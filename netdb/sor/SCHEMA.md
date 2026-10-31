@@ -261,6 +261,9 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 | 30 | `audit_log` | Append-only who/what/when/old→new change history |
 | — | `v_dns_hosts` / `v_dns_ifaces` / `v_dns_cnames` | Renderer-facing views matching the YAML shapes |
 
+The inventory above is `schema.sql`. Migration-owned tables are listed with
+their migration: RackWire in §7, provisioning images and stacks (029) in §8.
+
 ## 6. Conventions
 
 - PKs: unsigned auto-increment surrogates; big tables use `BIGINT UNSIGNED`.
@@ -352,3 +355,69 @@ migrations 024–028
 is documented in §14 of the [Provisioning Plan](../../docs/SolariNet_Provisioning_Plan.html)
 and its [PDF](../../docs/SolariNet_Provisioning_Plan.pdf); the manual SQL is
 kept under `rollback/`, outside the forward migration stream.
+
+## 8. Provisioning images and stacks (`migrations/029_provisioning_images_stacks.sql`)
+
+Migration 029 adds the catalog behind the dashboard's Images and Stacks
+screens and the fleet stack generator (`deploy/fleet/stackgen.py`). It is
+authored but **not applied to the live SoR**. Manual rollback:
+[`rollback/029-down.sql`](rollback/029-down.sql). It refuses unless the
+tables hold nothing but the untouched seed.
+
+| Table | Purpose |
+|---|---|
+| `prov_images` | Installable OS images. Each row is one real distro × release × arch (`release_name`; `RELEASE` is reserved). It records `boot_method` (`ipxe` / `pi_netboot` / `media`), source and checksum URLs, fetch state (`version`, `sha256`, `fetched_at`), `install_template`, `refresh_policy` and `netboot_verified`. One live row per `(distro, release_name, arch)`. CHECKs enforce hex sha256 and that `pi_netboot` is arm-only. |
+| `prov_stacks` | Named, ordered bundles of install steps (`slug`, `name`, `description`, `locked`, `sort_order`). `core` is locked and always rendered first. |
+| `prov_stack_items` | One install step: `item_type` ∈ `pkg`, `repo`, `artifact`, `script`, `build`, `role`. Columns: per-family names (`name_suse` / `name_debian` / `name_fedora`), optional `applies_families` / `applies_arches` SETs (NULL = all), `version_pin`, `repo_ref` (pkg → repo item), `ansible_role`, `item_order` override and `sort_order`. The type-specific shape lives in a `spec` JSON object. One live row per `(stack_id, logical_name)`. |
+| `prov_stack_artifacts` | Per-arch download for an `artifact` item: `url` and `sha256` (arch `any` is allowed). |
+| `prov_stack_deps` | Stack → stack dependency edges. A CHECK rejects self-dependency; cycles are rejected by the generator. |
+| `prov_runs` | Append-only audit of reimage/apply requests. Request columns are immutable (trigger), and a terminal status is final. A run can never return to `queued`, and rows cannot be deleted. `mode='reimage'` requires `image_id`; `stack_slugs` must be a JSON array. |
+
+Family-name convention for `prov_stack_items`:
+
+- On `pkg` items the column holds the real package name for that family. NULL means the item is unsupported on that family, and rendering it there is a hard error unless `applies_families` excludes the family.
+- On non-`pkg` items the column must be `'='` (supported) or NULL.
+
+Other CHECKs on `prov_stack_items`:
+
+- `spec` must be NULL on `pkg` and `role` items.
+- A `script` item must give either an inline `body` or a remote `url` together with its `sha256`.
+- A `build` item needs `source` and `system`, plus `version_pin`.
+- An `artifact` item needs `version_pin`.
+- A `role` item needs `ansible_role`.
+
+The generator adds further hard errors on top of these:
+
+- an unmapped package
+- a missing per-arch artifact or sha256
+- a tarball without sha256
+- a git ref that is a branch name
+- a secret-looking env name
+- a dependency cycle
+- an unknown stack slug
+
+Within a stack, default step order is repo → pkg → artifact → build → script →
+role (`item_order` overrides it). Build dependencies are logical package names,
+resolved through the family map and installed before the build.
+
+`functions` is unchanged. `functions.package_bundle` MAY name a `prov_stacks`
+slug; nothing enforces that link yet.
+
+No CDC triggers are attached, because nothing consumes these tables yet. The
+dashboard API (P3+) writes them directly, and an outbox binding can follow
+when a consumer exists.
+
+The seed is inserted once and never resurrected; a soft-deleted seed row stays
+deleted on re-run:
+
+- `core`: the 19 `solari_core_packages` from
+  `deploy/fleet/ansible/group_vars/all.yml`, mapped through `solari_pkg_map`.
+- `dev-tools`: the existing role, plus a powerlevel10k tag pin script.
+- Six images, including openSUSE Tumbleweed x86_64 over iPXE. No checksums or
+  versions are seeded.
+
+Tests:
+
+- `tests/netdb/test_prov_images_stacks.sh` runs on a scratch DB. It covers constraints, triggers, seed-once, `stackgen --from-db` against the fixture, and rollback with forward recovery.
+- `tests/deploy/test_stackgen.py` covers the generator, including the golden comparison of core against `all.yml`.
+- `tests/deploy/test_stack_items_ansible.sh` runs the Ansible role locally.

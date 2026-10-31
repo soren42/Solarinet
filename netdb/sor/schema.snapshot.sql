@@ -16,6 +16,7 @@
 --   026_unifi_network_cdc sha256=1c6c092d08783729c506edb8ae41dd22f0bb21b19d299b124ce4822b174901dc
 --   027_interconnect_cable_details sha256=0ed1ed961fe13366195191a2038df5468f8ca75f5865a6b8963e0b72d07bb0e3
 --   028_entity_unit_association sha256=35f30382d3bede4cb98165b2bd61d77c96da5bea873a6a984f7faf497b4760db
+--   029_provisioning_images_stacks sha256=146ea58d0edfeb0723e3611444367fa4493644be146cd056edd8717b7df2e44d
 
 /*M!999999\- enable the sandbox mode */
 
@@ -1541,6 +1542,246 @@ CREATE TABLE `projects` (
   CONSTRAINT `fk_project_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_project_tray` FOREIGN KEY (`tray_location_id`) REFERENCES `locations` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_images`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_images` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `distro` varchar(32) NOT NULL COMMENT 'distro handle as used by fetch-images.sh: opensuse, debian, ubuntu, fedora, raspios',
+  `family` enum('suse','debian','fedora') NOT NULL COMMENT 'package family; selects prov_stack_items.name_<family>',
+  `release_name` varchar(48) NOT NULL COMMENT 'release handle, e.g. 12, 13, tumbleweed, 15.6, 24.04, bookworm',
+  `release_label` varchar(96) DEFAULT NULL COMMENT 'operator-facing release label, e.g. 12 (bookworm)',
+  `arch` enum('x86_64','arm64','armhf','riscv64','i386') NOT NULL COMMENT 'CPU architecture',
+  `boot_method` enum('ipxe','pi_netboot','media') NOT NULL COMMENT 'ipxe = netboot via benzene iPXE; pi_netboot = Pi-native network boot; media = write image to card/disk',
+  `source_url` varchar(512) DEFAULT NULL COMMENT 'upstream location of the kernel+initrd directory or image',
+  `checksum_url` varchar(512) DEFAULT NULL COMMENT 'upstream checksum list (e.g. SHA256SUMS); NULL = none known',
+  `version` varchar(64) DEFAULT NULL COMMENT 'upstream version/build id last fetched; NULL = never fetched',
+  `sha256` char(64) DEFAULT NULL COMMENT 'sha256 of the fetched artifact; NULL = never fetched/verified',
+  `fetched_at` datetime DEFAULT NULL COMMENT 'when the artifact was last fetched; NULL = never',
+  `install_template` varchar(128) DEFAULT NULL COMMENT 'unattended-install template under deploy/fleet/netboot/configs/; NULL = image-based',
+  `refresh_policy` enum('manual','weekly','point_release') NOT NULL DEFAULT 'manual' COMMENT 'when IMAGE_REFRESH should re-fetch',
+  `netboot_verified` tinyint(1) NOT NULL DEFAULT 0 COMMENT '1 = a real install from this row has been observed end to end',
+  `notes` varchar(255) DEFAULT NULL COMMENT 'free-form operator note',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_images_live` (`distro`,`release_name`,`arch`,`live_flag`),
+  KEY `ix_prov_images_family_arch` (`family`,`arch`),
+  KEY `ix_prov_images_source` (`source_id`),
+  CONSTRAINT `fk_prov_images_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `ck_prov_images_verified` CHECK (`netboot_verified` in (0,1)),
+  CONSTRAINT `ck_prov_images_sha256` CHECK (`sha256` is null or `sha256` regexp '^[0-9a-f]{64}$'),
+  CONSTRAINT `ck_prov_images_pi_arch` CHECK (`boot_method` <> 'pi_netboot' or `arch` in ('arm64','armhf')),
+  CONSTRAINT `ck_prov_images_slug` CHECK (`distro` regexp '^[a-z0-9][a-z0-9-]*$')
+) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Installable OS images: real distro x release x arch rows with boot method and fetch state';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_runs`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_runs` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `mode` enum('reimage','apply') NOT NULL COMMENT 'reimage = wipe + install + stacks at first boot; apply = Ansible over SSH, no reinstall',
+  `entity_id` bigint(20) unsigned NOT NULL COMMENT 'FK: target machine',
+  `image_id` int(10) unsigned DEFAULT NULL COMMENT 'FK: image installed (reimage only; NULL for apply)',
+  `stack_slugs` longtext NOT NULL COMMENT 'JSON array: ordered dependency-closed stack slugs actually run',
+  `requested_by` varchar(128) NOT NULL COMMENT 'operator principal that pressed Deploy',
+  `status` enum('queued','running','succeeded','failed','cancelled') NOT NULL DEFAULT 'queued' COMMENT 'lifecycle; succeeded/failed/cancelled are terminal',
+  `dry_run` tinyint(1) NOT NULL DEFAULT 0 COMMENT '1 = diff only, nothing changed on the target',
+  `detail` varchar(255) DEFAULT NULL COMMENT 'short outcome / error summary',
+  `requested_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'when the run was requested',
+  `started_at` datetime DEFAULT NULL COMMENT 'when execution began',
+  `finished_at` datetime DEFAULT NULL COMMENT 'when the run reached a terminal status',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  PRIMARY KEY (`id`),
+  KEY `ix_prov_runs_entity` (`entity_id`,`requested_at`),
+  KEY `ix_prov_runs_image` (`image_id`),
+  KEY `ix_prov_runs_status` (`status`),
+  KEY `ix_prov_runs_source` (`source_id`),
+  CONSTRAINT `fk_prov_runs_entity` FOREIGN KEY (`entity_id`) REFERENCES `entities` (`id`),
+  CONSTRAINT `fk_prov_runs_image` FOREIGN KEY (`image_id`) REFERENCES `prov_images` (`id`),
+  CONSTRAINT `fk_prov_runs_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `ck_prov_runs_json` CHECK (json_valid(`stack_slugs`) and json_type(`stack_slugs`) = 'ARRAY'),
+  CONSTRAINT `ck_prov_runs_image` CHECK (`mode` = 'reimage' = (`image_id` is not null)),
+  CONSTRAINT `ck_prov_runs_dry` CHECK (`dry_run` in (0,1))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Audit log of provisioning runs; request columns immutable, terminal status final, no deletes';
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_prov_runs_bu`
+BEFORE UPDATE ON `prov_runs` FOR EACH ROW
+BEGIN
+  IF NOT (OLD.mode <=> NEW.mode AND OLD.entity_id <=> NEW.entity_id
+          AND OLD.image_id <=> NEW.image_id AND OLD.stack_slugs <=> NEW.stack_slugs
+          AND OLD.requested_by <=> NEW.requested_by AND OLD.dry_run <=> NEW.dry_run
+          AND OLD.requested_at <=> NEW.requested_at AND OLD.source_id <=> NEW.source_id
+          AND OLD.created_at <=> NEW.created_at) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'prov_runs request columns are immutable';
+  END IF;
+  IF OLD.status IN ('succeeded','failed','cancelled') THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'prov_runs terminal status is final';
+  END IF;
+  IF NEW.status = 'queued' AND OLD.status <> 'queued' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'prov_runs status cannot return to queued';
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_prov_runs_bd`
+BEFORE DELETE ON `prov_runs` FOR EACH ROW
+BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'prov_runs is an audit log; rows are never deleted';
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+DROP TABLE IF EXISTS `prov_stack_artifacts`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_stack_artifacts` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `item_id` int(10) unsigned NOT NULL COMMENT 'FK: the artifact stack item',
+  `arch` enum('any','x86_64','arm64','armhf','riscv64','i386') NOT NULL COMMENT 'target arch; any = arch-independent',
+  `url` varchar(512) NOT NULL COMMENT 'download URL for this arch at the item''s version_pin',
+  `sha256` char(64) DEFAULT NULL COMMENT 'expected sha256 of the download; NULL = not yet recorded (render is a hard error)',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_stack_artifacts_live` (`item_id`,`arch`,`live_flag`),
+  KEY `ix_prov_stack_artifacts_source` (`source_id`),
+  CONSTRAINT `fk_prov_stack_artifacts_item` FOREIGN KEY (`item_id`) REFERENCES `prov_stack_items` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_prov_stack_artifacts_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `ck_prov_stack_artifacts_sha256` CHECK (`sha256` is null or `sha256` regexp '^[0-9a-f]{64}$')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Per-arch download URL + sha256 for artifact stack items (any = arch-independent)';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_stack_deps`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_stack_deps` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `stack_id` int(10) unsigned NOT NULL COMMENT 'FK: the dependent stack',
+  `depends_on_stack_id` int(10) unsigned NOT NULL COMMENT 'FK: the stack it requires (applied earlier)',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_stack_deps_live` (`stack_id`,`depends_on_stack_id`,`live_flag`),
+  KEY `ix_prov_stack_deps_on` (`depends_on_stack_id`),
+  KEY `ix_prov_stack_deps_source` (`source_id`),
+  CONSTRAINT `fk_prov_stack_deps_on` FOREIGN KEY (`depends_on_stack_id`) REFERENCES `prov_stacks` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_prov_stack_deps_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `fk_prov_stack_deps_stack` FOREIGN KEY (`stack_id`) REFERENCES `prov_stacks` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `ck_prov_stack_deps_self` CHECK (`stack_id` <> `depends_on_stack_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Stack dependency edges; self-dependency rejected, cycles rejected by the generator';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_stack_items`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_stack_items` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `stack_id` int(10) unsigned NOT NULL COMMENT 'FK: owning stack',
+  `logical_name` varchar(96) NOT NULL COMMENT 'arch/distro-independent item name, e.g. netcat, docker-ce repo',
+  `item_type` enum('pkg','repo','artifact','script','build','role') NOT NULL DEFAULT 'pkg' COMMENT 'pkg | repo | artifact | script | build | role (see migration header)',
+  `name_suse` varchar(128) DEFAULT NULL COMMENT 'pkg: real openSUSE name; other types: = when supported; NULL = unsupported',
+  `name_debian` varchar(128) DEFAULT NULL COMMENT 'pkg: real Debian/Ubuntu name; other types: = when supported; NULL = unsupported',
+  `name_fedora` varchar(128) DEFAULT NULL COMMENT 'pkg: real Fedora name; other types: = when supported; NULL = unsupported',
+  `applies_families` set('suse','debian','fedora') DEFAULT NULL COMMENT 'families this item applies to; NULL = all; non-applicable targets skip it',
+  `applies_arches` set('x86_64','arm64','armhf','riscv64','i386') DEFAULT NULL COMMENT 'arches this item applies to; NULL = all; non-applicable targets skip it',
+  `ansible_role` varchar(64) DEFAULT NULL COMMENT 'role items only: Ansible role under deploy/fleet/ansible/roles',
+  `repo_ref` varchar(96) DEFAULT NULL COMMENT 'pkg items only: logical_name of a repo item that must be applied first',
+  `source_url` varchar(512) DEFAULT NULL COMMENT 'informational project/release home',
+  `version_pin` varchar(64) DEFAULT NULL COMMENT 'pinned version / git ref; required for artifact and build; compared by script/build version_check',
+  `spec` longtext DEFAULT NULL COMMENT 'per-type JSON object (repo/script/build required, artifact optional, pkg/role none); validated by stackgen.py',
+  `item_order` smallint(5) unsigned DEFAULT NULL COMMENT 'explicit position within the stack; NULL = type default (repo 100 .. role 600)',
+  `sort_order` smallint(5) unsigned NOT NULL DEFAULT 100 COMMENT 'tie-break within the same position (lower first, then logical_name)',
+  `notes` varchar(255) DEFAULT NULL COMMENT 'free-form operator note',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_stack_items_live` (`stack_id`,`logical_name`,`live_flag`),
+  KEY `ix_prov_stack_items_type` (`item_type`),
+  KEY `ix_prov_stack_items_source` (`source_id`),
+  CONSTRAINT `fk_prov_stack_items_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `fk_prov_stack_items_stack` FOREIGN KEY (`stack_id`) REFERENCES `prov_stacks` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `ck_prov_stack_items_role` CHECK (`item_type` = 'role' = (`ansible_role` is not null)),
+  CONSTRAINT `ck_prov_stack_items_repo_ref` CHECK (`repo_ref` is null or `item_type` = 'pkg'),
+  CONSTRAINT `ck_prov_stack_items_pin` CHECK (`item_type` not in ('artifact','build') or `version_pin` is not null),
+  CONSTRAINT `ck_prov_stack_items_suse` CHECK (`name_suse` is null or `item_type` = 'pkg' = (`name_suse` <> '=' and `name_suse` <> '')),
+  CONSTRAINT `ck_prov_stack_items_debian` CHECK (`name_debian` is null or `item_type` = 'pkg' = (`name_debian` <> '=' and `name_debian` <> '')),
+  CONSTRAINT `ck_prov_stack_items_fedora` CHECK (`name_fedora` is null or `item_type` = 'pkg' = (`name_fedora` <> '=' and `name_fedora` <> '')),
+  CONSTRAINT `ck_prov_stack_items_spec` CHECK (`spec` is null or json_valid(`spec`) and json_type(`spec`) = 'OBJECT'),
+  CONSTRAINT `ck_prov_stack_items_spec_req` CHECK (case `item_type` when 'pkg' then `spec` is null when 'role' then `spec` is null when 'artifact' then 1 else `spec` is not null end),
+  CONSTRAINT `ck_prov_stack_items_script` CHECK (`item_type` <> 'script' or json_exists(`spec`,'$.body') and !json_exists(`spec`,'$.url') or json_exists(`spec`,'$.url') and json_exists(`spec`,'$.sha256') and !json_exists(`spec`,'$.body')),
+  CONSTRAINT `ck_prov_stack_items_build` CHECK (`item_type` <> 'build' or json_exists(`spec`,'$.source') and json_exists(`spec`,'$.system'))
+) ENGINE=InnoDB AUTO_INCREMENT=34 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Logical stack items: pkg/repo/artifact/script/build/role, per-family names, per-type JSON spec';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `prov_stacks`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `prov_stacks` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `slug` varchar(48) NOT NULL COMMENT 'stable handle, e.g. core, web, ai; unique among live rows',
+  `name` varchar(96) NOT NULL COMMENT 'operator-facing name',
+  `description` varchar(255) DEFAULT NULL COMMENT 'what the stack provides',
+  `locked` tinyint(1) NOT NULL DEFAULT 0 COMMENT '1 = always included and ordered first (Core)',
+  `sort_order` smallint(5) unsigned NOT NULL DEFAULT 100 COMMENT 'stable tie-break within dependency order (lower first)',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED COMMENT 'soft-delete-aware unique helper',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_prov_stacks_slug_live` (`slug`,`live_flag`),
+  KEY `ix_prov_stacks_source` (`source_id`),
+  CONSTRAINT `fk_prov_stacks_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
+  CONSTRAINT `ck_prov_stacks_locked` CHECK (`locked` in (0,1)),
+  CONSTRAINT `ck_prov_stacks_slug` CHECK (`slug` regexp '^[a-z0-9][a-z0-9-]*$')
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Named arch-independent software stacks; locked = always included (Core)';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `receipts`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
