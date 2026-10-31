@@ -18,6 +18,7 @@
 --   028_entity_unit_association sha256=35f30382d3bede4cb98165b2bd61d77c96da5bea873a6a984f7faf497b4760db
 --   029_provisioning_images_stacks sha256=9a728c89089100963c81ce7cff7f4c6b611c74921b6d7cdde5d10859cc48001f
 --   030_provisioning_cdc sha256=ef9686d459c230ae7a05aa704ca59debef5f6c36204b35b46e684ba92a52ec6f
+--   031_provisioning_arch_refresh sha256=bc46d8210e86b02268bc44a634115d7bcd4a55f7f9a883a151e152c59a58ce6e
 
 /*M!999999\- enable the sandbox mode */
 
@@ -968,6 +969,7 @@ CREATE TABLE `hardware_models` (
   `make` varchar(128) NOT NULL COMMENT 'manufacturer, e.g. Ubiquiti, Dell, Raspberry Pi',
   `model` varchar(128) NOT NULL COMMENT 'product model, e.g. U7 Pro, PowerEdge R410, CM5',
   `hw_type` enum('server','workstation','sbc','nas','router','switch','ap','printer','scanner','iot','appliance','console','media','vehicle','tablet','phone','kvm','sensor','camera','ups','moca','other') NOT NULL DEFAULT 'other' COMMENT 'coarse device class for filtering and dashboard icons',
+  `arch` enum('x86_64','arm64','armhf','riscv64','i386') DEFAULT NULL COMMENT 'CPU architecture (prov_images.arch vocabulary); NULL = unknown. First arch source for reimage targets',
   `notes` text DEFAULT NULL COMMENT 'free-form notes (spec links, quirks)',
   `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
@@ -1641,9 +1643,9 @@ DROP TABLE IF EXISTS `prov_runs`;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `prov_runs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
-  `mode` enum('reimage','apply') NOT NULL COMMENT 'reimage = wipe + install + stacks at first boot; apply = Ansible over SSH, no reinstall',
-  `entity_id` bigint(20) unsigned NOT NULL COMMENT 'FK: target machine',
-  `image_id` int(10) unsigned DEFAULT NULL COMMENT 'FK: image installed (reimage only; NULL for apply)',
+  `mode` enum('reimage','apply','refresh') NOT NULL COMMENT 'reimage = wipe + install + stacks at first boot; apply = Ansible over SSH, no reinstall; refresh = IMAGE_REFRESH of one image',
+  `entity_id` bigint(20) unsigned DEFAULT NULL COMMENT 'FK: target machine (reimage/apply); NULL for refresh',
+  `image_id` int(10) unsigned DEFAULT NULL COMMENT 'FK: image installed (reimage) or refreshed (refresh); NULL for apply',
   `stack_slugs` longtext NOT NULL COMMENT 'JSON array: ordered dependency-closed stack slugs actually run',
   `requested_by` varchar(128) NOT NULL COMMENT 'operator principal that pressed Deploy',
   `status` enum('queued','running','succeeded','failed','cancelled') NOT NULL DEFAULT 'queued' COMMENT 'lifecycle; succeeded/failed/cancelled are terminal',
@@ -1665,8 +1667,8 @@ CREATE TABLE `prov_runs` (
   CONSTRAINT `fk_prov_runs_image` FOREIGN KEY (`image_id`) REFERENCES `prov_images` (`id`),
   CONSTRAINT `fk_prov_runs_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
   CONSTRAINT `ck_prov_runs_json` CHECK (json_valid(`stack_slugs`) and json_type(`stack_slugs`) = 'ARRAY'),
-  CONSTRAINT `ck_prov_runs_image` CHECK (`mode` = 'reimage' = (`image_id` is not null)),
-  CONSTRAINT `ck_prov_runs_dry` CHECK (`dry_run` in (0,1))
+  CONSTRAINT `ck_prov_runs_dry` CHECK (`dry_run` in (0,1)),
+  CONSTRAINT `ck_prov_runs_shape` CHECK (`mode` = 'reimage' and `entity_id` is not null and `image_id` is not null or `mode` = 'apply' and `entity_id` is not null and `image_id` is null or `mode` = 'refresh' and `entity_id` is null and `image_id` is not null)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Audit log of provisioning runs; request columns immutable, terminal status final, no deletes';
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!50003 SET @saved_cs_client      = @@character_set_client */ ;
