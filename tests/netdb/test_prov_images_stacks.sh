@@ -496,6 +496,26 @@ q "UPDATE prov_images SET source_id=$SRC, updated_at=created_at WHERE release_na
 q "INSERT INTO prov_stack_members (stack_id,software_id,source_id) VALUES ((SELECT id FROM prov_stacks WHERE slug='dev-tools'),$(SW git),$SRC)"
 refused "an extra member row" prov_stack_members
 q "DELETE m FROM prov_stack_members m JOIN prov_stacks s ON s.id=m.stack_id WHERE s.slug='dev-tools' AND m.software_id=$(SW git)"
+# NULL shift: moving a value into a neighbouring NULL column serialized identically
+# under bare CONCAT_WS(QUOTE()) (NULLs skipped); the 'NULL' marker must catch it.
+q "UPDATE prov_images SET version=install_template, install_template=NULL, updated_at=created_at WHERE release_name='tumbleweed'"
+refused "a value shifted into a neighbouring NULL column" prov_images
+q "UPDATE prov_images SET install_template=version, version=NULL, updated_at=created_at WHERE release_name='tumbleweed'"
+# Truncation: the guard sets a 16 MiB group_concat_max_len that the seed never
+# approaches, so shrink it in a copy to prove a truncated digest input is refused.
+sed 's/group_concat_max_len = 16777216/group_concat_max_len = 64/' "$SOR/rollback/029-down.sql" > "$TMP_A"
+grep -q 'group_concat_max_len = 64;' "$TMP_A" || die "truncation copy not patched"
+# Strict sql_mode turns the cut into ER 1260; a non-strict session only warns,
+# which is what the explicit length guard is for. Procedures keep the sql_mode
+# they were created under, so the prefix decides which path runs.
+for mode in strict lax; do
+  if [ "$mode" = strict ]; then want="cut by group_concat"; pre=""; else want="seed digest input truncated"; pre="SET SESSION sql_mode='';"; fi
+  if { echo "$pre"; cat "$TMP_A"; } | "${ADMIN[@]}" "$DB" >/dev/null 2>"$TMP_B"; then die "rollback accepted a truncated digest input ($mode)"; fi
+  grep -q "$want" "$TMP_B" || { cat "$TMP_B" >&2; die "truncation ($mode) refused for another reason"; }
+  eq "rollback refuses a truncated digest input ($mode sql_mode, tables kept)" \
+     "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'prov\\_%'" 9
+  q "DROP PROCEDURE IF EXISTS _solarinet_rollback_m029_assert_seed_only; DROP PROCEDURE IF EXISTS _solarinet_rollback_m029_seed_digests"
+done
 
 # The header's recompute command must reproduce the constants in the file.
 { sed '/^-- RECOMPUTE STOP/q' "$SOR/rollback/029-down.sql"
