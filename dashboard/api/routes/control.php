@@ -204,44 +204,6 @@ return static function (Router $router): void {
         ]);
     });
 
-    // --- GET /api/control/fleet-catalog ----------------------------------
-    // Read-only reference data for the provisioning UI (distros, arches, roles,
-    // profiles, the shared core package stack, netboot staging status). Served
-    // from a local JSON file with an inline fallback so the UI always renders.
-    $router->get('/api/control/fleet-catalog', static function (): void {
-        $cat = null;
-        $candidates = array_filter([
-            getenv('SOLARI_FLEET_CATALOG') ?: null,
-            __DIR__ . '/../fleet-catalog.json',
-            dirname(getenv('SOLARI_CTL_SOCK') ?: '') . '/../deploy/fleet/catalog.json',
-        ]);
-        foreach ($candidates as $f) {
-            if ($f && is_readable($f)) {
-                $j = json_decode((string) file_get_contents($f), true);
-                if (is_array($j)) { $cat = $j; break; }
-            }
-        }
-        if ($cat === null) {
-            $cat = [
-                'distros' => [
-                    ['id' => 'debian',   'label' => 'Debian 12',        'arches' => ['x86_64', 'arm64', 'arm32'], 'install' => 'preseed'],
-                    ['id' => 'ubuntu',   'label' => 'Ubuntu 24.04',     'arches' => ['x86_64', 'arm64'],          'install' => 'autoinstall'],
-                    ['id' => 'opensuse', 'label' => 'openSUSE Leap 15', 'arches' => ['x86_64', 'arm64'],          'install' => 'autoyast'],
-                    ['id' => 'raspios',  'label' => 'Raspberry Pi OS',  'arches' => ['arm64', 'arm32'],           'install' => 'image'],
-                ],
-                'arches'  => [
-                    ['id' => 'x86_64', 'label' => 'x86 (64-bit)'],
-                    ['id' => 'arm64',  'label' => 'ARM64'],
-                    ['id' => 'arm32',  'label' => 'ARM32 (Pi)'],
-                ],
-                'roles'    => [['id' => 'sensor', 'label' => 'Sensor / client'], ['id' => 'edge', 'label' => 'Edge node'], ['id' => 'appliance', 'label' => 'Appliance']],
-                'profiles' => [['id' => 'standard', 'label' => 'Standard stack'], ['id' => 'minimal', 'label' => 'Minimal']],
-                'netboot'  => ['httpBase' => 'http://benzene.akoria.net:8080', 'liveStatus' => 'staged'],
-            ];
-        }
-        Response::ok($cat);
-    });
-
     // --- POST /api/control/provision -------------------------------------
     // body: { target:"MAC|host", distro, arch, hostname, profile?, role?, server?, ip? }
     // Stages a bare-metal OS install via the C bridge (FLEET_PROVISION -> detaches
