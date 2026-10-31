@@ -29,10 +29,14 @@ from db_config import database_options
 CONF = os.environ.get("SORSYNC_CONF",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "sorsync.conf"))
 _run = True
-# CDC tables with no applier bound today (migrations 024, 026). Override in
-# config. test_every_cdc_table_is_bound_or_optional keeps this list complete.
+# CDC tables with no applier bound today (migrations 024, 026, 030). Override
+# in config. test_every_cdc_table_is_bound_or_optional keeps this list complete.
+# Deploy this list BEFORE applying migration 030 (see its header).
 DEFAULT_OPTIONAL_TABLES = ("sources,functions,entity_functions,function_incompatibility,"
-                           "vlans,dhcp_ranges,external_refs")
+                           "vlans,dhcp_ranges,external_refs,"
+                           "prov_images,prov_software,prov_software_artifacts,"
+                           "prov_software_requires,prov_software_conflicts,prov_stacks,"
+                           "prov_stack_members,prov_stack_deps,prov_runs")
 
 
 def log(msg):

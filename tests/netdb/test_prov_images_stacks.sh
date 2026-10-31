@@ -119,8 +119,8 @@ eq "nine prov_* tables, exactly" "SELECT GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_
    "prov_images,prov_runs,prov_software,prov_software_artifacts,prov_software_conflicts,prov_software_requires,prov_stacks,prov_stack_deps,prov_stack_members"
 eq "no repo_ref column (dependencies are requires edges)" \
    "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'prov\\_%' AND COLUMN_NAME='repo_ref'" 0
-eq "prov_runs guard triggers" "SELECT GROUP_CONCAT(TRIGGER_NAME ORDER BY TRIGGER_NAME) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE LIKE 'prov\\_%'" "trg_prov_runs_bd,trg_prov_runs_bu"
-eq "no CDC on prov_* (no consumer yet)" "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND ACTION_STATEMENT LIKE '%prov\\_%' AND ACTION_STATEMENT LIKE '%sor_outbox%'" 0
+eq "prov_runs guard triggers" "SELECT GROUP_CONCAT(TRIGGER_NAME ORDER BY TRIGGER_NAME) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE LIKE 'prov\\_%' AND TRIGGER_NAME LIKE 'trg\\_prov\\_runs\\_b%'" "trg_prov_runs_bd,trg_prov_runs_bu"
+eq "prov_* CDC triggers come from 030 (9 tables x ai/au/ad)" "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND ACTION_STATEMENT LIKE '%prov\\_%' AND ACTION_STATEMENT LIKE '%sor_outbox%'" 27
 eq "functions table untouched by 029" "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='functions' AND COLUMN_NAME LIKE 'prov%'" 0
 seed_counts "after double apply"
 
