@@ -152,8 +152,13 @@ try {
     check(httpRequest($base.'/api/inventory/models/999999999','PUT',['arch'=>'arm64'],$cookie,$csrf)['status']===404,'model PUT on a missing model was not 404');
     $archStmt=$db->prepare('SELECT arch FROM hardware_models WHERE id=?');
     $archStmt->execute([$ids['model']]); check($archStmt->fetchColumn()===null,'rejected model PUTs changed arch');
-    $put=httpRequest($base.$mpath,'PUT',['arch'=>'arm64','notes'=>'HTTP fixture arch'],$cookie,$csrf);
-    check($put['status']===200&&($put['body']['data']['arch']??null)==='arm64'&&($put['body']['data']['notes']??null)==='HTTP fixture arch','model PUT arch=arm64 failed');
+    // Arch-only: the hardened grant is column-scoped to arch + provenance.
+    foreach ([['arch'=>'arm64','notes'=>'x'],['make'=>'Other'],['hw_type'=>'server']] as $bad) check(httpRequest($base.$mpath,'PUT',$bad,$cookie,$csrf)['status']===400,'model PUT accepted a non-arch field');
+    $archStmt->execute([$ids['model']]); check($archStmt->fetchColumn()===null,'rejected non-arch model PUT changed arch');
+    $put=httpRequest($base.$mpath,'PUT',['arch'=>'arm64'],$cookie,$csrf);
+    check($put['status']===200&&($put['body']['data']['arch']??null)==='arm64','model PUT arch=arm64 failed');
+    $prov=$db->prepare('SELECT source_id, asserted_kind FROM hardware_models WHERE id=?'); $prov->execute([$ids['model']]); [$psrc,$pkind]=$prov->fetch(PDO::FETCH_NUM);
+    check((int)$psrc!==$manual&&$pkind==='human','model PUT did not re-assert dashboard human provenance');
     $archStmt->execute([$ids['model']]); check($archStmt->fetchColumn()==='arm64','model PUT did not persist arch');
     $one=httpRequest($base.$mpath,'GET',null,$viewerCookie); check(($one['body']['data']['arch']??null)==='arm64','model GET does not expose arch');
     $clr=httpRequest($base.$mpath,'PUT',['arch'=>''],$cookie,$csrf);

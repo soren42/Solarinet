@@ -342,7 +342,7 @@
     invEntityLink: function (id) { return "/api/inventory/components/" + encodeURIComponent(id) + "/entity-link"; },
     invUnit:      function (id) { return "/api/inventory/units/" + encodeURIComponent(id); },   // POST update
     invModels:    "/api/inventory/models",   // GET list / POST create
-    invModel:     function (id) { return "/api/inventory/models/" + encodeURIComponent(id); },  // PUT update
+    invModel:     function (id) { return "/api/inventory/models/" + encodeURIComponent(id); },  // PUT {arch} only
     invLocations: "/api/inventory/locations",// GET tree / POST create
     invFlatLocations: "/api/inventory/locations?flat=1", // paginated flat location list
     invReceipts:  "/api/inventory/receipts", // GET list / POST create (multipart scan upload)

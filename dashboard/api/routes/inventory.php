@@ -487,6 +487,10 @@ return static function (Router $router): void {
     });
 
     // arch (031) is what provisioning trusts first for a target's CPU arch.
+    // Deliberately arch-only: the hardened grant is column-scoped to
+    // UPDATE (arch, source_id, asserted_kind, asserted_at) on hardware_models
+    // (deploy/dashboard/hardened/sor-dashboard-grants.sql), and each edit
+    // re-asserts provenance as a human dashboard assertion, like the POST.
     $router->add('PUT', '/api/inventory/models/{id}', static function (array $p): void {
         Operator::requireOperator();
         $id = Inv::idParam($p['id']);
@@ -494,33 +498,16 @@ return static function (Router $router): void {
             Response::error('not_found', "No hardware model $id", 404);
         }
         $b = solari_json_body();
-
-        $sets   = [];
-        $params = [':id' => $id];
-        foreach (['make', 'model'] as $k) {
-            if (array_key_exists($k, $b)) {
-                $v = inv_str($b, $k, 128);
-                if ($v === null) {
-                    Response::error('bad_request', "$k cannot be cleared.", 400);
-                }
-                $sets[] = "$k = :$k"; $params[":$k"] = $v;
-            }
-        }
-        if (array_key_exists('hw_type', $b)) {
-            $sets[] = 'hw_type = :t';
-            $params[':t'] = Inv::requireEnum('hardware_models', 'hw_type', $b['hw_type'], 'hw_type');
-        }
-        if (array_key_exists('arch', $b)) {
-            $sets[] = 'arch = :arch'; $params[':arch'] = inv_model_arch($b);
-        }
-        if (array_key_exists('notes', $b)) {
-            $sets[] = 'notes = :notes'; $params[':notes'] = inv_str($b, 'notes');
-        }
-        if ($sets === []) {
-            Response::error('bad_request', 'No updatable fields supplied.', 400);
+        if (!array_key_exists('arch', $b) || array_diff(array_keys($b), ['arch']) !== []) {
+            Response::error('bad_request', 'Only arch can be updated on a hardware model.', 400);
         }
 
-        Inv::exec('UPDATE hardware_models SET ' . implode(', ', $sets) . ' WHERE id = :id', $params);   // dup make+model => 409
+        Inv::exec(
+            "UPDATE hardware_models
+                SET arch = :arch, source_id = :src, asserted_kind = 'human', asserted_at = NOW()
+              WHERE id = :id",
+            [':arch' => inv_model_arch($b), ':src' => Sor::dashboardSourceId(), ':id' => $id]
+        );
         Response::ok(inv_model_row(Inv::row(inv_model_sql() . ' WHERE id = :i', [':i' => $id])));
     });
 
