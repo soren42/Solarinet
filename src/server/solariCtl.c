@@ -603,6 +603,17 @@ static ctlPeerClass ctlClassifyPeer(uint32_t peerUid, uint32_t operatorUid,
     return CTL_PEER_UNKNOWN;
 }
 
+/* Legacy (enforcePeer=false) classification. Without an explicit dashboard uid
+ * every non-operator peer is treated as a dashboard: it keeps ordinary verbs and
+ * REQUEST_SUBMIT but is refused PRIVILEGED verbs, so an un-hardened deployment
+ * still cannot reach host-side helpers except through the queue. root and the
+ * operator uid (default: the server's own euid) keep full access. Pure. */
+static ctlPeerClass ctlClassifyPeerLegacy(uint32_t peerUid, uint32_t operatorUid)
+{
+    if (peerUid == 0 || peerUid == operatorUid) return CTL_PEER_OPERATOR;
+    return CTL_PEER_DASHBOARD;
+}
+
 /* The authorization matrix. Default-deny: an unknown peer gets nothing, and the
  * dashboard is refused every privileged verb even when it supplies op=. Pure. */
 static bool ctlPeerMayInvoke(ctlPeerClass peer, ctlVerbClass vc)
@@ -925,8 +936,8 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
      * enforced BEFORE the op= RBAC gate so a privileged verb from the dashboard
      * peer is refused regardless of what op= it claims. The dashboard must route
      * privileged verbs through REQUEST_SUBMIT; an unknown peer gets nothing. When
-     * enforcePeer is off, ctlServiceOne sets peerClass=OPERATOR and this is a
-     * no-op (legacy behaviour preserved). */
+     * enforcePeer is off, ctlServiceOne still refuses PRIVILEGED verbs to any
+     * peer other than root / the operator uid (ctlClassifyPeerLegacy). */
     {
         ctlVerbClass vc = ctlVerbPrivClass(verb);
         if (!ctlPeerMayInvoke(peerClass, vc)) {
@@ -2183,7 +2194,7 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
     size_t  replyLen;
     ssize_t got;
     int     cfd;
-    ctlPeerClass peerClass = CTL_PEER_OPERATOR;  /* legacy default when !enforce */
+    ctlPeerClass peerClass = CTL_PEER_UNKNOWN;   /* set from SO_PEERCRED below */
     uint32_t     peerUid   = (uint32_t)geteuid();
 
     cfd = accept(ctl->listenFd, NULL, NULL);
@@ -2198,9 +2209,9 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
 
     /* Peer credentials (Task #1). Read the connecting process's uid via
      * SO_PEERCRED — a kernel-supplied identity the caller cannot forge — and
-     * classify it. When enforcement is off we keep the legacy behaviour (every
-     * peer treated as operator) but still record the uid for audit. When it is
-     * on, a getsockopt failure fails CLOSED (UNKNOWN → refused). */
+     * classify it. When enforcement is off, only root and the operator uid are
+     * operators; any other uid is a dashboard peer (no PRIVILEGED verbs). A
+     * getsockopt failure fails CLOSED: UNKNOWN when enforcing, dashboard when not. */
     {
         struct ucred cred;
         socklen_t    credLen = (socklen_t)sizeof cred;
@@ -2208,11 +2219,11 @@ static solariStatus ctlServiceOne(serverCtl *ctl)
             peerUid = (uint32_t)cred.uid;
             peerClass = ctl->enforcePeer
                 ? ctlClassifyPeer(peerUid, ctl->operatorUid, ctl->dashboardUid)
-                : CTL_PEER_OPERATOR;
+                : ctlClassifyPeerLegacy(peerUid, ctl->operatorUid);
         } else {
             solariLogf(SOLARI_LOG_WARN, "ctl: SO_PEERCRED failed: %s",
                        strerror(errno));
-            peerClass = ctl->enforcePeer ? CTL_PEER_UNKNOWN : CTL_PEER_OPERATOR;
+            peerClass = ctl->enforcePeer ? CTL_PEER_UNKNOWN : CTL_PEER_DASHBOARD;
         }
     }
 

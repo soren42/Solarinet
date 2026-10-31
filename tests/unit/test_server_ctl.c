@@ -755,6 +755,27 @@ static void test_classify_peer(void)
     TEST_ASSERT_EQUAL_INT(CTL_PEER_OPERATOR, ctlClassifyPeer(0, opUid, 0));
 }
 
+/* enforcePeer=false must still keep PHP off the host: only root and the
+ * operator uid are OPERATOR; every other uid is a DASHBOARD peer, which is
+ * refused the privileged provisioning verbs but may still REQUEST_SUBMIT. */
+static void test_classify_peer_legacy_fails_closed(void)
+{
+    const uint32_t opUid = 1000;
+    const char *const priv[] = { "IMAGE_REFRESH", "PROV_STAGE", "STACK_APPLY" };
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_OPERATOR,  ctlClassifyPeerLegacy(0, opUid));
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_OPERATOR,  ctlClassifyPeerLegacy(opUid, opUid));
+    TEST_ASSERT_EQUAL_INT(CTL_PEER_DASHBOARD, ctlClassifyPeerLegacy(33, opUid));
+    for (size_t i = 0; i < sizeof priv / sizeof priv[0]; i++) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(CTL_VC_PRIVILEGED, ctlVerbPrivClass(priv[i]), priv[i]);
+        TEST_ASSERT_FALSE_MESSAGE(ctlPeerMayInvoke(ctlClassifyPeerLegacy(33, opUid),
+                                                   ctlVerbPrivClass(priv[i])), priv[i]);
+        TEST_ASSERT_TRUE_MESSAGE(ctlPeerMayInvoke(ctlClassifyPeerLegacy(opUid, opUid),
+                                                  ctlVerbPrivClass(priv[i])), priv[i]);
+    }
+    TEST_ASSERT_TRUE(ctlPeerMayInvoke(ctlClassifyPeerLegacy(33, opUid),
+                                      ctlVerbPrivClass("REQUEST_SUBMIT")));
+}
+
 /* Task #1 — the authorization matrix. OPERATOR may invoke anything; DASHBOARD
  * everything except PRIVILEGED; UNKNOWN nothing at all. This is the core of the
  * boundary: PHP (DASHBOARD) is refused every privileged verb even with op=. */
@@ -1311,6 +1332,7 @@ int main(void)
     RUN_TEST(test_ping_advertises_inline_decommission);
     RUN_TEST(test_queued_decommission_confirms_without_persisting_token);
     RUN_TEST(test_classify_peer);
+    RUN_TEST(test_classify_peer_legacy_fails_closed);
     RUN_TEST(test_peer_may_invoke);
     RUN_TEST(test_pool_delete_guard);
     RUN_TEST(test_reply_format);
