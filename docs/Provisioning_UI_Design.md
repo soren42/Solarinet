@@ -111,6 +111,14 @@ phase, provided each one passes cross-lab review and the plan is followed. P6
 is announced before the wipe but does not wait for a further go. A material
 deviation from this plan goes back to the operator.
 
+## 4a. Deferred (operator, 2026-10-31)
+
+- **Containers (Podman Quadlet) as a stack item type.** Stretch goal, taken up
+  once P1–P7 are finalized. Until then a container is deployed via a `role`.
+- **Language package managers** (pipx / cargo / npm -g / go install). No
+  dedicated type; the operator avoids them. Use a `script` item with a `creates`
+  guard when one is unavoidable.
+
 ## 5. Open questions
 
 - Fedora vs Fedora CoreOS (item 4).
