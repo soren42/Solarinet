@@ -167,6 +167,21 @@ The lock does not cover a netboot client that is mid-install and reading from
 the web root, so that part is still on you. Run the migrate inside tmux,
 since copying a few GB to the NAS takes a while.
 
+Two gaps are closed by procedure, not code (Lead decision, cross-lab review
+of e53341a). Nothing starts an image writer on a timer: they run only when
+someone triggers them from the dashboard. So:
+
+- **Install the release that carries the guard first, then migrate.** Helpers
+  from an older release don't take the maintenance lock. Once the new
+  release is active, no lock-unaware writer is left, and every writer
+  refuses until the migrate has swapped in the links.
+- **A NAS that stalls after the first check can hang the migrate.** Only the
+  first touch and `findmnt` are time-limited; later disk-usage, traversal
+  and copy calls are not. Swaps happen only after every file has been read
+  back and verified, so a hang loses nothing. Interrupt it (Ctrl-C, or kill
+  it from another shell), wait for the NAS, and re-run: copies that already
+  match are skipped.
+
 ```sh
 scp deploy/fleet/prov-store-migrate.py benzene:/tmp/
 ssh benzene
