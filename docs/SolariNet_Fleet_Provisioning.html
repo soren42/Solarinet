@@ -106,10 +106,13 @@
   <h3>Option A — proxyDHCP on benzene (self-contained, reversible)</h3>
   <p>A dedicated dnsmasq in <em>proxy</em> mode answers only PXE boot requests; it never hands out IP leases, so
      it does not conflict with the gateway's DHCP.</p>
-  <pre># first, fetch the netboot installer kernels (one-time, ~minutes):
-deploy/fleet/fetch-images.sh --distro all --arch x86_64
-
-# then flip PXE live on benzene:
+  <p>First make sure every installer you intend to boot is <b>fetched and verified</b>: run the operator-gated <code>IMAGE_REFRESH</code> verb for each iPXE image row
+     (<code>POST /api/provisioning/image-refresh {"image": &lt;id&gt;}</code>; a dashboard control lands with a later
+     provisioning phase). It downloads
+     the kernel/initrd on benzene, checks every sha256 against the upstream checksum source, writes
+     <code>solari-image.json</code>, and regenerates <code>boot.ipxe</code>. <code>fetch-images.sh</code> is now only
+     the internal worker of that verb — it has no built-in URL list and no <code>--distro all</code> mode.</p>
+  <pre># then flip PXE live on benzene:
 /srv/solari-provision/staging/go-live.sh          # enable + open firewall
 /srv/solari-provision/staging/go-live.sh --off    # fully reverse it</pre>
 
@@ -132,6 +135,9 @@ deploy/fleet/fetch-images.sh --distro all --arch x86_64
   <ul>
     <li>Dashboard → Provisioning → <b>Provision a new system</b> → "OS install", pick distro/arch/role, enter the
         target's <b>MAC</b> and a hostname → <b>Stage install</b>.</li>
+    <li>The installer image for that distro/release/arch must already be fetched + verified
+        (<code>IMAGE_REFRESH</code>, above). <code>FLEET_PROVISION</code> <b>refuses</b> to stage a MAC against an unfetched image and
+        stages nothing; refresh the image, then stage again.</li>
     <li>The machine auto-installs unattended on its next network boot (per-MAC iPXE profile), runs the common
         package stack, and enrolls into SolariNet. An un-staged machine is never touched (the per-MAC chain 404s
         and it boots local disk).</li>
@@ -161,7 +167,8 @@ deploy/fleet/fetch-images.sh --distro all --arch x86_64
   <ul>
     <li><b>Flip PXE live</b> Saturday via the runbook, then boot a real target to validate an unattended install
         end-to-end (only the final bare-metal wipe step is untested — it needs real hardware set to netboot).</li>
-    <li><b>fetch-images.sh</b> URLs (esp. Ubuntu 24.04 netboot) may need adjusting as releases move.</li>
+    <li>Installer source/checksum URLs live on each <code>prov_images</code> row and may need adjusting as releases move; a failed checksum makes <code>IMAGE_REFRESH</code> refuse, leaving
+        the previous image in place.</li>
     <li>arm64 <em>non-Pi</em> netboot installers, and arm32/mips static agent builds, are future work
         (see the heterogeneous-client roadmap).</li>
     <li>Enrollment auto-delivery hardening (one-time token) as noted above.</li>
