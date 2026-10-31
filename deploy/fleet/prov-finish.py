@@ -164,6 +164,34 @@ def step(conn, run_id: int, detail: str) -> None:
     conn.commit()
 
 
+def gated(conn, run_id: int, detail: str, launch):
+    """step() whose check and the launch of a target command are one operation.
+
+    The run's row lock is held from the status check until `launch(on_spawn)`
+    has started its child process (remote_run calls on_spawn, which commits).
+    A cancel (prov-stage supersede, advance_run) therefore either lands first
+    and this raises Superseded with nothing launched, or waits for the lock
+    and lands after the step is in flight — that step then completes and the
+    next gate stops the run."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM prov_runs WHERE id=%s FOR UPDATE", (run_id,))
+        row = cur.fetchone()
+        if not row or row["status"] != "running":
+            conn.rollback()
+            raise Superseded(f"run is {row['status'] if row else 'gone'}")
+        cur.execute("UPDATE prov_runs SET detail=%s WHERE id=%s", (detail[:255], run_id))
+    committed = []
+
+    def on_spawn() -> None:
+        conn.commit()
+        committed.append(True)
+    try:
+        return launch(on_spawn)
+    finally:
+        if not committed:       # never launched: release the row lock
+            conn.rollback()
+
+
 def finish(conn, run_id: int, status: str, detail: str) -> None:
     try:
         conn.rollback()
@@ -260,11 +288,11 @@ def ssh_env(kh: str, *, pinned: bool) -> tuple[str, ...]:
 
 
 def raw(ctx: Ctx, rec: dict, cmd: str, env: tuple[str, ...], *, become: bool,
-        timeout: int):
+        timeout: int, on_spawn=None):
     argv = ["env", "-C", ctx.ansible_dir, *env, f"ANSIBLE_BECOME={'True' if become else 'False'}",
             "ANSIBLE_LOAD_CALLBACK_PLUGINS=0", "ansible", "all", "-i", f"{rec['fqdn']},",
             "-u", rec["admin_user"], "-m", "ansible.builtin.raw", "-a", cmd]
-    return provlib.remote_run(argv, check=False, timeout=timeout)
+    return provlib.remote_run(argv, check=False, timeout=timeout, on_spawn=on_spawn)
 
 
 def read_marker(ctx: Ctx, rec: dict, kh: str) -> int | None:
@@ -302,8 +330,8 @@ def complete(conn, ctx: Ctx, rec: dict, run_id: int, kh: str, suffix: str) -> No
     """Install detected: un-stage, bootstrap, verify, check + apply. Raises Retry.
 
     `suffix` (" (attempt n of N)") is in every progress detail, so a crash
-    mid-way still counts this attempt. step() re-checks the run is still
-    running before every target-side effect (Superseded otherwise); a MAC
+    mid-way still counts this attempt. gated() re-checks the run is still
+    running as it launches every target-side command (Superseded otherwise); a MAC
     lock timeout propagates as MacBusy (not an attempt)."""
     step(conn, run_id, DETAIL_APPLYING + suffix)
     try:
@@ -318,27 +346,28 @@ def complete(conn, ctx: Ctx, rec: dict, run_id: int, kh: str, suffix: str) -> No
     log(f"run {run_id}: install detected on {rec['fqdn']}; boot profile "
         + ("removed" if word == "done" else "already removed"))
     pinned = ssh_env(kh, pinned=True)
-    step(conn, run_id, "installed; bootstrapping python3" + suffix)
-    proc = raw(ctx, rec, _PYTHON_SH, pinned, become=True, timeout=BOOTSTRAP_TIMEOUT)
+    proc = gated(conn, run_id, "installed; bootstrapping python3" + suffix,
+                 lambda spawned: raw(ctx, rec, _PYTHON_SH, pinned, become=True,
+                                     timeout=BOOTSTRAP_TIMEOUT, on_spawn=spawned))
     if proc.returncode != 0:
         raise Retry(f"python3 bootstrap failed: {stack_apply._err_tail(proc)}")
-    step(conn, run_id, "installed; checking facts" + suffix)
     try:
-        fam, arch = stack_apply.map_facts(*stack_apply.probe_facts(
-            ctx.ansible_dir, rec["fqdn"], user=rec["admin_user"], extra_env=pinned))
+        fam, arch = stack_apply.map_facts(*gated(
+            conn, run_id, "installed; checking facts" + suffix,
+            lambda spawned: stack_apply.probe_facts(
+                ctx.ansible_dir, rec["fqdn"], user=rec["admin_user"], extra_env=pinned,
+                on_spawn=spawned)))
     except ProvError as exc:
         raise Retry(str(exc)) from None
     if (fam, arch) != (rec["family"], rec["arch"]):
         raise Retry(f"installed system reports {fam}/{arch}, expected {rec['family']}/{rec['arch']}")
     vars_path = f"{ctx.runs}/reimage-{run_id}.stack.json"
-    step(conn, run_id, "installed; check pass" + suffix)
-    if not stack_apply.playbook(ctx.ansible_dir, rec["fqdn"], vars_path, True,
-                                user=rec["admin_user"], extra_env=pinned):
-        raise Retry("stack check pass failed")
-    step(conn, run_id, "installed; apply pass" + suffix)
-    if not stack_apply.playbook(ctx.ansible_dir, rec["fqdn"], vars_path, False,
-                                user=rec["admin_user"], extra_env=pinned):
-        raise Retry("stack apply pass failed")
+    for check, what in ((True, "check"), (False, "apply")):
+        if not gated(conn, run_id, f"installed; {what} pass" + suffix,
+                     lambda spawned: stack_apply.playbook(
+                         ctx.ansible_dir, rec["fqdn"], vars_path, check,
+                         user=rec["admin_user"], extra_env=pinned, on_spawn=spawned)):
+            raise Retry(f"stack {what} pass failed")
 
 
 def process(conn, ctx: Ctx, row: dict, *, install_timeout: int, attempts: int) -> str:
@@ -464,6 +493,11 @@ def main(argv: list[str] | None = None) -> int:
             sweep_armed(conn, ctx)
         except Exception as exc:  # noqa: BLE001 — retried every tick
             log(f"sweep: error: {exc}")
+            rc = 1
+        try:
+            stack_apply.reap_orphaned_applies(conn)
+        except Exception as exc:  # noqa: BLE001 — retried every tick
+            log(f"apply reaper: error: {exc}")
             rc = 1
     finally:
         conn.close()

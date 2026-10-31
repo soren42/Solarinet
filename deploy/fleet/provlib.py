@@ -55,7 +55,7 @@ import shlex
 import stat
 import subprocess
 import sys
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 # The same rules the C validators in src/server/solariCtl.c enforce.
 ID_RE = re.compile(r"^[1-9][0-9]{0,9}$")             # unsigned decimal, no sign/zero-pad, < 10^10
@@ -329,18 +329,34 @@ def remote_env(env: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def remote_run(argv: list[str], *, input: bytes | None = None, check: bool = True,
-               timeout: float | None = None) -> subprocess.CompletedProcess:
-    """Run argv on the provisioning host (or locally under SOLARI_PROV_LOCAL=1)."""
+               timeout: float | None = None,
+               on_spawn: Callable[[], None] | None = None) -> subprocess.CompletedProcess:
+    """Run argv on the provisioning host (or locally under SOLARI_PROV_LOCAL=1).
+
+    `on_spawn` runs once the child exists and before it is waited on; if it
+    raises, the child is killed and the exception propagates. prov-finish
+    uses it to commit its run-status gate only after the step is in flight."""
     if not argv or not all(isinstance(a, str) for a in argv):
         raise ProvError("remote_run needs a non-empty list of strings")
     if os.environ.get("SOLARI_PROV_LOCAL") == "1":
         cmd = list(argv)
     else:
         cmd = ["ssh", "-o", "BatchMode=yes", remote_env()["BENZENE"], "--", shlex.join(argv)]
-    try:
-        proc = subprocess.run(cmd, input=input, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise ProvError(f"timed out: {argv[0]}") from None
+    with subprocess.Popen(cmd, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        try:
+            if on_spawn is not None:
+                on_spawn()
+            out, err = child.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.communicate()
+            raise ProvError(f"timed out: {argv[0]}") from None
+        except BaseException:
+            child.kill()
+            child.communicate()
+            raise
+    proc = subprocess.CompletedProcess(cmd, child.returncode, out, err)
     if check and proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-3:]
         raise ProvError(f"{argv[0]} failed (exit {proc.returncode}): {' | '.join(tail)}")

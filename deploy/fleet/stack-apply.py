@@ -168,7 +168,7 @@ def _login(user: str | None) -> list[str]:
 
 
 def probe_facts(ansible_dir: str, fqdn: str, *, user: str | None = None,
-                extra_env: tuple[str, ...] = ()) -> tuple[str, str]:
+                extra_env: tuple[str, ...] = (), on_spawn=None) -> tuple[str, str]:
     # ANSIBLE_LOAD_CALLBACK_PLUGINS=0 + result_format=json pin ad-hoc output to
     # the built-in `host | SUCCESS => {...}` form whatever ansible.cfg says
     # (it sets callback_result_format=yaml; the `json` callback left
@@ -179,7 +179,7 @@ def probe_facts(ansible_dir: str, fqdn: str, *, user: str | None = None,
             "ANSIBLE_CALLBACK_RESULT_FORMAT=json",
             "ansible", "all", "-i", f"{fqdn},", *_login(user), "-m", "ansible.builtin.setup",
             "-a", "filter=ansible_os_family,ansible_architecture"]
-    proc = provlib.remote_run(argv, check=False, timeout=FACT_TIMEOUT)
+    proc = provlib.remote_run(argv, check=False, timeout=FACT_TIMEOUT, on_spawn=on_spawn)
     if proc.returncode != 0:
         raise ProvError(f"fact probe of {fqdn} failed: {_err_tail(proc)}")
     return parse_facts(_out(proc))
@@ -211,7 +211,7 @@ def render_stacks(family: str, arch: str, slugs: list[str], out_path: str) -> li
 
 
 def playbook(ansible_dir: str, fqdn: str, vars_path: str, check: bool, *,
-             user: str | None = None, extra_env: tuple[str, ...] = ()) -> bool:
+             user: str | None = None, extra_env: tuple[str, ...] = (), on_spawn=None) -> bool:
     # Pin the built-in callback (ansible.cfg's choice too) so a stale cfg on
     # the control node naming the removed `yaml` callback cannot abort the run.
     argv = ["env", "-C", ansible_dir, *extra_env, "ANSIBLE_STDOUT_CALLBACK=ansible.builtin.default",
@@ -221,7 +221,7 @@ def playbook(ansible_dir: str, fqdn: str, vars_path: str, check: bool, *,
         argv += ["--check", "--diff"]
     log(("check pass: " if check else "apply pass: ")
         + " ".join(argv[argv.index("ansible-playbook") + 1:]))
-    proc = provlib.remote_run(argv, check=False,
+    proc = provlib.remote_run(argv, check=False, on_spawn=on_spawn,
                               timeout=CHECK_TIMEOUT if check else APPLY_TIMEOUT)
     sys.stdout.write(_out(proc))
     err = (proc.stderr or b"").decode("utf-8", "replace")
@@ -252,7 +252,7 @@ def _lock(conn, name: str) -> None:
         cur.execute("SELECT GET_LOCK(%s, 10) AS got", (name,))
         got = (cur.fetchone() or {}).get("got")
     if got != 1:
-        raise ProvError("another stack apply for this entity is being started")
+        raise ProvError("another stack apply for this entity is in progress")
 
 
 def _unlock(conn, name: str) -> None:
@@ -276,18 +276,20 @@ def main(argv: list[str] | None = None) -> int:
         conn = provlib.connect_sor()
     except ProvError as exc:
         return provlib.die(str(exc))
-    lock_name = f"solari-prov-apply-{entity_id}"
+    lock_name = apply_lock_name(entity_id)
     run_id = None
     try:
         with tempfile.TemporaryDirectory(prefix="stack-apply-") as tmp:
             try:
+                # Held for the whole run (released by the server if this process
+                # dies), so a `running` apply row for this entity found while we
+                # hold it belongs to a dead helper and is failed, not obeyed.
+                _lock(conn, lock_name)
+                reap_dead_applies(conn, entity_id)
                 with conn.cursor() as cur:
                     entity = load_entity(cur, entity_id)
                     check_stacks(cur, slugs)
-                    busy = active_apply_run(cur, entity_id)
                 conn.commit()
-                if busy is not None:
-                    raise ProvError(f"apply run {busy} for entity {entity_id} is still active")
                 fqdn = f"{entity['name']}.{domain}"
                 log(f"entity {entity_id} {fqdn}; stacks {','.join(slugs)}"
                     + (" (dry-run)" if dry_run else ""))
@@ -298,21 +300,17 @@ def main(argv: list[str] | None = None) -> int:
                 order = render_stacks(family, arch, slugs, vars_local)
                 log("stack order: " + ",".join(order))
 
-                # Serialise check-then-open so two concurrent applies cannot both
-                # pass the "no active run" test. GET_LOCK needs no privileges.
-                _lock(conn, lock_name)
-                try:
-                    with conn.cursor() as cur:
-                        busy = active_apply_run(cur, entity_id)
-                    conn.commit()
-                    if busy is not None:
-                        raise ProvError(f"apply run {busy} for entity {entity_id} is still active")
-                    run_id = provlib.open_run(conn, mode="apply", entity_id=entity_id,
-                                              image_id=None, stack_order=order,
-                                              requested_by=op, dry_run=dry_run,
-                                              detail="check pass")
-                finally:
-                    _unlock(conn, lock_name)
+                # The entity lock (held since the start) serialises check-then-open,
+                # so two concurrent applies cannot both pass the "no active run" test.
+                with conn.cursor() as cur:
+                    busy = active_apply_run(cur, entity_id)
+                conn.commit()
+                if busy is not None:
+                    raise ProvError(f"apply run {busy} for entity {entity_id} is still active")
+                run_id = provlib.open_run(conn, mode="apply", entity_id=entity_id,
+                                          image_id=None, stack_order=order,
+                                          requested_by=op, dry_run=dry_run,
+                                          detail="check pass")
                 log(f"opened prov_runs {run_id}")
 
                 vars_remote = f"{prov_root}/runs/apply-{run_id}.stack.json"
@@ -341,7 +339,58 @@ def main(argv: list[str] | None = None) -> int:
                     _fail(conn, run_id, f"internal error: {type(exc).__name__}")
                 raise
     finally:
+        _unlock(conn, lock_name)
         conn.close()
+
+
+def apply_lock_name(entity_id: int) -> str:
+    return f"solari-prov-apply-{int(entity_id)}"
+
+
+def reap_dead_applies(conn, entity_id: int) -> list[int]:
+    """Fail this entity's open apply runs; the caller must hold its apply lock.
+
+    Every live stack-apply holds apply_lock_name(entity) from before it opens
+    its run until it exits, and the server drops the lock with a dead
+    session, so any queued/running apply row seen under the lock is orphaned."""
+    reaped = []
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM prov_runs WHERE entity_id=%s AND mode='apply'"
+                    " AND status IN ('queued','running') ORDER BY id", (entity_id,))
+        ids = [int(r["id"]) for r in cur.fetchall()]
+    conn.commit()
+    for rid in ids:
+        try:
+            provlib.advance_run(conn, rid, "failed",
+                                "helper exited without a result (apply lock released); "
+                                "re-run the apply")
+            reaped.append(rid)
+            log(f"reaped orphaned apply run {rid} (entity {entity_id})")
+        except ProvError:       # finished meanwhile
+            conn.rollback()
+    return reaped
+
+
+def reap_orphaned_applies(conn) -> list[int]:
+    """prov-finish tick: fail open apply runs whose helper is gone (lock free)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT entity_id FROM prov_runs WHERE mode='apply'"
+                    " AND status IN ('queued','running')")
+        entities = [int(r["entity_id"]) for r in cur.fetchall()]
+    conn.commit()
+    reaped: list[int] = []
+    for eid in entities:
+        name = apply_lock_name(eid)
+        with conn.cursor() as cur:
+            cur.execute("SELECT GET_LOCK(%s, 0) AS got", (name,))
+            got = (cur.fetchone() or {}).get("got")
+        if got != 1:
+            continue            # a live stack-apply owns it
+        try:
+            reaped += reap_dead_applies(conn, eid)
+        finally:
+            _unlock(conn, name)
+    return reaped
 
 
 def _set_running_detail(conn, run_id: int, detail: str) -> None:

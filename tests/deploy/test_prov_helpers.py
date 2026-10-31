@@ -874,6 +874,42 @@ class ProvFinish(StageMixin, Base):
                                             "of 3 ended without a result)"))
         self.assertEqual(self.calls("ansible-playbook"), [])
 
+    def test_gate_holds_run_through_launch(self):
+        # gated(): the status check and the launch of the target command are
+        # one operation — a cancel cannot slip in between them
+        rid = self.staged()
+        snippet = (
+            "import sys, importlib.util; sys.path.insert(0, sys.argv[1]); import provlib\n"
+            "spec = importlib.util.spec_from_file_location('pf', sys.argv[1] + '/prov-finish.py')\n"
+            "pf = importlib.util.module_from_spec(spec); spec.loader.exec_module(pf)\n"
+            "rid = int(sys.argv[2]); conn = provlib.connect_sor(); other = provlib.connect_sor()\n"
+            "out = []\n"
+            "def cancel():\n"
+            "    try:\n"
+            "        with other.cursor() as c:\n"
+            "            c.execute('SET SESSION innodb_lock_wait_timeout=1')\n"
+            "            c.execute(\"UPDATE prov_runs SET status='cancelled', finished_at=NOW()\"\n"
+            "                      \" WHERE id=%s\", (rid,))\n"
+            "        other.commit(); return 'cancelled'\n"
+            "    except Exception:\n"
+            "        other.rollback(); return 'blocked'\n"
+            "def launch(on_spawn):\n"
+            "    out.append('pre-spawn:' + cancel())\n"
+            "    on_spawn()\n"
+            "    out.append('post-spawn:' + cancel())\n"
+            "    return 'ran'\n"
+            "out.append(pf.gated(conn, rid, 'installed; check pass', launch))\n"
+            "try:\n"
+            "    pf.gated(conn, rid, 'installed; apply pass', lambda s: out.append('LAUNCHED'))\n"
+            "except pf.Superseded:\n"
+            "    out.append('stopped')\n"
+            "print(' '.join(out))\n")
+        proc = subprocess.run([PY, "-c", snippet, FLEET, str(rid)], env=self.env,
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.stdout.strip(), "pre-spawn:blocked post-spawn:cancelled ran stopped",
+                         proc.stderr)
+        self.assertEqual(self.status(rid)[0], "cancelled")
+
     def test_unstage_waits_for_mac_lock(self):
         rid = self.staged()
         name = "solari-prov-mac-" + self.CFG.replace("-", ":")
@@ -1119,21 +1155,91 @@ class StackApply(Base):
         self.assertEqual((run["status"], run["detail"]), ("failed", "apply pass failed"))
         self.assertEqual(len(self.calls("ansible-playbook")), 2)
 
-    def test_concurrent_apply_refused(self):
-        n1 = ent("p3h-node1")
+    def hold_lock(self, name):
+        """A separate SoR session holding named lock `name`; .release() frees it."""
+        def used():
+            return admin(f"SELECT IS_USED_LOCK('{name}') IS NOT NULL", db=None).strip() == "1"
+        holder = subprocess.Popen(ADMIN + ["-N", "-B"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        holder.stdin.write(f"SELECT GET_LOCK('{name}', 10);\n")
+        holder.stdin.flush()
+        for _ in range(100):
+            if used():
+                break
+            subprocess.run(["sleep", "0.1"], check=True)
+        else:
+            holder.kill()
+            holder.wait()
+            self.fail(f"lock holder never got {name}")
+
+        def release():
+            if holder.poll() is None:
+                holder.stdin.write(f"SELECT RELEASE_LOCK('{name}');\n")
+                holder.stdin.close()
+                try:
+                    holder.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    holder.kill()
+                    holder.wait()
+            for _ in range(100):
+                if not used():
+                    return
+                subprocess.run(["sleep", "0.1"], check=True)
+            self.fail(f"{name} still held after release")
+        holder.release = release
+        self.addCleanup(release)
+        return holder
+
+    def orphan_apply(self, n1, status="running"):
         admin("INSERT INTO prov_runs (mode, entity_id, stack_slugs, requested_by, status, "
-              f"source_id) VALUES ('apply', {n1}, '[\"core\"]', 'someone', 'queued', {SRC})")
-        busy = runs(n1, "apply")[-1]
+              f"started_at, source_id) VALUES ('apply', {n1}, '[\"core\"]', 'someone', "
+              f"'{status}', NOW(), {SRC})")
+        return runs(n1, "apply")[-1]
+
+    def test_concurrent_apply_refused(self):
+        # a live stack-apply holds the entity's apply lock for its whole run
+        n1 = ent("p3h-node1")
+        busy = self.orphan_apply(n1)
+        holder = self.hold_lock(f"solari-prov-apply-{n1}")
         try:
             before = len(runs(n1))
             p = self.apply()
             self.assertEqual(p.returncode, 1)
-            self.assertIn(f"apply run {busy['id']} for entity {n1} is still active", p.stderr)
+            self.assertIn("another stack apply for this entity is in progress", p.stderr)
             self.assertEqual(len(runs(n1)), before)
             self.assertEqual(self.calls(), [])
-            # a reimage run in flight does not block an apply (different mode)
+            self.assertEqual(runs(n1, "apply")[-1]["status"], "running")   # not reaped
         finally:
-            admin(f"UPDATE prov_runs SET status='cancelled', detail='test cleanup' WHERE id={busy['id']}")
+            holder.release()
+            admin(f"UPDATE prov_runs SET status='cancelled', detail='test cleanup' "
+                  f"WHERE id={busy['id']} AND status IN ('queued','running')")
+
+    def test_orphaned_apply_is_reaped_by_next_apply(self):
+        # a helper that died left its row running; nobody holds the lock
+        n1 = ent("p3h-node1")
+        for status in ("running", "queued"):
+            with self.subTest(status=status):
+                dead = self.orphan_apply(n1, status)
+                p = self.apply()
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                st, detail = admin(f"SELECT status, detail FROM prov_runs WHERE id={dead['id']}").split("\t")
+                self.assertEqual(st, "failed")
+                self.assertIn("helper exited without a result", detail)
+                self.assertEqual(self.last_apply()["status"], "succeeded")
+
+    def test_prov_finish_reaps_orphaned_apply(self):
+        n1 = ent("p3h-node1")
+        dead = self.orphan_apply(n1)
+        holder = self.hold_lock(f"solari-prov-apply-{n1}")
+        p = self.run_helper(PROV_FINISH, "--run", "999999999")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(runs(n1, "apply")[-1]["status"], "running")      # live owner: left
+        holder.release()
+        p = self.run_helper(PROV_FINISH, "--run", "999999999")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        st = admin(f"SELECT status FROM prov_runs WHERE id={dead['id']}").strip()
+        self.assertEqual(st, "failed")
+        self.assertEqual(self.calls(), [])
 
     def test_fact_handling(self):
         n1 = ent("p3h-node1")
