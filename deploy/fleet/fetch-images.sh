@@ -10,6 +10,8 @@
 #                   --file <name> <url> <sha256>          (one or more)
 #                   [--extract <tarball> <member> <out>]  (from a fetched tarball)
 #                   [--meta <key> <value>]                (solari-image.json fields)
+#   fetch-images.sh --dest <same> --prune <current>          (commit: drop old versions)
+#   fetch-images.sh --dest <same> --rollback <previous|-> <new>  (undo a swap)
 #
 # On benzene (or locally under SOLARI_PROV_LOCAL=1, the test seam) it:
 #   1. downloads every --file into a fresh staging dir NEXT TO the image dir
@@ -22,8 +24,16 @@
 #      solari-image.json (the --meta fields + manifest_sha256 + fetched_at);
 #   5. atomically swaps the image dir: <arch> is a symlink to the staging dir,
 #      replaced with rename(2) (`mv -T`), so a booting client never sees a
-#      half-written tree; the previous version dir is then removed.
-# Prints `manifest-sha256 <hex>` on stdout (prov_images.sha256); logs to stderr.
+#      half-written tree. The previous version dir is KEPT: the caller records
+#      the SoR row and regenerates boot.ipxe first, then either commits with
+#      --prune <current> (removes every other version dir) or undoes with
+#      --rollback <previous> <new> (re-points the symlink at the previous
+#      version, or removes it when there was none, and deletes <new>). Both
+#      refuse unless the symlink still points where the caller expects.
+# Fetch prints `staged <dir>` and `previous <dir|->` before the swap, `swapped`
+# after it, and `manifest-sha256 <hex>` (prov_images.sha256) on stdout; logs
+# to stderr. Version dirs are named .<arch>.v.XXXXXXXX (.<arch>.legacy.<pid>
+# for a pre-symlink real directory moved aside).
 #
 # Every argument is validated against a strict pattern before use, and the
 # remote side is a FIXED script receiving the values as single-quoted
@@ -47,8 +57,9 @@ RE_MEMBER='^[A-Za-z0-9.][A-Za-z0-9._/-]{0,255}$'
 RE_META_KEY='^(distro|release_name|release_label|arch|version|source_url)$'
 RE_META_VAL='^([A-Za-z0-9][A-Za-z0-9 ._:/()+,~@%=-]{0,511})?$'
 RE_ROOT='^/[A-Za-z0-9._/-]+$'
+RE_VER='^\.(x86_64|arm64|armhf|riscv64|i386)\.(v\.[A-Za-z0-9]{8}|legacy\.[0-9]{1,10})$'
 
-DEST="" ; RARGS=() ; NAMES=" " ; NFILES=0
+DEST="" ; RARGS=() ; NAMES=" " ; NFILES=0 ; OP=fetch ; OPARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dest)
@@ -83,30 +94,78 @@ while [ $# -gt 0 ]; do
       [[ "$2" =~ $RE_META_KEY ]] || bad "unknown --meta key: $2"
       [[ "$3" =~ $RE_META_VAL ]] || bad "unsafe --meta value for $2"
       RARGS+=(M "$2" "$3"); shift 3 ;;
+    --prune)
+      [ $# -ge 2 ] || usage
+      [[ "$2" =~ $RE_VER ]] || bad "invalid version dir: $2"
+      OP=prune; OPARGS=("$2"); shift 2 ;;
+    --rollback)
+      [ $# -ge 3 ] || usage
+      [ "$2" = "-" ] || [[ "$2" =~ $RE_VER ]] || bad "invalid previous version dir: $2"
+      [[ "$3" =~ $RE_VER ]] || bad "invalid version dir: $3"
+      [ "$2" != "$3" ] || bad "--rollback previous and new are the same"
+      OP=rollback; OPARGS=("$2" "$3"); shift 3 ;;
     -h|--help) usage ;;
     *) bad "unknown arg: $1" ;;
   esac
 done
 [ -n "$DEST" ] || usage
-[ "$NFILES" -ge 1 ] || usage
+if [ "$OP" = fetch ]; then
+  [ "$NFILES" -ge 1 ] || usage
+else
+  [ "${#RARGS[@]}" -eq 0 ] || bad "--$OP takes no --file/--extract/--meta"
+  for v in "${OPARGS[@]}"; do
+    [ "$v" = "-" ] || [ "${v#."${DEST##*/}".}" != "$v" ] || bad "$v is not a version dir of $DEST"
+  done
+fi
 [[ "$HTTP_ROOT" =~ $RE_ROOT ]] && [[ "/$HTTP_ROOT/" != */../* ]] || bad "unsafe HTTP_ROOT: $HTTP_ROOT"
 
 PROTOS="=https,http"; [ "$LOCAL" = 1 ] && PROTOS="=https,http,file"
 
 # ---- the fixed script that runs on benzene ------------------------------------
-# argv: <http_root> <curl protos> <dest> then records: F name url sha | X tb member out | M key val
+# argv: <http_root> <curl protos> <dest> <op> then
+#   fetch:    records F name url sha | X tb member out | M key val
+#   prune:    <current>
+#   rollback: <previous|-> <new>
 # shellcheck disable=SC2016
 REMOTE_SH='set -euo pipefail
 umask 022
 log() { printf "[fetch] %s\n" "$*" >&2; }
 err() { printf "[fetch][error] %s\n" "$*" >&2; exit 1; }
-root=$1 protos=$2 dest=$3; shift 3
+root=$1 protos=$2 dest=$3 op=$4; shift 4
 final="$root/$dest"; parent="${final%/*}"; leaf="${final##*/}"
 mkdir -p -- "$parent"
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$parent/.$leaf.lock"
   flock -w 900 9 || err "another refresh of $dest holds the lock"
 fi
+current() { if [ -L "$final" ]; then readlink -- "$final"; fi; }
+if [ "$op" = prune ]; then
+  keep=$1
+  [ "$(current)" = "$keep" ] || err "$dest does not point at $keep; refusing to prune"
+  shopt -s nullglob
+  for d in "$parent/.$leaf.v."* "$parent/.$leaf.legacy."*; do
+    [ "${d##*/}" = "$keep" ] && continue
+    rm -rf -- "$d"; log "pruned ${d##*/}"
+  done
+  printf "pruned %s\n" "$keep"
+  exit 0
+fi
+if [ "$op" = rollback ]; then
+  prev=$1 new=$2
+  [ "$(current)" = "$new" ] || err "$dest does not point at $new; refusing to roll back"
+  if [ "$prev" = "-" ]; then
+    rm -f -- "$final"; log "removed $dest (there was no previous version)"
+  else
+    [ -d "$parent/$prev" ] && [ ! -L "$parent/$prev" ] || err "previous version $prev is gone"
+    ln -s -- "$prev" "$parent/.$leaf.link.$$"
+    mv -T -- "$parent/.$leaf.link.$$" "$final"
+    log "re-pointed $dest -> $prev"
+  fi
+  rm -rf -- "${parent:?}/$new"
+  printf "rolled-back %s\n" "$prev"
+  exit 0
+fi
+[ "$op" = fetch ] || err "bad op $op"
 stage="$(mktemp -d -- "$parent/.$leaf.v.XXXXXXXX")"
 trap '\''rm -rf -- "$stage"'\'' EXIT
 served=(); drop=(); meta=()
@@ -160,20 +219,26 @@ elif [ -e "$final" ]; then
   legacy="$parent/.$leaf.legacy.$$"; mv -- "$final" "$legacy"; old="${legacy##*/}"
   log "moved legacy real directory aside: $legacy"
 fi
+case "$old" in
+  "") ;;
+  */*) err "$dest points at $old, not a version dir here; fix it by hand" ;;
+  ".$leaf.v."*|".$leaf.legacy."*) [ -d "$parent/$old" ] || old="" ;;
+  *) err "$dest points at $old, not a version dir here; fix it by hand" ;;
+esac
+printf "staged %s\nprevious %s\n" "${stage##*/}" "${old:--}"
 ln -s -- "${stage##*/}" "$parent/.$leaf.link.$$"
 mv -T -- "$parent/.$leaf.link.$$" "$final"
 trap - EXIT
-case "$old" in
-  ".$leaf."*) case "$old" in */*) ;; *) rm -rf -- "${parent:?}/$old" ;; esac ;;
-esac
-log "swapped $dest -> ${stage##*/} (manifest sha256 $msha)"
+printf "swapped\n"
+log "swapped $dest -> ${stage##*/} (manifest sha256 $msha); previous ${old:--} kept until --prune"
 printf "manifest-sha256 %s\n" "$msha"'
 
 # POSIX single-quoting for the remote login shell: every value becomes one literal word.
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-ARGS=("$HTTP_ROOT" "$PROTOS" "$DEST" "${RARGS[@]}")
-flog "fetching ${DEST} ($NFILES file(s)) into ${HTTP_ROOT}"
+ARGS=("$HTTP_ROOT" "$PROTOS" "$DEST" "$OP" "${RARGS[@]+"${RARGS[@]}"}" "${OPARGS[@]+"${OPARGS[@]}"}")
+if [ "$OP" = fetch ]; then flog "fetching ${DEST} ($NFILES file(s)) into ${HTTP_ROOT}" >&2
+else flog "${OP} ${DEST} ${OPARGS[*]}" >&2; fi
 if [ "$LOCAL" = 1 ]; then
   bash -c "$REMOTE_SH" fetch-images "${ARGS[@]}"
 else

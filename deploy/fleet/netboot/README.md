@@ -142,8 +142,16 @@ installers/<distro>/<release_name>/.<arch>.v.XXXXXXXX/
   openSUSE's `CHECKSUMS` carry no build/snapshot id).
 - The swap is atomic: everything is downloaded + verified into a staging dir
   next to the target, then the `<arch>` symlink is replaced with `rename(2)`.
-  A failed or mismatched fetch leaves the previous image untouched. **nginx
-  must follow symlinks** (the default; do not set `disable_symlinks`).
+  A failed or mismatched fetch leaves the previous image untouched. The
+  previous version dir is kept after the swap until image-refresh.py has
+  updated the SoR row and regenerated `boot.ipxe`; it then commits with
+  `fetch-images.sh --prune <new>`, or — if either step failed — restores the
+  SoR row and runs `--rollback <previous|-> <new>`, so the OLD image keeps
+  serving with a matching menu and row. **nginx must follow symlinks** (the
+  default; do not set `disable_symlinks`).
+- Every IMAGE_REFRESH is a `prov_runs` row (`mode='refresh'`, `image_id` set,
+  `entity_id` NULL) that ends `succeeded` (`installed <version> …`) or
+  `failed` (reason + `old image kept` / `rollback FAILED: …`).
 - `solari-image.json` lets `fleet-provision.sh` (which has no SoR access)
   render a per-MAC profile with exactly the menu's paths.
 
