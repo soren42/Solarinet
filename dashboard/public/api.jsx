@@ -342,6 +342,7 @@
     invEntityLink: function (id) { return "/api/inventory/components/" + encodeURIComponent(id) + "/entity-link"; },
     invUnit:      function (id) { return "/api/inventory/units/" + encodeURIComponent(id); },   // POST update
     invModels:    "/api/inventory/models",   // GET list / POST create
+    invModel:     function (id) { return "/api/inventory/models/" + encodeURIComponent(id); },  // PUT update
     invLocations: "/api/inventory/locations",// GET tree / POST create
     invFlatLocations: "/api/inventory/locations?flat=1", // paginated flat location list
     invReceipts:  "/api/inventory/receipts", // GET list / POST create (multipart scan upload)
@@ -1259,6 +1260,7 @@
     updateUnit:       function (id, body) { return post(EP.invUnit(id), body || {}); },
     // models catalog (hardware_models)
     createModel:      function (body) { return post(EP.invModels, body || {}); },
+    updateModel:      function (id, body) { return getJSON(EP.invModel(id), { method: "PUT", body: body || {} }); },
     // locations (drawer/tray/bin hierarchy)
     createLocation:   function (body) { return post(EP.invLocations, body || {}); },
     // receipts — scan upload is multipart (FormData); pass a FormData for the file.
