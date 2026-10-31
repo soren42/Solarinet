@@ -8,11 +8,12 @@
   linuxrc is pointed at it via the boot.ipxe kernel arg:
       autoyast=@@HTTP_BASE@@/configs/<mac>.xml  install=@@HTTP_BASE@@/.../repo
 
-  TOKENS (see netboot/README.md manifest):
-    @@HOSTNAME@@ @@FQDN@@ @@DOMAIN@@ @@TIMEZONE@@
-    @@ADMIN_USER@@ @@ADMIN_PWHASH@@ @@SSH_PUBKEY@@
-    @@DISK@@ @@PACKAGES@@
-    @@HTTP_BASE@@ @@ARCH@@ @@SERVER_URL@@ @@SERVER_NAME@@ @@SERVER_IP@@
+  TOKENS, each NAME wrapped in double at-signs (named bare here so the renderer never
+    substitutes into this comment; see netboot/README.md):
+    HOSTNAME FQDN DOMAIN TIMEZONE
+    ADMIN_USER ADMIN_PWHASH AUTHORIZED_KEYS_XML
+    DISK PACKAGES_XML PROV_RUN_ID
+    HTTP_BASE ARCH SERVER_URL SERVER_NAME SERVER_IP
 
   Reference: https://doc.opensuse.org/projects/autoyast/
   ===========================================================================
@@ -78,9 +79,10 @@
   </partitioning>
 
   <!-- ==== software ======================================================= -->
-  <!-- base + minimal server patterns; @@PACKAGES@@ expands to <package>     -->
-  <!-- entries (the render step turns the space-separated list into lines).  -->
-  <!-- openssh/sudo/curl/ca-certificates are ensured so firstboot works.     -->
+  <!-- base + minimal server patterns plus the bootstrap packages: the      -->
+  <!-- render step emits ONE <package> element per name (openSUSE names,    -->
+  <!-- FLEET_BOOTSTRAP_PACKAGES_SUSE). Everything else (Core and the other  -->
+  <!-- stacks) is applied after first boot by prov-finish.py over SSH.      -->
   <software>
     <install_recommended config:type="boolean">false</install_recommended>
     <patterns config:type="list">
@@ -89,11 +91,7 @@
       <pattern>minimal_base</pattern>
     </patterns>
     <packages config:type="list">
-      <package>openssh</package>
-      <package>sudo</package>
-      <package>curl</package>
-      <package>ca-certificates</package>
-      <package>@@PACKAGES@@</package>
+@@PACKAGES_XML@@
     </packages>
   </software>
 
@@ -110,7 +108,9 @@
 
   <!-- ==== accounts ======================================================= -->
   <!-- root password locked-ish (set to the same hash but SSH is key-only);  -->
-  <!-- admin user gets the SSH key. Passwordless sudo is granted in the      -->
+  <!-- admin user gets the operator key and, for a PROV_STAGE install, the  -->
+  <!-- provisioning host's Ansible control key (one <listentry> each).      -->
+  <!-- Passwordless sudo is granted in the                                  -->
   <!-- post-install chroot script below. @@ADMIN_PWHASH@@ is a crypt(3) hash.-->
   <users config:type="list">
     <user>
@@ -125,7 +125,7 @@
       <home>/home/@@ADMIN_USER@@</home>
       <shell>/bin/bash</shell>
       <authorized_keys config:type="list">
-        <listentry>@@SSH_PUBKEY@@</listentry>
+@@AUTHORIZED_KEYS_XML@@
       </authorized_keys>
     </user>
   </users>
@@ -134,8 +134,10 @@
   <!-- POST-INSTALL SCRIPT (runs chrooted in the installed system)          -->
   <!-- ===================================================================== -->
   <!-- chrooted=true => runs inside the freshly installed root after the     -->
-  <!-- package install. We grant passwordless sudo, fetch solari-firstboot.sh-->
-  <!-- and run it with the SolariNet tokens as env vars.                     -->
+  <!-- package install. We grant passwordless sudo, record the PROV_STAGE   -->
+  <!-- run id as an Ansible local fact (prov-finish.py's "this install of   -->
+  <!-- run N completed" signal), ensure python3 for Ansible, then fetch     -->
+  <!-- solari-firstboot.sh and run it with the SolariNet tokens as env vars. -->
   <scripts>
     <chroot-scripts config:type="list">
       <script>
@@ -147,6 +149,18 @@ set -e
 # passwordless sudo for the admin user
 printf '@@ADMIN_USER@@ ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/010-solari-admin
 chmod 440 /etc/sudoers.d/010-solari-admin
+
+# PROV_STAGE run marker (empty for a plain FLEET_PROVISION install)
+if [ -n '@@PROV_RUN_ID@@' ]; then
+  install -d -m 0755 /etc/ansible/facts.d
+  printf '{"run_id": @@PROV_RUN_ID@@}\n' > /etc/ansible/facts.d/solari_prov.fact
+  chmod 0644 /etc/ansible/facts.d/solari_prov.fact
+fi
+
+# python3 for Ansible (a capability on Tumbleweed; prov-finish retries it)
+command -v python3 >/dev/null 2>&1 \
+  || zypper --non-interactive install --no-recommends python3 \
+  || echo 'solari: python3 not installed here; prov-finish.py will install it' >&2
 
 # fetch + run the SolariNet first-boot installer
 curl --fail --silent --show-error --location \

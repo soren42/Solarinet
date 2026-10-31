@@ -102,8 +102,10 @@
      <code>solari_pkg_map</code> translates the few names that differ between the Debian/Ubuntu and openSUSE
      families. Core set: <span class="mono-sm">sudo curl wget ca-certificates gnupg htop tmux git vim rsync jq
      unzip lsof chrony python3 net-tools openssh-server</span> + the SolariNet agent. The same list feeds the
-     netboot unattended installs (<code>@@PACKAGES@@</code>) and the Pi image build, so a machine looks the
-     same however it was provisioned. (This is the legacy <b>OS install</b> path; the Images &amp; Stacks path
+     Pi image build and legacy Debian/Ubuntu netboot installs staged without a run id; netboot installers
+     otherwise carry only a minimal per-family bootstrap set (SSH server, sudo, curl, CA certificates,
+     python3, one <code>&lt;package&gt;</code> per name on AutoYaST), and core arrives as the
+     <code>core</code> stack after first boot. (This is the legacy <b>OS install</b> path; the Images &amp; Stacks path
      takes its packages from the SoR <code>core</code> stack instead.)</p>
 
   <h2>What lives on benzene</h2>

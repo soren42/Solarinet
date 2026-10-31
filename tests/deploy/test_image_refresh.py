@@ -535,12 +535,13 @@ class FleetProvisionTests(unittest.TestCase):
         self.assertIn(f"set base {BASE}", prof)
         self.assertIn("hostname : node-7", prof)
         self.assertNotIn("@@", prof)
+        # stack vars stay operator-side (0600); never published in the web root
         pub = os.path.join(self.http, "configs", f"{self.MACH}.stack.json")
         priv = os.path.join(self.prov, "profiles", self.MACH, "stack.json")
-        for path, mode in ((pub, 0o644), (priv, 0o600)):
-            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), mode, path)
-            with open(path) as fh:
-                self.assertEqual(json.load(fh)["solari_stacks"], ["core"])
+        self.assertFalse(os.path.exists(pub), pub)
+        self.assertEqual(stat.S_IMODE(os.stat(priv).st_mode), 0o600, priv)
+        with open(priv) as fh:
+            self.assertEqual(json.load(fh)["solari_stacks"], ["core"])
         with open(os.path.join(self.prov, "profiles", self.MACH, "profile.env")) as fh:
             env = fh.read()
         self.assertIn("release=12\n", env)

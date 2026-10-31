@@ -6,11 +6,12 @@
 # debian-installer fetches it via the boot.ipxe kernel arg:
 #     preseed/url=@@HTTP_BASE@@/configs/<mac>.preseed  auto=true priority=critical
 #
-# TOKENS (see netboot/README.md manifest):
-#   @@HOSTNAME@@ @@FQDN@@ @@DOMAIN@@ @@TIMEZONE@@
-#   @@ADMIN_USER@@ @@ADMIN_PWHASH@@ @@SSH_PUBKEY@@
-#   @@DISK@@ @@PACKAGES@@
-#   @@HTTP_BASE@@ @@ARCH@@ @@SERVER_URL@@ @@SERVER_NAME@@ @@SERVER_IP@@
+# TOKENS, each NAME wrapped in double at-signs (named bare here so the renderer never
+#   substitutes into this comment; see netboot/README.md):
+#   HOSTNAME FQDN DOMAIN TIMEZONE
+#   ADMIN_USER ADMIN_PWHASH SSH_PUBKEY CONTROL_PUBKEY
+#   DISK PACKAGES PROV_RUN_ID
+#   HTTP_BASE ARCH SERVER_URL SERVER_NAME SERVER_IP
 #
 # Reference: https://www.debian.org/releases/bookworm/example-preseed.txt
 # =============================================================================
@@ -89,9 +90,11 @@ d-i grub-installer/bootdev         string @@DISK@@
 
 # ---- package selection ------------------------------------------------------
 tasksel tasksel/first              multiselect standard, ssh-server
-# @@PACKAGES@@ is a space-separated list; openssh-server/sudo/curl are ensured
-# regardless so firstboot + enrollment work.
-d-i pkgsel/include                 string openssh-server sudo curl ca-certificates @@PACKAGES@@
+# The PACKAGES token is the space-separated install set (pkgsel/include takes a
+# space-separated list): the bootstrap set openssh-server sudo curl
+# ca-certificates python3, plus FLEET_CORE_PACKAGES for a plain FLEET_PROVISION
+# install. A PROV_STAGE install gets its stacks after first boot (prov-finish).
+d-i pkgsel/include                 string @@PACKAGES@@
 d-i pkgsel/upgrade                 select safe-upgrade
 popularity-contest popularity-contest/participate boolean false
 
@@ -102,7 +105,9 @@ d-i finish-install/reboot_in_progress note
 # LATE COMMAND  (runs in /target near the end, before first reboot)
 # =============================================================================
 # Everything here runs with the installed system mounted at /target. We:
-#   1. Install the admin user's SSH key + passwordless sudo.
+#   1. Install the admin user's SSH keys (operator + provisioning-host control
+#      key) + passwordless sudo, and record the PROV_STAGE run id as the
+#      Ansible local fact prov-finish.py looks for.
 #   2. Fetch solari-firstboot.sh and run it CHROOTED with the SolariNet tokens
 #      passed as env vars, so the agent + enrollment marker are staged.
 # in-target runs a command inside the /target chroot. The '; \' continuations
@@ -110,12 +115,13 @@ d-i finish-install/reboot_in_progress note
 d-i preseed/late_command string \
     set -e ; \
     mkdir -p /target/home/@@ADMIN_USER@@/.ssh ; \
-    echo '@@SSH_PUBKEY@@' > /target/home/@@ADMIN_USER@@/.ssh/authorized_keys ; \
+    printf '%s\n' '@@SSH_PUBKEY@@' '@@CONTROL_PUBKEY@@' | sed '/^$/d' > /target/home/@@ADMIN_USER@@/.ssh/authorized_keys ; \
     in-target chown -R @@ADMIN_USER@@:@@ADMIN_USER@@ /home/@@ADMIN_USER@@/.ssh ; \
     in-target chmod 700 /home/@@ADMIN_USER@@/.ssh ; \
     in-target chmod 600 /home/@@ADMIN_USER@@/.ssh/authorized_keys ; \
     printf '@@ADMIN_USER@@ ALL=(ALL) NOPASSWD:ALL\n' > /target/etc/sudoers.d/010-solari-admin ; \
     in-target chmod 440 /etc/sudoers.d/010-solari-admin ; \
+    if [ -n '@@PROV_RUN_ID@@' ]; then mkdir -p /target/etc/ansible/facts.d ; printf '{"run_id": @@PROV_RUN_ID@@}\n' > /target/etc/ansible/facts.d/solari_prov.fact ; chmod 0644 /target/etc/ansible/facts.d/solari_prov.fact ; fi ; \
     in-target sh -c 'command -v curl >/dev/null || (apt-get update && apt-get install -y curl)' ; \
     in-target sh -c 'curl --fail --silent --show-error --location @@HTTP_BASE@@/installers/solari-firstboot.sh -o /usr/local/sbin/solari-firstboot.sh' ; \
     in-target chmod 0755 /usr/local/sbin/solari-firstboot.sh ; \
