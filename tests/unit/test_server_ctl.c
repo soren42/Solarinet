@@ -1424,7 +1424,7 @@ static void test_helper_path_primitives(void)
 
 static void test_helper_paths_resolve_defaults_and_config(void)
 {
-    char root[SERVER_PATH_MAX], logd[SERVER_PATH_MAX], link[512], real[512];
+    char root[SERVER_PATH_MAX], logd[SERVER_PATH_MAX], link[512], real[PATH_MAX];
 
     /* production defaults: root = cwd, logs beside the ctl socket */
     TEST_ASSERT_TRUE(ctlResolveHelperPaths("", "", "/run/solari/solariCtl.sock",
