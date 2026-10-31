@@ -6,7 +6,7 @@ are dispatched by solariServer's queue consumer, which execs ONE helper per
 verb with a literal argv (no shell):
 
   deploy/fleet/image-refresh.py --image <id> --op <principal>
-  deploy/fleet/prov-stage.py    --entity <id> --image <id> --stacks <a,b> --op <principal>
+  deploy/fleet/prov-stage.py    --entity <id> --image <id> --stacks <a,b> --mac <mac> --arch <arch> --op <principal>
   deploy/fleet/stack-apply.py   --entity <id> --stacks <a,b> [--dry-run] --op <principal>
 
 The C side has already validated every argument with the same rules as below;
@@ -50,12 +50,17 @@ from typing import Any, Iterable
 ID_RE = re.compile(r"^[1-9][0-9]{0,9}$")             # unsigned decimal, no sign/zero-pad, < 10^10
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")   # 029 slug CHECK, bounded to VARCHAR(48)
 PRINCIPAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+:-]{0,127}$")
+MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")     # lowercase, colon-separated
+# prov_images.arch == hardware_models.arch (031) vocabulary.
+ARCHES = ("x86_64", "arm64", "armhf", "riscv64", "i386")
 MAX_STACKS = 32
 
 DEFAULT_CNF = "/etc/solarinet/prov-sor.cnf"
 PROVISIONER_SOURCE = "provisioner"
 
 TERMINAL = frozenset({"succeeded", "failed", "cancelled"})
+# mode -> (entity required, image required); mirrors 031 ck_prov_runs_shape.
+RUN_SHAPES = {"reimage": (True, True), "apply": (True, False), "refresh": (False, True)}
 _FORWARD = {
     "queued": frozenset({"running", "failed", "cancelled"}),
     "running": frozenset({"succeeded", "failed", "cancelled"}),
@@ -91,6 +96,19 @@ def parse_stacks(value: str) -> list[str]:
     if len(out) > MAX_STACKS:
         raise ProvError(f"at most {MAX_STACKS} stacks per run")
     return out
+
+
+def parse_mac(value: str) -> str:
+    """The deploy target's MAC exactly as the C bridge passes it (lowercase a:b:..)."""
+    if not isinstance(value, str) or not MAC_RE.match(value):
+        raise ProvError("mac must be a lowercase colon-separated MAC address")
+    return value
+
+
+def parse_arch(value: str) -> str:
+    if value not in ARCHES:
+        raise ProvError(f"arch must be one of {', '.join(ARCHES)}")
+    return value
 
 
 def parse_principal(value: str) -> str:
@@ -188,14 +206,20 @@ def provisioner_source_id(cur) -> int:
     return int(row["id"])
 
 
-def open_run(conn, *, mode: str, entity_id: int, image_id: int | None,
+def open_run(conn, *, mode: str, entity_id: int | None, image_id: int | None,
              stack_order: Iterable[str], requested_by: str, dry_run: bool = False,
              detail: str | None = None) -> int:
-    """INSERT a queued prov_runs row and commit; returns its id."""
-    if mode not in ("reimage", "apply"):
+    """INSERT a queued prov_runs row and commit; returns its id.
+
+    Shapes (031 ck_prov_runs_shape): reimage = entity + image; apply = entity,
+    no image; refresh = image, no entity (stack_order empty).
+    """
+    if mode not in RUN_SHAPES:
         raise ProvError(f"invalid run mode {mode!r}")
-    if (mode == "reimage") != (image_id is not None):
-        raise ProvError("reimage runs need an image; apply runs must not name one")
+    need_entity, need_image = RUN_SHAPES[mode]
+    if (entity_id is not None) != need_entity or (image_id is not None) != need_image:
+        raise ProvError("reimage runs need an entity and an image; apply runs an entity and "
+                        "no image; refresh runs an image and no entity")
     slugs = list(stack_order)
     with conn.cursor() as cur:
         src = provisioner_source_id(cur)
