@@ -1,0 +1,103 @@
+# Provisioning UI — Images & Software Stacks (design notes)
+
+`Status: DRAFT · 2026-10-31 · owner: Jason C. Kay (PM) · scribe: Lead (Opus 5.5)`
+
+Closes the long-standing gap: netboot/PXE/TFTP and Ansible exist and are live,
+but there is no UI to warehouse, manage, maintain, and deploy OS images, and no
+frontend for composing architecture-independent software stacks.
+
+Operator sketch: `IMG_1662.png` (T3 attachment, 2026-10-31; not committed).
+
+---
+
+## 1. What already exists (observed 2026-10-31)
+
+| Piece | Location | State |
+|---|---|---|
+| Netboot | benzene 10.5.2.50 `/srv/solari-provision/` | LIVE — UniFi DHCP next-server → benzene; `solari-tftp` active, nginx :8080 active, `/ipxe/boot.ipxe` → 200; `solari-netboot` (proxyDHCP) inactive by design |
+| iPXE loaders | `deploy/fleet/netboot/build-ipxe-loaders.sh` | Chain script must be embedded (UniFi advertises one filename) |
+| Unattended installers | `deploy/fleet/netboot/configs/` | openSUSE AutoYaST, Debian preseed, Ubuntu autoinstall + `installers/solari-firstboot.sh` |
+| Per-host boot profile | `deploy/fleet/netboot/ipxe/mac-profile.ipxe.tmpl` | MAC-keyed |
+| Ansible | `deploy/fleet/ansible/` | Roles: `base-os`, `common-stack`, `dev-tools` (zsh/p10k/starship), `directory-join`, `shared-home`, `solarinet-client`; single package list in `group_vars/all.yml` |
+| Bridge | `deploy/fleet/fleet-provision.sh`, `dashboard/api/routes/provisioning.php` | Operator-gated `FLEET_PROVISION` / `FLEET_IMAGE` |
+| UI | Provisioning screen | Only a "Provision a new system" panel |
+| Never exercised | — | A real bare-metal wipe + install |
+
+## 2. Operator sketch (as drawn)
+
+- **Two panels.** *Images* (left) and *Software* (right); empty header band on top.
+- **Images.** Accordion by distro: Debian, SUSE, Fedora Core, Ubuntu. Each distro
+  expands to arch rows (ARM, x86-64, x86-32, RISC-V). Every row has
+  **deploy / edit / update / delete**.
+- **Software.** Stacks (Core, Web, AI) with a checkbox each, plus **edit / delete**.
+- **Implied flow (inferred).** Tick stacks, then press deploy on an image row.
+
+## 3. Agreed revisions (operator approved 2026-10-31)
+
+1. **Target selector in the header band.** Pick a machine from SoR inventory.
+   - It shows the machine's MAC and arch (from its hardware model).
+   - Image rows whose arch doesn't match grey out.
+   - A single **Deploy** sends *target + image + checked stacks*.
+   - Reason: page-global checkboxes leave it unclear what a deploy includes.
+2. **Stacks apply to existing machines; one Deploy for the whole batch.**
+   - A mode toggle on the target chooses **Reimage** (wipe + install, then
+     stacks at first boot) or **Apply stacks only** (Ansible over SSH, no
+     reinstall). Applying to live machines is the main value of Ansible here.
+   - Several stacks are ticked at once and pushed as **one ordered run**.
+     Dependencies are pulled in automatically, Core is always first, and the
+     run order is shown before you confirm.
+   - The Software pane has **no per-stack action buttons** beyond edit and
+     delete. A single **Deploy** in the sticky bottom bar sends
+     *target + image (reimage mode) + all selected stacks*.
+     (Revised 2026-10-31 per operator; supersedes per-stack "Apply to target".)
+3. **Release level between distro and arch.**
+   - Examples: Debian 12 vs 13; Tumbleweed vs Leap.
+   - Each arch row shows version, fetched-at date, and checksum status.
+   - **Update** = re-fetch from upstream. Stale images are visibly flagged.
+4. **Show only real distro × arch combinations, and label how each boots.**
+   - Boot methods: iPXE / Pi-native netboot / write-to-media.
+   - Split **ARM** into `arm64` / `armhf`; Pis do not use the iPXE path.
+   - **x86-32**: mostly empty upstream. Recent Debian, Ubuntu and Fedora dropped
+     i386/i686 installers (*inferred; verify per release before building the row*).
+   - **RISC-V**: Debian 13 riscv64 is an official port. Netboot on actual
+     hardware is *UNVERIFIED*.
+   - **"Fedora Core" → "Fedora".** Fedora CoreOS is a different, immutable
+     product that installs via Ignition. Pick one explicitly.
+5. **Stack editor is where arch-independence comes from.**
+   - A stack is a list of *logical* packages, with a per-distro name map wherever
+     names differ (e.g. SUSE `apache2` + `php8` vs Debian `apache2` + `php`).
+   - **Upstream installs** are a first-class item type, with a pinned version and
+     per-arch artifacts. Examples: AI CLIs, T3 Code, powerlevel10k.
+   - Stacks may depend on others (AI → Core).
+   - **Core is always included** (locked on).
+   - Stacks are stored as data in the SoR. The backend renders them to Ansible
+     vars; YAML is never edited in the browser. This replaces the single
+     `group_vars/all.yml` list.
+6. **Safety.**
+   - Delete requires confirmation.
+   - Deploy and apply are audit-logged.
+   - Both use the same operator gate as the existing provisioning panel.
+
+## 4. Phase plan (scoped 2026-10-31)
+
+Mockup: `docs/mockups/provisioning-images-stacks.html` (static, sample data,
+no network calls). Open it in a browser and click through it before P1 starts.
+
+| Phase | Deliverable | Exit check |
+|---|---|---|
+| **P1 · Data** | SoR migration 029+: `prov_image` (distro, release, arch, boot method, source URL, checksum URL, version, sha256, fetched-at, template, refresh policy), `prov_stack`, `prov_stack_item` (logical name, type pkg/upstream/role, per-family names, pin, per-arch artifact + sha256), `prov_stack_dep`, `prov_run` (audit). Seed from today's `group_vars/all.yml` and `catalog.json`. | Migration applies on a scratch DB (never `solarinet`/`sor`); seed reproduces today's package list |
+| **P2 · Generator** | Stack closure → ordered Ansible vars + role list per target family/arch. Unmapped item = hard error naming item + family. | Golden-file tests per family; render for steel/Tumbleweed matches hand-written vars |
+| **P3 · Bridge + API** | New operator-gated verbs on the existing queue: `IMAGE_REFRESH` (wraps `fetch-images.sh`, verifies checksum, regenerates boot menu), `PROV_STAGE` (per-MAC profile + first-boot stacks), `STACK_APPLY` (dry-run diff, then apply). Routes under `provisioning.php`, behind default-deny + CSRF. | Verb dispatch tests; no PHP path reaches the host except via the queue |
+| **P4 · UI** | Mockup → dashboard screen (vanilla JSX, no build step). Retire `catalog.json`; fix the stale "Live PXE activates once…" note. | Operator click-through on the live dashboard |
+| **P5 · Review** | Cross-lab review of P1–P4 (Luna / gpt-6-luna). | Findings resolved or explicitly deferred |
+| **P6 · Bare metal** | steel (ZimaBlade, x86_64, Debian 12) → openSUSE Tumbleweed + Core, staged through the new UI. Clear the stale `steel` known_hosts entry, enroll the agent. | Machine boots Tumbleweed, agent reports, Core verified on-host |
+| **P7 · DNS role** | Port the BIND secondary helper to SUSE layout as the `dns-secondary` role; apply via Apply-stacks-only. Do **not** restart steel's old docker bind9 (stale zones). | AXFR from primary, serial match, sorsync registration |
+
+P6 is the first-ever real wipe + install and is destructive. It runs only on
+an explicit operator go, even inside the pre-authorized deploy window.
+
+## 5. Open questions
+
+- Fedora vs Fedora CoreOS (item 4).
+- Does x86-32 stay as a row at all?
+- Multi-target deploy: one machine at a time, or batches?
