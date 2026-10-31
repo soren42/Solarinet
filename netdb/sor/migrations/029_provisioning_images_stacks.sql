@@ -34,12 +34,16 @@
 --   script   install script: spec.body (inline, stored here) XOR spec.url +
 --            spec.sha256 (remote, pinned — an unpinned curl|sh is rejected by
 --            CHECK). interpreter (default /bin/sh), run_as root|admin, env
---            (non-secret), idempotency guard creates and/or check
---            (+ optional version_check regex compared with version_pin).
---   build    source build: spec.source {git} at `version_pin` ref, or
+--            (non-secret), idempotency guard creates and/or check (an argv
+--            list, run without a shell, as the item's user) + optional
+--            version_check regex compared with version_pin.
+--   build    source build: spec.source {git[, tag]} checked out at the full
+--            commit SHA in `version_pin` (tag is display only), or
 --            {tarball, sha256}; system cmake|make|autotools|meson|custom;
---            configure_args, build_deps (logical pkg names resolved through
---            the same family map), prefix, commands (custom), same guard.
+--            configure_args, build_deps (logical pkg names resolved only
+--            against pkg items of the rendered stacks; locked core is always
+--            rendered and is the family map), prefix, commands (custom),
+--            same guard (build checks run unprivileged).
 --   role     existing Ansible role named by `ansible_role`.
 --
 -- WHY A JSON `spec` (not side tables): the per-type fields are heterogeneous,
@@ -142,9 +146,9 @@ CREATE TABLE IF NOT EXISTS `prov_images` (
   KEY `ix_prov_images_family_arch` (`family`,`arch`),
   KEY `ix_prov_images_source` (`source_id`),
   CONSTRAINT `ck_prov_images_verified` CHECK (`netboot_verified` IN (0,1)),
-  CONSTRAINT `ck_prov_images_sha256`   CHECK (`sha256` IS NULL OR `sha256` REGEXP '^[0-9a-f]{64}$'),
+  CONSTRAINT `ck_prov_images_sha256`   CHECK (`sha256` IS NULL OR `sha256` REGEXP '(?-i)^[0-9a-f]{64}\\z'),
   CONSTRAINT `ck_prov_images_pi_arch`  CHECK (`boot_method` <> 'pi_netboot' OR `arch` IN ('arm64','armhf')),
-  CONSTRAINT `ck_prov_images_slug`     CHECK (`distro` REGEXP '^[a-z0-9][a-z0-9-]*$'),
+  CONSTRAINT `ck_prov_images_slug`     CHECK (`distro` REGEXP '(?-i)^[a-z0-9][a-z0-9-]*\\z'),
   CONSTRAINT `fk_prov_images_source`   FOREIGN KEY (`source_id`) REFERENCES `sources`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='Installable OS images: real distro x release x arch rows with boot method and fetch state';
@@ -174,7 +178,7 @@ CREATE TABLE IF NOT EXISTS `prov_stacks` (
   UNIQUE KEY `uq_prov_stacks_slug_live` (`slug`,`live_flag`),
   KEY `ix_prov_stacks_source` (`source_id`),
   CONSTRAINT `ck_prov_stacks_locked` CHECK (`locked` IN (0,1)),
-  CONSTRAINT `ck_prov_stacks_slug`   CHECK (`slug` REGEXP '^[a-z0-9][a-z0-9-]*$'),
+  CONSTRAINT `ck_prov_stacks_slug`   CHECK (`slug` REGEXP '(?-i)^[a-z0-9][a-z0-9-]*\\z'),
   CONSTRAINT `fk_prov_stacks_source` FOREIGN KEY (`source_id`) REFERENCES `sources`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='Named arch-independent software stacks; locked = always included (Core)';
@@ -197,7 +201,7 @@ CREATE TABLE IF NOT EXISTS `prov_stack_items` (
   `ansible_role`     VARCHAR(64)  NULL COMMENT 'role items only: Ansible role under deploy/fleet/ansible/roles',
   `repo_ref`         VARCHAR(96)  NULL COMMENT 'pkg items only: logical_name of a repo item that must be applied first',
   `source_url`       VARCHAR(512) NULL COMMENT 'informational project/release home',
-  `version_pin`      VARCHAR(64)  NULL COMMENT 'pinned version / git ref; required for artifact and build; compared by script/build version_check',
+  `version_pin`      VARCHAR(64)  NULL COMMENT 'pinned version: one safe path component; git builds = full 40/64-hex commit SHA; required for artifact and build; compared by version_check',
   `spec`             LONGTEXT     NULL COMMENT 'per-type JSON object (repo/script/build required, artifact optional, pkg/role none); validated by stackgen.py',
   `item_order`       SMALLINT UNSIGNED NULL COMMENT 'explicit position within the stack; NULL = type default (repo 100 .. role 600)',
   `sort_order`       SMALLINT UNSIGNED NOT NULL DEFAULT 100 COMMENT 'tie-break within the same position (lower first, then logical_name)',
@@ -225,11 +229,37 @@ CREATE TABLE IF NOT EXISTS `prov_stack_items` (
                                                      WHEN 'role' THEN `spec` IS NULL
                                                      WHEN 'artifact' THEN TRUE
                                                      ELSE `spec` IS NOT NULL END),
-  -- script: inline body XOR remote url, and a remote url MUST carry a sha256.
-  CONSTRAINT `ck_prov_stack_items_script`   CHECK (`item_type` <> 'script' OR
-                                                   (JSON_EXISTS(`spec`,'$.body') AND NOT JSON_EXISTS(`spec`,'$.url')) OR
-                                                   (JSON_EXISTS(`spec`,'$.url') AND JSON_EXISTS(`spec`,'$.sha256') AND NOT JSON_EXISTS(`spec`,'$.body'))),
-  CONSTRAINT `ck_prov_stack_items_build`    CHECK (`item_type` <> 'build' OR (JSON_EXISTS(`spec`,'$.source') AND JSON_EXISTS(`spec`,'$.system'))),
+  -- version_pin becomes a directory name on hosts (artifact/build dirs): one
+  -- safe path component, never '/', '.', '..' or a leading '-'.
+  CONSTRAINT `ck_prov_stack_items_pin_fmt`  CHECK (`version_pin` IS NULL OR `version_pin` REGEXP '(?-i)^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}\\z'),
+  -- script: inline body XOR remote url; a remote url MUST carry a sha256.
+  -- Every value is type- and emptiness-checked (JSON null is not a value).
+  -- NB: MariaDB passes a CHECK that evaluates to NULL, and a missing JSON key
+  -- yields NULL, so every JSON predicate below is wrapped in IFNULL(..., 0).
+  CONSTRAINT `ck_prov_stack_items_script`   CHECK (`item_type` <> 'script' OR IFNULL(
+      (JSON_TYPE(JSON_EXTRACT(`spec`,'$.body')) = 'STRING' AND JSON_VALUE(`spec`,'$.body') <> ''
+       AND NOT JSON_EXISTS(`spec`,'$.url') AND NOT JSON_EXISTS(`spec`,'$.sha256')) OR
+      (JSON_TYPE(JSON_EXTRACT(`spec`,'$.url')) = 'STRING' AND JSON_VALUE(`spec`,'$.url') <> ''
+       AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.sha256')) = 'STRING'
+       AND JSON_VALUE(`spec`,'$.sha256') REGEXP '(?-i)^[0-9a-f]{64}\\z'
+       AND NOT JSON_EXISTS(`spec`,'$.body')), 0)),
+  -- build: source is {git} pinned by full commit SHA in version_pin, or
+  -- {tarball, sha256}; system is one of the supported build systems.
+  CONSTRAINT `ck_prov_stack_items_build`    CHECK (`item_type` <> 'build' OR IFNULL((
+      JSON_TYPE(JSON_EXTRACT(`spec`,'$.source')) = 'OBJECT'
+      AND JSON_VALUE(`spec`,'$.system') IN ('cmake','make','autotools','meson','custom')
+      AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.system')) = 'STRING'
+      AND ((JSON_TYPE(JSON_EXTRACT(`spec`,'$.source.git')) = 'STRING' AND JSON_VALUE(`spec`,'$.source.git') <> ''
+            AND NOT JSON_EXISTS(`spec`,'$.source.tarball')
+            AND `version_pin` REGEXP '(?-i)^[0-9a-f]{40}([0-9a-f]{24})?\\z')
+        OR (JSON_TYPE(JSON_EXTRACT(`spec`,'$.source.tarball')) = 'STRING' AND JSON_VALUE(`spec`,'$.source.tarball') <> ''
+            AND NOT JSON_EXISTS(`spec`,'$.source.git')
+            AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.source.sha256')) = 'STRING'
+            AND JSON_VALUE(`spec`,'$.source.sha256') REGEXP '(?-i)^[0-9a-f]{64}\\z'))), 0)),
+  -- guard check is an argv list (run without a shell), never a string.
+  CONSTRAINT `ck_prov_stack_items_check`    CHECK (`spec` IS NULL OR NOT JSON_EXISTS(`spec`,'$.check') OR IFNULL(
+      (JSON_TYPE(JSON_EXTRACT(`spec`,'$.check')) = 'ARRAY' AND JSON_LENGTH(`spec`,'$.check') >= 1
+       AND JSON_TYPE(JSON_EXTRACT(`spec`,'$.check[0]')) = 'STRING' AND JSON_VALUE(`spec`,'$.check[0]') <> ''), 0)),
   CONSTRAINT `fk_prov_stack_items_stack`    FOREIGN KEY (`stack_id`)  REFERENCES `prov_stacks`(`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_prov_stack_items_source`   FOREIGN KEY (`source_id`) REFERENCES `sources`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -240,14 +270,15 @@ CREATE TABLE IF NOT EXISTS `prov_stack_items` (
 -- ----------------------------------------------------------------------------
 -- arch 'any' = one artifact serves every arch (scripts, jars); an exact-arch
 -- row wins over 'any'. Only meaningful for `artifact` items — the generator
--- rejects artifact rows on any other item type. A NULL sha256 is a render-time
--- hard error (nothing is fetched unpinned).
+-- rejects artifact rows on any other item type. sha256 is mandatory and
+-- format-checked: a row exists only once its digest is known (nothing is
+-- fetched unpinned, and no digest is ever invented).
 CREATE TABLE IF NOT EXISTS `prov_stack_artifacts` (
   `id`            INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
   `item_id`       INT UNSIGNED NOT NULL COMMENT 'FK: the artifact stack item',
   `arch`          ENUM('any','x86_64','arm64','armhf','riscv64','i386') NOT NULL COMMENT 'target arch; any = arch-independent',
   `url`           VARCHAR(512) NOT NULL COMMENT 'download URL for this arch at the item''s version_pin',
-  `sha256`        CHAR(64)     NULL COMMENT 'expected sha256 of the download; NULL = not yet recorded (render is a hard error)',
+  `sha256`        CHAR(64)     NOT NULL COMMENT 'expected sha256 of the download (64 lowercase hex); never invented, so no row until it is known',
   `source_id`     SMALLINT UNSIGNED NOT NULL COMMENT 'provenance: system that asserted this row',
   `asserted_kind` ENUM('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
   `asserted_at`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'provenance: when the source last asserted this',
@@ -258,7 +289,8 @@ CREATE TABLE IF NOT EXISTS `prov_stack_artifacts` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_prov_stack_artifacts_live` (`item_id`,`arch`,`live_flag`),
   KEY `ix_prov_stack_artifacts_source` (`source_id`),
-  CONSTRAINT `ck_prov_stack_artifacts_sha256` CHECK (`sha256` IS NULL OR `sha256` REGEXP '^[0-9a-f]{64}$'),
+  CONSTRAINT `ck_prov_stack_artifacts_sha256` CHECK (`sha256` REGEXP '(?-i)^[0-9a-f]{64}\\z'),
+  CONSTRAINT `ck_prov_stack_artifacts_url`    CHECK (`url` <> ''),
   CONSTRAINT `fk_prov_stack_artifacts_item`   FOREIGN KEY (`item_id`)   REFERENCES `prov_stack_items`(`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_prov_stack_artifacts_source` FOREIGN KEY (`source_id`) REFERENCES `sources`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -423,17 +455,18 @@ WHERE s.slug = 'dev-tools' AND s.deleted_at IS NULL
 
 -- powerlevel10k pin: the role clones p10k at master with update:false (it never
 -- moves an existing checkout). This inline script runs AFTER the role
--- (item_order 700) and moves that checkout to tag v1.20.0, refusing if the tag
--- no longer points at the commit observed via `git ls-remote` on 2026-10-31.
--- Guard: `git describe --exact-match` must print the pin, so a converged host
--- is a no-op and the role's update:false never fights it. Assumes the role's
+-- (item_order 700) and moves that checkout to the commit of tag v1.20.0
+-- (observed via `git ls-remote` on 2026-10-31). The pin is the full commit
+-- SHA; the tag is only how the commit is fetched, and the script refuses if
+-- the fetched commit differs. Guard: `git rev-parse HEAD` must print the pin,
+-- so a converged host is a no-op and the role's update:false never fights it. Assumes the role's
 -- default solari_devtools_ohmyzsh_dir (/usr/share/oh-my-zsh); fails loudly if
 -- the clone is absent (solari_devtools_ohmyzsh: false).
 INSERT INTO `prov_stack_items`
   (`stack_id`,`logical_name`,`item_type`,`name_suse`,`name_debian`,`name_fedora`,`source_url`,`version_pin`,
    `spec`,`item_order`,`sort_order`,`notes`,`source_id`,`asserted_kind`)
 SELECT s.id, 'powerlevel10k pin', 'script', '=', '=', NULL,
-       'https://github.com/romkatv/powerlevel10k', 'v1.20.0',
+       'https://github.com/romkatv/powerlevel10k', 'ff0311157d6b24fea21aa70699783f362b0f554f',
        JSON_OBJECT(
          'body', CONCAT_WS(CHAR(10),
            'set -eu',
@@ -444,9 +477,9 @@ SELECT s.id, 'powerlevel10k pin', 'script', '=', '=', NULL,
            'git -C "$d" -c advice.detachedHead=false checkout --quiet ff0311157d6b24fea21aa70699783f362b0f554f'),
          'interpreter', '/bin/sh',
          'run_as', 'root',
-         'check', 'git -C /usr/share/oh-my-zsh/custom/themes/powerlevel10k describe --tags --exact-match HEAD',
-         'version_check', '^(v[0-9][0-9.]*)$'),
-       700, 10, 'Pins the role''s master clone to a release tag (runs after the role)',
+         'check', JSON_ARRAY('git', '-C', '/usr/share/oh-my-zsh/custom/themes/powerlevel10k', 'rev-parse', 'HEAD'),
+         'version_check', '^([0-9a-f]{40})$'),
+       700, 10, 'Pins the role''s master clone to the v1.20.0 commit (runs after the role)',
        (SELECT id FROM sources WHERE slug='provisioner' AND deleted_at IS NULL), 'human'
 FROM `prov_stacks` s
 WHERE s.slug = 'dev-tools' AND s.deleted_at IS NULL

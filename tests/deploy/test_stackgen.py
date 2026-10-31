@@ -55,7 +55,10 @@ def script(name, **spec):
     return other(name, "script", spec=spec)
 
 
-def build(name, pin="v1.0.0", **spec):
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def build(name, pin=COMMIT, **spec):
     spec.setdefault("source", {"git": "https://example.invalid/x.git"})
     spec.setdefault("system", "cmake")
     spec.setdefault("creates", "/usr/local/bin/x")
@@ -115,7 +118,9 @@ class SeedFixture(unittest.TestCase):
         self.assertEqual([s["type"] for s in got["solari_stack_steps"]], ["pkg", "role", "script"],
                          "p10k pin (item_order 700) must run after the dev-tools role")
         p10k = got["solari_stack_scripts"][0]
-        self.assertEqual(p10k["version"], "v1.20.0")
+        self.assertEqual(p10k["version"], "ff0311157d6b24fea21aa70699783f362b0f554f")
+        self.assertEqual(p10k["check"], ["git", "-C", "/usr/share/oh-my-zsh/custom/themes/powerlevel10k",
+                                         "rev-parse", "HEAD"])
         self.assertIsNone(p10k["url"])
         self.assertIn("ff0311157d6b24fea21aa70699783f362b0f554f", p10k["body"])
 
@@ -308,11 +313,18 @@ class Scripts(unittest.TestCase):
 
     def test_version_check_needs_check_and_pin(self):
         with self.assertRaisesRegex(StackGenError, "version_check needs both"):
-            self.one(script("s", check="x --version", version_check=r"(\d+)"))
-        s = script("s", check="x --version", version_check=r"\d+")
+            self.one(script("s", check=["x", "--version"], version_check=r"(\d+)"))
+        s = script("s", check=["x", "--version"], version_check=r"\d+")
         s["version_pin"] = "1"
         with self.assertRaisesRegex(StackGenError, "capture group"):
             self.one(s)
+
+    def test_check_must_be_argv_list_not_shell_string(self):  # review finding 3
+        for bad in ("test -x /opt/x && rm -rf /", [], [""], ["ok", 3], {"cmd": "x"}):
+            with self.subTest(check=bad), self.assertRaisesRegex(StackGenError, "argv list"):
+                self.one(script("s", check=bad))
+        got = self.one(script("s", check=["/opt/x/bin/x", "--version"]))["solari_stack_scripts"][0]
+        self.assertEqual(got["check"], ["/opt/x/bin/x", "--version"])
 
     def test_secret_env_rejected(self):
         with self.assertRaisesRegex(StackGenError, "looks like a secret"):
@@ -331,18 +343,46 @@ class Builds(unittest.TestCase):
     def test_build_deps_merged_into_packages_before_build(self):
         d = doc_with(
             {"slug": "toolchain", "items": [pkg("cmake"), pkg("libssl-dev", suse="libopenssl-devel")]},
-            {"slug": "x", "items": [build("thing", build_deps=["git", "cmake", "libssl-dev"])]},
+            {"slug": "x", "depends_on": ["toolchain"],
+             "items": [build("thing", build_deps=["git", "cmake", "libssl-dev"])]},
         )
-        got = render_doc(d, ["x"], "suse")  # toolchain NOT selected: deps resolve via the catalog
-        self.assertEqual(got["solari_stack_order"], ["core", "x"])
-        self.assertEqual(got["solari_stack_packages"], ["git", "make", "cmake", "libopenssl-devel"])
-        self.assertEqual(got["solari_stack_steps"], [
+        got = render_doc(d, ["x"], "suse")
+        self.assertEqual(got["solari_stack_order"], ["core", "toolchain", "x"])
+        self.assertEqual(got["solari_stack_steps"], [  # adjacent pkg steps merge
             {"type": "pkg", "packages": ["git", "make", "cmake", "libopenssl-devel"]},
             {"type": "build", "index": 0}])
+        self.assertEqual(got["solari_stack_packages"], ["git", "make", "cmake", "libopenssl-devel"])
         b = got["solari_stack_builds"][0]
         self.assertEqual(b["build_deps"], ["git", "cmake", "libopenssl-devel"])
-        self.assertEqual(b["source"], {"git": "https://example.invalid/x.git", "ref": "v1.0.0",
+        self.assertEqual(b["source"], {"git": "https://example.invalid/x.git", "commit": COMMIT, "tag": None,
                                        "tarball": None, "sha256": None})
+
+    def test_build_deps_never_resolve_from_unselected_stacks(self):  # review finding 4
+        d = doc_with(
+            {"slug": "toolchain", "items": [pkg("cmake")]},
+            {"slug": "x", "items": [build("thing", build_deps=["cmake"])]},
+        )
+        with self.assertRaisesRegex(StackGenError, r"build dep 'cmake' is not a pkg item in the selected stacks"):
+            render_doc(d, ["x"])
+
+    def test_build_dep_applicability_enforced(self):  # review finding 4
+        for kw, msg in (({"applies_families": ["debian"]}, "not applicable to family suse"),
+                        ({"applies_arches": ["arm64"]}, "not applicable to arch x86_64")):
+            d = doc_with({"slug": "x", "items": [pkg("ninja", **kw), build("t", build_deps=["ninja"])]})
+            with self.subTest(kw=kw), self.assertRaisesRegex(StackGenError, msg):
+                render_doc(d, ["x"])
+
+    def test_build_dep_repo_must_precede_build(self):  # review finding 4
+        repo = other("vendor repo", "repo", spec={"suse": {"url": "https://r.invalid", "key_url": "https://r.invalid/k",
+                                                           "fingerprint": "A" * 40}})
+        dep = pkg("vendor-lib", repo_ref="vendor repo")
+        d = doc_with({"slug": "x", "items": [
+            dict(repo, item_order=900), dict(dep, item_order=950), build("t", build_deps=["vendor-lib"])]})
+        with self.assertRaisesRegex(StackGenError, "needs repo 'vendor repo', which is not applied before this build"):
+            render_doc(d, ["x"])
+        d = doc_with({"slug": "x", "items": [repo, dep, build("t", build_deps=["vendor-lib"])]})
+        self.assertEqual([s["type"] for s in render_doc(d, ["x"])["solari_stack_steps"]],
+                         ["pkg", "repo", "pkg", "build"])
 
     def test_build_dep_pkg_step_inserted_mid_stack(self):
         d = doc_with({"slug": "x", "items": [
@@ -365,10 +405,26 @@ class Builds(unittest.TestCase):
         with self.assertRaisesRegex(StackGenError, "unmapped"):
             render_doc(d, ["x"], "suse")
 
-    def test_unpinned_git_ref_rejected(self):
-        for ref in ("master", "MAIN", "HEAD", None):
-            with self.subTest(ref=ref), self.assertRaisesRegex(StackGenError, "no pinned ref"):
+    def test_git_build_requires_full_commit_sha(self):  # review finding 2
+        for ref in ("master", "feature/release", "release", "v1.0.0", COMMIT[:12], COMMIT.upper(), None):
+            with self.subTest(ref=ref), self.assertRaisesRegex(StackGenError, "full commit SHA|safe path component"):
                 render_doc(doc_with({"slug": "x", "items": [build("t", pin=ref)]}), ["x"])
+        b = render_doc(doc_with({"slug": "x", "items": [
+            build("t", source={"git": "https://e.invalid/x.git", "tag": "v1.0.0"})]}), ["x"])["solari_stack_builds"][0]
+        self.assertEqual((b["source"]["commit"], b["source"]["tag"], b["version"]), (COMMIT, "v1.0.0", COMMIT))
+        self.assertFalse(hasattr(stackgen, "UNPINNED_REFS"), "branch denylist heuristic must be gone")
+
+    def test_version_pin_must_be_a_safe_path_component(self):  # review finding 1
+        bad = ("../../../../etc/cron.d", "..", ".", "a/b", "/abs", "-rf", "", "x" * 65, "v1 .0", "v1\n")
+        for pin in bad:
+            d = doc_with({"slug": "x", "items": [other("tool", "artifact", version_pin=pin,
+                                                       artifacts={"any": {"url": "https://e.invalid/a", "sha256": SHA}})]})
+            with self.subTest(pin=pin), self.assertRaisesRegex(StackGenError, "safe path component"):
+                render_doc(d, ["x"])
+        for pin in ("1.2.3", "v1.20.0", "2024.10+git~r1", "1.0-rc1", COMMIT):
+            d = doc_with({"slug": "x", "items": [other("tool", "artifact", version_pin=pin,
+                                                       artifacts={"any": {"url": "https://e.invalid/a", "sha256": SHA}})]})
+            self.assertEqual(render_doc(d, ["x"])["solari_stack_artifacts"][0]["version"], pin)
 
     def test_tarball_requires_sha256(self):
         d = doc_with({"slug": "x", "items": [build("t", source={"tarball": "https://e.invalid/t.tar.gz"})]})

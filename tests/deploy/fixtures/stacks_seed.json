@@ -222,13 +222,19 @@
             "suse": "=",
             "debian": "="
           },
-          "version_pin": "v1.20.0",
+          "version_pin": "ff0311157d6b24fea21aa70699783f362b0f554f",
           "spec": {
             "body": "set -eu\nd=/usr/share/oh-my-zsh/custom/themes/powerlevel10k\n[ -d \"$d/.git\" ] || { echo \"powerlevel10k clone missing at $d (dev-tools ohmyzsh disabled?)\" >&2; exit 1; }\ngit -C \"$d\" fetch --quiet --depth 1 origin tag v1.20.0\n[ \"$(git -C \"$d\" rev-parse 'v1.20.0^{commit}')\" = ff0311157d6b24fea21aa70699783f362b0f554f ] || { echo \"powerlevel10k tag v1.20.0 moved upstream\" >&2; exit 1; }\ngit -C \"$d\" -c advice.detachedHead=false checkout --quiet ff0311157d6b24fea21aa70699783f362b0f554f",
             "interpreter": "/bin/sh",
             "run_as": "root",
-            "check": "git -C /usr/share/oh-my-zsh/custom/themes/powerlevel10k describe --tags --exact-match HEAD",
-            "version_check": "^(v[0-9][0-9.]*)$"
+            "check": [
+              "git",
+              "-C",
+              "/usr/share/oh-my-zsh/custom/themes/powerlevel10k",
+              "rev-parse",
+              "HEAD"
+            ],
+            "version_check": "^([0-9a-f]{40})$"
           },
           "item_order": 700,
           "sort_order": 10

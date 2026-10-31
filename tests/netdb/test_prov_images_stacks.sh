@@ -156,6 +156,50 @@ rejects "malformed artifact sha256" \
   "INSERT INTO prov_stack_artifacts (item_id,arch,url,sha256,source_id) VALUES ((SELECT id FROM prov_stack_items WHERE logical_name='t13'),'any','u','XYZ',$SRC)"
 rejects "invalid spec JSON" \
   "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,spec,source_id) VALUES ($CORE,'t14','repo','=','{nope',$SRC)"
+
+# ---- review regressions (cross-lab review of 11db0e9/f01e45a) ------------------
+H64="$(printf 'a%.0s' {1..64})"; C40="$(printf 'b%.0s' {1..40})"
+ins_item() {  # logical_name, item_type, version_pin-SQL, spec-SQL
+  echo "INSERT INTO prov_stack_items (stack_id,logical_name,item_type,name_suse,version_pin,spec,source_id) VALUES ($CORE,'$1','$2','=',$3,$4,$SRC)"
+}
+# 1. version_pin is one safe path component
+rejects "path-escaping version_pin" "$(ins_item r1 artifact "'../../../../etc/cron.d'" NULL)"
+rejects "version_pin '..'" "$(ins_item r2 artifact "'..'" NULL)"
+rejects "version_pin with a slash" "$(ins_item r3 artifact "'a/b'" NULL)"
+rejects "version_pin with a trailing newline" "$(ins_item r4 artifact "CONCAT('v1',CHAR(10))" NULL)"
+rejects "version_pin with a leading dash" "$(ins_item r5 artifact "'-rf'" NULL)"
+accepts "version_pin 2024.10+git~r1" "$(ins_item r6 artifact "'2024.10+git~r1'" NULL)"
+# 2. git builds are pinned by full commit SHA only
+GITSPEC="'{\"source\":{\"git\":\"https://e.invalid/x.git\",\"tag\":\"v1\"},\"system\":\"cmake\",\"creates\":\"/x\"}'"
+rejects "git build pinned by tag" "$(ins_item r7 build "'v1.0.0'" "$GITSPEC")"
+rejects "git build pinned by branch-ish ref" "$(ins_item r8 build "'feature-release'" "$GITSPEC")"
+rejects "git build pinned by abbreviated SHA" "$(ins_item r9 build "'${C40:0:12}'" "$GITSPEC")"
+rejects "git build pinned by uppercase SHA" "$(ins_item r10 build "'${C40^^}'" "$GITSPEC")"
+accepts "git build pinned by full commit SHA" "$(ins_item r11 build "'$C40'" "$GITSPEC")"
+rejects "build with both git and tarball" "$(ins_item r12 build "'$C40'" "'{\"source\":{\"git\":\"u\",\"tarball\":\"t\",\"sha256\":\"$H64\"},\"system\":\"make\"}'")"
+rejects "build tarball without sha256" "$(ins_item r13 build "'1.0'" "'{\"source\":{\"tarball\":\"https://e.invalid/t.tgz\"},\"system\":\"make\"}'")"
+rejects "build with unknown system" "$(ins_item r14 build "'$C40'" "'{\"source\":{\"git\":\"u\"},\"system\":\"bazel\"}'")"
+# 3. guard check is an argv list
+rejects "check as a shell string" "$(ins_item r15 script NULL "'{\"body\":\"true\",\"check\":\"test -x /x && true\"}'")"
+rejects "check as an empty list" "$(ins_item r16 script NULL "'{\"body\":\"true\",\"check\":[]}'")"
+accepts "check as an argv list" "$(ins_item r17 script NULL "'{\"body\":\"true\",\"check\":[\"/x\",\"--version\"]}'")"
+# 5. JSON null / empty / malformed values are not values
+rejects "script url JSON null + sha256" "$(ins_item r18 script NULL "'{\"url\":null,\"sha256\":\"$H64\",\"creates\":\"/x\"}'")"
+rejects "script url + sha256 JSON null" "$(ins_item r19 script NULL "'{\"url\":\"https://e.invalid/i.sh\",\"sha256\":null}'")"
+rejects "script url + malformed sha256" "$(ins_item r20 script NULL "'{\"url\":\"https://e.invalid/i.sh\",\"sha256\":\"abc\"}'")"
+rejects "script url + uppercase sha256" "$(ins_item r21 script NULL "'{\"url\":\"https://e.invalid/i.sh\",\"sha256\":\"${H64^^}\"}'")"
+rejects "script body JSON null" "$(ins_item r22 script NULL "'{\"body\":null}'")"
+rejects "script empty body" "$(ins_item r23 script NULL "'{\"body\":\"\"}'")"
+rejects "artifact row without sha256" \
+  "INSERT INTO prov_stack_artifacts (item_id,arch,url,source_id) VALUES ((SELECT id FROM prov_stack_items WHERE logical_name='t13'),'any','https://e.invalid/a',$SRC)"
+rejects "artifact row with uppercase sha256" \
+  "INSERT INTO prov_stack_artifacts (item_id,arch,url,sha256,source_id) VALUES ((SELECT id FROM prov_stack_items WHERE logical_name='t13'),'any','https://e.invalid/a','${H64^^}',$SRC)"
+rejects "image with uppercase sha256" \
+  "INSERT INTO prov_images (distro,family,release_name,arch,boot_method,sha256,source_id) VALUES ('debian','debian','13','x86_64','ipxe','${H64^^}',$SRC)"
+eq "p10k seed pinned by full commit SHA with an argv check" \
+   "SELECT CONCAT(version_pin,' ',JSON_TYPE(JSON_EXTRACT(spec,'\$.check'))) FROM prov_stack_items WHERE logical_name='powerlevel10k pin' AND deleted_at IS NOT NULL" \
+   "ff0311157d6b24fea21aa70699783f362b0f554f ARRAY"
+q "DELETE FROM prov_stack_items WHERE logical_name IN ('r6','r11','r17')"
 q "DELETE FROM prov_stack_items WHERE logical_name IN ('t9','t13')"
 
 # ---- prov_runs ------------------------------------------------------------------

@@ -5,8 +5,18 @@
   ansible.builtin.set_fact:
     solari_bld: "{{ solari_stack_builds[solari_step.index] }}"
     solari_guard: "{{ solari_stack_builds[solari_step.index] }}"
-    solari_guard_user: root
+    # The guard only inspects the result; it never needs root.
+    solari_guard_user: "{{ solari_stack_admin_user }}"
     solari_bld_dir: "{{ solari_stack_work_root }}/build/{{ solari_stack_builds[solari_step.index].id }}/{{ solari_stack_builds[solari_step.index].version }}"
+
+- name: Refuse path components that could escape {{ solari_stack_work_root }}
+  ansible.builtin.assert:
+    that:
+      - (solari_bld.id | string | regex_search('^[A-Za-z0-9][A-Za-z0-9._+~-]*$')) == (solari_bld.id | string)
+      - (solari_bld.version | string | regex_search('^[A-Za-z0-9][A-Za-z0-9._+~-]*$')) == (solari_bld.version | string)
+      - (solari_bld_dir | normpath).startswith((solari_stack_work_root | normpath) ~ '/')
+    fail_msg: "unsafe id/version {{ solari_bld.id }}/{{ solari_bld.version }} (must be one plain path component)"
+    quiet: true
 
 - name: Check whether {{ solari_bld.name }} is already built
   ansible.builtin.include_tasks: guard.yml
@@ -20,13 +30,25 @@
         state: directory
         mode: "0755"
 
-    - name: Fetch source at pinned ref
-      ansible.builtin.git:
-        repo: "{{ solari_bld.source.git }}"
-        dest: "{{ solari_bld_dir }}/src"
-        version: "{{ solari_bld.source.ref }}"
-        force: true
+    - name: Fetch source at the pinned commit
       when: solari_bld.source.git is not none
+      block:
+        - name: Check out commit {{ solari_bld.source.commit }}{{ ' (' ~ solari_bld.source.tag ~ ')' if solari_bld.source.tag else '' }}
+          ansible.builtin.git:
+            repo: "{{ solari_bld.source.git }}"
+            dest: "{{ solari_bld_dir }}/src"
+            version: "{{ solari_bld.source.commit }}"
+            force: true
+        - name: Read checked-out commit
+          ansible.builtin.command:
+            argv: [git, -C, "{{ solari_bld_dir }}/src", rev-parse, HEAD]
+          register: solari_bld_head
+          changed_when: false
+        - name: Refuse anything but the pinned commit
+          ansible.builtin.assert:
+            that: solari_bld_head.stdout | trim == solari_bld.source.commit
+            fail_msg: "checked out {{ solari_bld_head.stdout | trim }}, pinned {{ solari_bld.source.commit }}"
+            quiet: true
 
     - name: Fetch and unpack sha256-pinned source tarball
       when: solari_bld.source.tarball is not none

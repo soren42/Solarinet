@@ -58,8 +58,11 @@ TYPE_DEFAULT_ORDER = {t: (r + 1) * 100 for t, r in TYPE_RANK.items()}
 SAME = "="
 BUILD_SYSTEMS = ("cmake", "make", "autotools", "meson", "custom")
 RUN_AS = ("root", "admin")
-# Branch-like refs are not pins: they move. Tags and commit ids are accepted.
-UNPINNED_REFS = frozenset({"head", "master", "main", "trunk", "develop", "dev", "latest", "stable"})
+# version_pin becomes a directory name on hosts: one safe path component
+# (no '/', never '.', '..' or a leading '-'). Mirrors ck_prov_stack_items_pin_fmt.
+PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}$")
+# Git sources are pinned by full commit id only (refs and tags can move).
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 SECRET_ENV_RE = re.compile(r"PASS|SECRET|TOKEN|KEY|CREDENTIAL|AUTH|PRIVATE", re.IGNORECASE)
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -104,7 +107,7 @@ def load_definitions(doc: Any) -> dict[str, dict]:
     stacks: dict[str, dict] = {}
     for raw in doc["stacks"]:
         slug = raw.get("slug")
-        if not isinstance(slug, str) or not SLUG_RE.match(slug):
+        if not isinstance(slug, str) or not SLUG_RE.fullmatch(slug):
             raise StackGenError(f"invalid stack slug {slug!r}")
         if slug in stacks:
             raise StackGenError(f"duplicate stack slug {slug!r}")
@@ -156,6 +159,10 @@ def load_definitions(doc: Any) -> dict[str, dict]:
                 raise StackGenError(f"{where}: {itype} items take no spec")
             if itype in ("repo", "script", "build") and spec is None:
                 raise StackGenError(f"{where}: {itype} items require a spec")
+            pin = it.get("version_pin")
+            if pin is not None and (not isinstance(pin, str) or not PIN_RE.fullmatch(pin)):
+                raise StackGenError(f"{where}: version_pin {pin!r} must be one safe path component "
+                                    "([A-Za-z0-9][A-Za-z0-9._+~-]*, max 64)")
             item_order = it.get("item_order")
             items.append({
                 "logical_name": name,
@@ -166,7 +173,7 @@ def load_definitions(doc: Any) -> dict[str, dict]:
                 "applies_arches": _set_list(it.get("applies_arches"), ARCHES, f"{where} applies_arches"),
                 "ansible_role": role,
                 "repo_ref": it.get("repo_ref"),
-                "version_pin": it.get("version_pin"),
+                "version_pin": pin,
                 "spec": spec,
                 "artifacts": artifacts,
                 "item_order": int(item_order) if item_order is not None else None,
@@ -260,7 +267,7 @@ def _check_keys(spec: dict, allowed: set[str], where: str) -> None:
 
 
 def _check_sha(value: Any, where: str, what: str) -> str:
-    if not isinstance(value, str) or not SHA256_RE.match(value):
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise StackGenError(f"{where}: {what} requires a sha256 (64 lowercase hex), got {value!r}")
     return value
 
@@ -271,8 +278,12 @@ def _guard(spec: dict, it: dict, where: str) -> dict:
         raise StackGenError(f"{where}: needs an idempotency guard (creates and/or check)")
     if creates is not None and (not isinstance(creates, str) or not creates.startswith("/")):
         raise StackGenError(f"{where}: creates must be an absolute path")
-    if check is not None and (not isinstance(check, str) or not check.strip()):
-        raise StackGenError(f"{where}: check must be a non-empty command")
+    if check is not None:
+        if (not isinstance(check, list) or not check or not all(isinstance(a, str) for a in check)
+                or not check[0]):
+            raise StackGenError(f"{where}: check must be an argv list of strings (no shell), "
+                                f"e.g. [\"git\", \"-C\", \"/opt/x\", \"rev-parse\", \"HEAD\"]; got {check!r}")
+        check = list(check)
     if vcheck is not None:
         if not check or not it["version_pin"]:
             raise StackGenError(f"{where}: version_check needs both check and version_pin")
@@ -289,7 +300,7 @@ def _env(spec: dict, where: str) -> dict:
     if not isinstance(env, dict):
         raise StackGenError(f"{where}: env must be an object")
     for k, v in env.items():
-        if not ENV_NAME_RE.match(k) or not isinstance(v, str):
+        if not ENV_NAME_RE.fullmatch(k) or not isinstance(v, str):
             raise StackGenError(f"{where}: env {k!r} must be NAME=string")
         if SECRET_ENV_RE.search(k):
             raise StackGenError(f"{where}: env {k!r} looks like a secret; secrets never live in stack specs")
@@ -307,7 +318,7 @@ def _render_repo(it: dict, family: str, where: str) -> dict:
         if not isinstance(fam.get(k), str) or not fam[k]:
             raise StackGenError(f"{where}: repo {family} definition needs {k}")
     fpr = re.sub(r"\s+", "", fam["fingerprint"]).upper()
-    if not FPR_RE.match(fpr):
+    if not FPR_RE.fullmatch(fpr):
         raise StackGenError(f"{where}: repo fingerprint must be a full 40/64-hex key fingerprint")
     out = {"url": fam["url"], "key_url": fam["key_url"], "fingerprint": fpr, "suite": None, "components": None}
     if family == "debian":
@@ -367,15 +378,23 @@ def _render_build(it: dict, where: str) -> dict:
         raise StackGenError(f"{where}: build needs a source object")
     pin = it["version_pin"]
     if "git" in src:
-        _check_keys(src, {"git"}, where + " source")
-        if not pin or str(pin).strip().lower() in UNPINNED_REFS:
-            raise StackGenError(f"{where}: build has no pinned ref (version_pin {pin!r} is not a tag/commit)")
-        source = {"git": src["git"], "ref": pin, "tarball": None, "sha256": None}
+        _check_keys(src, {"git", "tag"}, where + " source")
+        if not isinstance(src["git"], str) or not src["git"]:
+            raise StackGenError(f"{where}: build git source needs a url")
+        if not pin or not COMMIT_RE.fullmatch(pin):
+            raise StackGenError(f"{where}: git build must be pinned by full commit SHA in version_pin "
+                                f"(40/64 lowercase hex), got {pin!r}")
+        tag = src.get("tag")
+        if tag is not None and (not isinstance(tag, str) or not tag):
+            raise StackGenError(f"{where}: source tag (display only) must be a non-empty string")
+        source = {"git": src["git"], "commit": pin, "tag": tag, "tarball": None, "sha256": None}
     elif "tarball" in src:
         _check_keys(src, {"tarball", "sha256"}, where + " source")
         if not pin:
             raise StackGenError(f"{where}: build has no pinned version")
-        source = {"git": None, "ref": None, "tarball": src["tarball"],
+        if not isinstance(src["tarball"], str) or not src["tarball"]:
+            raise StackGenError(f"{where}: build tarball source needs a url")
+        source = {"git": None, "commit": None, "tag": None, "tarball": src["tarball"],
                   "sha256": _check_sha(src.get("sha256"), where, "build tarball")}
     else:
         raise StackGenError(f"{where}: build source must be {{git}} or {{tarball, sha256}}")
@@ -401,9 +420,13 @@ def _render_build(it: dict, where: str) -> dict:
 
 
 def _pkg_index(stacks: dict[str, dict], order: list[str]) -> dict[str, dict]:
-    """logical name -> pkg item; closure stacks (in order) win, then the rest by slug."""
+    """logical name -> pkg item, from the render's closure only (first in order wins).
+
+    Stacks outside the closure are never consulted: selecting a stack must not
+    pull definitions (names, repos) from stacks the operator did not select.
+    The locked core stack is always in the closure, so it is the family map."""
     index: dict[str, dict] = {}
-    for slug in order + sorted(set(stacks) - set(order)):
+    for slug in order:
         for it in sorted(stacks[slug]["items"], key=_item_key):
             if it["item_type"] == "pkg":
                 index.setdefault(it["logical_name"], {**it, "stack": slug})
@@ -473,10 +496,19 @@ def render(stacks: dict[str, dict], selected: list[str], family: str, arch: str)
                 for dep in entry["build_deps"]:
                     pkg = pkg_index.get(dep)
                     if pkg is None:
-                        raise StackGenError(f"{where}: build dep {dep!r} is not a pkg item in any stack")
+                        raise StackGenError(f"{where}: build dep {dep!r} is not a pkg item in the selected "
+                                            f"stacks {order} (add it to core or to a stack this one depends on)")
+                    dwhere = f"{where} build dep {dep!r} (stack {pkg['stack']!r})"
+                    if pkg["applies_families"] and family not in pkg["applies_families"]:
+                        raise StackGenError(f"{dwhere}: not applicable to family {family}")
+                    if pkg["applies_arches"] and arch not in pkg["applies_arches"]:
+                        raise StackGenError(f"{dwhere}: not applicable to arch {arch}")
                     real = pkg["names"][family]
                     if real is None:
-                        raise StackGenError(f"{where}: build dep {dep!r} unmapped for family {family}")
+                        raise StackGenError(f"{dwhere}: unmapped for family {family}")
+                    if pkg["repo_ref"] is not None and pkg["repo_ref"] not in applied_repos:
+                        raise StackGenError(f"{dwhere}: needs repo {pkg['repo_ref']!r}, which is not applied "
+                                            "before this build")
                     resolved.append(real)
                 entry["build_deps"] = resolved
                 add_packages(resolved)

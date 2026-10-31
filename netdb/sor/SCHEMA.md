@@ -369,7 +369,7 @@ tables hold nothing but the untouched seed.
 | `prov_images` | Installable OS images. Each row is one real distro × release × arch (`release_name`; `RELEASE` is reserved). It records `boot_method` (`ipxe` / `pi_netboot` / `media`), source and checksum URLs, fetch state (`version`, `sha256`, `fetched_at`), `install_template`, `refresh_policy` and `netboot_verified`. One live row per `(distro, release_name, arch)`. CHECKs enforce hex sha256 and that `pi_netboot` is arm-only. |
 | `prov_stacks` | Named, ordered bundles of install steps (`slug`, `name`, `description`, `locked`, `sort_order`). `core` is locked and always rendered first. |
 | `prov_stack_items` | One install step: `item_type` ∈ `pkg`, `repo`, `artifact`, `script`, `build`, `role`. Columns: per-family names (`name_suse` / `name_debian` / `name_fedora`), optional `applies_families` / `applies_arches` SETs (NULL = all), `version_pin`, `repo_ref` (pkg → repo item), `ansible_role`, `item_order` override and `sort_order`. The type-specific shape lives in a `spec` JSON object. One live row per `(stack_id, logical_name)`. |
-| `prov_stack_artifacts` | Per-arch download for an `artifact` item: `url` and `sha256` (arch `any` is allowed). |
+| `prov_stack_artifacts` | Per-arch download for an `artifact` item: `url` and a mandatory `sha256` (arch `any` is allowed). |
 | `prov_stack_deps` | Stack → stack dependency edges. A CHECK rejects self-dependency; cycles are rejected by the generator. |
 | `prov_runs` | Append-only audit of reimage/apply requests. Request columns are immutable (trigger), and a terminal status is final. A run can never return to `queued`, and rows cannot be deleted. `mode='reimage'` requires `image_id`; `stack_slugs` must be a JSON array. |
 
@@ -380,25 +380,34 @@ Family-name convention for `prov_stack_items`:
 
 Other CHECKs on `prov_stack_items`:
 
+- `version_pin` must be one safe path component (`[A-Za-z0-9][A-Za-z0-9._+~-]*`, max 64), because it becomes a directory name on hosts.
 - `spec` must be NULL on `pkg` and `role` items.
-- A `script` item must give either an inline `body` or a remote `url` together with its `sha256`.
-- A `build` item needs `source` and `system`, plus `version_pin`.
+- A `script` item must give either a non-empty inline `body` or a remote `url` with a lowercase-hex `sha256`; JSON `null` is not a value.
+- A `build` item needs a supported `system` and one of two sources:
+  - `source.git`, pinned by a full 40- or 64-hex commit SHA in `version_pin`. An optional `source.tag` is display-only.
+  - `source.tarball` with a `sha256`.
+- A guard `check` must be a non-empty argv list. It runs without a shell: as the script's `run_as` user for scripts, and as the unprivileged admin user for builds.
 - An `artifact` item needs `version_pin`.
 - A `role` item needs `ansible_role`.
+
+All hex and format CHECKs use case-sensitive `(?-i)…\z` patterns. Under `utf8mb4_unicode_ci`, a plain `REGEXP` is case-insensitive, and `$` also matches before a trailing newline. JSON predicates are wrapped in `IFNULL(…, 0)` because MariaDB passes a CHECK that evaluates to NULL.
 
 The generator adds further hard errors on top of these:
 
 - an unmapped package
 - a missing per-arch artifact or sha256
 - a tarball without sha256
-- a git ref that is a branch name
+- a git build not pinned by a full commit SHA
+- a build dep that is not a pkg item in the rendered stacks, does not apply to the target, or needs a repo that is not applied first
 - a secret-looking env name
 - a dependency cycle
 - an unknown stack slug
 
 Within a stack, default step order is repo → pkg → artifact → build → script →
-role (`item_order` overrides it). Build dependencies are logical package names,
-resolved through the family map and installed before the build.
+role (`item_order` overrides it). Build dependencies are logical package names
+and resolve only against pkg items in the stacks being rendered. The locked
+`core` stack is always included and acts as the family map. Dependencies are
+installed just before the build.
 
 `functions` is unchanged. `functions.package_bundle` MAY name a `prov_stacks`
 slug; nothing enforces that link yet.

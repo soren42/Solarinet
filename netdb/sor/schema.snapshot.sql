@@ -16,7 +16,7 @@
 --   026_unifi_network_cdc sha256=1c6c092d08783729c506edb8ae41dd22f0bb21b19d299b124ce4822b174901dc
 --   027_interconnect_cable_details sha256=0ed1ed961fe13366195191a2038df5468f8ca75f5865a6b8963e0b72d07bb0e3
 --   028_entity_unit_association sha256=35f30382d3bede4cb98165b2bd61d77c96da5bea873a6a984f7faf497b4760db
---   029_provisioning_images_stacks sha256=146ea58d0edfeb0723e3611444367fa4493644be146cd056edd8717b7df2e44d
+--   029_provisioning_images_stacks sha256=a2b09da690607b886540375459535c4973fa6c7351eff5ca91fcd8e55375cecb
 
 /*M!999999\- enable the sandbox mode */
 
@@ -1576,9 +1576,9 @@ CREATE TABLE `prov_images` (
   KEY `ix_prov_images_source` (`source_id`),
   CONSTRAINT `fk_prov_images_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
   CONSTRAINT `ck_prov_images_verified` CHECK (`netboot_verified` in (0,1)),
-  CONSTRAINT `ck_prov_images_sha256` CHECK (`sha256` is null or `sha256` regexp '^[0-9a-f]{64}$'),
+  CONSTRAINT `ck_prov_images_sha256` CHECK (`sha256` is null or `sha256` regexp '(?-i)^[0-9a-f]{64}\\z'),
   CONSTRAINT `ck_prov_images_pi_arch` CHECK (`boot_method` <> 'pi_netboot' or `arch` in ('arm64','armhf')),
-  CONSTRAINT `ck_prov_images_slug` CHECK (`distro` regexp '^[a-z0-9][a-z0-9-]*$')
+  CONSTRAINT `ck_prov_images_slug` CHECK (`distro` regexp '(?-i)^[a-z0-9][a-z0-9-]*\\z')
 ) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Installable OS images: real distro x release x arch rows with boot method and fetch state';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `prov_runs`;
@@ -1672,7 +1672,7 @@ CREATE TABLE `prov_stack_artifacts` (
   `item_id` int(10) unsigned NOT NULL COMMENT 'FK: the artifact stack item',
   `arch` enum('any','x86_64','arm64','armhf','riscv64','i386') NOT NULL COMMENT 'target arch; any = arch-independent',
   `url` varchar(512) NOT NULL COMMENT 'download URL for this arch at the item''s version_pin',
-  `sha256` char(64) DEFAULT NULL COMMENT 'expected sha256 of the download; NULL = not yet recorded (render is a hard error)',
+  `sha256` char(64) NOT NULL COMMENT 'expected sha256 of the download (64 lowercase hex); never invented, so no row until it is known',
   `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
   `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
@@ -1685,7 +1685,8 @@ CREATE TABLE `prov_stack_artifacts` (
   KEY `ix_prov_stack_artifacts_source` (`source_id`),
   CONSTRAINT `fk_prov_stack_artifacts_item` FOREIGN KEY (`item_id`) REFERENCES `prov_stack_items` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_prov_stack_artifacts_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
-  CONSTRAINT `ck_prov_stack_artifacts_sha256` CHECK (`sha256` is null or `sha256` regexp '^[0-9a-f]{64}$')
+  CONSTRAINT `ck_prov_stack_artifacts_sha256` CHECK (`sha256` regexp '(?-i)^[0-9a-f]{64}\\z'),
+  CONSTRAINT `ck_prov_stack_artifacts_url` CHECK (`url` <> '')
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Per-arch download URL + sha256 for artifact stack items (any = arch-independent)';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `prov_stack_deps`;
@@ -1728,7 +1729,7 @@ CREATE TABLE `prov_stack_items` (
   `ansible_role` varchar(64) DEFAULT NULL COMMENT 'role items only: Ansible role under deploy/fleet/ansible/roles',
   `repo_ref` varchar(96) DEFAULT NULL COMMENT 'pkg items only: logical_name of a repo item that must be applied first',
   `source_url` varchar(512) DEFAULT NULL COMMENT 'informational project/release home',
-  `version_pin` varchar(64) DEFAULT NULL COMMENT 'pinned version / git ref; required for artifact and build; compared by script/build version_check',
+  `version_pin` varchar(64) DEFAULT NULL COMMENT 'pinned version: one safe path component; git builds = full 40/64-hex commit SHA; required for artifact and build; compared by version_check',
   `spec` longtext DEFAULT NULL COMMENT 'per-type JSON object (repo/script/build required, artifact optional, pkg/role none); validated by stackgen.py',
   `item_order` smallint(5) unsigned DEFAULT NULL COMMENT 'explicit position within the stack; NULL = type default (repo 100 .. role 600)',
   `sort_order` smallint(5) unsigned NOT NULL DEFAULT 100 COMMENT 'tie-break within the same position (lower first, then logical_name)',
@@ -1754,8 +1755,10 @@ CREATE TABLE `prov_stack_items` (
   CONSTRAINT `ck_prov_stack_items_fedora` CHECK (`name_fedora` is null or `item_type` = 'pkg' = (`name_fedora` <> '=' and `name_fedora` <> '')),
   CONSTRAINT `ck_prov_stack_items_spec` CHECK (`spec` is null or json_valid(`spec`) and json_type(`spec`) = 'OBJECT'),
   CONSTRAINT `ck_prov_stack_items_spec_req` CHECK (case `item_type` when 'pkg' then `spec` is null when 'role' then `spec` is null when 'artifact' then 1 else `spec` is not null end),
-  CONSTRAINT `ck_prov_stack_items_script` CHECK (`item_type` <> 'script' or json_exists(`spec`,'$.body') and !json_exists(`spec`,'$.url') or json_exists(`spec`,'$.url') and json_exists(`spec`,'$.sha256') and !json_exists(`spec`,'$.body')),
-  CONSTRAINT `ck_prov_stack_items_build` CHECK (`item_type` <> 'build' or json_exists(`spec`,'$.source') and json_exists(`spec`,'$.system'))
+  CONSTRAINT `ck_prov_stack_items_pin_fmt` CHECK (`version_pin` is null or `version_pin` regexp '(?-i)^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}\\z'),
+  CONSTRAINT `ck_prov_stack_items_script` CHECK (`item_type` <> 'script' or ifnull(json_type(json_extract(`spec`,'$.body')) = 'STRING' and json_value(`spec`,'$.body') <> '' and !json_exists(`spec`,'$.url') and !json_exists(`spec`,'$.sha256') or json_type(json_extract(`spec`,'$.url')) = 'STRING' and json_value(`spec`,'$.url') <> '' and json_type(json_extract(`spec`,'$.sha256')) = 'STRING' and json_value(`spec`,'$.sha256') regexp '(?-i)^[0-9a-f]{64}\\z' and !json_exists(`spec`,'$.body'),0)),
+  CONSTRAINT `ck_prov_stack_items_build` CHECK (`item_type` <> 'build' or ifnull(json_type(json_extract(`spec`,'$.source')) = 'OBJECT' and json_value(`spec`,'$.system') in ('cmake','make','autotools','meson','custom') and json_type(json_extract(`spec`,'$.system')) = 'STRING' and (json_type(json_extract(`spec`,'$.source.git')) = 'STRING' and json_value(`spec`,'$.source.git') <> '' and !json_exists(`spec`,'$.source.tarball') and `version_pin` regexp '(?-i)^[0-9a-f]{40}([0-9a-f]{24})?\\z' or json_type(json_extract(`spec`,'$.source.tarball')) = 'STRING' and json_value(`spec`,'$.source.tarball') <> '' and !json_exists(`spec`,'$.source.git') and json_type(json_extract(`spec`,'$.source.sha256')) = 'STRING' and json_value(`spec`,'$.source.sha256') regexp '(?-i)^[0-9a-f]{64}\\z'),0)),
+  CONSTRAINT `ck_prov_stack_items_check` CHECK (`spec` is null or !json_exists(`spec`,'$.check') or ifnull(json_type(json_extract(`spec`,'$.check')) = 'ARRAY' and json_length(`spec`,'$.check') >= 1 and json_type(json_extract(`spec`,'$.check[0]')) = 'STRING' and json_value(`spec`,'$.check[0]') <> '',0))
 ) ENGINE=InnoDB AUTO_INCREMENT=34 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Logical stack items: pkg/repo/artifact/script/build/role, per-family names, per-type JSON spec';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `prov_stacks`;
@@ -1780,7 +1783,7 @@ CREATE TABLE `prov_stacks` (
   KEY `ix_prov_stacks_source` (`source_id`),
   CONSTRAINT `fk_prov_stacks_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
   CONSTRAINT `ck_prov_stacks_locked` CHECK (`locked` in (0,1)),
-  CONSTRAINT `ck_prov_stacks_slug` CHECK (`slug` regexp '^[a-z0-9][a-z0-9-]*$')
+  CONSTRAINT `ck_prov_stacks_slug` CHECK (`slug` regexp '(?-i)^[a-z0-9][a-z0-9-]*\\z')
 ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Named arch-independent software stacks; locked = always included (Core)';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `receipts`;

@@ -9,7 +9,11 @@
 #      deploy/fleet/stackgen.py for THIS host's family/arch;
 #   3. run the real stack-items role against localhost (connection local,
 #      become disabled, all paths under the temp dir) and assert the effects;
-#   4. run it again and require changed=0 (guards make it idempotent).
+#   4. run it again and require changed=0 (guards make it idempotent);
+#   5. version_check mismatch re-runs; tampered sha256 is refused;
+#   6. review regressions: a hand-edited render with a path-escaping version
+#      is refused by the role before anything is created, and a guard check
+#      is executed as argv (shell metacharacters are inert).
 #
 # Not exercised here (need root / network): pkg and repo steps.
 # Requires ansible-playbook on PATH (or ~/.local/bin); skips with exit 0 if
@@ -55,7 +59,15 @@ case "$(uname -m)" in
   riscv64) ARCH=riscv64 ;; i386|i686) ARCH=i386 ;; *) echo "SKIP: arch"; exit 0 ;;
 esac
 
-mkdir -p "$T/src/hello-1.0" "$T/roles/smoke-role/tasks" "$T/prefix" "$T/out"
+mkdir -p "$T/src/hello-1.0" "$T/roles/smoke-role/tasks" "$T/prefix" "$T/out" "$T/gitsrc"
+# Git source: pin the FIRST commit; a later commit on the branch must not be built.
+git -C "$T/gitsrc" init -q
+printf 'pinned\n' > "$T/gitsrc/marker"
+git -C "$T/gitsrc" add marker
+git -C "$T/gitsrc" -c user.name=t -c user.email=t@invalid commit -q -m pinned
+GIT_PIN="$(git -C "$T/gitsrc" rev-parse HEAD)"
+printf 'moved\n' > "$T/gitsrc/marker"
+git -C "$T/gitsrc" -c user.name=t -c user.email=t@invalid commit -q -am moved
 printf '#!/bin/sh\necho hello\n' > "$T/src/hello-1.0/hello.sh"
 tar -C "$T/src" -czf "$T/hello-1.0.tar.gz" hello-1.0
 printf 'artifact-payload\n' > "$T/tool.bin"
@@ -70,7 +82,7 @@ cat > "$T/roles/smoke-role/tasks/main.yml" <<EOF
     mode: "0644"
 EOF
 
-T="$T" TAR_SHA="$TAR_SHA" ART_SHA="$ART_SHA" python3 - > "$T/defs.json" <<'PY'
+T="$T" TAR_SHA="$TAR_SHA" ART_SHA="$ART_SHA" GIT_PIN="$GIT_PIN" python3 - > "$T/defs.json" <<'PY'
 import json, os
 t = os.environ["T"]
 same = {"suse": "=", "debian": "=", "fedora": "="}
@@ -79,13 +91,17 @@ print(json.dumps({"stacks": [{"slug": "smoke", "items": [
     {"logical_name": "marker script", "item_type": "script", "names": same, "version_pin": "2.1",
      "spec": {"body": f'echo "2.1" > {t}/out/version.txt\necho "$GREETING" > {t}/out/greeting.txt',
               "env": {"GREETING": "hi from env"}, "run_as": "admin",
-              "creates": f"{t}/out/greeting.txt", "check": f"cat {t}/out/version.txt",
+              "creates": f"{t}/out/greeting.txt", "check": ["cat", f"{t}/out/version.txt"],
               "version_check": r"^([0-9.]+)$"}},
     {"logical_name": "hello", "item_type": "build", "names": same, "version_pin": "1.0",
      "spec": {"source": {"tarball": f"file://{t}/hello-1.0.tar.gz", "sha256": os.environ["TAR_SHA"]},
               "system": "custom", "prefix": f"{t}/prefix",
               "commands": 'mkdir -p "$PREFIX/bin" && cp hello.sh "$PREFIX/bin/hello" && chmod 0755 "$PREFIX/bin/hello"',
               "creates": f"{t}/prefix/bin/hello"}},
+    {"logical_name": "gitthing", "item_type": "build", "names": same, "version_pin": os.environ["GIT_PIN"],
+     "spec": {"source": {"git": f"file://{t}/gitsrc", "tag": "display-only"}, "system": "custom",
+              "prefix": f"{t}/prefix", "commands": 'cp marker "$PREFIX/git-marker"',
+              "creates": f"{t}/prefix/git-marker", "check": ["cat", f"{t}/prefix/git-marker"]}},
     {"logical_name": "tool", "item_type": "artifact", "names": same, "version_pin": "3.0",
      "artifacts": {"any": {"url": f"file://{t}/tool.bin", "sha256": os.environ["ART_SHA"]}}},
 ]}]}))
@@ -95,9 +111,9 @@ python3 "$ROOT/deploy/fleet/stackgen.py" --from-json "$T/defs.json" --family "$F
 python3 - "$T/render.json" <<'PY' || die "render step order"
 import json, sys
 r = json.load(open(sys.argv[1]))
-assert [s["type"] for s in r["solari_stack_steps"]] == ["artifact", "build", "script", "role"], r["solari_stack_steps"]
+assert [s["type"] for s in r["solari_stack_steps"]] == ["artifact", "build", "build", "script", "role"], r["solari_stack_steps"]
 PY
-ok "render: artifact → build → script → role"
+ok "render: artifact → build ×2 → script → role"
 
 cat > "$T/play.yml" <<EOF
 ---
@@ -122,7 +138,8 @@ run_play 1
 [ "$("$T/prefix/bin/hello")" = "hello" ] || die "custom build install"
 cmp -s "$T/tool.bin" "$T/opt/smoke--tool/3.0/tool.bin" || die "artifact download"
 [ -f "$T/out/role.txt" ] || die "role step"
-ok "first run applied artifact, build, script (env), role"
+[ "$(cat "$T/prefix/git-marker")" = "pinned" ] || die "git build did not use the pinned commit"
+ok "first run applied artifact, builds (tarball + git at pinned commit, not branch tip), script (env), role"
 
 # ---- 4. second run: idempotent ----------------------------------------------
 run_play 2
@@ -146,5 +163,43 @@ if ANSIBLE_ROLES_PATH="$ANS/roles:$T/roles" ANSIBLE_LOCALHOST_WARNING=0 ANSIBLE_
 fi
 grep -qi 'checksum' "$T/run4.log" || { cat "$T/run4.log" >&2; die "tampered artifact failed for another reason"; }
 ok "sha256 mismatch refused"
+
+# ---- 7. review regression: path-escaping version refused by the role --------
+printf 'artifact-payload\n' > "$T/tool.bin"
+python3 - "$T/render.json" "$T/render-escape.json" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+r["solari_stack_artifacts"][0]["version"] = "../../escaped"
+r["solari_stack_steps"] = [{"type": "artifact", "index": 0}]
+json.dump(r, open(sys.argv[2], "w"))
+PY
+rm -rf "$T/opt" "$T/escaped"
+if ANSIBLE_ROLES_PATH="$ANS/roles:$T/roles" ANSIBLE_LOCALHOST_WARNING=0 ANSIBLE_INVENTORY_UNPARSED_WARNING=0 \
+   ansible-playbook -i localhost, "$T/play.yml" -e "@$T/render-escape.json" -e ansible_become=false \
+   -e "solari_stack_admin_user=$(id -un)" -e "solari_stack_artifact_root=$T/opt/art" \
+   -e "solari_stack_work_root=$T/work" > "$T/run5.log" 2>&1; then
+  die "path-escaping version was accepted"
+fi
+grep -q 'unsafe id/version' "$T/run5.log" || { cat "$T/run5.log" >&2; die "escape refused for another reason"; }
+[ ! -e "$T/escaped" ] && [ ! -e "$T/opt/escaped" ] || die "a path outside the artifact root was created"
+[ -z "$(ls -A "$T/opt/art" 2>/dev/null)" ] || die "something was created under the artifact root before the refusal"
+ok "role refuses a path-escaping version before creating anything"
+
+# ---- 8. review regression: guard check is argv, not a shell -------------------
+python3 - "$T/render.json" "$T/render-inject.json" "$T" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1])); t = sys.argv[3]
+s = r["solari_stack_scripts"][0]
+s["check"] = ["cat", f"{t}/out/version.txt; touch {t}/out/pwned"]
+s["creates"] = None
+r["solari_stack_steps"] = [{"type": "script", "index": 0}]
+json.dump(r, open(sys.argv[2], "w"))
+PY
+ANSIBLE_ROLES_PATH="$ANS/roles:$T/roles" ANSIBLE_LOCALHOST_WARNING=0 ANSIBLE_INVENTORY_UNPARSED_WARNING=0 \
+  ansible-playbook -i localhost, "$T/play.yml" -e "@$T/render-inject.json" -e ansible_become=false \
+  -e "solari_stack_admin_user=$(id -un)" -e "solari_stack_artifact_root=$T/opt" \
+  -e "solari_stack_work_root=$T/work" > "$T/run6.log" 2>&1 || true
+[ ! -e "$T/out/pwned" ] || die "guard check was interpreted by a shell"
+ok "guard check metacharacters are inert (argv, no shell)"
 
 echo "PASS: $pass checks"
