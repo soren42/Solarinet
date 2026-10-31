@@ -65,10 +65,12 @@
 --            configure_args, prefix, same guard (build checks run
 --            unprivileged). Build dependencies are `requires` edges to pkg
 --            entries (spec.build_deps is refused). custom builds carry TWO
---            commands: `build` (runs as the unprivileged admin user, like
---            every other system's fetch/configure/compile) and `install` (the
---            only phase run as root); other systems may carry neither. The
---            legacy single `commands` key is refused.
+--            commands, `build` and `install`; other systems may carry
+--            neither. The legacy single `commands` key is refused. No build
+--            command ever runs as root: every system's fetch, compile and
+--            install run as the unprivileged admin user, the install staged
+--            under DESTDIR, and root only copies the staged prefix into
+--            place (data only). Root-time install logic must be a `script`.
 --   role     existing Ansible role named by `ansible_role`.
 --
 -- REQUIREMENTS (prov_software_requires): A requires B = B is installed before

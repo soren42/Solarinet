@@ -74,7 +74,7 @@ Operator sketch: `IMG_1662.png` (T3 attachment, 2026-10-31; not committed).
      | `repo` | Third-party repository plus signing key, added before `pkg` items |
      | `artifact` | Upstream release binary or tarball, per arch, sha256-pinned (AI CLIs, T3 Code) |
      | `script` | Download/install shell script. Body is inline, or a remote URL with a mandatory sha256. Has an idempotency guard (`creates` / `check` command / version regex) |
-     | `build` | Source build (cmake / make / autotools / meson / custom). Pinned git ref or checksummed tarball; build deps resolve through the package map |
+     | `build` | Source build (cmake / make / autotools / meson / custom). Pinned git ref or checksummed tarball; build deps resolve through the package map. Every phase, install included, runs unprivileged into a DESTDIR stage; root only copies the staged prefix (no symlink traversal, setuid dropped). Root-time install logic must be a `script` item |
      | `role` | Existing Ansible role |
 
    - **Software pool (operator-approved 2026-10-31, before 029 went live).**

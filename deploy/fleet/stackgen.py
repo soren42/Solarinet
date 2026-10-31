@@ -570,14 +570,17 @@ def _render_build(it: dict, where: str) -> dict:
     system = spec.get("system")
     if system not in BUILD_SYSTEMS:
         raise StackGenError(f"{where}: build system must be one of {BUILD_SYSTEMS}")
-    # custom builds follow the same privilege boundary as the others: `build`
-    # runs as the unprivileged admin user, only `install` runs as root.
+    # No build ever runs a build-controlled command as root: `build` and
+    # `install` (like every other system's compile and install) run as the
+    # unprivileged admin user, the install staged under $DESTDIR; root only
+    # copies <stage><prefix> into the prefix (stack-items stage_install.py).
+    # Root-time install logic belongs in a `script` item.
     cmds = {k: spec.get(k) for k in ("build", "install")}
     if system == "custom":
         for k, v in cmds.items():
             if not isinstance(v, str) or not v.strip():
                 raise StackGenError(f"{where}: custom build needs a non-empty {k} command "
-                                    "(build runs unprivileged, install as root)")
+                                    "(both run unprivileged; install writes under $DESTDIR$PREFIX)")
     elif any(v is not None for v in cmds.values()):
         raise StackGenError(f"{where}: build/install commands are only valid for system custom")
     args = spec.get("configure_args") or []
@@ -587,8 +590,13 @@ def _render_build(it: dict, where: str) -> dict:
     if not isinstance(prefix, str) or not PREFIX_RE.fullmatch(prefix):
         raise StackGenError(f"{where}: prefix must be an absolute path of plain components "
                             f"([A-Za-z0-9._+-], no '.'/'..', not '/'), got {prefix!r}")
+    env = _env(spec, where)
+    for k in ("DESTDIR", "PREFIX"):
+        if k in env:
+            raise StackGenError(f"{where}: env {k} is set by the stack-items role (prefix / install "
+                                "stage); use spec.prefix instead")
     out = {"source": source, "system": system, "configure_args": list(args), "prefix": prefix,
-           "build": cmds["build"], "install": cmds["install"], "env": _env(spec, where),
+           "build": cmds["build"], "install": cmds["install"], "env": env,
            "build_deps": []}   # filled by render() from the entry's pkg requirements
     out.update(_guard(spec, it, where))
     return out

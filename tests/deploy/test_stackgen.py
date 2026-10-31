@@ -568,6 +568,13 @@ class Builds(unittest.TestCase):
         b = render_doc(doc_with({"slug": "x", "items": [build("t")]}), ["x"])["solari_stack_builds"][0]
         self.assertEqual((b["build"], b["install"], b["prefix"]), (None, None, "/usr/local"))
 
+    def test_build_env_cannot_override_destdir_or_prefix(self):  # Luna review: every install is DESTDIR-staged
+        for k in ("DESTDIR", "PREFIX"):
+            with self.subTest(env=k), self.assertRaisesRegex(StackGenError, f"env {k} is set by the stack-items role"):
+                render_doc(doc_with({"slug": "x", "items": [build("t", env={k: "/"})]}), ["x"])
+        b = render_doc(doc_with({"slug": "x", "items": [build("t", env={"CFLAGS": "-O2"})]}), ["x"])
+        self.assertEqual(b["solari_stack_builds"][0]["env"], {"CFLAGS": "-O2"})
+
     def test_prefix_is_plain_absolute_path(self):  # review 2 finding 1 (staged install copies into it)
         for prefix in ("usr/local", "/", "/usr/../etc", "/usr/./local", "/opt/x y", "/opt/*", "/opt/x\n", "//", ""):
             with self.subTest(prefix=prefix), self.assertRaisesRegex(StackGenError, "prefix must be"):

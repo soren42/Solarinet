@@ -1,17 +1,20 @@
 # Source build from a pinned git ref or a sha256-pinned tarball. Build deps
 # were already installed by the preceding pkg step (the generator inserts it).
 #
-# Privilege boundary: fetch, configure and compile run as the unprivileged
-# admin user (solari_stack_admin_user) in a build dir it owns. Only the
-# install runs as root:
-#   cmake / meson / autotools  the build system's own install step ALSO runs
-#                              unprivileged, staged into <build>/_stage via
-#                              DESTDIR; root then copies <stage><prefix> into
-#                              the prefix (root-owned, setuid/setgid bits
-#                              dropped) and refuses anything staged outside it.
-#   make                       plain Makefiles honour DESTDIR only by
-#                              convention, so `make install` runs as root.
-#   custom                     `build` runs unprivileged, `install` as root.
+# Privilege boundary: a build NEVER executes a build-controlled command as
+# root. Fetch, configure, compile AND install all run as the unprivileged
+# admin user (solari_stack_admin_user) in a build dir it owns, the install
+# staged into <build>/_stage via DESTDIR (exported to the environment for
+# every system, and passed on the make command line for make/autotools):
+#   cmake      cmake --install        meson   meson install
+#   autotools  make install           make    make PREFIX=<prefix> install
+#   custom     the item's `install` command (must write under $DESTDIR$PREFIX)
+# The only root step is files/stage_install.py, a data-only copier that
+# installs <stage><prefix> into the prefix without following any symlink
+# (stage or destination), root-owned, setuid/setgid dropped, and refuses
+# anything staged outside the prefix. A build whose install ignores DESTDIR
+# stages nothing and is refused: an item that needs root-time install logic
+# must be modelled as a `script` item (the explicit, reviewed root-code path).
 # Unprivileged steps refuse to run as uid 0, so an inventory-level
 # ansible_become_user (which beats the task keyword) fails closed instead of
 # silently compiling as root. The guard check also runs as the admin user.
@@ -23,7 +26,7 @@
     # The guard only inspects the result; it never needs root.
     solari_guard_user: "{{ solari_stack_admin_user }}"
     solari_bld_dir: "{{ solari_stack_work_root }}/build/{{ solari_stack_builds[solari_step.index].id }}/{{ solari_stack_builds[solari_step.index].version }}"
-    solari_bld_staged: "{{ solari_stack_builds[solari_step.index].system in ['cmake', 'meson', 'autotools'] }}"
+    solari_bld_stage: "{{ solari_stack_work_root }}/build/{{ solari_stack_builds[solari_step.index].id }}/{{ solari_stack_builds[solari_step.index].version }}/_stage"
 
 - name: Refuse path components that could escape {{ solari_stack_work_root }}
   ansible.builtin.assert:
@@ -124,60 +127,49 @@
       environment: "{{ solari_bld.env | combine({'PREFIX': solari_bld.prefix}) }}"
       changed_when: true
 
-    - name: Install via a DESTDIR stage ({{ solari_bld.system }})
-      when: solari_bld_staged | bool
-      block:
-        - name: Stage install as {{ solari_stack_admin_user }} into {{ solari_bld_dir }}/_stage
-          become: true
-          become_user: "{{ solari_stack_admin_user }}"
-          ansible.builtin.shell:
-            cmd: |
-              set -eu
-              [ "$(id -u)" != 0 ] || { echo "stack-items: refusing to stage {{ solari_bld.name | quote }} as root" >&2; exit 1; }
-              rm -rf "$DESTDIR"
-              {% if solari_bld.system == 'cmake' %}
-              cmake --install _solari_build
-              {% elif solari_bld.system == 'meson' %}
-              meson install -C _solari_build
-              {% else %}
-              make install
-              {% endif %}
-            chdir: "{{ solari_bld_dir }}/src"
-            executable: /bin/sh
-          environment: "{{ solari_bld.env | combine({'PREFIX': solari_bld.prefix, 'DESTDIR': solari_bld_dir ~ '/_stage'}) }}"
-          changed_when: true
-
-        - name: Copy the staged {{ solari_bld.prefix }} into place (root)
-          ansible.builtin.shell:
-            cmd: |
-              set -eu
-              [ -d "$SOLARI_STAGE$SOLARI_PREFIX" ] || { echo "stack-items: build staged nothing under $SOLARI_PREFIX" >&2; exit 1; }
-              outside="$(find "$SOLARI_STAGE" -mindepth 1 ! -type d ! -path "$SOLARI_STAGE$SOLARI_PREFIX/*" -print)"
-              if [ -n "$outside" ]; then
-                printf 'stack-items: refusing a build that staged files outside its prefix %s:\n%s\n' "$SOLARI_PREFIX" "$outside" >&2
-                exit 1
-              fi
-              mkdir -p "$SOLARI_PREFIX"
-              cp -R -P --preserve=timestamps,links "$SOLARI_STAGE$SOLARI_PREFIX/." "$SOLARI_PREFIX/"
-            executable: /bin/sh
-          environment:
-            SOLARI_STAGE: "{{ solari_bld_dir }}/_stage"
-            SOLARI_PREFIX: "{{ solari_bld.prefix }}"
-          changed_when: true
-
-    - name: Install as root ({{ solari_bld.system }})
-      when: not (solari_bld_staged | bool)
+    - name: Stage install as {{ solari_stack_admin_user }} into {{ solari_bld_stage }} ({{ solari_bld.system }})
+      become: true
+      become_user: "{{ solari_stack_admin_user }}"
       ansible.builtin.shell:
         cmd: |
           set -eu
-          {% if solari_bld.system == 'make' %}
-          make PREFIX={{ solari_bld.prefix | quote }} install
+          [ "$(id -u)" != 0 ] || { echo "stack-items: refusing to stage {{ solari_bld.name | quote }} as root" >&2; exit 1; }
+          rm -rf "$DESTDIR"
+          mkdir -p "$DESTDIR"
+          {% if solari_bld.system == 'cmake' %}
+          cmake --install _solari_build
+          {% elif solari_bld.system == 'meson' %}
+          meson install -C _solari_build
+          {% elif solari_bld.system == 'autotools' %}
+          make DESTDIR="$DESTDIR" install
+          {% elif solari_bld.system == 'make' %}
+          make PREFIX={{ solari_bld.prefix | quote }} DESTDIR="$DESTDIR" install
           {% else %}
           {{ solari_bld.install }}
           {% endif %}
         chdir: "{{ solari_bld_dir }}/src"
         executable: /bin/sh
-      environment: "{{ solari_bld.env | combine({'PREFIX': solari_bld.prefix}) }}"
+      environment: "{{ solari_bld.env | combine({'PREFIX': solari_bld.prefix, 'DESTDIR': solari_bld_stage}) }}"
+      changed_when: true
+
+    # Read-only validation BEFORE the prefix is created, so a refused stage
+    # leaves nothing behind. (Root, like the install: `script` transfers a
+    # file, which an unprivileged become user could not read without ACLs.)
+    - name: Check the stage (nothing outside the prefix, DESTDIR honoured; writes nothing)
+      ansible.builtin.script:
+        cmd: "stage_install.py --check --stage {{ solari_bld_stage | quote }} --prefix {{ solari_bld.prefix | quote }}"
+        executable: "{{ ansible_facts.python.executable | default(discovered_interpreter_python) }}"
+      changed_when: false
+
+    - name: Ensure prefix {{ solari_bld.prefix }} exists (root)
+      ansible.builtin.file:
+        path: "{{ solari_bld.prefix }}"
+        state: directory
+
+    - name: Install the stage into {{ solari_bld.prefix }} (root; data copy only, no build code)
+      ansible.builtin.script:
+        cmd: "stage_install.py --stage {{ solari_bld_stage | quote }} --prefix {{ solari_bld.prefix | quote }}"
+        executable: "{{ ansible_facts.python.executable | default(discovered_interpreter_python) }}"
       changed_when: true
 
     - name: Re-check {{ solari_bld.name }} after building

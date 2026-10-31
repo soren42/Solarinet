@@ -20,8 +20,10 @@
 #   * stackgen --from-db (as an ephemeral SELECT-only user) renders
 #     byte-identically to tests/deploy/fixtures/stacks_seed.json, rejects a
 #     DB conflict pair, and refuses a live member of a soft-deleted entry;
-#   * rollback 029-down.sql refuses non-seed state, then succeeds, then 029
-#     re-applies cleanly (forward recovery).
+#   * rollback 029-down.sql refuses non-seed state (runs, operator rows,
+#     edits made within the seed's own second, soft deletes), its documented
+#     digest-recompute command reproduces the file's constants, then it
+#     succeeds on the untouched seed, then 029 re-applies (forward recovery).
 #
 # Never touches live `sor` / `solarinet`: the database name is fixed below,
 # the script refuses if it already exists, and teardown only drops what it
@@ -466,6 +468,51 @@ if "${ADMIN[@]}" "$DB" < "$SOR/rollback/029-down.sql" >/dev/null 2>&1; then die 
 ok "rollback refuses operator-edited rows"
 q "DROP PROCEDURE IF EXISTS _solarinet_rollback_m029_assert_seed_only; DELETE FROM prov_images WHERE release_name='tumbleweed'"
 apply "$SOR/migrations/029_provisioning_images_stacks.sql"   # re-seed the image fresh
+
+# The guard compares exact counts + content digests, so an edit stamped in the
+# seed's own second (updated_at = created_at, invisible to a timestamp check)
+# and a soft delete are refused too, naming the table.
+refused() {  # label, expected table — rollback must refuse and keep every prov_* table
+  if "${ADMIN[@]}" "$DB" < "$SOR/rollback/029-down.sql" >/dev/null 2>"$TMP_B"; then die "rollback accepted $1"; fi
+  grep -q "not the untouched 029 seed.*$2 (rows" "$TMP_B" || { cat "$TMP_B" >&2; die "rollback refused $1 for another reason"; }
+  eq "rollback refuses $1 (names $2, tables kept)" \
+     "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'prov\\_%'" 9
+}
+q "CREATE TABLE _bk_m029 AS SELECT id, notes, updated_at FROM prov_software WHERE logical_name='git'"
+q "UPDATE prov_software SET notes='operator note', updated_at=created_at WHERE logical_name='git'"
+eq "same-second edit is invisible to updated_at > created_at" \
+   "SELECT updated_at > created_at FROM prov_software WHERE logical_name='git'" 0
+refused "a same-second edit of a seed pool row" prov_software
+q "UPDATE prov_software p JOIN _bk_m029 b ON b.id=p.id SET p.notes=b.notes, p.updated_at=b.updated_at; DROP TABLE _bk_m029"
+q "UPDATE prov_stacks SET name='Core!', updated_at=created_at WHERE slug='core'"
+refused "a same-second edit of a seed stack" prov_stacks
+q "UPDATE prov_stacks SET name='Core', updated_at=created_at WHERE slug='core'"
+q "UPDATE prov_stack_members m JOIN prov_software p ON p.id=m.software_id SET m.deleted_at=m.created_at, m.updated_at=m.created_at WHERE p.logical_name='curl'"
+refused "a soft-deleted seed member" prov_stack_members
+q "UPDATE prov_stack_members m JOIN prov_software p ON p.id=m.software_id SET m.deleted_at=NULL, m.updated_at=m.created_at WHERE p.logical_name='curl'"
+q "UPDATE prov_images SET source_id=(SELECT id FROM sources WHERE slug<>'provisioner' ORDER BY id LIMIT 1), updated_at=created_at WHERE release_name='tumbleweed'"
+refused "a seed image re-asserted by another source" prov_images
+q "UPDATE prov_images SET source_id=$SRC, updated_at=created_at WHERE release_name='tumbleweed'"
+q "INSERT INTO prov_stack_members (stack_id,software_id,source_id) VALUES ((SELECT id FROM prov_stacks WHERE slug='dev-tools'),$(SW git),$SRC)"
+refused "an extra member row" prov_stack_members
+q "DELETE m FROM prov_stack_members m JOIN prov_stacks s ON s.id=m.stack_id WHERE s.slug='dev-tools' AND m.software_id=$(SW git)"
+
+# The header's recompute command must reproduce the constants in the file.
+{ sed '/^-- RECOMPUTE STOP/q' "$SOR/rollback/029-down.sql"
+  echo 'CALL _solarinet_rollback_m029_seed_digests();'
+  echo 'SELECT tbl, n, digest FROM _solarinet_m029_seed_actual ORDER BY tbl;'
+  echo 'DROP PROCEDURE _solarinet_rollback_m029_seed_digests;'
+  echo 'DROP PROCEDURE _solarinet_rollback_m029_assert_seed_only;'
+} | "${ADMIN[@]}" -N -B "$DB" > "$TMP_A" || die "digest recompute command"
+"$PY" - "$TMP_A" "$SOR/rollback/029-down.sql" <<'PYCHK' || die "recomputed seed digests differ from the 029-down.sql constants"
+import re, sys
+got = {l.split("\t")[0]: tuple(l.split("\t")[1:]) for l in open(sys.argv[1]).read().splitlines()}
+src = open(sys.argv[2]).read()
+want = {m[0]: (m[1], m[2]) for m in re.findall(r"SELECT '(prov_[a-z_]+)'(?: AS tbl)?, (\d+)(?: AS n)?, '([0-9a-f]{64})'", src)}
+assert len(want) == 6 and got == want, (got, want)
+PYCHK
+ok "documented recompute command reproduces the 6 seed count/digest constants"
+
 apply "$SOR/rollback/029-down.sql"
 eq "rollback removed all prov_* tables" "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'prov\\_%'" 0
 eq "rollback removed prov_runs triggers" "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME LIKE 'trg_prov\\_runs%'" 0

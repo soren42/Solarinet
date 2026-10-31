@@ -395,7 +395,7 @@ Other CHECKs on `prov_software`:
 - A `build` entry needs a supported `system` (matched case-sensitively, `COLLATE utf8mb4_bin`, so `CMake` is refused) and one of two sources:
   - `source.git`, pinned by a full 40- or 64-hex commit SHA in `version_pin`. An optional `source.tag` is display-only.
   - `source.tarball` with a `sha256`.
-- A `custom` build carries two non-empty commands: `build`, which runs as the unprivileged admin user, and `install`, which runs as root. Other systems carry neither. The old single `commands` key is refused, and so is `spec.build_deps`: build dependencies are `prov_software_requires` edges.
+- A `custom` build carries two non-empty commands, `build` and `install`. Both run as the unprivileged admin user; `install` writes under `$DESTDIR$PREFIX`. Other systems carry neither. The old single `commands` key is refused, and so is `spec.build_deps`: build dependencies are `prov_software_requires` edges.
 - A guard `check` must be a non-empty argv list, and every element must be a string (the first non-empty). It runs without a shell: as the script's `run_as` user for scripts, and as the unprivileged admin user for builds. No JSON function can range over array elements inside a CHECK (`JSON_TABLE` needs a subquery, and `JSON_SEARCH` also matches numbers, booleans and null), so the CHECK matches the `JSON_COMPACT` text against `["str"(,"str")*]`.
 - A `repo` entry's per-family blocks must be objects whose fields cannot inject a line into a sources.list or `.repo` file:
   - `url` and `key_url` are single tokens with no whitespace or control characters.
@@ -442,16 +442,28 @@ entry's `logical_name` alone, so they do not change with which stack installs
 it first. The `stack-items` role consumes the same variables as before plus
 the two report lists.
 
-The `stack-items` role keeps upstream build tooling away from root. Fetch,
-configure and compile run as the unprivileged admin user, in a build directory
-that user owns; that step refuses to run if `id -u` is 0. The install phase
-depends on the build system:
+The `stack-items` role never runs a build-controlled command as root. Fetch,
+configure, compile and install all run as the unprivileged admin user, in a
+build directory that user owns; those steps refuse to run if `id -u` is 0.
+Every install is staged into `<build>/_stage` via `DESTDIR` (exported for
+all systems, and passed on the `make` command line for make and autotools):
 
-| System | Install |
+| System | Staged install (as the admin user) |
 |---|---|
-| cmake, meson, autotools | Staged as the admin user into `<build>/_stage` via `DESTDIR`. Root then copies `<stage><prefix>` into the prefix. A build that stages anything outside its prefix is refused. |
-| make | `make install` as root, because plain Makefiles honour `DESTDIR` only by convention. |
-| custom | `install` as root. |
+| cmake | `cmake --install` |
+| meson | `meson install` |
+| autotools | `make DESTDIR=… install` |
+| make | `make PREFIX=<prefix> DESTDIR=… install` |
+| custom | the item's `install` command, which must write under `$DESTDIR$PREFIX` |
+
+The only root step is the role's `files/stage_install.py`, a data-only copier.
+It installs `<stage><prefix>` into the prefix without following any symlink,
+whether in the stage or already in the destination. Files land root-owned at
+0755 or 0644, with setuid and setgid dropped. A staged symlink must point
+inside the prefix. Devices, fifos, sockets and anything staged outside the
+prefix are refused. A build whose install ignores `DESTDIR` stages nothing and
+is refused too. An item that needs root-time install logic must be a `script`
+item, the explicit and reviewed path for root code.
 
 `functions` is unchanged. `functions.package_bundle` MAY name a `prov_stacks`
 slug; nothing enforces that link yet.

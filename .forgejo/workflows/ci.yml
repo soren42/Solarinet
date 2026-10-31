@@ -61,6 +61,8 @@ jobs:
           python -m pip install pyyaml
       - name: Provisioning stack generator (stackgen) unit and golden tests
         run: python3 tests/deploy/test_stackgen.py
+      - name: Stack-items root stage installer (no symlink traversal, setuid strip, refusals)
+        run: python3 tests/deploy/test_stage_install.py
       - name: Stack-items Ansible role local smoke (stackgen render -> role, idempotency, sha256 refusal)
         env:
           STACK_ITEMS_REQUIRE_ANSIBLE: '1'

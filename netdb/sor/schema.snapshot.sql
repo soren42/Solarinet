@@ -16,7 +16,7 @@
 --   026_unifi_network_cdc sha256=1c6c092d08783729c506edb8ae41dd22f0bb21b19d299b124ce4822b174901dc
 --   027_interconnect_cable_details sha256=0ed1ed961fe13366195191a2038df5468f8ca75f5865a6b8963e0b72d07bb0e3
 --   028_entity_unit_association sha256=35f30382d3bede4cb98165b2bd61d77c96da5bea873a6a984f7faf497b4760db
---   029_provisioning_images_stacks sha256=84e78ef8938d630d9094c311c546f46bacdb8ca28da9b173d170ad9b8cca9e23
+--   029_provisioning_images_stacks sha256=9a728c89089100963c81ce7cff7f4c6b611c74921b6d7cdde5d10859cc48001f
 
 /*M!999999\- enable the sandbox mode */
 

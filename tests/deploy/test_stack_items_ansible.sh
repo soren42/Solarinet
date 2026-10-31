@@ -17,11 +17,15 @@
 #   7. privilege boundary: become is SIMULATED by a test-only become plugin
 #      (solari_fakebecome) that tags each command with the user it would have
 #      become, plus an `id` shim that reports uid 0 under a "root" tag. Builds
-#      record `id -u` + that tag per phase: compile (custom, make, cmake) and
-#      the cmake DESTDIR stage must be the admin user / non-zero uid; install
-#      must be root. Forcing ansible_become_user=root (which beats the task
+#      record `id -u` + that tag per phase: compile AND install (custom,
+#      make, cmake — all DESTDIR-staged) must be the admin user / non-zero
+#      uid; no build command runs as root, only the data-only stage_install.py
+#      copy does. Forcing ansible_become_user=root (which beats the task
 #      keyword) must make compile refuse; a cmake install outside its prefix
-#      and a repo field carrying a newline are refused.
+#      and a repo field carrying a newline are refused;
+#   8. stage_install: an install that ignores DESTDIR (stages nothing) is
+#      refused with the "model it as a script" message, and a symlink already
+#      in the destination (prefix/lib -> elsewhere) is never followed.
 #
 # Not exercised here (need root / network): real sudo, pkg and repo steps.
 # The cmake legs skip when cmake is absent.
@@ -120,14 +124,14 @@ printf '%s %s\n' "$(id -u)" "${SOLARI_FAKE_BECOME_USER:-none}" > "$1"
 EOF
 chmod 0755 "$T/proof.sh"
 
-# make: `all` compiles unprivileged, `install` runs as root (no DESTDIR).
+# make: `all` compiles and `install` stages (DESTDIR), both unprivileged.
 cat > "$T/src/makething-1.0/Makefile" <<EOF
 all:
 	$T/proof.sh compile.proof
 install:
-	mkdir -p \$(PREFIX)/proof/make
-	cp compile.proof \$(PREFIX)/proof/make/compile
-	$T/proof.sh \$(PREFIX)/proof/make/install
+	mkdir -p \$(DESTDIR)\$(PREFIX)/proof/make
+	cp compile.proof \$(DESTDIR)\$(PREFIX)/proof/make/compile
+	$T/proof.sh \$(DESTDIR)\$(PREFIX)/proof/make/install
 EOF
 tar -C "$T/src" -czf "$T/makething-1.0.tar.gz" makething-1.0
 # cmake: compile + `cmake --install` (DESTDIR stage) unprivileged, root copies.
@@ -183,14 +187,14 @@ software = [
      "spec": {"source": {"tarball": f"file://{t}/hello-1.0.tar.gz", "sha256": os.environ["TAR_SHA"]},
               "system": "custom", "prefix": f"{t}/prefix",
               "build": f"{t}/proof.sh compile.proof",
-              "install": 'mkdir -p "$PREFIX/bin" "$PREFIX/proof/custom" && cp hello.sh "$PREFIX/bin/hello"'
-                         ' && chmod 0755 "$PREFIX/bin/hello" && cp compile.proof "$PREFIX/proof/custom/compile"'
-                         f' && {t}/proof.sh "$PREFIX/proof/custom/install"',
+              "install": 'D="$DESTDIR$PREFIX" && mkdir -p "$D/bin" "$D/proof/custom" && cp hello.sh "$D/bin/hello"'
+                         ' && chmod 0755 "$D/bin/hello" && cp compile.proof "$D/proof/custom/compile"'
+                         f' && {t}/proof.sh "$D/proof/custom/install"',
               "creates": f"{t}/prefix/bin/hello"}},
     {"logical_name": "gitthing", "item_type": "build", "names": same, "version_pin": os.environ["GIT_PIN"],
      "spec": {"source": {"git": f"file://{t}/gitsrc", "tag": "display-only"}, "system": "custom",
               "prefix": f"{t}/prefix", "build": "cp marker marker.built",
-              "install": 'cp marker.built "$PREFIX/git-marker"',
+              "install": 'mkdir -p "$DESTDIR$PREFIX" && cp marker.built "$DESTDIR$PREFIX/git-marker"',
               "creates": f"{t}/prefix/git-marker", "check": ["cat", f"{t}/prefix/git-marker"]}},
     {"logical_name": "makething", "item_type": "build", "names": same, "version_pin": "1.0",
      "spec": {"source": {"tarball": f"file://{t}/makething-1.0.tar.gz", "sha256": os.environ["MAKE_SHA"]},
@@ -260,10 +264,16 @@ want() {  # want <proof file> <expected user> <label>
   fi
 }
 want "$T/prefix/proof/custom/compile" "$ADMIN" "custom build"
-want "$T/prefix/proof/custom/install" root "custom install"
+want "$T/prefix/proof/custom/install" "$ADMIN" "custom install"
 want "$T/prefix/proof/make/compile" "$ADMIN" "make compile"
-want "$T/prefix/proof/make/install" root "make install"
-ok "custom + make: compile ran as $ADMIN (uid $MYUID), install as root"
+want "$T/prefix/proof/make/install" "$ADMIN" "make install"
+ok "custom + make: compile AND install ran as $ADMIN (uid $MYUID), never as root"
+[ -f "$T/work/build/makething/1.0/_stage$T/prefix/proof/make/install" ] \
+  && [ -f "$T/work/build/hello/1.0/_stage$T/prefix/bin/hello" ] \
+  || die "make/custom install was not staged via DESTDIR"
+[ "$(stat -c %a "$T/prefix/bin/hello")" = 755 ] && [ "$(stat -c %a "$T/prefix/proof/make/compile")" = 644 ] \
+  || die "installed modes not normalised to 0755/0644"
+ok "make + custom installs staged via DESTDIR; root step copied them with normalised modes"
 if [ "$HAVE_CMAKE" = 1 ]; then
   want "$T/prefix/proof/cmake/compile" "$ADMIN" "cmake compile"
   want "$T/prefix/proof/cmake/stage" "$ADMIN" "cmake --install (DESTDIR stage)"
@@ -392,5 +402,34 @@ PY
   [ ! -e "$T/work/keys/smoke--evil.asc" ] || die "repo key fetched before field validation"
   ok "repo $field carrying a newline refused before anything is fetched"
 done
+
+# ---- 12. install that ignores DESTDIR stages nothing: refused ------------------
+nodest_build() {  # nodest_build <out render> <name> <prefix> <install cmd>
+  python3 - "$T/render.json" "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1])); name, prefix, inst = sys.argv[3:6]
+b = dict(next(b for b in r["solari_stack_builds"] if b["name"] == "hello"))
+b.update(name=name, id=f"smoke--{name}", prefix=prefix, creates=f"{prefix}/bin/x", install=inst)
+r["solari_stack_builds"] = [b]; r["solari_stack_steps"] = [{"type": "build", "index": 0}]
+json.dump(r, open(sys.argv[2], "w"))
+PY
+}
+# (Here the admin user can write the prefix; on a real target it cannot, and
+# the root step refuses either way because nothing was staged.)
+nodest_build "$T/render-nodest.json" nodest "$T/prefix-nodest" 'mkdir -p "$PREFIX/bin" && echo x > "$PREFIX/bin/x"'
+if play "$T/render-nodest.json" "$T/run9.log"; then die "install ignoring DESTDIR was accepted"; fi
+grep -q 'did not honour DESTDIR' "$T/run9.log" && grep -q 'modelled as a `script` item' "$T/run9.log" \
+  || { cat "$T/run9.log" >&2; die "DESTDIR-ignoring install failed for another reason"; }
+ok "install that ignores DESTDIR is refused (root-time install logic must be a script item)"
+
+# ---- 13. a destination symlink is never followed by the root copy -------------
+mkdir -p "$T/prefix-sym" "$T/victim"
+ln -s "$T/victim" "$T/prefix-sym/bin"
+nodest_build "$T/render-sym.json" symdest "$T/prefix-sym" 'mkdir -p "$DESTDIR$PREFIX/bin" && echo pwned > "$DESTDIR$PREFIX/bin/x"'
+if play "$T/render-sym.json" "$T/run10.log"; then die "install through a destination symlink was accepted"; fi
+grep -q 'refusing to install through destination symlink' "$T/run10.log" \
+  || { cat "$T/run10.log" >&2; die "destination-symlink install failed for another reason"; }
+[ -z "$(ls -A "$T/victim")" ] || die "root copy followed prefix/bin -> $T/victim"
+ok "root stage copy refuses a destination symlink (prefix/bin -> elsewhere), nothing written through it"
 
 echo "PASS: $pass checks"
