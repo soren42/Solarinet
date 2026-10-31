@@ -53,9 +53,13 @@ VERSIONS = {"ubuntu": "24.04.3"}
 
 STUB_SSH = """#!/usr/bin/env bash
 # test stub: run the "remote" command locally; refuse any host but the test one.
+# STUB_SSH_FAIL_ON=<text>: fail (without running) any remote command containing it.
 while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
 [ "${1:-}" = "p5-test-benzene" ] || { echo "stub ssh: refusing host ${1:-?}" >&2; exit 97; }
 shift
+if [ -n "${STUB_SSH_FAIL_ON:-}" ] && [[ "$*" == *"${STUB_SSH_FAIL_ON}"* ]]; then
+  echo "stub ssh: injected failure" >&2; exit 1
+fi
 exec bash -c "$*"
 """
 
@@ -259,6 +263,43 @@ class InstallProfiles(unittest.TestCase):
         self.assertFalse(os.path.exists(pub))
         priv = os.path.join(self.prov, "profiles", MACH, "stack.json")
         self.assertEqual(stat.S_IMODE(os.stat(priv).st_mode), 0o600)
+
+    # -- arming order (P1) ---------------------------------------------------
+    def armed(self):
+        return os.path.exists(os.path.join(self.http, "ipxe", f"mac-{MACH}.ipxe"))
+
+    def leftovers(self):
+        return [os.path.join(d, f) for top in (self.http, self.prov)
+                for d, _, files in os.walk(top) for f in files if ".tmp." in f]
+
+    def test_profile_published_last(self):
+        # a failure anywhere after the configs push must leave nothing armed
+        vars_path = os.path.join(self.tmp, "vars.json")
+        with open(vars_path, "w") as fh:
+            json.dump({"solari_stack_order": ["core"]}, fh)
+        for fail_on in ("solari-firstboot.sh", "/profile.env", "/stack.json",
+                        f"mac-{MACH}.ipxe.tmp"):
+            with self.subTest(fail_on=fail_on):
+                p = self.provision("opensuse", "--run-id", "7", "--stack-vars", vars_path,
+                                   STUB_SSH_FAIL_ON=fail_on)
+                self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertFalse(self.armed(), "per-MAC boot profile armed by a failed staging")
+                self.assertEqual(self.leftovers(), [])
+        p = self.provision("opensuse", "--run-id", "7", "--stack-vars", vars_path)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(self.armed())
+        self.assertEqual(self.profile_env()["run_id"], "7")
+        self.assertEqual(self.leftovers(), [])
+
+    def test_failed_restage_drops_previous_profile(self):
+        # run 5 armed; a re-stage for run 6 fails mid-way: run 5's install must
+        # not stay armed under run 6's (partial) configs
+        p = self.provision("opensuse", "--run-id", "5")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(self.armed())
+        p = self.provision("opensuse", "--run-id", "6", STUB_SSH_FAIL_ON="/profile.env")
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.armed())
 
 
 if __name__ == "__main__":

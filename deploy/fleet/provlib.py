@@ -24,6 +24,16 @@ SoR connection — never from argv. In order:
 prov_runs lifecycle is forward-only (029's trg_prov_runs_bu enforces it in the
 DB; advance_run() refuses the same moves client-side for a clean message):
   queued -> running | failed | cancelled;  running -> succeeded | failed | cancelled.
+The helpers never leave a row queued: open_run() INSERTs it already `running`
+(started_at set) in one commit, so a helper that dies right after opening
+leaves a run its own recovery path sees (prov-finish for reimage, the next
+refresh's supersede for refresh), never one stuck in `queued`.
+
+Per-MAC boot profiles (PROV_STAGE): the per-MAC iPXE profile is what makes a
+machine wipe itself on its next network boot. Every write to one MAC's files
+holds mac_lock(); unstage_profile() removes (finish) or disarms one only while
+PROV_ROOT/profiles/<cfgkey>/profile.env still names the given run, and
+disarm_stale_profile() disarms a profile whose run is no longer active.
 
 Provisioning host (benzene) — the same env names and defaults as
 fleet-lib.sh: BENZENE, BENZENE_IP, HTTP_PORT, HTTP_BASE, PROV_ROOT, HTTP_ROOT.
@@ -70,6 +80,10 @@ _FORWARD = {
 
 class ProvError(Exception):
     """A refusal or failure the helper reports and exits non-zero on."""
+
+
+class MacBusy(ProvError):
+    """mac_lock() timed out: another step holds the MAC. Transient — retry later."""
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +224,9 @@ def provisioner_source_id(cur) -> int:
 def open_run(conn, *, mode: str, entity_id: int | None, image_id: int | None,
              stack_order: Iterable[str], requested_by: str, dry_run: bool = False,
              detail: str | None = None) -> int:
-    """INSERT a queued prov_runs row and commit; returns its id.
+    """INSERT a `running` prov_runs row (started_at = now) and commit; returns its id.
 
+    One statement, one commit: there is no queued window a crash could strand.
     Shapes (031 ck_prov_runs_shape): reimage = entity + image; apply = entity,
     no image; refresh = image, no entity (stack_order empty).
     """
@@ -226,13 +241,22 @@ def open_run(conn, *, mode: str, entity_id: int | None, image_id: int | None,
         src = provisioner_source_id(cur)
         cur.execute(
             "INSERT INTO prov_runs (mode, entity_id, image_id, stack_slugs, requested_by,"
-            " status, dry_run, detail, source_id, asserted_kind)"
-            " VALUES (%s,%s,%s,%s,%s,'queued',%s,%s,%s,'human')",
+            " status, dry_run, detail, started_at, source_id, asserted_kind)"
+            " VALUES (%s,%s,%s,%s,%s,'running',%s,%s,CURRENT_TIMESTAMP,%s,'human')",
             (mode, entity_id, image_id, json.dumps(slugs), requested_by,
              1 if dry_run else 0, _clip(detail), src))
         run_id = int(cur.lastrowid)
     conn.commit()
     return run_id
+
+
+def run_status(conn, run_id: int) -> str | None:
+    """Current status of one run (None = no such row); ends the read transaction."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM prov_runs WHERE id=%s", (run_id,))
+        row = cur.fetchone()
+    conn.commit()
+    return row["status"] if row else None
 
 
 @contextlib.contextmanager
@@ -249,7 +273,7 @@ def mac_lock(conn, mac: str, wait: int):
         row = cur.fetchone()
     got = row.get("got") if isinstance(row, dict) else (row[0] if row else None)
     if got != 1:
-        raise ProvError(f"another provisioning step holds MAC {mac}; try again shortly")
+        raise MacBusy(f"another provisioning step holds MAC {mac}; try again shortly")
     try:
         yield
     finally:
@@ -334,6 +358,132 @@ def remote_write(path: str, data: bytes, mode: str = "0644") -> None:
     if not re.fullmatch(r"0[0-7]{3}", mode):
         raise ProvError(f"invalid mode {mode!r}")
     remote_run(["sh", "-c", _WRITE_SH, "sh", path, mode], input=data)
+
+
+# ---------------------------------------------------------------------------
+# Per-MAC boot profiles on the provisioning host
+# ---------------------------------------------------------------------------
+CFGKEY_RE = re.compile(r"^[0-9a-f]{2}(-[0-9a-f]{2}){5}$")
+# PROV_ROOT / HTTP_ROOT reach ssh options (space-split by Ansible) and a remote shell.
+PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
+
+
+def prov_paths(env: dict[str, str] | None = None) -> tuple[str, str]:
+    """(PROV_ROOT, HTTP_ROOT) without a trailing slash; plain absolute paths only."""
+    renv = remote_env(env)
+    out = []
+    for name in ("PROV_ROOT", "HTTP_ROOT"):
+        path = renv[name].rstrip("/")
+        if not PATH_RE.match(path) or "/../" in path + "/":
+            raise ProvError(f"{name} {path!r} is not a plain absolute path")
+        out.append(path)
+    return out[0], out[1]
+
+
+# Un-stage / disarm one per-MAC profile, but only while profile.env still
+# names THIS run (a newer PROV_STAGE for the same MAC owns the files
+# otherwise). Idempotent; prints one word: done|already|foreign. "disarm"
+# moves the boot profile out of the web root (kept for the record).
+_UNSTAGE_SH = r'''
+set -eu
+run=$1 cfg=$2 prov=$3 http=$4 how=$5
+pdir="$prov/profiles/$cfg"
+if [ -f "$pdir/finished-$run.env" ] || [ -f "$pdir/disarmed-$run.env" ]; then echo already; exit 0; fi
+if [ ! -f "$pdir/profile.env" ] || ! grep -qx "run_id=$run" "$pdir/profile.env"; then echo foreign; exit 0; fi
+if [ "$how" = disarm ] && [ -f "$http/ipxe/mac-$cfg.ipxe" ]; then
+  mv -f "$http/ipxe/mac-$cfg.ipxe" "$pdir/disarmed-$run.ipxe"
+fi
+rm -f "$http/ipxe/mac-$cfg.ipxe" "$http/configs/$cfg.xml" "$http/configs/$cfg.preseed" \
+      "$http/configs/$cfg.stack.json"
+rm -rf "$http/configs/ubuntu/$cfg"
+if [ "$how" = disarm ]; then mv -f "$pdir/profile.env" "$pdir/disarmed-$run.env"
+else mv -f "$pdir/profile.env" "$pdir/finished-$run.env"; fi
+echo done
+'''
+
+# Owner of one MAC's staged files: the run_id profile.env names (may be
+# empty). Exit 3 = no profile.env.
+_OWNER_SH = r'''
+set -eu
+f="$1/profiles/$2/profile.env"
+[ -f "$f" ] || exit 3
+sed -n 's/^run_id=//p' "$f" | head -n 1
+'''
+
+# Every armed per-MAC profile: "<cfgkey> <run_id>" per line.
+_ARMED_SH = r'''
+set -eu
+prov=$1 http=$2
+for f in "$prov"/profiles/*/profile.env; do
+  [ -f "$f" ] || continue
+  d=${f%/profile.env}; cfg=${d##*/}
+  [ -f "$http/ipxe/mac-$cfg.ipxe" ] || continue
+  printf '%s %s\n' "$cfg" "$(sed -n 's/^run_id=//p' "$f" | head -n 1)"
+done
+'''
+
+
+def _err_tail(proc: subprocess.CompletedProcess) -> str:
+    text = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+    return " | ".join(text[-3:]) or f"exit {proc.returncode}"
+
+
+def unstage_profile(run_id: int, cfgkey: str, how: str, paths: tuple[str, str]) -> str:
+    """Run _UNSTAGE_SH for one run; the caller holds mac_lock(). done|already|foreign."""
+    if not CFGKEY_RE.match(cfgkey) or how not in ("finish", "disarm"):
+        raise ProvError(f"refusing to un-stage {cfgkey!r} ({how!r})")
+    proc = remote_run(["sh", "-c", _UNSTAGE_SH, "sh", str(run_id), cfgkey, paths[0], paths[1],
+                       how], check=False, timeout=60)
+    word = proc.stdout.decode("utf-8", "replace").strip()
+    if proc.returncode != 0 or word not in ("done", "already", "foreign"):
+        raise ProvError(f"un-staging {cfgkey} failed: {_err_tail(proc)}")
+    return word
+
+
+def profile_owner(cfgkey: str, paths: tuple[str, str]) -> int | None:
+    """The run id one MAC's profile.env names; None when absent or empty."""
+    if not CFGKEY_RE.match(cfgkey):
+        raise ProvError(f"refusing cfgkey {cfgkey!r}")
+    proc = remote_run(["sh", "-c", _OWNER_SH, "sh", paths[0], cfgkey], check=False, timeout=60)
+    if proc.returncode == 3:
+        return None
+    if proc.returncode != 0:
+        raise ProvError(f"cannot read the {cfgkey} profile owner: {_err_tail(proc)}")
+    run = proc.stdout.decode("utf-8", "replace").strip()
+    return int(run) if ID_RE.match(run) else None
+
+
+def armed_profiles(paths: tuple[str, str]) -> list[tuple[str, int]]:
+    """Every armed per-MAC profile whose profile.env names a run: (cfgkey, run id)."""
+    proc = remote_run(["sh", "-c", _ARMED_SH, "sh", paths[0], paths[1]], check=False, timeout=60)
+    if proc.returncode != 0:
+        raise ProvError(f"cannot list armed boot profiles: {_err_tail(proc)}")
+    out = []
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        cfg, _, run = line.strip().partition(" ")
+        if CFGKEY_RE.match(cfg) and ID_RE.match(run):
+            out.append((cfg, int(run)))
+    return out
+
+
+def disarm_stale_profile(conn, cfgkey: str, paths: tuple[str, str], *, wait: int,
+                         own_run: int | None = None) -> int | None:
+    """Disarm one MAC's staged install if nothing live owns it; returns the run disarmed.
+
+    Under mac_lock(): reads which run profile.env names and disarms it when it
+    is `own_run` (the caller's own staging just failed) or a run that is no
+    longer queued/running in the SoR (failed, cancelled — e.g. superseded by a
+    staging that then failed — or even succeeded). A live run's profile, an
+    unknown run id, or a profile.env with no run id (FLEET_PROVISION) is left
+    alone. Raises MacBusy when the lock is held."""
+    with mac_lock(conn, cfgkey, wait):
+        owner = profile_owner(cfgkey, paths)
+        if owner is None:
+            return None
+        if owner != own_run and run_status(conn, owner) not in TERMINAL:
+            return None
+        unstage_profile(owner, cfgkey, "disarm", paths)
+        return owner
 
 
 def die(msg: str, code: int = 1) -> int:

@@ -69,10 +69,12 @@ fdie()  { printf '\033[1;31m[fleet][error]\033[0m %s\n' "$*" >&2; exit 1; }
 bssh() {
   ssh -o BatchMode=yes "${BENZENE}" "$@" 2> >(grep -vE 'Kernel: Linux.*CPU:' >&2)
 }
-# write stdin to a remote path (creates parent dir), optional mode
+# write stdin to a remote path (creates parent dir), optional mode. Atomic: the
+# data lands under a temp name in the same directory and is renamed into place,
+# so a reader (an iPXE client fetching a profile) never sees a partial file.
 bput() { # <remote-path> [mode]
-  local dst="$1" mode="${2:-0644}"
-  bssh "install -D -m ${mode} /dev/stdin '${dst}'"
+  local dst="$1" mode="${2:-0644}" tmp="$1.tmp.$$"
+  bssh "install -D -m ${mode} /dev/stdin '${tmp}' && mv -f '${tmp}' '${dst}' || { rm -f '${tmp}'; exit 1; }"
 }
 
 # ---- MAC normalization ------------------------------------------------------

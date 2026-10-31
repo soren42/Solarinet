@@ -178,8 +178,24 @@ def runs(entity: str, mode: str | None = None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # fakes
 # ---------------------------------------------------------------------------
+# FAKE_HOOK_ON=<point> + FAKE_HOOK_SQL: the fake runs that SQL on the scratch
+# SoR (as the helper user) when it reaches <point> — e.g. a PROV_STAGE
+# cancelling the run while prov-finish is mid-way.
+FAKE_HOOK = r'''
+def _hook(point):
+    if os.environ.get("FAKE_HOOK_ON") != point:
+        return
+    import subprocess
+    e = dict(os.environ, MYSQL_PWD=os.environ["SOR_DB_PASS"])
+    subprocess.run(["mariadb", "--protocol=TCP", "-h", os.environ["SOR_DB_HOST"],
+                    "-P", os.environ["SOR_DB_PORT"], "-u", os.environ["SOR_DB_USER"],
+                    os.environ["SOR_DB_NAME"], "-e", os.environ["FAKE_HOOK_SQL"]],
+                   env=e, check=True)
+'''
+
 FAKE_ANSIBLE = r'''#!__PY__
 import json, os, sys
+__HOOK__
 rec = {"tool": "ansible", "argv": sys.argv[1:], "cwd": os.getcwd(),
        "load_cb": os.environ.get("ANSIBLE_LOAD_CALLBACK_PLUGINS"),
        "result_fmt": os.environ.get("ANSIBLE_CALLBACK_RESULT_FORMAT"),
@@ -218,6 +234,7 @@ if sys.argv[sys.argv.index("-m") + 1] == "ansible.builtin.raw":
             sys.exit(4)
         print(host + " | CHANGED | rc=0 >>\n" + marker)
         sys.exit(0)
+    _hook("bootstrap")
     rc = int(os.environ.get("FAKE_RAW_RC", "0"))
     print(host + (" | CHANGED | rc=0 >>" if rc == 0 else " | FAILED | rc=%d >>" % rc))
     sys.exit(rc)
@@ -239,6 +256,7 @@ else:
 
 FAKE_PLAYBOOK = r'''#!__PY__
 import json, os, stat, sys
+__HOOK__
 argv = sys.argv[1:]
 rec = {"tool": "ansible-playbook", "argv": argv, "cwd": os.getcwd(),
        "stdout_cb": os.environ.get("ANSIBLE_STDOUT_CALLBACK"),
@@ -276,6 +294,7 @@ if not _hostkey_ok():
     print("fatal: [host]: UNREACHABLE! => Host key verification failed.")
     sys.exit(4)
 check = "--check" in argv
+_hook("check" if check else "apply")
 print("PLAY [Provision SolariNet fleet host] " + ("(check)" if check else "(apply)"))
 rc = int(os.environ.get("FAKE_CHECK_RC" if check else "FAKE_APPLY_RC", "0"))
 print("PLAY RECAP ok=3 failed=%d" % (1 if rc else 0))
@@ -295,6 +314,19 @@ if sv:
         rec["vars_error"] = str(exc)
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")
+if os.environ.get("FAKE_PROVISION_PUBLISH") == "1":
+    # what fleet-provision.sh --run-id leaves behind: profile.env naming the
+    # run and the armed per-MAC boot profile
+    cfg = argv[argv.index("--target") + 1].replace(":", "-")
+    run = argv[argv.index("--run-id") + 1]
+    pdir = os.path.join(os.environ["PROV_ROOT"], "profiles", cfg)
+    ipxe = os.path.join(os.environ["HTTP_ROOT"], "ipxe")
+    os.makedirs(pdir, exist_ok=True)
+    os.makedirs(ipxe, exist_ok=True)
+    with open(os.path.join(pdir, "profile.env"), "w") as fh:
+        fh.write("mac=%s\nrun_id=%s\n" % (cfg, run))
+    with open(os.path.join(ipxe, "mac-%s.ipxe" % cfg), "w") as fh:
+        fh.write("#!ipxe\n# run %s\n" % run)
 print("[fleet] fake staged " + " ".join(argv))
 sys.exit(int(os.environ.get("FAKE_PROVISION_RC", "0")))
 '''
@@ -317,7 +349,7 @@ def make_fakes(tmp: str) -> str:
                        ("fleet-provision", FAKE_PROVISION), ("mv", FAKE_MV)):
         p = os.path.join(fakebin, name)
         with open(p, "w", encoding="utf-8") as fh:
-            fh.write(body.replace("__PY__", interp))
+            fh.write(body.replace("__PY__", interp).replace("__HOOK__", FAKE_HOOK))
         os.chmod(p, 0o755)
     return fakebin
 
@@ -560,6 +592,81 @@ class ProvStage(StageMixin, Base):
         self.assertEqual(r[2]["detail"], "fleet-provision failed (exit 3)")
         self.assertEqual(r[1]["detail"], f"superseded by run {r[2]['id']}")
 
+    def profile(self, cfg="02-00-00-00-00-02"):
+        http = os.path.join(self.prov_root, "netboot", "http")
+        pdir = os.path.join(self.prov_root, "profiles", cfg)
+        return (os.path.join(http, "ipxe", f"mac-{cfg}.ipxe"), pdir)
+
+    def test_failed_staging_disarms_its_profile(self):
+        # fleet-provision published the profile and then failed (exit 3):
+        # the destructive boot profile must not stay armed
+        n1 = ent("p3h-node1")
+        p = self.stage(n1, img(TW), FAKE_PROVISION_PUBLISH="1", FAKE_PROVISION_RC="3")
+        self.assertEqual(p.returncode, 1)
+        rid = runs(n1)[-1]["id"]
+        self.assertEqual(runs(n1)[-1]["status"], "failed")
+        ipxe, pdir = self.profile()
+        self.assertFalse(os.path.exists(ipxe), "boot profile left armed")
+        self.assertFalse(os.path.exists(os.path.join(pdir, "profile.env")))
+        self.assertTrue(os.path.exists(os.path.join(pdir, f"disarmed-{rid}.ipxe")))
+        self.assertTrue(os.path.exists(os.path.join(pdir, f"disarmed-{rid}.env")))
+        self.assertIn(f"disarmed the 02-00-00-00-00-02 boot profile of run {rid}", p.stdout)
+
+    def test_failed_restage_disarms_superseded_profile(self):
+        # run A is armed; a re-stage supersedes A and fails before replacing
+        # A's profile — A (now cancelled) must not keep the MAC armed
+        n1 = ent("p3h-node1")
+        p = self.stage(n1, img(TW), FAKE_PROVISION_PUBLISH="1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        a = runs(n1)[-1]["id"]
+        ipxe, pdir = self.profile()
+        self.assertTrue(os.path.exists(ipxe))
+        p = self.stage(n1, img(TW), FAKE_PROVISION_RC="3")
+        self.assertEqual(p.returncode, 1)
+        r = runs(n1)
+        self.assertEqual((r[-2]["id"], r[-2]["status"], r[-1]["status"]), (a, "cancelled", "failed"))
+        self.assertFalse(os.path.exists(ipxe), "superseded run's boot profile left armed")
+        self.assertTrue(os.path.exists(os.path.join(pdir, f"disarmed-{a}.env")))
+
+    def test_failed_staging_leaves_live_profile(self):
+        # profile.env names a different run that is still live: not ours to touch
+        n1, n2 = ent("p3h-node1"), ent("p3h-node2")
+        p = self.stage(n2, img(TW))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        live = runs(n2)[-1]["id"]
+        ipxe, pdir = self.profile()
+        os.makedirs(os.path.dirname(ipxe), exist_ok=True)
+        os.makedirs(pdir, exist_ok=True)
+        with open(ipxe, "w") as fh:
+            fh.write("#!ipxe\n")
+        with open(os.path.join(pdir, "profile.env"), "w") as fh:
+            fh.write(f"run_id={live}\n")
+        p = self.stage(n1, img(TW), FAKE_PROVISION_RC="3")
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(runs(n2)[-1]["status"], "running")
+        self.assertTrue(os.path.exists(ipxe))
+        self.assertTrue(os.path.exists(os.path.join(pdir, "profile.env")))
+
+    def test_open_run_is_running_at_once(self):
+        # a crash right after open_run must not leave a queued row behind:
+        # the row is born running (started_at set) in one commit
+        n1 = ent("p3h-node1")
+        # whatever the outcome, close the row so it never blocks later applies
+        self.addCleanup(admin, "UPDATE prov_runs SET status='failed', finished_at=CURRENT_TIMESTAMP"
+                        f" WHERE entity_id={n1} AND mode='apply' AND status IN ('queued','running')")
+        snippet = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import provlib\n"
+            "conn = provlib.connect_sor()\n"
+            "rid = provlib.open_run(conn, mode='apply', entity_id=int(sys.argv[2]), image_id=None,\n"
+            "                       stack_order=['core'], requested_by='jason', detail='d')\n"
+            "import os; os._exit(9)\n")         # die without any further statement
+        proc = subprocess.run([PY, "-c", snippet, FLEET, n1], env=self.env,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 9, proc.stderr)
+        r = runs(n1, "apply")[-1]
+        self.assertEqual((r["status"], r["detail"], r["started"], r["finished"]),
+                         ("running", "d", True, False))
+
     def test_bad_domain_or_admin_user_refused(self):
         n1 = ent("p3h-node1")
         before = runs(n1)
@@ -770,33 +877,96 @@ class ProvFinish(StageMixin, Base):
     def test_unstage_waits_for_mac_lock(self):
         rid = self.staged()
         name = "solari-prov-mac-" + self.CFG.replace("-", ":")
+
+        def lock_used():
+            return admin(f"SELECT IS_USED_LOCK('{name}') IS NOT NULL", db=None).strip() == "1"
+
+        # The holder's stdin stays open, so its session (and the lock) lives
+        # until we RELEASE_LOCK explicitly — no kill, no orphaned client.
         holder = subprocess.Popen(ADMIN + ["-N", "-B"], stdin=subprocess.PIPE,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
         try:
-            holder.stdin.write(f"SELECT GET_LOCK('{name}', 10); SELECT SLEEP(60);\n")
+            holder.stdin.write(f"SELECT GET_LOCK('{name}', 10);\n")
             holder.stdin.flush()
             for _ in range(100):
-                if admin(f"SELECT IS_USED_LOCK('{name}') IS NOT NULL", db=None).strip() == "1":
+                if lock_used():
                     break
                 subprocess.run(["sleep", "0.1"], check=True)
             else:
                 self.fail("lock holder never got the MAC lock")
-            # a concurrent PROV_STAGE holds the MAC: nothing may be removed
-            p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_MAC_LOCK_WAIT="0",
-                            SOLARI_PROV_APPLY_ATTEMPTS="2")
-            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-            st, detail = self.status(rid)
-            self.assertEqual(st, "running")
-            self.assertIn(f"another provisioning step holds MAC {self.CFG}", detail)
-            self.assertTrue(detail.endswith("(attempt 1 of 2)"), detail)
-            self.assertEqual(set(self.staged_files().values()), {True})
-            self.assertEqual(self.calls("ansible-playbook"), [])
+            # a concurrent PROV_STAGE holds the MAC: nothing may be removed, and
+            # the lock timeout is not an attempt — with 1 attempt allowed the run
+            # must survive any number of busy ticks
+            for _ in range(2):
+                p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}',
+                                SOLARI_PROV_MAC_LOCK_WAIT="0", SOLARI_PROV_APPLY_ATTEMPTS="1")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertEqual(self.status(rid), (
+                    "running", f"installed; another provisioning step holds MAC {self.CFG}; "
+                    "try again shortly; deferred"))
+                self.assertEqual(set(self.staged_files().values()), {True})
+                self.assertEqual(self.calls("ansible-playbook"), [])
+            holder.stdin.write(f"SELECT RELEASE_LOCK('{name}');\n")
+            holder.stdin.close()
+            holder.wait(timeout=30)
         finally:
-            holder.kill()
-            holder.wait()
-        self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_APPLY_ATTEMPTS="2")
+            if holder.poll() is None:
+                holder.kill()
+                holder.wait()
+        for _ in range(100):
+            if not lock_used():
+                break
+            subprocess.run(["sleep", "0.1"], check=True)
+        else:
+            self.fail("MAC lock still held after RELEASE_LOCK")
+        self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_APPLY_ATTEMPTS="1")
         self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
         self.assertEqual(set(self.staged_files().values()), {False})
+
+    def test_cancel_mid_flow_stops_target_effects(self):
+        # A PROV_STAGE cancels the run while prov-finish is mid-way: nothing
+        # further may touch the target, and the run stays cancelled.
+        for point, raws, playbooks in (("bootstrap", 2, 0), ("check", 2, 1)):
+            with self.subTest(point=point):
+                rid = self.staged()
+                p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', FAKE_HOOK_ON=point,
+                                FAKE_HOOK_SQL="UPDATE prov_runs SET status='cancelled', "
+                                "detail='superseded by run 999999', finished_at=CURRENT_TIMESTAMP "
+                                f"WHERE id={rid}")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertEqual(self.status(rid), ("cancelled", "superseded by run 999999"))
+                ans = self.calls("ansible")
+                self.assertEqual([c["argv"][c["argv"].index("-m") + 1] for c in ans],
+                                 ["ansible.builtin.raw"] * raws
+                                 + (["ansible.builtin.setup"] if playbooks else []))
+                pb = self.calls("ansible-playbook")
+                self.assertEqual(len(pb), playbooks)
+                self.assertTrue(all("--check" in c["argv"] for c in pb), "apply pass ran")
+
+    def test_foreign_profile_stops_the_run(self):
+        rid = self.staged()
+        self.write_profile_env(rid + 1000)                  # a newer PROV_STAGE owns the MAC
+        p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}')
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.status(rid), ("cancelled", "superseded: a newer staging owns the "
+                                            "boot profile; stacks not applied"))
+        self.assertEqual(set(self.staged_files().values()), {True})   # left to the newer run
+        self.assertEqual(len(self.calls("ansible")), 1)               # the marker probe only
+        self.assertEqual(self.calls("ansible-playbook"), [])
+
+    def test_sweep_disarms_profile_of_terminal_run(self):
+        rid = self.staged()
+        # the run ended without disarming (e.g. prov-stage died after failing it)
+        admin(f"UPDATE prov_runs SET status='failed', detail='x', finished_at=CURRENT_TIMESTAMP "
+              f"WHERE id={rid}")
+        p = self.finish(rid)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"sweep: disarmed the {self.CFG} boot profile of terminal run {rid}", p.stdout)
+        self.assertEqual(self.staged_files()["ipxe"], False)
+        self.assertEqual(self.staged_files()["profile"], False)
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, f"disarmed-{rid}.ipxe")))
+        self.assertTrue(os.path.exists(os.path.join(self.pdir, f"disarmed-{rid}.env")))
+        self.assertEqual(self.calls(), [])
 
     def test_fact_mismatch_and_bootstrap_failure(self):
         rid = self.staged()

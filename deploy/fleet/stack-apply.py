@@ -16,7 +16,7 @@ Flow:
      with the SAME tables as roles/stack-items/defaults/main.yml (unmapped →
      refuse);
   3. render the vars with `stackgen.py --from-db`, open the prov_runs row (mode
-     apply, dry_run flag) and advance it to running, upload the vars to
+     apply, dry_run flag) directly as running, upload the vars to
      `<PROV_ROOT>/runs/apply-<run id>.stack.json` (0644);
   4. `ansible-playbook ... playbooks/site.yml --tags stack -e @<vars> --check
      --diff` first (failure → failed); with --dry-run the run then succeeds
@@ -309,11 +309,11 @@ def main(argv: list[str] | None = None) -> int:
                         raise ProvError(f"apply run {busy} for entity {entity_id} is still active")
                     run_id = provlib.open_run(conn, mode="apply", entity_id=entity_id,
                                               image_id=None, stack_order=order,
-                                              requested_by=op, dry_run=dry_run)
+                                              requested_by=op, dry_run=dry_run,
+                                              detail="check pass")
                 finally:
                     _unlock(conn, lock_name)
                 log(f"opened prov_runs {run_id}")
-                provlib.advance_run(conn, run_id, "running", "check pass")
 
                 vars_remote = f"{prov_root}/runs/apply-{run_id}.stack.json"
                 with open(vars_local, "rb") as fh:

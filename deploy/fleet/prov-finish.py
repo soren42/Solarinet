@@ -33,13 +33,25 @@ every few minutes, or by hand — drives each such run to a terminal status:
      run, under the per-MAC SoR lock PROV_STAGE also takes), make sure python3
      exists (zypper / apt-get via the raw module), check the installed OS
      family/arch against the record, then the stack check pass and the apply
-     pass -> succeeded "installed; stacks applied";
+     pass -> succeeded "installed; stacks applied". Before EACH of those
+     steps the run is re-read under a row lock and must still be `running`:
+     a PROV_STAGE that superseded it meanwhile (status cancelled) stops it
+     before the next target-side effect, and so does a profile.env that
+     names another run ("foreign": a newer staging owns the MAC — the run is
+     cancelled if the stager has not already done so). A step already in
+     flight when the cancel lands runs to completion; no later step starts;
   5. a failure after the install is retried on later ticks (the run stays
      running, detail "installed; ... (attempt n of N)") up to
      SOLARI_PROV_APPLY_ATTEMPTS (default 3), then the run fails. The attempt
      number is recorded before the attempt starts, so a crash mid-attempt
      still uses it up. The profile is already gone by then, so a failed apply
-     never reinstalls the machine.
+     never reinstalls the machine. Waiting out the per-MAC lock is not an
+     attempt: a lock timeout defers the run to the next tick with the attempt
+     count it had.
+  6. every invocation then sweeps the provisioning host for per-MAC boot
+     profiles that are still armed although the run their profile.env names
+     is terminal (a PROV_STAGE whose own clean-up could not run, a run failed
+     by hand) and disarms them under the per-MAC lock.
 
 Runs staged before this mechanism (no run record) are failed with a message
 to re-stage. Nothing here talks to the target except over SSH with the
@@ -66,7 +78,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import provlib  # noqa: E402  (path set above)
-from provlib import ProvError  # noqa: E402
+from provlib import MacBusy, ProvError  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("stack_apply", os.path.join(HERE, "stack-apply.py"))
 stack_apply = importlib.util.module_from_spec(_spec)
@@ -74,12 +86,10 @@ _spec.loader.exec_module(stack_apply)
 
 MARKER = "/etc/ansible/facts.d/solari_prov.fact"
 MARKER_RE = re.compile(r'\{\s*"run_id"\s*:\s*([1-9][0-9]{0,9})\s*\}')
-CFGKEY_RE = re.compile(r"^[0-9a-f]{2}(-[0-9a-f]{2}){5}$")
+CFGKEY_RE = provlib.CFGKEY_RE
 FQDN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 FAMILY_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
-# PROV_ROOT reaches ssh options (space-split by Ansible) and a remote shell.
-PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 
 DETAIL_STAGING = "staging netboot install"
 DETAIL_APPLYING = "installed; applying stacks"
@@ -91,26 +101,6 @@ DEFAULT_INSTALL_TIMEOUT = 21600
 DEFAULT_APPLY_ATTEMPTS = 3
 PROBE_TIMEOUT = 120
 BOOTSTRAP_TIMEOUT = 900
-
-# Un-stage / disarm one per-MAC profile on the provisioning host, but only while
-# profile.env still names THIS run (a newer PROV_STAGE for the same MAC owns
-# the files otherwise). Idempotent; prints one word: done|already|foreign.
-_UNSTAGE_SH = r'''
-set -eu
-run=$1 cfg=$2 prov=$3 http=$4 how=$5
-pdir="$prov/profiles/$cfg"
-if [ -f "$pdir/finished-$run.env" ] || [ -f "$pdir/disarmed-$run.env" ]; then echo already; exit 0; fi
-if [ ! -f "$pdir/profile.env" ] || ! grep -qx "run_id=$run" "$pdir/profile.env"; then echo foreign; exit 0; fi
-if [ "$how" = disarm ] && [ -f "$http/ipxe/mac-$cfg.ipxe" ]; then
-  mv -f "$http/ipxe/mac-$cfg.ipxe" "$pdir/disarmed-$run.ipxe"
-fi
-rm -f "$http/ipxe/mac-$cfg.ipxe" "$http/configs/$cfg.xml" "$http/configs/$cfg.preseed" \
-      "$http/configs/$cfg.stack.json"
-rm -rf "$http/configs/ubuntu/$cfg"
-if [ "$how" = disarm ]; then mv -f "$pdir/profile.env" "$pdir/disarmed-$run.env"
-else mv -f "$pdir/profile.env" "$pdir/finished-$run.env"; fi
-echo done
-'''
 
 # python3 for Ansible modules on a fresh install (raw needs none). AutoYaST /
 # preseed / autoinstall already try; this covers a failed or offline attempt.
@@ -128,6 +118,10 @@ def log(msg: str) -> None:
 
 class Retry(Exception):
     """A post-install step failed; the run may be retried on a later tick."""
+
+
+class Superseded(Exception):
+    """The run is no longer running (cancelled by a newer PROV_STAGE): stop."""
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +148,22 @@ def set_detail(conn, run_id: int, detail: str) -> None:
     conn.commit()
 
 
+def step(conn, run_id: int, detail: str) -> None:
+    """Gate before a target-side effect: the run must still be `running`.
+
+    Reads the status under a row lock (prov-stage's supersede and every other
+    status move take the same lock) and records `detail` in that transaction;
+    raises Superseded when the run was cancelled or finished meanwhile."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM prov_runs WHERE id=%s FOR UPDATE", (run_id,))
+        row = cur.fetchone()
+        if not row or row["status"] != "running":
+            conn.rollback()
+            raise Superseded(f"run is {row['status'] if row else 'gone'}")
+        cur.execute("UPDATE prov_runs SET detail=%s WHERE id=%s", (detail[:255], run_id))
+    conn.commit()
+
+
 def finish(conn, run_id: int, status: str, detail: str) -> None:
     try:
         conn.rollback()
@@ -175,12 +185,7 @@ def try_lock(conn, name: str) -> bool:
 # ---------------------------------------------------------------------------
 class Ctx:
     def __init__(self, env=None):
-        renv = provlib.remote_env(env)
-        self.prov_root = renv["PROV_ROOT"].rstrip("/")
-        self.http_root = renv["HTTP_ROOT"].rstrip("/")
-        for name, path in (("PROV_ROOT", self.prov_root), ("HTTP_ROOT", self.http_root)):
-            if not PATH_RE.match(path) or "/../" in path + "/":
-                raise ProvError(f"{name} {path!r} is not a plain absolute path")
+        self.prov_root, self.http_root = provlib.prov_paths(env)
         self.runs = f"{self.prov_root}/runs"
         self.mac_lock_wait = DEFAULT_MAC_LOCK_WAIT
         self.ansible_dir = f"{self.prov_root}/ansible"
@@ -215,12 +220,36 @@ def unstage(conn, ctx: Ctx, rec: dict, run_id: int, how: str) -> str:
     # The MAC lock keeps a concurrent PROV_STAGE from publishing between the
     # profile.env ownership check and the removals (provlib.mac_lock).
     with provlib.mac_lock(conn, rec["cfgkey"], ctx.mac_lock_wait):
-        proc = provlib.remote_run(["sh", "-c", _UNSTAGE_SH, "sh", str(run_id), rec["cfgkey"],
-                                   ctx.prov_root, ctx.http_root, how], check=False, timeout=60)
-    word = proc.stdout.decode("utf-8", "replace").strip()
-    if proc.returncode != 0 or word not in ("done", "already", "foreign"):
-        raise ProvError(f"un-staging {rec['cfgkey']} failed: {stack_apply._err_tail(proc)}")
-    return word
+        return provlib.unstage_profile(run_id, rec["cfgkey"], how,
+                                       (ctx.prov_root, ctx.http_root))
+
+
+def sweep_armed(conn, ctx: Ctx) -> int:
+    """Disarm armed per-MAC profiles whose run is terminal; returns how many."""
+    paths = (ctx.prov_root, ctx.http_root)
+    armed = provlib.armed_profiles(paths)
+    if not armed:
+        return 0
+    marks = ",".join(["%s"] * len(armed))
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT id FROM prov_runs WHERE id IN ({marks})"
+                    " AND status IN ('succeeded','failed','cancelled')",
+                    tuple(run for _cfg, run in armed))
+        done = {int(r["id"]) for r in cur.fetchall()}
+    conn.commit()
+    n = 0
+    for cfg, run in armed:
+        if run not in done:
+            continue
+        try:   # re-checked under the MAC lock: a staging may have replaced it
+            owner = provlib.disarm_stale_profile(conn, cfg, paths, wait=ctx.mac_lock_wait)
+        except MacBusy:
+            log(f"sweep: MAC {cfg} busy; next tick")
+            continue
+        if owner is not None:
+            log(f"sweep: disarmed the {cfg} boot profile of terminal run {owner}")
+            n += 1
+    return n
 
 
 def ssh_env(kh: str, *, pinned: bool) -> tuple[str, ...]:
@@ -273,19 +302,27 @@ def complete(conn, ctx: Ctx, rec: dict, run_id: int, kh: str, suffix: str) -> No
     """Install detected: un-stage, bootstrap, verify, check + apply. Raises Retry.
 
     `suffix` (" (attempt n of N)") is in every progress detail, so a crash
-    mid-way still counts this attempt."""
-    set_detail(conn, run_id, DETAIL_APPLYING + suffix)
+    mid-way still counts this attempt. step() re-checks the run is still
+    running before every target-side effect (Superseded otherwise); a MAC
+    lock timeout propagates as MacBusy (not an attempt)."""
+    step(conn, run_id, DETAIL_APPLYING + suffix)
     try:
         word = unstage(conn, ctx, rec, run_id, "finish")
+    except MacBusy:
+        raise
     except ProvError as exc:
         raise Retry(str(exc)) from None
+    if word == "foreign":       # a newer staging owns the MAC: this run is over
+        log(f"run {run_id}: boot profile belongs to a newer staging (left in place)")
+        raise Superseded("a newer staging owns the boot profile")
     log(f"run {run_id}: install detected on {rec['fqdn']}; boot profile "
-        + {"done": "removed", "already": "already removed",
-           "foreign": "belongs to a newer staging (left in place)"}[word])
+        + ("removed" if word == "done" else "already removed"))
     pinned = ssh_env(kh, pinned=True)
+    step(conn, run_id, "installed; bootstrapping python3" + suffix)
     proc = raw(ctx, rec, _PYTHON_SH, pinned, become=True, timeout=BOOTSTRAP_TIMEOUT)
     if proc.returncode != 0:
         raise Retry(f"python3 bootstrap failed: {stack_apply._err_tail(proc)}")
+    step(conn, run_id, "installed; checking facts" + suffix)
     try:
         fam, arch = stack_apply.map_facts(*stack_apply.probe_facts(
             ctx.ansible_dir, rec["fqdn"], user=rec["admin_user"], extra_env=pinned))
@@ -294,10 +331,11 @@ def complete(conn, ctx: Ctx, rec: dict, run_id: int, kh: str, suffix: str) -> No
     if (fam, arch) != (rec["family"], rec["arch"]):
         raise Retry(f"installed system reports {fam}/{arch}, expected {rec['family']}/{rec['arch']}")
     vars_path = f"{ctx.runs}/reimage-{run_id}.stack.json"
+    step(conn, run_id, "installed; check pass" + suffix)
     if not stack_apply.playbook(ctx.ansible_dir, rec["fqdn"], vars_path, True,
                                 user=rec["admin_user"], extra_env=pinned):
         raise Retry("stack check pass failed")
-    set_detail(conn, run_id, "installed; apply pass" + suffix)
+    step(conn, run_id, "installed; apply pass" + suffix)
     if not stack_apply.playbook(ctx.ansible_dir, rec["fqdn"], vars_path, False,
                                 user=rec["admin_user"], extra_env=pinned):
         raise Retry("stack apply pass failed")
@@ -345,6 +383,14 @@ def process(conn, ctx: Ctx, row: dict, *, install_timeout: int, attempts: int) -
         return "waiting"
     try:
         complete(conn, ctx, rec, run_id, kh, f" (attempt {n} of {attempts})")
+    except MacBusy as exc:      # not an attempt: put the count back, next tick
+        set_detail(conn, run_id, f"installed; {exc}; deferred"
+                   + (f" (attempt {started} of {attempts})" if started else ""))
+        log(f"run {run_id}: {exc}; deferred to the next tick")
+        return "busy"
+    except Superseded as exc:
+        finish(conn, run_id, "cancelled", f"superseded: {exc}; stacks not applied")
+        return "superseded"
     except Retry as exc:
         return _retry(conn, run_id, n, attempts, str(exc))
     finish(conn, run_id, "succeeded", "installed; stacks applied")
@@ -398,14 +444,27 @@ def main(argv: list[str] | None = None) -> int:
                 log(f"run {row['id']}: busy (another prov-finish holds it)")
                 continue
             try:
-                outcome = process(conn, ctx, row, install_timeout=install_timeout,
+                # Re-read under the per-run lock: the list above may be stale
+                # (finished by another prov-finish, superseded by PROV_STAGE).
+                fresh = pending_runs(conn, int(row["id"]))
+                if not fresh:
+                    log(f"run {row['id']}: no longer running")
+                    continue
+                outcome = process(conn, ctx, fresh[0], install_timeout=install_timeout,
                                   attempts=attempts)
                 log(f"run {row['id']}: {outcome}")
+            except MacBusy as exc:
+                log(f"run {row['id']}: {exc}; next tick")
             except Exception as exc:  # noqa: BLE001 — leave the run, try the next tick
                 log(f"run {row['id']}: error: {exc}")
                 rc = 1
             finally:
                 stack_apply._unlock(conn, name)
+        try:
+            sweep_armed(conn, ctx)
+        except Exception as exc:  # noqa: BLE001 — retried every tick
+            log(f"sweep: error: {exc}")
+            rc = 1
     finally:
         conn.close()
     return rc

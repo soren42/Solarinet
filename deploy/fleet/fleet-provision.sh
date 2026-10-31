@@ -12,6 +12,12 @@
 # switch (proxyDHCP or UniFi options) which activates separately. Until then the
 # entry is staged and inert.
 #
+# The per-MAC iPXE profile (ipxe/mac-<MAC>.ipxe) is what makes a machine wipe
+# itself on its next network boot. Staging first removes any previous one for
+# the MAC, writes every installer file and profile.env, and publishes the new
+# profile LAST by atomic rename: a staging that fails part-way leaves no
+# profile armed (prov-stage.py then disarms whatever its run owns).
+#
 #   fleet-provision.sh --target <MAC|host> --distro <debian|ubuntu|opensuse>
 #                      --arch <x86_64|arm64|arm32> [--release <release_name>]
 #                      --hostname <h> [--run-id <prov_runs id>]
@@ -193,6 +199,12 @@ sign_node_cert "${FQDN}" "${OP}" "${CERTTMP}"
 ENROLL_TOKEN="$(openssl rand -hex 16)"
 flog "minted enrollment cert CN=client.${FQDN}"
 
+# ---- disarm the previous per-MAC profile before rewriting what it boots -------
+if [ -n "${MAC}" ]; then
+  bssh "rm -f '${HTTP_ROOT}/ipxe/mac-${MAC}.ipxe'" \
+    || fdie "cannot remove the previous per-MAC profile ipxe/mac-${MAC}.ipxe; nothing staged."
+fi
+
 # ---- render + push the distro unattended-install config ---------------------
 case "${DISTRO}" in
   debian)
@@ -210,15 +222,11 @@ case "${DISTRO}" in
 esac
 flog "rendered ${DISTRO} unattended-install config -> configs/${CFGKEY}"
 
-# ---- top-level boot menu: only bootstrap it; per-MAC entry ------------------
+# ---- top-level boot menu: only bootstrap it ---------------------------------
 # ipxe/boot.ipxe is generated from the SoR's fetched images by image-refresh.py;
 # never overwrite it. The static zero-image menu is installed only if absent.
 render_template "${FLEET_DIR}/netboot/ipxe/boot.ipxe" > "${WORK}/boot.ipxe"
 bssh "test -e '${HTTP_ROOT}/ipxe/boot.ipxe' || install -D -m 0644 /dev/stdin '${HTTP_ROOT}/ipxe/boot.ipxe'" < "${WORK}/boot.ipxe"
-if [ -n "${MAC}" ]; then
-  bput "${HTTP_ROOT}/ipxe/mac-${MAC}.ipxe" 0644 < "${WORK}/mac.ipxe"
-  flog "staged per-MAC auto-install: ipxe/mac-${MAC}.ipxe (${IMG_DIR})"
-fi
 
 # ---- stage the first-boot installer + enrollment material -------------------
 # solari-firstboot.sh runs on the freshly installed node; the cert material is
@@ -241,6 +249,12 @@ if [ -n "${STACK_VARS}" ]; then
 fi
 [ -z "${RUN_ID}" ] || flog "install tagged with prov_runs ${RUN_ID}; prov-finish completes it after first boot"
 flog "staged enrollment material (enroll token ${ENROLL_TOKEN:0:8}…)"
+
+# ---- arm: publish the per-MAC profile LAST (atomic rename via bput) ----------
+if [ -n "${MAC}" ]; then
+  bput "${HTTP_ROOT}/ipxe/mac-${MAC}.ipxe" 0644 < "${WORK}/mac.ipxe"
+  flog "staged per-MAC auto-install: ipxe/mac-${MAC}.ipxe (${IMG_DIR})"
+fi
 
 flog "staged. ${HOSTNAME_} will install ${DISTRO} ${RELEASE}/${IMG_ARCH} on next network boot once PXE is live."
 if [ -z "${MAC}" ]; then

@@ -20,22 +20,31 @@ Flow:
      may come from the agent — the helper cannot read the monitoring DB);
   3. render the stack vars with `stackgen.py --from-db` for the image's
      family/arch (solari_stack_order = the dependency-closed run order);
-  4. open a prov_runs row (mode reimage) and cancel any older queued/running
-     reimage run for the same entity ("superseded by run <id>");
+  4. open a prov_runs row (mode reimage) directly as `running` (one commit,
+     no queued window) and cancel any older queued/running reimage run for the
+     same entity ("superseded by run <id>");
   5. keep the run's record operator-side on the provisioning host, outside
      the web root: PROV_ROOT/runs/reimage-<run>.json (target, image, admin
      user) and PROV_ROOT/runs/reimage-<run>.stack.json (the vars) — stack vars
      are never published over HTTP;
   6. stage through the EXISTING flow — fleet-provision.sh with --release and
-     --run-id (path overridable via SOLARI_FLEET_PROVISION for tests); the
-     installer writes the run id to the target as an Ansible local fact and
-     authorizes the provisioning host's control key;
+     --run-id (path overridable via SOLARI_FLEET_PROVISION for tests), under
+     the per-MAC SoR lock; the installer writes the run id to the target as an
+     Ansible local fact and authorizes the provisioning host's control key.
+     fleet-provision publishes the per-MAC boot profile LAST (atomic rename),
+     after every installer file and profile.env, so a staging that fails
+     part-way never leaves a destructive profile armed for a half-written
+     install;
   7. on success the run stays `running` with detail "staged; awaiting netboot
      install". prov-finish.py (solari-prov-finish.timer) completes it: once
      the freshly installed host answers with this run id it un-stages the
      per-MAC profile, applies the stacks over SSH and marks the run
      succeeded/failed. Any failure here after the run is open marks it
-     `failed`.
+     `failed` and then, under the per-MAC lock, disarms this MAC's staged
+     install if profile.env names this run or a run that is no longer active
+     (e.g. the one just superseded) — a failed PROV_STAGE leaves nothing armed.
+     prov-finish sweeps the same condition on every tick in case this
+     clean-up itself could not run.
 
 Exit: 0 staged, 1 refusal/failure, 2 usage error. Progress goes to stdout /
 stderr (the C side redirects both to the helper log). Secrets are
@@ -289,10 +298,9 @@ def main(argv: list[str] | None = None) -> int:
                 log("stack order: " + ",".join(order))
                 run_id = provlib.open_run(conn, mode="reimage", entity_id=entity_id,
                                           image_id=image_id, stack_order=order,
-                                          requested_by=op)
+                                          requested_by=op, detail="staging netboot install")
                 log(f"opened prov_runs {run_id}")
                 supersede(conn, entity_id, run_id)
-                provlib.advance_run(conn, run_id, "running", "staging netboot install")
                 publish_run(run_id, {
                     "run_id": run_id, "entity_id": entity_id, "image_id": image_id,
                     "hostname": entity["name"], "fqdn": f"{entity['name']}.{domain}",
@@ -307,10 +315,12 @@ def main(argv: list[str] | None = None) -> int:
             except ProvError as exc:
                 if run_id is not None:
                     _fail(conn, run_id, str(exc))
+                    _disarm(conn, mac, run_id, lock_busy=isinstance(exc, provlib.MacBusy))
                 return provlib.die(str(exc))
             except Exception as exc:  # noqa: BLE001 — never leave the run open
                 if run_id is not None:
                     _fail(conn, run_id, f"internal error: {type(exc).__name__}")
+                    _disarm(conn, mac, run_id, lock_busy=False)
                 raise
     finally:
         conn.close()
@@ -324,6 +334,29 @@ def _fail(conn, run_id: int, detail: str) -> None:
         provlib.advance_run(conn, run_id, "failed", detail)
     except Exception as exc:  # noqa: BLE001
         print(f"error: could not mark run {run_id} failed: {exc}", file=sys.stderr)
+
+
+def _disarm(conn, mac: str, run_id: int, *, lock_busy: bool) -> None:
+    """After a failed staging: leave no destructive boot profile armed for it.
+
+    Disarms this MAC's staged install when profile.env names this run, or a
+    run that is no longer active (the run this staging superseded, whose
+    profile fleet-provision had not yet replaced). Best effort: prov-finish's
+    sweep disarms the same condition on its next tick if this cannot."""
+    cfgkey = mac.replace(":", "-")
+    if lock_busy:   # never got the MAC lock, so fleet-provision never ran
+        log(f"MAC {mac} busy; prov-finish will disarm any stale profile")
+        return
+    try:
+        conn.rollback()
+        owner = provlib.disarm_stale_profile(conn, cfgkey, provlib.prov_paths(),
+                                             wait=MAC_LOCK_WAIT, own_run=run_id)
+    except Exception as exc:  # noqa: BLE001 — prov-finish sweeps what this misses
+        print(f"error: could not disarm the {cfgkey} boot profile after run {run_id} "
+              f"failed: {exc}; prov-finish will retry", file=sys.stderr)
+        return
+    if owner is not None:
+        log(f"disarmed the {cfgkey} boot profile of run {owner}")
 
 
 if __name__ == "__main__":

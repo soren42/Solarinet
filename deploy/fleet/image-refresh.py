@@ -8,7 +8,7 @@ IMAGE_REFRESH verb; safe to run by hand. Exit 0 ok, 1 failure/refusal, 2 usage.
 
 Result: every refresh of an existing image is a prov_runs row (031 shape:
 mode='refresh', image_id set, entity_id NULL, stack_slugs []), requested_by =
---op, queued -> running -> succeeded | failed. The detail says what was
+--op, opened running (provlib.open_run) -> succeeded | failed. The detail says what was
 installed or why it failed (and whether the old image was kept). Only one
 refresh per image runs at a time (SoR GET_LOCK held for the whole run); any
 older refresh run of the image still queued/running is therefore orphaned and
@@ -579,10 +579,9 @@ def main(argv: list[str] | None = None) -> int:
         log(f"op={op} image={image_id} {row['distro']} {row['release_name']} {row['arch']}")
         _lock(conn, lock)
         run_id = provlib.open_run(conn, mode="refresh", entity_id=None, image_id=image_id,
-                                  stack_order=[], requested_by=op)
+                                  stack_order=[], requested_by=op, detail="fetching")
         log(f"opened prov_runs {run_id}")
         supersede(conn, image_id, run_id)
-        provlib.advance_run(conn, run_id, "running", "fetching")
         detail = refresh(conn, row)
         finish(conn, run_id, "succeeded", detail)
         log(f"run {run_id} succeeded: {detail}")
