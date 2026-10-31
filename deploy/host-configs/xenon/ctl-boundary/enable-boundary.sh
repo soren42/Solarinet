@@ -109,7 +109,7 @@ php-fpm8.5 -t 2>&1 | tail -1
 # 6. activate
 systemctl daemon-reload
 systemctl restart solarinet-server
-for i in $(seq 1 20); do [ -S /run/solari/solariCtl.sock ] && break; sleep 0.5; done
+for _ in $(seq 1 20); do [ -S /run/solari/solariCtl.sock ] && break; sleep 0.5; done
 stat -c '%a %U:%G %n' /run/solari /run/solari/solariCtl.sock
 systemctl reload php8.5-fpm
 sleep 2
