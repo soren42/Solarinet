@@ -10,7 +10,9 @@ GRANT SELECT, INSERT, UPDATE ON `sor`.`entities` TO 'solari_dashboard'@'10.0.0.2
 GRANT SELECT ON `sor`.`entity_hardware_unit_links` TO 'solari_dashboard'@'10.0.0.20';
 GRANT SELECT, INSERT, UPDATE ON `sor`.`ip_addresses` TO 'solari_dashboard'@'10.0.0.20';
 
-GRANT SELECT, INSERT ON `sor`.`hardware_models` TO 'solari_dashboard'@'10.0.0.20';
+-- hardware_models edits are column-scoped: only the operator-set CPU arch
+-- (migration 031; apply 031 before this grant) plus its provenance stamp.
+GRANT SELECT, INSERT, UPDATE (`arch`, `source_id`, `asserted_kind`, `asserted_at`) ON `sor`.`hardware_models` TO 'solari_dashboard'@'10.0.0.20';
 GRANT SELECT, INSERT, UPDATE ON `sor`.`hardware_units` TO 'solari_dashboard'@'10.0.0.20';
 GRANT SELECT, INSERT, UPDATE ON `sor`.`locations` TO 'solari_dashboard'@'10.0.0.20';
 GRANT SELECT, INSERT, UPDATE ON `sor`.`projects` TO 'solari_dashboard'@'10.0.0.20';

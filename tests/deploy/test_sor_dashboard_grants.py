@@ -66,6 +66,14 @@ EXPECTED = {
     "v_dns_ifaces": {"SELECT"},
     "v_project_shopping": {"SELECT"},
 }
+# Column-scoped grants (information_schema.COLUMN_PRIVILEGES); the table-level
+# matrix above stays exact, so these never widen to whole-table UPDATE.
+EXPECTED_COLUMNS = {
+    ("hardware_models", "arch"): {"UPDATE"},
+    ("hardware_models", "source_id"): {"UPDATE"},
+    ("hardware_models", "asserted_kind"): {"UPDATE"},
+    ("hardware_models", "asserted_at"): {"UPDATE"},
+}
 DENIED = {"certificates", "config_items", "external_refs", "secrets", "users", "groups", "relationships"}
 
 
@@ -172,6 +180,27 @@ def main():
             actual.setdefault(table, set()).add(privilege.upper())
         assert actual == EXPECTED, f"grant matrix mismatch: {actual!r}"
         print(f"  ok  exact table grant matrix ({sum(map(len, EXPECTED.values()))} privileges)")
+
+        cur.execute(
+            "SELECT TABLE_NAME, COLUMN_NAME, PRIVILEGE_TYPE FROM information_schema.COLUMN_PRIVILEGES "
+            "WHERE GRANTEE=%s AND TABLE_SCHEMA=%s",
+            (f"'{TEST_USER}'@'{TEST_HOST}'", DB),
+        )
+        actual_columns = {}
+        for table, column, privilege in cur.fetchall():
+            actual_columns.setdefault((table, column), set()).add(privilege.upper())
+        assert actual_columns == EXPECTED_COLUMNS, f"column grant matrix mismatch: {actual_columns!r}"
+        cur.execute(
+            "UPDATE `hardware_models` SET `arch`=`arch`, `source_id`=`source_id`, "
+            "`asserted_kind`=`asserted_kind`, `asserted_at`=`asserted_at` WHERE 1=0"
+        )
+        try:
+            cur.execute("UPDATE `hardware_models` SET `make`=`make` WHERE 1=0")
+        except pymysql.err.OperationalError as exc:
+            assert exc.args[0] == 1143, f"unexpected hardware_models.make denial: {exc!r}"
+        else:
+            raise AssertionError("dashboard must not UPDATE hardware_models beyond arch + provenance")
+        print(f"  ok  exact column grant matrix ({len(EXPECTED_COLUMNS)} columns); other columns denied")
 
         cur.execute(
             "SELECT PRIVILEGE_TYPE FROM information_schema.USER_PRIVILEGES "

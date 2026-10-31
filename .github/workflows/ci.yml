@@ -238,6 +238,16 @@ jobs:
           STACKGEN_TEST_PYTHON: /tmp/sorsync-ci/bin/python
           STACKGEN_TEST_USER_HOST: '%'
         run: bash tests/netdb/test_prov_cdc_030.sh
+      - name: Provisioning arch + refresh runs (migration 031) shape CHECK, guards, rollback digest, ledger rehearsal
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+          STACKGEN_TEST_PYTHON: /tmp/sorsync-ci/bin/python
+          STACKGEN_TEST_USER_HOST: '%'
+        run: bash tests/netdb/test_prov_arch_refresh_031.sh
       - name: IMAGE_REFRESH helper, fetch-images.sh and boot-menu render (local fixtures, no internet)
         env:
           SOLARI_TEST_SOR_DB: '1'
@@ -855,7 +865,7 @@ jobs:
           test "$monitoring_migration_count" = 38 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 38" >&2; exit 1; }
           echo "ledger-gate: monitoring applied-migration count is $monitoring_migration_count"
           sor_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read SoR migration count' >&2; exit 1; }
-          test "$sor_migration_count" = 15 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 15" >&2; exit 1; }
+          test "$sor_migration_count" = 16 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 16" >&2; exit 1; }
           echo "ledger-gate: SoR applied-migration count is $sor_migration_count"
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output "$ledger_tmp/monitoring-schema.sql"
           echo 'ledger-gate: monitoring schema exported'
@@ -896,7 +906,8 @@ jobs:
             tests/deploy/test_stack_items_ansible.sh \
             tests/deploy/test_fleet_provisioning_gate.sh \
             tests/netdb/test_prov_images_stacks.sh \
-            tests/netdb/test_prov_cdc_030.sh
+            tests/netdb/test_prov_cdc_030.sh \
+            tests/netdb/test_prov_arch_refresh_031.sh
       - name: F-07 fleet provisioning fails closed
         run: bash tests/deploy/test_fleet_provisioning_gate.sh
       - name: F-07 signed release manifest contract

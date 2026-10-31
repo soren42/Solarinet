@@ -67,7 +67,9 @@ ALTER TABLE `prov_runs`
   MODIFY COLUMN `mode` ENUM('reimage','apply','refresh') NOT NULL
     COMMENT 'reimage = wipe + install + stacks at first boot; apply = Ansible over SSH, no reinstall; refresh = IMAGE_REFRESH of one image',
   MODIFY COLUMN `entity_id` BIGINT UNSIGNED NULL
-    COMMENT 'FK: target machine (reimage/apply); NULL for refresh';
+    COMMENT 'FK: target machine (reimage/apply); NULL for refresh',
+  MODIFY COLUMN `image_id` INT UNSIGNED NULL
+    COMMENT 'FK: image installed (reimage) or refreshed (refresh); NULL for apply';
 
 SET @ck := (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
              WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'prov_runs'
