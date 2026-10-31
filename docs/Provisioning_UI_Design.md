@@ -93,8 +93,11 @@ no network calls). Open it in a browser and click through it before P1 starts.
 | **P6 · Bare metal** | steel (ZimaBlade, x86_64, Debian 12) → openSUSE Tumbleweed + Core, staged through the new UI. Clear the stale `steel` known_hosts entry, enroll the agent. | Machine boots Tumbleweed, agent reports, Core verified on-host |
 | **P7 · DNS role** | Port the BIND secondary helper to SUSE layout as the `dns-secondary` role; apply via Apply-stacks-only. Do **not** restart steel's old docker bind9 (stale zones). | AXFR from primary, serial match, sorsync registration |
 
-P6 is the first-ever real wipe + install and is destructive. It runs only on
-an explicit operator go, even inside the pre-authorized deploy window.
+P6 is the first-ever real wipe + install and is destructive. Operator granted
+standing authorization on 2026-10-31 for development and deployment of every
+phase, provided each one passes cross-lab review and the plan is followed. P6
+is announced before the wipe but does not wait for a further go. A material
+deviation from this plan goes back to the operator.
 
 ## 5. Open questions
 
