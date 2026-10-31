@@ -69,6 +69,7 @@ DISTRO_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 F07_DENIED = "[fleet][error] F-07: unsigned provisioning is disabled."
 STACKGEN_TIMEOUT = 300
 PROVISION_TIMEOUT = 3600
+MAC_LOCK_WAIT = 120       # s; prov-finish holds the MAC lock only while un-staging
 
 
 def log(msg: str) -> None:
@@ -300,7 +301,8 @@ def main(argv: list[str] | None = None) -> int:
                     "distro": image["distro"], "release": image["release_name"],
                     "admin_user": admin_user, "stack_order": order,
                 }, vars_path)
-                stage(mac, image, entity["name"], domain, run_id, op)
+                with provlib.mac_lock(conn, mac, MAC_LOCK_WAIT):
+                    stage(mac, image, entity["name"], domain, run_id, op)
                 set_running_detail(conn, run_id, "staged; awaiting netboot install")
             except ProvError as exc:
                 if run_id is not None:

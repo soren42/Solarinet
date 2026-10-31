@@ -37,6 +37,7 @@ Stdlib only; pymysql is imported lazily by connect_sor().
 from __future__ import annotations
 
 import configparser
+import contextlib
 import json
 import os
 import re
@@ -232,6 +233,32 @@ def open_run(conn, *, mode: str, entity_id: int | None, image_id: int | None,
         run_id = int(cur.lastrowid)
     conn.commit()
     return run_id
+
+
+@contextlib.contextmanager
+def mac_lock(conn, mac: str, wait: int):
+    """SoR named lock serialising every write to one MAC's netboot files.
+
+    PROV_STAGE (fleet-provision publishing a profile) and prov-finish
+    (un-staging / disarming one) both run against the same per-MAC files on
+    the provisioning host; holding this across each keeps an older run's
+    clean-up from removing a newer staging's files mid-publish."""
+    name = "solari-prov-mac-" + parse_mac(mac.replace("-", ":"))
+    with conn.cursor() as cur:
+        cur.execute("SELECT GET_LOCK(%s, %s) AS got", (name, wait))
+        row = cur.fetchone()
+    got = row.get("got") if isinstance(row, dict) else (row[0] if row else None)
+    if got != 1:
+        raise ProvError(f"another provisioning step holds MAC {mac}; try again shortly")
+    try:
+        yield
+    finally:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT RELEASE_LOCK(%s)", (name,))
+                cur.fetchall()
+        except Exception:  # noqa: BLE001 — the lock also dies with the session
+            pass
 
 
 def advance_run(conn, run_id: int, status: str, detail: str | None = None) -> None:

@@ -230,12 +230,16 @@ installer profile also:
 polls each running reimage run: over SSH from benzene, as the admin user, it
 reads the marker. Only when it names **this** run (the new OS is up) does it
 remove `ipxe/mac-<cfgkey>.ipxe` + the installer configs (only while
-`profile.env` still names this run; it becomes `finished-<run>.env`), install
-python3 if missing, verify the installed OS family/arch, and run the stack
-playbook (check, then apply) with the host key pinned from the marker probe.
-The run then ends `succeeded`, or `failed` after `SOLARI_PROV_APPLY_ATTEMPTS`
-(default 3) failed ticks — the profile is already gone, so a failed apply never
-reinstalls. A run whose install is not seen within `SOLARI_PROV_INSTALL_TIMEOUT`
+`profile.env` still names this run, under the per-MAC SoR lock that PROV_STAGE
+also holds while publishing; it becomes `finished-<run>.env`), install python3
+if missing, verify the installed OS family/arch, and run the stack playbook
+(check, then apply). Host keys: probes before the marker is seen use a
+throw-away known_hosts; the key that first answers with this run's marker is
+pinned in `runs/reimage-<run>.known_hosts` and required (strict checking) for
+every later probe and step, across ticks. The run then ends `succeeded`, or
+`failed` after `SOLARI_PROV_APPLY_ATTEMPTS` (default 3) attempts — each attempt
+is recorded before it starts, so a crash still uses it up; the profile is
+already gone, so a failed apply never reinstalls. A run whose install is not seen within `SOLARI_PROV_INSTALL_TIMEOUT`
 seconds (default 6 h) is `failed` and its profile **disarmed** (moved to
 `profiles/<cfgkey>/disarmed-<run>.*`); re-stage to retry.
 

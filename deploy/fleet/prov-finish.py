@@ -21,19 +21,25 @@ every few minutes, or by hand — drives each such run to a terminal status:
      of the web root) and the run fails "install not detected ...; re-stage to
      retry". No reinstall loop and no silently armed profile;
   3. otherwise probe the target over SSH from the provisioning host, as the
-     admin user, with a fresh per-run known_hosts file (trust on first use):
-     `cat` the marker. Unreachable, or another run id (the old OS still
-     running, an earlier install) -> still waiting;
+     admin user, and `cat` the marker. Until the marker has been seen the
+     probe uses a throw-away known_hosts (accept-new); unreachable, or another
+     run id (the old OS still running, an earlier install) -> still waiting.
+     The host key that first answers with THIS run's marker is pinned in
+     runs/reimage-<run>.known_hosts (trust on first marker) and every later
+     probe and step, on this and later ticks, requires it
+     (StrictHostKeyChecking=yes);
   4. marker == this run -> the install succeeded: un-stage the per-MAC
      profile and installer configs (only while profile.env still names THIS
-     run), make sure python3 exists (zypper / apt-get via the raw module),
-     check the installed OS family/arch against the record, then the stack
-     check pass and the apply pass — all with the host key pinned from step 3
-     (StrictHostKeyChecking=yes) -> succeeded "installed; stacks applied";
+     run, under the per-MAC SoR lock PROV_STAGE also takes), make sure python3
+     exists (zypper / apt-get via the raw module), check the installed OS
+     family/arch against the record, then the stack check pass and the apply
+     pass -> succeeded "installed; stacks applied";
   5. a failure after the install is retried on later ticks (the run stays
      running, detail "installed; ... (attempt n of N)") up to
-     SOLARI_PROV_APPLY_ATTEMPTS (default 3), then the run fails. The profile
-     is already gone by then, so a failed apply never reinstalls the machine.
+     SOLARI_PROV_APPLY_ATTEMPTS (default 3), then the run fails. The attempt
+     number is recorded before the attempt starts, so a crash mid-attempt
+     still uses it up. The profile is already gone by then, so a failed apply
+     never reinstalls the machine.
 
 Runs staged before this mechanism (no run record) are failed with a message
 to re-stage. Nothing here talks to the target except over SSH with the
@@ -44,7 +50,8 @@ existing operator/control keys; no new credentials, no HTTP.
 Exit: 0 (each run's outcome is in prov_runs), 1 SoR unreachable / internal
 error, 2 usage error. Progress and playbook output go to stdout (journal).
 Environment: the provlib SoR + provisioning-host variables (as for the ctl
-helpers), SOLARI_PROV_INSTALL_TIMEOUT, SOLARI_PROV_APPLY_ATTEMPTS.
+helpers), SOLARI_PROV_INSTALL_TIMEOUT, SOLARI_PROV_APPLY_ATTEMPTS,
+SOLARI_PROV_MAC_LOCK_WAIT (seconds to wait for the per-MAC lock, default 30).
 """
 from __future__ import annotations
 
@@ -76,7 +83,10 @@ PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 
 DETAIL_STAGING = "staging netboot install"
 DETAIL_APPLYING = "installed; applying stacks"
+# Every installed-state detail carries the number of the attempt last STARTED;
+# it is written before any work, so a crash mid-attempt still consumes it.
 ATTEMPT_RE = re.compile(r"^installed; .*\(attempt ([0-9]+) of [0-9]+\)")
+DEFAULT_MAC_LOCK_WAIT = 30
 DEFAULT_INSTALL_TIMEOUT = 21600
 DEFAULT_APPLY_ATTEMPTS = 3
 PROBE_TIMEOUT = 120
@@ -172,6 +182,7 @@ class Ctx:
             if not PATH_RE.match(path) or "/../" in path + "/":
                 raise ProvError(f"{name} {path!r} is not a plain absolute path")
         self.runs = f"{self.prov_root}/runs"
+        self.mac_lock_wait = DEFAULT_MAC_LOCK_WAIT
         self.ansible_dir = f"{self.prov_root}/ansible"
 
 
@@ -200,9 +211,12 @@ def load_record(ctx: Ctx, row: dict) -> dict | None:
     return rec
 
 
-def unstage(ctx: Ctx, rec: dict, run_id: int, how: str) -> str:
-    proc = provlib.remote_run(["sh", "-c", _UNSTAGE_SH, "sh", str(run_id), rec["cfgkey"],
-                               ctx.prov_root, ctx.http_root, how], check=False, timeout=60)
+def unstage(conn, ctx: Ctx, rec: dict, run_id: int, how: str) -> str:
+    # The MAC lock keeps a concurrent PROV_STAGE from publishing between the
+    # profile.env ownership check and the removals (provlib.mac_lock).
+    with provlib.mac_lock(conn, rec["cfgkey"], ctx.mac_lock_wait):
+        proc = provlib.remote_run(["sh", "-c", _UNSTAGE_SH, "sh", str(run_id), rec["cfgkey"],
+                                   ctx.prov_root, ctx.http_root, how], check=False, timeout=60)
     word = proc.stdout.decode("utf-8", "replace").strip()
     if proc.returncode != 0 or word not in ("done", "already", "foreign"):
         raise ProvError(f"un-staging {rec['cfgkey']} failed: {stack_apply._err_tail(proc)}")
@@ -210,9 +224,7 @@ def unstage(ctx: Ctx, rec: dict, run_id: int, how: str) -> str:
 
 
 def ssh_env(kh: str, *, pinned: bool) -> tuple[str, ...]:
-    # host_key_checking=True drops ansible.cfg's StrictHostKeyChecking=no; the
-    # per-run known_hosts file is filled on the marker probe (accept-new) and
-    # then required to match for every later step of the same tick.
+    # host_key_checking=True drops ansible.cfg's StrictHostKeyChecking=no.
     mode = "yes" if pinned else "accept-new"
     return ("ANSIBLE_HOST_KEY_CHECKING=True",
             f"ANSIBLE_SSH_COMMON_ARGS=-o UserKnownHostsFile={kh} -o StrictHostKeyChecking={mode}")
@@ -227,13 +239,31 @@ def raw(ctx: Ctx, rec: dict, cmd: str, env: tuple[str, ...], *, become: bool,
 
 
 def read_marker(ctx: Ctx, rec: dict, kh: str) -> int | None:
-    provlib.remote_run(["rm", "-f", kh], timeout=60)
-    proc = raw(ctx, rec, f"cat {MARKER}", ssh_env(kh, pinned=False), become=False,
+    """The run id the host's marker carries; pins its host key on first match.
+
+    Trust on first marker: until the installed system answers with this run's
+    marker the host key is unknown (the old OS or the installer may still be
+    on that name), so each probe uses a throw-away known_hosts with
+    accept-new. The key that first answers with the marker is moved into the
+    run's pinned known_hosts, and from then on every probe and step uses
+    StrictHostKeyChecking=yes against it — a different host appearing later
+    is unreachable, never re-trusted."""
+    if provlib.remote_run(["test", "-s", kh], check=False, timeout=60).returncode == 0:
+        proc = raw(ctx, rec, f"cat {MARKER}", ssh_env(kh, pinned=True), become=False,
+                   timeout=PROBE_TIMEOUT)
+        m = MARKER_RE.search(stack_apply._out(proc)) if proc.returncode == 0 else None
+        return int(m.group(1)) if m else None
+    probe = kh + ".probe"
+    provlib.remote_run(["rm", "-f", probe], timeout=60)
+    proc = raw(ctx, rec, f"cat {MARKER}", ssh_env(probe, pinned=False), become=False,
                timeout=PROBE_TIMEOUT)
-    if proc.returncode != 0:
-        return None
-    m = MARKER_RE.search(stack_apply._out(proc))
-    return int(m.group(1)) if m else None
+    m = MARKER_RE.search(stack_apply._out(proc)) if proc.returncode == 0 else None
+    run = int(m.group(1)) if m else None
+    if run == rec["run_id"]:
+        provlib.remote_run(["mv", "-f", probe, kh], timeout=60)
+    else:
+        provlib.remote_run(["rm", "-f", probe], check=False, timeout=60)
+    return run
 
 
 # ---------------------------------------------------------------------------
@@ -242,11 +272,11 @@ def read_marker(ctx: Ctx, rec: dict, kh: str) -> int | None:
 def complete(conn, ctx: Ctx, rec: dict, run_id: int, kh: str, suffix: str) -> None:
     """Install detected: un-stage, bootstrap, verify, check + apply. Raises Retry.
 
-    `suffix` (" (attempt n of N)" or "") keeps the failed-attempt count in every
-    progress detail, so a crash mid-way never resets it."""
+    `suffix` (" (attempt n of N)") is in every progress detail, so a crash
+    mid-way still counts this attempt."""
     set_detail(conn, run_id, DETAIL_APPLYING + suffix)
     try:
-        word = unstage(ctx, rec, run_id, "finish")
+        word = unstage(conn, ctx, rec, run_id, "finish")
     except ProvError as exc:
         raise Retry(str(exc)) from None
     log(f"run {run_id}: install detected on {rec['fqdn']}; boot profile "
@@ -292,32 +322,36 @@ def process(conn, ctx: Ctx, row: dict, *, install_timeout: int, attempts: int) -
                "staged before completion tracking (no run record); re-stage to retry")
         return "failed"
     if timed_out:
-        word = unstage(ctx, rec, run_id, "disarm")
+        word = unstage(conn, ctx, rec, run_id, "disarm")
         finish(conn, run_id, "failed",
                f"install not detected within {install_timeout / 3600:g} h; boot profile "
                + ("disarmed" if word in ("done", "already") else "left to the newer staging")
                + "; re-stage to retry")
         return "failed"
     m = ATTEMPT_RE.match(detail)
-    failed_so_far = int(m.group(1)) if m else 0
-    suffix = f" (attempt {failed_so_far} of {attempts})" if failed_so_far else ""
+    started = int(m.group(1)) if m else 0
+    if started >= attempts:     # the last attempt died without recording an outcome
+        finish(conn, run_id, "failed", "installed; stacks not applied (attempt "
+               f"{started} of {attempts} ended without a result)")
+        return "failed"
+    n = started + 1
     kh = f"{ctx.runs}/reimage-{run_id}.known_hosts"
     marker = read_marker(ctx, rec, kh)
     if marker != run_id:
         if installed:           # was reachable before: count it as a failed attempt
-            return _retry(conn, run_id, failed_so_far, attempts, "installed host not reachable")
+            return _retry(conn, run_id, n, attempts, "installed host not reachable")
         return "waiting"
     try:
-        complete(conn, ctx, rec, run_id, kh, suffix)
+        complete(conn, ctx, rec, run_id, kh, f" (attempt {n} of {attempts})")
     except Retry as exc:
-        return _retry(conn, run_id, failed_so_far, attempts, str(exc))
+        return _retry(conn, run_id, n, attempts, str(exc))
     finish(conn, run_id, "succeeded", "installed; stacks applied")
     provlib.remote_run(["rm", "-f", kh], check=False, timeout=60)
     return "succeeded"
 
 
-def _retry(conn, run_id: int, failed_so_far: int, attempts: int, why: str) -> str:
-    n = failed_so_far + 1
+def _retry(conn, run_id: int, n: int, attempts: int, why: str) -> str:
+    """Attempt `n` failed: fail the run on the last one, else leave it for a retry."""
     why = why[:160]             # keep the attempt count inside the 255-char detail
     if n >= attempts:
         finish(conn, run_id, "failed", f"installed; {why}; stacks not applied "
@@ -350,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
         install_timeout = _int_env("SOLARI_PROV_INSTALL_TIMEOUT", DEFAULT_INSTALL_TIMEOUT, 600)
         attempts = _int_env("SOLARI_PROV_APPLY_ATTEMPTS", DEFAULT_APPLY_ATTEMPTS, 1)
         ctx = Ctx()
+        ctx.mac_lock_wait = _int_env("SOLARI_PROV_MAC_LOCK_WAIT", DEFAULT_MAC_LOCK_WAIT, 0)
         conn = provlib.connect_sor()
     except ProvError as exc:
         return provlib.die(str(exc))

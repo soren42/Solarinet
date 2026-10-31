@@ -189,6 +189,26 @@ rec = {"tool": "ansible", "argv": sys.argv[1:], "cwd": os.getcwd(),
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")
 host = sys.argv[sys.argv.index("-i") + 1].rstrip(",")
+def _hostkey_ok():
+    # Emulate ssh host-key checking from ANSIBLE_SSH_COMMON_ARGS: accept-new
+    # records FAKE_HOSTKEY in an empty/absent file; any recorded key must match.
+    args = (os.environ.get("ANSIBLE_SSH_COMMON_ARGS") or "").split()
+    opts = dict(a.split("=", 1) for a in args if "=" in a)
+    kh, mode = opts.get("UserKnownHostsFile"), opts.get("StrictHostKeyChecking")
+    if not kh or os.environ.get("ANSIBLE_HOST_KEY_CHECKING") != "True":
+        return True
+    key = os.environ.get("FAKE_HOSTKEY", "key-A")
+    have = open(kh).read().strip() if os.path.exists(kh) else ""
+    if have:
+        return have == key
+    if mode == "accept-new":
+        with open(kh, "w") as fh:
+            fh.write(key + "\n")
+        return True
+    return False
+if not _hostkey_ok():
+    print(host + " | UNREACHABLE! => {\"msg\": \"Host key verification failed.\"}")
+    sys.exit(4)
 if sys.argv[sys.argv.index("-m") + 1] == "ansible.builtin.raw":
     cmd = sys.argv[sys.argv.index("-a") + 1]
     if cmd.startswith("cat /etc/ansible/facts.d/"):
@@ -235,6 +255,26 @@ if ev.startswith("@"):
         rec["vars_error"] = str(exc)
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")
+def _hostkey_ok():
+    # Emulate ssh host-key checking from ANSIBLE_SSH_COMMON_ARGS: accept-new
+    # records FAKE_HOSTKEY in an empty/absent file; any recorded key must match.
+    args = (os.environ.get("ANSIBLE_SSH_COMMON_ARGS") or "").split()
+    opts = dict(a.split("=", 1) for a in args if "=" in a)
+    kh, mode = opts.get("UserKnownHostsFile"), opts.get("StrictHostKeyChecking")
+    if not kh or os.environ.get("ANSIBLE_HOST_KEY_CHECKING") != "True":
+        return True
+    key = os.environ.get("FAKE_HOSTKEY", "key-A")
+    have = open(kh).read().strip() if os.path.exists(kh) else ""
+    if have:
+        return have == key
+    if mode == "accept-new":
+        with open(kh, "w") as fh:
+            fh.write(key + "\n")
+        return True
+    return False
+if not _hostkey_ok():
+    print("fatal: [host]: UNREACHABLE! => Host key verification failed.")
+    sys.exit(4)
 check = "--check" in argv
 print("PLAY [Provision SolariNet fleet host] " + ("(check)" if check else "(apply)"))
 rc = int(os.environ.get("FAKE_CHECK_RC" if check else "FAKE_APPLY_RC", "0"))
@@ -604,11 +644,14 @@ class ProvFinish(StageMixin, Base):
             self.assertEqual(c["argv"][:6], ["all", "-i", "p3h-node1.akoria.net,", "-u",
                                              "solari-admin", "-m"])
             self.assertEqual(c["argv"][-1], "cat /etc/ansible/facts.d/solari_prov.fact")
-            self.assertEqual(c["ssh_args"], f"-o UserKnownHostsFile={kh} "
+            self.assertEqual(c["ssh_args"], f"-o UserKnownHostsFile={kh}.probe "
                              "-o StrictHostKeyChecking=accept-new")
             self.assertEqual((c["hkc"], c["become"]), ("True", "False"))
             self.assertEqual(c["cwd"], os.path.join(self.prov_root, "ansible"))
         self.assertEqual(self.calls("ansible-playbook"), [])
+        # a host that answered without this run's marker is never pinned
+        self.assertFalse(os.path.exists(kh))
+        self.assertFalse(os.path.exists(kh + ".probe"))
 
     def test_marker_match_applies_and_unstages(self):
         rid = self.staged()
@@ -657,6 +700,79 @@ class ProvFinish(StageMixin, Base):
         self.assertEqual(self.status(rid), ("failed", "installed; stack apply pass failed; "
                                             "stacks not applied (attempt 2 of 2)"))
         self.assertEqual(len(self.calls("ansible-playbook")), 4)
+
+    def test_host_key_pinned_across_ticks(self):
+        rid = self.staged()
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_APPLY_RC": "2",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "3"}
+        self.finish(rid, **env)
+        kh = os.path.join(self.prov_root, "runs", f"reimage-{rid}.known_hosts")
+        with open(kh) as fh:
+            self.assertEqual(fh.read().strip(), "key-A")    # pinned from the marker probe
+        # next tick: a different host answers on that name with the marker
+        os.unlink(self.log_path)
+        self.finish(rid, FAKE_HOSTKEY="key-B", **env)
+        self.assertEqual(self.status(rid), ("running", "installed; installed host not reachable; "
+                                            "retrying (attempt 2 of 3)"))
+        probe = self.calls("ansible")
+        self.assertEqual(len(probe), 1)
+        self.assertEqual(probe[0]["ssh_args"], f"-o UserKnownHostsFile={kh} "
+                         "-o StrictHostKeyChecking=yes")       # never re-trusted
+        self.assertEqual(self.calls("ansible-playbook"), [])
+        with open(kh) as fh:
+            self.assertEqual(fh.read().strip(), "key-A")
+        # the original host is back: the pinned key still works
+        self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_APPLY_ATTEMPTS="3")
+        self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
+
+    def test_crash_mid_attempt_uses_it_up(self):
+        rid = self.staged()
+        # attempt 1 of 3 started, then the process died (no outcome recorded)
+        admin(f"UPDATE prov_runs SET detail='installed; applying stacks (attempt 1 of 3)' "
+              f"WHERE id={rid}")
+        env = {"FAKE_MARKER": f'{{"run_id": {rid}}}', "FAKE_APPLY_RC": "2",
+               "SOLARI_PROV_APPLY_ATTEMPTS": "3"}
+        self.finish(rid, **env)
+        self.assertEqual(self.status(rid), ("running", "installed; stack apply pass failed; "
+                                            "retrying (attempt 2 of 3)"))
+        # the last attempt started and died: the next tick fails without retrying
+        admin(f"UPDATE prov_runs SET detail='installed; apply pass (attempt 3 of 3)' WHERE id={rid}")
+        os.unlink(self.log_path)
+        self.finish(rid, **env)
+        self.assertEqual(self.status(rid), ("failed", "installed; stacks not applied (attempt 3 "
+                                            "of 3 ended without a result)"))
+        self.assertEqual(self.calls(), [])
+
+    def test_unstage_waits_for_mac_lock(self):
+        rid = self.staged()
+        name = "solari-prov-mac-" + self.CFG.replace("-", ":")
+        holder = subprocess.Popen(ADMIN + ["-N", "-B"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        try:
+            holder.stdin.write(f"SELECT GET_LOCK('{name}', 10); SELECT SLEEP(60);\n")
+            holder.stdin.flush()
+            for _ in range(100):
+                if admin(f"SELECT IS_USED_LOCK('{name}') IS NOT NULL", db=None).strip() == "1":
+                    break
+                subprocess.run(["sleep", "0.1"], check=True)
+            else:
+                self.fail("lock holder never got the MAC lock")
+            # a concurrent PROV_STAGE holds the MAC: nothing may be removed
+            p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_MAC_LOCK_WAIT="0",
+                            SOLARI_PROV_APPLY_ATTEMPTS="2")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            st, detail = self.status(rid)
+            self.assertEqual(st, "running")
+            self.assertIn(f"another provisioning step holds MAC {self.CFG}", detail)
+            self.assertTrue(detail.endswith("(attempt 1 of 2)"), detail)
+            self.assertEqual(set(self.staged_files().values()), {True})
+            self.assertEqual(self.calls("ansible-playbook"), [])
+        finally:
+            holder.kill()
+            holder.wait()
+        self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}', SOLARI_PROV_APPLY_ATTEMPTS="2")
+        self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
+        self.assertEqual(set(self.staged_files().values()), {False})
 
     def test_fact_mismatch_and_bootstrap_failure(self):
         rid = self.staged()
