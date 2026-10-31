@@ -1,0 +1,32 @@
+# stack-items role defaults. Consumed only when common-stack is handed
+# generator-rendered vars (deploy/fleet/stackgen.py → solari_stack_*).
+---
+# ansible_os_family / ansible_architecture → stackgen family / arch handles.
+solari_stack_family_map:
+  Debian: debian
+  Suse: suse
+  RedHat: fedora
+solari_stack_arch_map:
+  x86_64: x86_64
+  aarch64: arm64
+  armv7l: armhf
+  armv6l: armhf
+  riscv64: riscv64
+  i386: i386
+  i686: i386
+
+solari_stack_artifact_root: /opt/solari/stack          # <id>/<version>/<file>
+solari_stack_work_root: /var/lib/solari/stack          # scripts/, build/, keys/
+solari_stack_admin_user: "{{ solari_admin_user | default('solari-admin') }}"
+
+# Lists default empty so a partial render never trips an undefined lookup.
+solari_stack_steps: []
+solari_stack_repos: []
+solari_stack_packages: []
+solari_stack_artifacts: []
+solari_stack_builds: []
+solari_stack_scripts: []
+solari_stack_roles: []
+solari_stack_skipped: []
+solari_stack_shared: []
+solari_stack_implicit: []

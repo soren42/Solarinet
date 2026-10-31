@@ -1,0 +1,32 @@
+# Idempotency guard shared by scripts and builds. Installed iff EVERY given
+# guard agrees: `creates` exists, and `check` (an argv list, executed WITHOUT
+# a shell, as solari_guard_user) exits 0 (and, with
+# version_check, the single capture group of its first match in stdout
+# equals the pinned version; regex is multiline). Sets solari_guard_done.
+---
+- name: Guard — creates path
+  ansible.builtin.stat:
+    path: "{{ solari_guard.creates }}"
+  register: solari_guard_stat
+  when: solari_guard.creates is not none
+
+- name: Guard — check command (argv, no shell)
+  ansible.builtin.command:
+    argv: "{{ solari_guard.check }}"
+  become: true
+  become_user: "{{ solari_guard_user }}"
+  register: solari_guard_chk
+  changed_when: false
+  failed_when: false
+  when: solari_guard.check is not none
+
+- name: Guard — verdict
+  ansible.builtin.set_fact:
+    solari_guard_done: >-
+      {{ (solari_guard.creates is none or solari_guard_stat.stat.exists)
+         and (solari_guard.check is none
+              or (solari_guard_chk.rc == 0
+                  and (solari_guard.version_check is none
+                       or (solari_guard_chk.stdout | regex_findall(solari_guard.version_check, multiline=True)
+                           | first | default(none))
+                          == solari_guard.version))) }}

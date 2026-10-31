@@ -1,0 +1,53 @@
+# =============================================================================
+# stack-items role — execute a stackgen render (solari_stack_*) in order.
+# =============================================================================
+# The render is produced for ONE family + arch; refuse to apply it anywhere
+# else. solari_stack_steps is the authoritative sequence (dependency order,
+# Core first, repo → pkg → artifact → build → script → role within a stack
+# unless an explicit item_order says otherwise); each step indexes into the
+# typed lists. Pins/sha256s were enforced by the generator and are enforced
+# again here by get_url checksums and key-fingerprint assertions.
+---
+- name: Refuse a render made for a different family/arch
+  ansible.builtin.assert:
+    that:
+      - solari_stack_family == solari_stack_family_map.get(ansible_os_family)
+      - solari_stack_arch == solari_stack_arch_map.get(ansible_architecture)
+    fail_msg: >-
+      stack vars were rendered for {{ solari_stack_family }}/{{ solari_stack_arch }} but
+      {{ inventory_hostname }} is {{ ansible_os_family }}/{{ ansible_architecture }}
+    quiet: true
+
+- name: Report items skipped as not applicable to this family/arch
+  ansible.builtin.debug:
+    msg: "{{ solari_stack_skipped }}"
+  when: solari_stack_skipped | length > 0
+
+- name: Report pool entries a later stack shares with an earlier one (installed once)
+  ansible.builtin.debug:
+    msg: "{{ solari_stack_shared }}"
+  when: solari_stack_shared | length > 0
+
+- name: Report requirements installed implicitly from the software pool
+  ansible.builtin.debug:
+    msg: "{{ solari_stack_implicit }}"
+  when: solari_stack_implicit | length > 0
+
+- name: Prepare stack work directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ solari_stack_artifact_root }}"
+    - "{{ solari_stack_work_root }}"
+    - "{{ solari_stack_work_root }}/keys"
+    - "{{ solari_stack_work_root }}/scripts"
+    - "{{ solari_stack_work_root }}/build"
+
+- name: Apply stack steps in rendered order ({{ solari_stack_order | join(' → ') }})
+  ansible.builtin.include_tasks: "step-{{ solari_step.type }}.yml"
+  loop: "{{ solari_stack_steps }}"
+  loop_control:
+    loop_var: solari_step
+    label: "{{ solari_step.type }} {{ solari_step.packages | default([]) | join(' ') }}{{ solari_step.index | default('') }}"

@@ -56,6 +56,18 @@ ansible-playbook -i inventory/hosts.yml playbooks/site.yml --limit pi-porch --ta
 ansible-playbook --syntax-check -i inventory/hosts.yml playbooks/site.yml
 ```
 
+Run from this directory (or the repo's `deploy/fleet/ansible/`). Ansible
+only reads `./ansible.cfg` from the current directory, and that cfg supplies
+`roles_path` (resolved relative to the cfg), the inventory, `become` and the
+SSH settings. Invoked from anywhere else, the playbook fails with
+`the role 'base-os' was not found`. From the repo root, point at the cfg
+explicitly:
+
+```bash
+ANSIBLE_CONFIG=deploy/fleet/ansible/ansible.cfg \
+  ansible-playbook --syntax-check -i localhost, deploy/fleet/ansible/playbooks/site.yml
+```
+
 Only `ansible.builtin` modules are used. (`ansible.posix` is **not** required;
 SSH authorized keys are managed with a plain template so no extra collection is
 needed.)

@@ -1,0 +1,98 @@
+# Third-party repo: fetch the signing key, prove its fingerprint matches the
+# pinned one, then register key + repo. Nothing from the repo is trusted until
+# the fingerprint assertion passes.
+---
+- name: Select repo
+  ansible.builtin.set_fact:
+    solari_repo: "{{ solari_stack_repos[solari_step.index] }}"
+    solari_repo_key: "{{ solari_stack_work_root }}/keys/{{ solari_stack_repos[solari_step.index].id }}.asc"
+
+# Mirrors stackgen's repo rules so a hand-edited render cannot smuggle extra
+# lines into a sources.list / .repo file or extra argv into zypper.
+- name: Refuse repo fields that could inject config lines
+  vars:
+    solari_repo_id_re: '^[A-Za-z0-9][A-Za-z0-9._+~-]*\Z'
+    solari_repo_url_re: '^[^\s\x00-\x1f\x7f-\x9f  ]+\Z'
+    solari_repo_token_re: '^[A-Za-z0-9._/][A-Za-z0-9._/-]*\Z'
+    solari_repo_fpr_re: '^([0-9A-F]{40}|[0-9A-F]{64})\Z'
+    solari_repo_ctl_re: '[\x00-\x1f\x7f-\x9f  ]'
+  ansible.builtin.assert:
+    that:
+      - solari_repo.id | string is match(solari_repo_id_re)
+      - solari_repo.name | string is not search(solari_repo_ctl_re)
+      - solari_repo.url | string is match(solari_repo_url_re)
+      - solari_repo.key_url | string is match(solari_repo_url_re)
+      - solari_repo.fingerprint | string is match(solari_repo_fpr_re)
+      - ansible_os_family != 'Debian' or (solari_repo.suite | string is match(solari_repo_token_re))
+      - ansible_os_family != 'Debian' or (solari_repo.components is sequence and solari_repo.components is not string
+          and solari_repo.components | length > 0
+          and solari_repo.components | map('string') | reject('match', solari_repo_token_re) | list | length == 0)
+    fail_msg: "{{ solari_repo.name | string | regex_replace(solari_repo_ctl_re, '?') }}: repo id/url/key_url/fingerprint/suite/components contain characters that could inject config lines"
+    quiet: true
+
+- name: Fetch signing key for {{ solari_repo.name }}
+  ansible.builtin.get_url:
+    url: "{{ solari_repo.key_url }}"
+    dest: "{{ solari_repo_key }}"
+    mode: "0644"
+
+- name: Read signing key fingerprints
+  ansible.builtin.command:
+    argv: [gpg, --batch, --show-keys, --with-colons, "{{ solari_repo_key }}"]
+  register: solari_repo_gpg
+  changed_when: false
+
+- name: Assert the key matches the pinned fingerprint
+  ansible.builtin.assert:
+    that: ("fpr:::::::::" ~ solari_repo.fingerprint ~ ":") in solari_repo_gpg.stdout_lines
+    fail_msg: "{{ solari_repo.name }}: key at {{ solari_repo.key_url }} does not carry fingerprint {{ solari_repo.fingerprint }}"
+    quiet: true
+
+- name: Register apt repo (Debian family)
+  when: ansible_os_family == 'Debian'
+  block:
+    - name: Install apt keyring for {{ solari_repo.name }}
+      ansible.builtin.copy:
+        src: "{{ solari_repo_key }}"
+        remote_src: true
+        dest: "/etc/apt/keyrings/solari-{{ solari_repo.id }}.asc"
+        mode: "0644"
+    - name: Write apt source for {{ solari_repo.name }}
+      ansible.builtin.copy:
+        dest: "/etc/apt/sources.list.d/solari-{{ solari_repo.id }}.list"
+        mode: "0644"
+        content: >
+          deb [signed-by=/etc/apt/keyrings/solari-{{ solari_repo.id }}.asc]
+          {{ solari_repo.url }} {{ solari_repo.suite }} {{ solari_repo.components | join(' ') }}
+      register: solari_repo_apt
+    - name: Refresh apt metadata after adding {{ solari_repo.name }}
+      ansible.builtin.apt:
+        update_cache: true
+      when: solari_repo_apt is changed
+
+- name: Register rpm repo (Suse / RedHat families)
+  when: ansible_os_family in ['Suse', 'RedHat']
+  block:
+    - name: Import verified signing key for {{ solari_repo.name }}
+      ansible.builtin.rpm_key:
+        key: "{{ solari_repo_key }}"
+        fingerprint: "{{ solari_repo.fingerprint }}"
+        state: present
+    - name: Add zypper repo {{ solari_repo.name }}
+      ansible.builtin.command:
+        argv: [zypper, --non-interactive, addrepo, --refresh, --check, "{{ solari_repo.url }}", "solari-{{ solari_repo.id }}"]
+        creates: "/etc/zypp/repos.d/solari-{{ solari_repo.id }}.repo"
+      when: ansible_os_family == 'Suse'
+    - name: Refresh zypper repo {{ solari_repo.name }}
+      ansible.builtin.command:
+        argv: [zypper, --non-interactive, refresh, "solari-{{ solari_repo.id }}"]
+      changed_when: false
+      when: ansible_os_family == 'Suse'
+    - name: Add dnf repo {{ solari_repo.name }}
+      ansible.builtin.yum_repository:
+        name: "solari-{{ solari_repo.id }}"
+        description: "{{ solari_repo.name }} (SolariNet stack {{ solari_repo.stack }})"
+        baseurl: "{{ solari_repo.url }}"
+        gpgcheck: true
+        gpgkey: "file://{{ solari_repo_key }}"
+      when: ansible_os_family == 'RedHat'

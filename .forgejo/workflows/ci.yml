@@ -59,6 +59,16 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y iproute2 nftables mosquitto
           python -m pip install pyyaml
+      - name: Provisioning stack generator (stackgen) unit and golden tests
+        run: python3 tests/deploy/test_stackgen.py
+      - name: Stack-items root stage installer (no symlink traversal, setuid strip, refusals)
+        run: python3 tests/deploy/test_stage_install.py
+      - name: Stack-items Ansible role local smoke (stackgen render -> role, idempotency, sha256 refusal)
+        env:
+          STACK_ITEMS_REQUIRE_ANSIBLE: '1'
+        run: |
+          python -m pip install ansible-core==2.21.1
+          bash tests/deploy/test_stack_items_ansible.sh
       - name: Validate isolated Forgejo runner firewall contract
         run: python -m unittest discover -s deploy/forgejo-runner -p 'test_*.py' -v
       - name: Exercise isolated runner firewall packet flow
@@ -216,6 +226,16 @@ jobs:
           MYSQL_USER: root
           MYSQL_PWD: sorsync_fixture
         run: bash tests/netdb/test_sor_migration_rollback.sh
+      - name: Provisioning images and stacks (migration 029) constraints, stackgen --from-db, rollback
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+          STACKGEN_TEST_PYTHON: /tmp/sorsync-ci/bin/python
+          STACKGEN_TEST_USER_HOST: '%'
+        run: bash tests/netdb/test_prov_images_stacks.sh
       - name: Test SoR delivery, failure recovery, and rendered DNS chain
         env:
           SOLARI_TEST_AMQP_URL: amqp://solarinet_fixture:delivery_fixture@127.0.0.1:5672/solari
@@ -817,7 +837,7 @@ jobs:
           test "$monitoring_migration_count" = 38 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 38" >&2; exit 1; }
           echo "ledger-gate: monitoring applied-migration count is $monitoring_migration_count"
           sor_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read SoR migration count' >&2; exit 1; }
-          test "$sor_migration_count" = 13 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 13" >&2; exit 1; }
+          test "$sor_migration_count" = 14 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 14" >&2; exit 1; }
           echo "ledger-gate: SoR applied-migration count is $sor_migration_count"
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output "$ledger_tmp/monitoring-schema.sql"
           echo 'ledger-gate: monitoring schema exported'
@@ -852,7 +872,9 @@ jobs:
             deploy/cross-build-client.sh \
             deploy/remote-deploy.sh \
             deploy/enrollment/solari-enroll.sh \
-            deploy/enrollment/solari-decommission.sh
+            deploy/enrollment/solari-decommission.sh \
+            tests/deploy/test_stack_items_ansible.sh \
+            tests/netdb/test_prov_images_stacks.sh
       - name: F-07 fleet provisioning fails closed
         run: bash tests/deploy/test_fleet_provisioning_gate.sh
       - name: F-07 signed release manifest contract

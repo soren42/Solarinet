@@ -1,0 +1,182 @@
+# Source build from a pinned git ref or a sha256-pinned tarball. Build deps
+# were already installed by the preceding pkg step (the generator inserts it).
+#
+# Privilege boundary: a build NEVER executes a build-controlled command as
+# root. Fetch, configure, compile AND install all run as the unprivileged
+# admin user (solari_stack_admin_user) in a build dir it owns, the install
+# staged into <build>/_stage via DESTDIR (exported to the environment for
+# every system, and passed on the make command line for make/autotools):
+#   cmake      cmake --install        meson   meson install
+#   autotools  make install           make    make PREFIX=<prefix> install
+#   custom     the item's `install` command (must write under $DESTDIR$PREFIX)
+# The only root step is files/stage_install.py, a data-only copier that
+# installs <stage><prefix> into the prefix without following any symlink
+# (stage or destination), root-owned, setuid/setgid dropped, and refuses
+# anything staged outside the prefix. A build whose install ignores DESTDIR
+# stages nothing and is refused: an item that needs root-time install logic
+# must be modelled as a `script` item (the explicit, reviewed root-code path).
+# Unprivileged steps refuse to run as uid 0, so an inventory-level
+# ansible_become_user (which beats the task keyword) fails closed instead of
+# silently compiling as root. The guard check also runs as the admin user.
+---
+- name: Select build
+  ansible.builtin.set_fact:
+    solari_bld: "{{ solari_stack_builds[solari_step.index] }}"
+    solari_guard: "{{ solari_stack_builds[solari_step.index] }}"
+    # The guard only inspects the result; it never needs root.
+    solari_guard_user: "{{ solari_stack_admin_user }}"
+    solari_bld_dir: "{{ solari_stack_work_root }}/build/{{ solari_stack_builds[solari_step.index].id }}/{{ solari_stack_builds[solari_step.index].version }}"
+    solari_bld_stage: "{{ solari_stack_work_root }}/build/{{ solari_stack_builds[solari_step.index].id }}/{{ solari_stack_builds[solari_step.index].version }}/_stage"
+
+- name: Refuse path components that could escape {{ solari_stack_work_root }}
+  ansible.builtin.assert:
+    that:
+      - (solari_bld.id | string | regex_search('^[A-Za-z0-9][A-Za-z0-9._+~-]*$')) == (solari_bld.id | string)
+      - (solari_bld.version | string | regex_search('^[A-Za-z0-9][A-Za-z0-9._+~-]*$')) == (solari_bld.version | string)
+      - (solari_bld_dir | normpath).startswith((solari_stack_work_root | normpath) ~ '/')
+      # Same rule as stackgen PREFIX_RE: absolute, plain components, not '/'.
+      - (solari_bld.prefix | string | regex_search('^(/(?!\.\.?(/|$))[A-Za-z0-9._+-]+)+$')) == (solari_bld.prefix | string)
+    fail_msg: "unsafe id/version/prefix {{ solari_bld.id }}/{{ solari_bld.version }} {{ solari_bld.prefix }} (must be plain path components)"
+    quiet: true
+
+- name: Check whether {{ solari_bld.name }} is already built
+  ansible.builtin.include_tasks: guard.yml
+
+- name: Build {{ solari_bld.name }} {{ solari_bld.version }}
+  when: not (solari_guard_done | bool)
+  block:
+    - name: Create build directory owned by {{ solari_stack_admin_user }}
+      ansible.builtin.file:
+        path: "{{ solari_bld_dir }}"
+        state: directory
+        owner: "{{ solari_stack_admin_user }}"
+        mode: "0755"
+
+    - name: Fetch source as {{ solari_stack_admin_user }}
+      become: true
+      become_user: "{{ solari_stack_admin_user }}"
+      block:
+        - name: Fetch source at the pinned commit
+          when: solari_bld.source.git is not none
+          block:
+            - name: Check out commit {{ solari_bld.source.commit }}{{ ' (' ~ solari_bld.source.tag ~ ')' if solari_bld.source.tag else '' }}
+              ansible.builtin.git:
+                repo: "{{ solari_bld.source.git }}"
+                dest: "{{ solari_bld_dir }}/src"
+                version: "{{ solari_bld.source.commit }}"
+                force: true
+            - name: Read checked-out commit
+              ansible.builtin.command:
+                argv: [git, -C, "{{ solari_bld_dir }}/src", rev-parse, HEAD]
+              register: solari_bld_head
+              changed_when: false
+            - name: Refuse anything but the pinned commit
+              ansible.builtin.assert:
+                that: solari_bld_head.stdout | trim == solari_bld.source.commit
+                fail_msg: "checked out {{ solari_bld_head.stdout | trim }}, pinned {{ solari_bld.source.commit }}"
+                quiet: true
+
+        - name: Fetch and unpack sha256-pinned source tarball
+          when: solari_bld.source.tarball is not none
+          block:
+            - name: Download source tarball
+              ansible.builtin.get_url:
+                url: "{{ solari_bld.source.tarball }}"
+                dest: "{{ solari_bld_dir }}/{{ solari_bld.source.tarball | urlsplit('path') | basename }}"
+                checksum: "sha256:{{ solari_bld.source.sha256 }}"
+                mode: "0644"
+              register: solari_bld_tar
+            - name: Create source directory
+              ansible.builtin.file:
+                path: "{{ solari_bld_dir }}/src"
+                state: directory
+                mode: "0755"
+            - name: Unpack source tarball
+              ansible.builtin.unarchive:
+                src: "{{ solari_bld_tar.dest }}"
+                dest: "{{ solari_bld_dir }}/src"
+                remote_src: true
+                extra_opts: [--strip-components=1]
+
+    - name: Configure and compile as {{ solari_stack_admin_user }} ({{ solari_bld.system }})
+      become: true
+      become_user: "{{ solari_stack_admin_user }}"
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          [ "$(id -u)" != 0 ] || { echo "stack-items: refusing to compile {{ solari_bld.name | quote }} as root" >&2; exit 1; }
+          {% set p = solari_bld.prefix | quote %}
+          {% set a = solari_bld.configure_args | map('quote') | join(' ') %}
+          {% if solari_bld.system == 'cmake' %}
+          cmake -S . -B _solari_build -DCMAKE_INSTALL_PREFIX={{ p }} {{ a }}
+          cmake --build _solari_build
+          {% elif solari_bld.system == 'meson' %}
+          meson setup _solari_build --prefix={{ p }} {{ a }}
+          meson compile -C _solari_build
+          {% elif solari_bld.system == 'autotools' %}
+          [ -x ./configure ] || autoreconf -fi
+          ./configure --prefix={{ p }} {{ a }}
+          make
+          {% elif solari_bld.system == 'make' %}
+          make PREFIX={{ p }} {{ a }}
+          {% else %}
+          {{ solari_bld.build }}
+          {% endif %}
+        chdir: "{{ solari_bld_dir }}/src"
+        executable: /bin/sh
+      environment: "{{ solari_bld.env | combine({'PREFIX': solari_bld.prefix}) }}"
+      changed_when: true
+
+    - name: Stage install as {{ solari_stack_admin_user }} into {{ solari_bld_stage }} ({{ solari_bld.system }})
+      become: true
+      become_user: "{{ solari_stack_admin_user }}"
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          [ "$(id -u)" != 0 ] || { echo "stack-items: refusing to stage {{ solari_bld.name | quote }} as root" >&2; exit 1; }
+          rm -rf "$DESTDIR"
+          mkdir -p "$DESTDIR"
+          {% if solari_bld.system == 'cmake' %}
+          cmake --install _solari_build
+          {% elif solari_bld.system == 'meson' %}
+          meson install -C _solari_build
+          {% elif solari_bld.system == 'autotools' %}
+          make DESTDIR="$DESTDIR" install
+          {% elif solari_bld.system == 'make' %}
+          make PREFIX={{ solari_bld.prefix | quote }} DESTDIR="$DESTDIR" install
+          {% else %}
+          {{ solari_bld.install }}
+          {% endif %}
+        chdir: "{{ solari_bld_dir }}/src"
+        executable: /bin/sh
+      environment: "{{ solari_bld.env | combine({'PREFIX': solari_bld.prefix, 'DESTDIR': solari_bld_stage}) }}"
+      changed_when: true
+
+    # Read-only validation BEFORE the prefix is created, so a refused stage
+    # leaves nothing behind. (Root, like the install: `script` transfers a
+    # file, which an unprivileged become user could not read without ACLs.)
+    - name: Check the stage (nothing outside the prefix, DESTDIR honoured; writes nothing)
+      ansible.builtin.script:
+        cmd: "stage_install.py --check --stage {{ solari_bld_stage | quote }} --prefix {{ solari_bld.prefix | quote }}"
+        executable: "{{ ansible_facts.python.executable | default(discovered_interpreter_python) }}"
+      changed_when: false
+
+    - name: Ensure prefix {{ solari_bld.prefix }} exists (root)
+      ansible.builtin.file:
+        path: "{{ solari_bld.prefix }}"
+        state: directory
+
+    - name: Install the stage into {{ solari_bld.prefix }} (root; data copy only, no build code)
+      ansible.builtin.script:
+        cmd: "stage_install.py --stage {{ solari_bld_stage | quote }} --prefix {{ solari_bld.prefix | quote }}"
+        executable: "{{ ansible_facts.python.executable | default(discovered_interpreter_python) }}"
+      changed_when: true
+
+    - name: Re-check {{ solari_bld.name }} after building
+      ansible.builtin.include_tasks: guard.yml
+
+    - name: Assert {{ solari_bld.name }} converged
+      ansible.builtin.assert:
+        that: solari_guard_done | bool
+        fail_msg: "{{ solari_bld.name }} built but its creates/check guard is still unsatisfied"
+        quiet: true
