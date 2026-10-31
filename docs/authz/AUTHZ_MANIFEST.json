@@ -240,6 +240,192 @@
     },
     {
       "method": "GET",
+      "pattern": "/api/provisioning/images",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/images/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/software",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/software/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/stacks",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/stacks/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/runs",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/provisioning/runs/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/images",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/provisioning/images/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/images/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/software",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/provisioning/software/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/software/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/software/{id}/artifacts",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/software/{id}/artifacts/{artifactId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/software/{id}/requires",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/software/{id}/requires/{requiresId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/software/{id}/conflicts",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/software/{id}/conflicts/{otherId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/stacks",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/provisioning/stacks/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/stacks/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/stacks/{id}/members",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/provisioning/stacks/{id}/members/{softwareId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/stacks/{id}/members/{softwareId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/stacks/{id}/deps",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/provisioning/stacks/{id}/deps/{dependsOnId}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/image-refresh",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/stage",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/apply",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
       "pattern": "/api/networks/allocator-eligibility",
       "csrf": "none",
       "roleRequired": "session"
@@ -1053,6 +1239,16 @@
       ]
     },
     {
+      "verb": "IMAGE_REFRESH",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/provisioning/image-refresh"
+      ]
+    },
+    {
       "verb": "LIFECYCLE_SET",
       "class": "privileged",
       "requiresOperator": true,
@@ -1114,6 +1310,16 @@
       ]
     },
     {
+      "verb": "PROV_STAGE",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/provisioning/stage"
+      ]
+    },
+    {
       "verb": "REJECT",
       "class": "privileged",
       "requiresOperator": false,
@@ -1146,7 +1352,10 @@
         "POST /api/pools/{poolId}/delete (callQueued poll)",
         "POST /api/rules/{ruleId}/delete (callQueued poll)",
         "POST /api/assets/{assetId}/targets/{targetId}/remove (callQueued poll)",
-        "POST /api/nodes/{id}/config (callQueued poll)"
+        "POST /api/nodes/{id}/config (callQueued poll)",
+        "POST /api/provisioning/image-refresh (callQueued poll)",
+        "POST /api/provisioning/stage (callQueued poll)",
+        "POST /api/provisioning/apply (callQueued poll)"
       ]
     },
     {
@@ -1172,7 +1381,10 @@
         "POST /api/pools/{poolId}/delete",
         "POST /api/rules/{ruleId}/delete",
         "POST /api/assets/{assetId}/targets/{targetId}/remove",
-        "POST /api/nodes/{id}/config"
+        "POST /api/nodes/{id}/config",
+        "POST /api/provisioning/image-refresh",
+        "POST /api/provisioning/stage",
+        "POST /api/provisioning/apply"
       ]
     },
     {
@@ -1221,6 +1433,16 @@
       "mayRunOnStandby": false,
       "phpCallers": [
         "POST /api/enrollments/{enrId}/approve (server queue invokes SIGN during APPROVE)"
+      ]
+    },
+    {
+      "verb": "STACK_APPLY",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/provisioning/apply"
       ]
     },
     {

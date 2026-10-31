@@ -10,6 +10,8 @@
 #define _GNU_SOURCE
 #endif
 #define CTL_READ_TIMEOUT_MS 150
+/* Capture ctlSpawnDetached's argv/log instead of exec'ing (see ctlTestSpawn). */
+#define SOLARI_CTL_TEST_SPAWN 1
 
 #include "solariCtl.c"
 
@@ -30,11 +32,65 @@ static bool gQueuedDecommissionReady;
 static bool gQueuedDecommissionCompleted;
 static char gQueuedDecommissionResult[256];
 
+/* ctlSpawnDetached test seam: record what would have been exec'd. */
+static unsigned gSpawnCalls;
+static char gSpawnArgv[1024];      /* argv joined with '|' */
+static char gSpawnLog[256];
+
+static solariStatus ctlTestSpawn(char *const argv[], const char *logPath)
+{
+    size_t o = 0;
+    int i;
+    gSpawnCalls++;
+    gSpawnArgv[0] = '\0';
+    for (i = 0; argv[i]; i++) {
+        int n = snprintf(gSpawnArgv + o, sizeof gSpawnArgv - o, "%s%s",
+                         i ? "|" : "", argv[i]);
+        TEST_ASSERT_TRUE(n > 0 && (size_t)n < sizeof gSpawnArgv - o);
+        o += (size_t)n;
+    }
+    snprintf(gSpawnLog, sizeof gSpawnLog, "%s", logPath ? logPath : "");
+    return SOLARI_OK;
+}
+
+/* REQUEST_SUBMIT capture (overrides the weak server_stubs.c stub). */
+static unsigned gSubmitCalls;
+static char gSubmitVerb[64];
+static char gSubmitArgs[1024];
+static char gSubmitOp[160];
+
+solariStatus serverDbCtlRequestSubmit(serverDb *db, const char *verb,
+    const char *args, const char *requestedBy, uint32_t peerUid,
+    const char *idem, unsigned long long *reqOut)
+{
+    (void)db; (void)peerUid; (void)idem;
+    gSubmitCalls++;
+    snprintf(gSubmitVerb, sizeof gSubmitVerb, "%s", verb ? verb : "");
+    snprintf(gSubmitArgs, sizeof gSubmitArgs, "%s", args ? args : "");
+    snprintf(gSubmitOp, sizeof gSubmitOp, "%s", requestedBy ? requestedBy : "");
+    if (reqOut) *reqOut = 9001;
+    return SOLARI_OK;
+}
+
+/* Generic queued row for serverCtlQueuePoll replay tests. */
+static bool gQueuedCustomReady;
+static char gQueuedVerb[48];
+static char gQueuedArgs[1024];
+static char gQueuedRequester[128];
+
 solariStatus serverDbCtlRequestClaim(serverDb *db, const char *claimedBy,
     unsigned long long *reqId, char *verb, size_t verbCap, char *args, size_t argsCap,
     char *requester, size_t requesterCap)
 {
     (void)db; (void)claimedBy;
+    if (gQueuedCustomReady) {
+        gQueuedCustomReady = false;
+        if (reqId) *reqId = 78;
+        snprintf(verb, verbCap, "%s", gQueuedVerb);
+        snprintf(args, argsCap, "%s", gQueuedArgs);
+        snprintf(requester, requesterCap, "%s", gQueuedRequester);
+        return SOLARI_OK;
+    }
     if (!gQueuedDecommissionReady) return ERR_TLV_END;
     gQueuedDecommissionReady = false;
     if (reqId) *reqId = 77;
@@ -281,6 +337,20 @@ static void test_rbac(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlCheckRbac("ALERT_ACK", "event=1 op=dana", op, sizeof op));
     TEST_ASSERT_EQUAL_STRING("dana", op);
     TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlCheckRbac("REQUEST_GET", "request=1 op=dana", op, sizeof op));
+
+    /* P3 provisioning verbs: destructive, operator-required, never on standby */
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("IMAGE_REFRESH"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("PROV_STAGE"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("STACK_APPLY"));
+    TEST_ASSERT_TRUE(ctlVerbRequiresOperator("IMAGE_REFRESH"));
+    TEST_ASSERT_TRUE(ctlVerbRequiresOperator("PROV_STAGE"));
+    TEST_ASSERT_TRUE(ctlVerbRequiresOperator("STACK_APPLY"));
+    TEST_ASSERT_FALSE(ctlVerbMayRunOnStandby("IMAGE_REFRESH"));
+    TEST_ASSERT_FALSE(ctlVerbMayRunOnStandby("PROV_STAGE"));
+    TEST_ASSERT_FALSE(ctlVerbMayRunOnStandby("STACK_APPLY"));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("IMAGE_REFRESH", "image=1", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("PROV_STAGE", "entity=1 image=1 stacks=core op=", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("STACK_APPLY", "entity=1 stacks=core dryRun=1", op, sizeof op));
 }
 
 /* Task #1 — verb-class mapping is an ALLOWLIST (review F1/F4). Only an explicit
@@ -331,6 +401,9 @@ static void test_verb_priv_class(void)
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("DEPLOY"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("FLEET_PROVISION"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("FLEET_IMAGE"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("IMAGE_REFRESH"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("PROV_STAGE"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("STACK_APPLY"));
 
     /* default-deny: an unknown / not-yet-invented verb is PRIVILEGED, not ordinary */
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("SOME_NEW_VERB_2027"));
@@ -383,7 +456,7 @@ static void test_ctl_manifest_matches_classifier(void)
     FILE *fp = fopen(AUTHZ_MANIFEST_PATH, "rb");
     char *data, *section, *p;
     long size;
-    unsigned checked = 0;
+    unsigned checked = 0, sentinels = 0;
     TEST_ASSERT_NOT_NULL_MESSAGE(fp, "authorization manifest could not be opened");
     TEST_ASSERT_EQUAL_INT(0, fseek(fp, 0, SEEK_END));
     size = ftell(fp);
@@ -398,17 +471,35 @@ static void test_ctl_manifest_matches_classifier(void)
     TEST_ASSERT_NOT_NULL_MESSAGE(section, "manifest ctlVerbs section missing");
     p = strchr(section, '[');
     TEST_ASSERT_NOT_NULL(p);
-    while ((p = strchr(p, '{')) != NULL) {
-        char object[1024], verb[64], cls[32];
-        const char *end = strchr(p, '}');
-        bool requiresOperator, destructive, mayRunOnStandby;
+    p++;
+    for (;;) {
+        char object[4096], verb[64], cls[32];
+        const char *end;
+        bool requiresOperator, destructive, mayRunOnStandby, inStr = false;
         size_t len;
         ctlVerbClass expectedClass;
-        if (!end) break;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ',') p++;
+        if (*p == ']') break;                       /* end of the ctlVerbs array */
+        TEST_ASSERT_EQUAL_CHAR_MESSAGE('{', *p, "manifest ctlVerbs: expected an object");
+        /* Find the object's closing brace, skipping braces inside strings
+         * (route patterns such as /api/x/{id} live in phpCallers). The
+         * objects are flat: no nested objects, only string arrays. */
+        for (end = p + 1; *end; end++) {
+            if (inStr) {
+                if (*end == '\\' && end[1]) end++;
+                else if (*end == '"') inStr = false;
+            } else if (*end == '"') {
+                inStr = true;
+            } else if (*end == '{') {
+                TEST_FAIL_MESSAGE("manifest ctlVerbs: nested object");
+            } else if (*end == '}') {
+                break;
+            }
+        }
+        TEST_ASSERT_EQUAL_CHAR_MESSAGE('}', *end, "manifest ctlVerbs: unterminated object");
         len = (size_t)(end - p + 1);
         TEST_ASSERT_TRUE_MESSAGE(len < sizeof object, "manifest ctl verb object too large");
         memcpy(object, p, len); object[len] = '\0';
-        if (!strstr(object, "\"verb\"")) break;
         TEST_ASSERT_TRUE(json_string_value(object, "verb", verb, sizeof verb));
         TEST_ASSERT_TRUE(json_string_value(object, "class", cls, sizeof cls));
         TEST_ASSERT_TRUE(json_bool_value(object, "requiresOperator", &requiresOperator));
@@ -418,15 +509,20 @@ static void test_ctl_manifest_matches_classifier(void)
         else if (strcmp(cls, "enqueue") == 0) expectedClass = CTL_VC_ENQUEUE;
         else if (strcmp(cls, "privileged") == 0) expectedClass = CTL_VC_PRIVILEGED;
         else { TEST_FAIL_MESSAGE("manifest has unknown ctl class"); expectedClass = CTL_VC_PRIVILEGED; }
-        TEST_ASSERT_EQUAL_INT(expectedClass, ctlVerbPrivClass(verb));
-        TEST_ASSERT_EQUAL_INT(requiresOperator, ctlVerbRequiresOperator(verb));
-        TEST_ASSERT_EQUAL_INT(destructive, ctlVerbIsDestructive(verb));
-        TEST_ASSERT_EQUAL_INT(mayRunOnStandby, ctlVerbMayRunOnStandby(verb));
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expectedClass, ctlVerbPrivClass(verb), verb);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(requiresOperator, ctlVerbRequiresOperator(verb), verb);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(destructive, ctlVerbIsDestructive(verb), verb);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(mayRunOnStandby, ctlVerbMayRunOnStandby(verb), verb);
+        if (strcmp(verb, "IMAGE_REFRESH") == 0 || strcmp(verb, "PROV_STAGE") == 0 ||
+            strcmp(verb, "STACK_APPLY") == 0 || strcmp(verb, "REQUEST_GET") == 0 ||
+            strcmp(verb, "REQUEST_SUBMIT") == 0)
+            sentinels++;
         checked++;
         p = (char *)end + 1;
-        section = strstr(p, "\"behavior\"");
-        if (section && p > section) break;
     }
+    /* Every object was walked, including those after REQUEST_GET (whose
+     * phpCallers carry {placeholders}) — a first-'}' reader stopped there. */
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(5, sentinels, "manifest walk missed a verb");
     TEST_ASSERT_TRUE_MESSAGE(checked > 0, "manifest has no ctl verb objects");
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED,
         ctlVerbPrivClass("AUTHZ_MANIFEST_UNLISTED_VERB"));
@@ -807,6 +903,393 @@ static void test_ctl_line_byte_boundaries(void)
     }
 }
 
+/* ===================================================================== */
+/* P3 provisioning verbs: IMAGE_REFRESH / PROV_STAGE / STACK_APPLY         */
+/* ===================================================================== */
+
+/* Run one line through the dispatcher as `peer`, with no ctx (role gate off). */
+static void prov_call(const char *line, ctlPeerClass peer, char *reply, size_t cap)
+{
+    serverCtl ctl;
+    char buf[CTL_REQ_CAP];
+    memset(&ctl, 0, sizeof ctl);
+    TEST_ASSERT_TRUE(strlen(line) < sizeof buf);
+    snprintf(buf, sizeof buf, "%s", line);
+    gSpawnCalls = 0;
+    gSpawnArgv[0] = '\0';
+    gSpawnLog[0] = '\0';
+    (void)ctlHandleLine(&ctl, buf, peer, peer == CTL_PEER_DASHBOARD ? 33 : 0,
+                        reply, cap);
+}
+
+/* Assert `line` is refused with ERR <code> and nothing is spawned. */
+static void prov_expect_err(const char *line, solariStatus code)
+{
+    char reply[512], prefix[32];
+    prov_call(line, CTL_PEER_OPERATOR, reply, sizeof reply);
+    snprintf(prefix, sizeof prefix, "ERR %d ", (int)code);
+    if (strncmp(reply, prefix, strlen(prefix)) != 0 || gSpawnCalls != 0) {
+        char msg[1200];
+        snprintf(msg, sizeof msg, "line <%s> reply <%s> spawns=%u", line, reply, gSpawnCalls);
+        TEST_FAIL_MESSAGE(msg);
+    }
+}
+
+/* Assert `line` is accepted and execs exactly `argv` (|-joined) logging to `log`. */
+static void prov_expect_spawn(const char *line, const char *argv, const char *log,
+                              const char *status)
+{
+    char reply[512], want[256];
+    prov_call(line, CTL_PEER_OPERATOR, reply, sizeof reply);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(1, gSpawnCalls, line);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(argv, gSpawnArgv, line);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(log, gSpawnLog, line);
+    snprintf(want, sizeof want, "OK log=%s status=%s\n", log, status);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(want, reply, line);
+}
+
+static bool ctlProvValidSlug(const char *s)
+{
+    return s && ctlProvValidSlugN(s, strlen(s));
+}
+
+static void test_prov_validators_pure(void)
+{
+    uint32_t v = 0;
+    bool dry = true;
+    char out[CTL_PROV_STACKS_CAP], line[4096];
+    size_t o;
+    int i;
+
+    /* ids */
+    TEST_ASSERT_TRUE(ctlProvValidId("1", &v));          TEST_ASSERT_EQUAL_UINT32(1, v);
+    TEST_ASSERT_TRUE(ctlProvValidId("4294967295", &v)); TEST_ASSERT_EQUAL_UINT32(4294967295u, v);
+    TEST_ASSERT_TRUE(ctlProvValidId("1000000000", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("0", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("-1", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("+1", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("01", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("1e3", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("4294967296", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("9999999999", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("10000000000", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("12 3", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId(" 1", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("1\n", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("0x10", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId("", &v));
+    TEST_ASSERT_FALSE(ctlProvValidId(NULL, &v));
+
+    /* slugs */
+    TEST_ASSERT_TRUE(ctlProvValidSlug("core"));
+    TEST_ASSERT_TRUE(ctlProvValidSlug("dev-tools"));
+    TEST_ASSERT_TRUE(ctlProvValidSlug("0"));
+    TEST_ASSERT_TRUE(ctlProvValidSlug("a-"));
+    TEST_ASSERT_TRUE(ctlProvValidSlug("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv"));   /* 48 */
+    TEST_ASSERT_FALSE(ctlProvValidSlug("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvw")); /* 49 */
+    TEST_ASSERT_FALSE(ctlProvValidSlug(""));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("-core"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("Core"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("dev_tools"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug(".."));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("a/b"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("a;b"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("$(id)"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("`id`"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("a b"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("a\nb"));
+    TEST_ASSERT_FALSE(ctlProvValidSlug("a%20b"));
+
+    /* stacks: normalized (dedupe, order kept) */
+    TEST_ASSERT_TRUE(ctlProvValidStacks("core", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("core", out);
+    TEST_ASSERT_TRUE(ctlProvValidStacks("web,core,web,ai,core", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("web,core,ai", out);
+    TEST_ASSERT_TRUE(ctlProvValidStacks("a,ab,a", out, sizeof out));     /* prefix is not a dup */
+    TEST_ASSERT_EQUAL_STRING("a,ab", out);
+    TEST_ASSERT_FALSE(ctlProvValidStacks("", out, sizeof out));
+    TEST_ASSERT_FALSE(ctlProvValidStacks("core,", out, sizeof out));
+    TEST_ASSERT_FALSE(ctlProvValidStacks(",core", out, sizeof out));
+    TEST_ASSERT_FALSE(ctlProvValidStacks("core,,web", out, sizeof out));
+    TEST_ASSERT_FALSE(ctlProvValidStacks(",", out, sizeof out));
+    TEST_ASSERT_FALSE(ctlProvValidStacks("core,Web", out, sizeof out));
+    TEST_ASSERT_FALSE(ctlProvValidStacks("core;web", out, sizeof out));
+    TEST_ASSERT_FALSE(ctlProvValidStacks("core web", out, sizeof out));
+    /* 32 distinct accepted; 33 distinct refused; 33 with a duplicate collapses */
+    for (o = 0, i = 0; i < 33; i++)
+        o += (size_t)snprintf(line + o, sizeof line - o, "%ss%d", i ? "," : "", i);
+    TEST_ASSERT_FALSE(ctlProvValidStacks(line, out, sizeof out));
+    *strrchr(line, ',') = '\0';
+    TEST_ASSERT_TRUE(ctlProvValidStacks(line, out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING(line, out);
+    strcat(line, ",s0");
+    TEST_ASSERT_TRUE(ctlProvValidStacks(line, out, sizeof out));
+    /* 32 maximal slugs fill the normalized buffer exactly */
+    for (o = 0, i = 0; i < 32; i++)
+        o += (size_t)snprintf(line + o, sizeof line - o, "%s%02d%s", i ? "," : "", i,
+                              "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrst");
+    TEST_ASSERT_EQUAL_UINT(CTL_PROV_STACKS_CAP - 1, strlen(line));
+    TEST_ASSERT_TRUE(ctlProvValidStacks(line, out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING(line, out);
+
+    /* dryRun */
+    TEST_ASSERT_TRUE(ctlProvValidDryRun("0", &dry));  TEST_ASSERT_FALSE(dry);
+    TEST_ASSERT_TRUE(ctlProvValidDryRun("1", &dry));  TEST_ASSERT_TRUE(dry);
+    TEST_ASSERT_FALSE(ctlProvValidDryRun("2", &dry));
+    TEST_ASSERT_FALSE(ctlProvValidDryRun("yes", &dry));
+    TEST_ASSERT_FALSE(ctlProvValidDryRun("", &dry));
+    TEST_ASSERT_FALSE(ctlProvValidDryRun("01", &dry));
+    TEST_ASSERT_FALSE(ctlProvValidDryRun("true", &dry));
+
+    /* principal */
+    TEST_ASSERT_TRUE(ctlProvValidPrincipal("alice"));
+    TEST_ASSERT_TRUE(ctlProvValidPrincipal("jason@akoria.org"));
+    TEST_ASSERT_TRUE(ctlProvValidPrincipal("svc:kc+ops.1_x-y"));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal(""));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal(".alice"));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal("-alice"));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal("al ice"));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal("al;ice"));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal("al/ice"));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal("al\nice"));
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal("$(id)"));
+    memset(line, 'a', 128); line[128] = '\0';
+    TEST_ASSERT_TRUE(ctlProvValidPrincipal(line));
+    line[128] = 'a'; line[129] = '\0';
+    TEST_ASSERT_FALSE(ctlProvValidPrincipal(line));
+}
+
+static void test_prov_strict_decode_refuses_embedded_nul(void)
+{
+    char out[32];
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlArgStrStrict("a=5 b=x", "a", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("5", out);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlArgStrStrict("op=a%2Bb", "op", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("a+b", out);
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlArgStrStrict("op=50%", "op", out, sizeof out));   /* malformed % kept */
+    TEST_ASSERT_EQUAL_STRING("50%", out);
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, ctlArgStrStrict("a=5%00x", "a", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("", out);
+    TEST_ASSERT_EQUAL_INT(ERR_INVALID_ARG, ctlArgStrStrict("a=%00", "a", out, sizeof out));
+    TEST_ASSERT_EQUAL_INT(ERR_TLV_END, ctlArgStrStrict("a=1", "b", out, sizeof out));
+    /* first match wins, like ctlArgStr */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, ctlArgStrStrict("a=1 a=%00", "a", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("1", out);
+}
+
+static void test_prov_verbs_exec_exact_argv(void)
+{
+    prov_expect_spawn("IMAGE_REFRESH image=7 op=alice",
+        "deploy/fleet/image-refresh.py|--image|7|--op|alice",
+        "run/image-refresh-7.log", "refreshing");
+    prov_expect_spawn("IMAGE_REFRESH op=alice image=4294967295 junk=ignored",
+        "deploy/fleet/image-refresh.py|--image|4294967295|--op|alice",
+        "run/image-refresh-4294967295.log", "refreshing");
+    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core,dev-tools op=jason@akoria.org",
+        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core,dev-tools|--op|jason@akoria.org",
+        "run/prov-stage-42.log", "staging");
+    /* duplicates collapse before reaching the helper */
+    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=web,core,web op=alice",
+        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|web,core|--op|alice",
+        "run/prov-stage-42.log", "staging");
+    /* pct-encoded principal is decoded once (queue replay encodes requestedBy) */
+    prov_expect_spawn("PROV_STAGE entity=42 image=3 stacks=core op=a%2Bb",
+        "deploy/fleet/prov-stage.py|--entity|42|--image|3|--stacks|core|--op|a+b",
+        "run/prov-stage-42.log", "staging");
+    prov_expect_spawn("STACK_APPLY entity=9 stacks=core dryRun=1 op=alice",
+        "deploy/fleet/stack-apply.py|--entity|9|--stacks|core|--dry-run|--op|alice",
+        "run/stack-apply-9.log", "applying");
+    prov_expect_spawn("STACK_APPLY entity=9 stacks=core,web dryRun=0 op=alice",
+        "deploy/fleet/stack-apply.py|--entity|9|--stacks|core,web|--op|alice",
+        "run/stack-apply-9.log", "applying");
+}
+
+static void test_prov_verbs_refuse_bad_args(void)
+{
+    static const char *const badIds[] = {
+        "0", "-1", "01", "1e3", "4294967296", "12%203", "+5", "0x1", "",
+        "1%00", "1%0a", "1%3b", "%31%30%00", "1;id", "1$(id)", "1`id`", "ab"
+    };
+    static const char *const badSlugs[] = {
+        "", "Core", "co_re", "..", "a/b", "a;b", "$(id)", "`id`", "a%20b", "a%0ab",
+        "a%3bb", "a%00", "core%2c", "%2ccore", "a%2fb", "-core", "core%0d",
+        "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvw", "core,", ",core",
+        "core,,web", "a%24%28id%29", "a%60id%60"
+    };
+    static const char *const badDry[] = { "2", "yes", "", "true", "01", "1%00", "%31%0a", "-1" };
+    static const char *const badOps[] = {
+        "%20alice", "al%20ice", "alice%0a", "alice%3bid", "alice%00x", ".alice",
+        "-alice", "al/ice", "%24%28id%29", "a%60id%60"
+    };
+    char line[8192];
+    size_t o, i;
+
+    /* RBAC: missing / empty op -> ERR_AUTH_ROLE before any validation */
+    prov_expect_err("IMAGE_REFRESH image=1", ERR_AUTH_ROLE);
+    prov_expect_err("IMAGE_REFRESH image=1 op=", ERR_AUTH_ROLE);
+    prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core", ERR_AUTH_ROLE);
+    prov_expect_err("PROV_STAGE entity=1 image=1 stacks=core op=", ERR_AUTH_ROLE);
+    prov_expect_err("STACK_APPLY entity=1 stacks=core dryRun=0", ERR_AUTH_ROLE);
+    prov_expect_err("STACK_APPLY entity=1 stacks=core dryRun=0 op=", ERR_AUTH_ROLE);
+
+    /* missing args */
+    prov_expect_err("IMAGE_REFRESH op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE image=1 stacks=core op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE entity=1 stacks=core op=alice", ERR_INVALID_ARG);
+    prov_expect_err("PROV_STAGE entity=1 image=1 op=alice", ERR_INVALID_ARG);
+    prov_expect_err("STACK_APPLY stacks=core dryRun=0 op=alice", ERR_INVALID_ARG);
+    prov_expect_err("STACK_APPLY entity=1 dryRun=0 op=alice", ERR_INVALID_ARG);
+    prov_expect_err("STACK_APPLY entity=1 stacks=core op=alice", ERR_INVALID_ARG);
+
+    for (i = 0; i < sizeof badIds / sizeof badIds[0]; i++) {
+        snprintf(line, sizeof line, "IMAGE_REFRESH image=%s op=alice", badIds[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        snprintf(line, sizeof line, "PROV_STAGE entity=%s image=1 stacks=core op=alice", badIds[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=%s stacks=core op=alice", badIds[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        snprintf(line, sizeof line, "STACK_APPLY entity=%s stacks=core dryRun=0 op=alice", badIds[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+    }
+    for (i = 0; i < sizeof badSlugs / sizeof badSlugs[0]; i++) {
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=%s op=alice", badSlugs[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        snprintf(line, sizeof line, "STACK_APPLY entity=1 stacks=core,%s dryRun=1 op=alice", badSlugs[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+    }
+    for (i = 0; i < sizeof badDry / sizeof badDry[0]; i++) {
+        snprintf(line, sizeof line, "STACK_APPLY entity=1 stacks=core dryRun=%s op=alice", badDry[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+    }
+    for (i = 0; i < sizeof badOps / sizeof badOps[0]; i++) {
+        snprintf(line, sizeof line, "IMAGE_REFRESH image=1 op=%s", badOps[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 stacks=core op=%s", badOps[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+        snprintf(line, sizeof line, "STACK_APPLY entity=1 stacks=core dryRun=0 op=%s", badOps[i]);
+        prov_expect_err(line, ERR_INVALID_ARG);
+    }
+
+    /* 33 distinct stacks */
+    o = (size_t)snprintf(line, sizeof line, "PROV_STAGE entity=1 image=1 op=alice stacks=");
+    for (i = 0; i < 33; i++)
+        o += (size_t)snprintf(line + o, sizeof line - o, "%ss%u", i ? "," : "", (unsigned)i);
+    prov_expect_err(line, ERR_INVALID_ARG);
+    /* an oversized raw stacks value is refused, not truncated */
+    o = (size_t)snprintf(line, sizeof line, "STACK_APPLY entity=1 dryRun=0 op=alice stacks=core");
+    while (o + 6 < CTL_PROV_STACKS_RAW + 64)
+        o += (size_t)snprintf(line + o, sizeof line - o, ",core");
+    prov_expect_err(line, ERR_INVALID_ARG);
+}
+
+static void test_prov_verbs_dashboard_must_queue(void)
+{
+    static const char *const direct[] = {
+        "IMAGE_REFRESH image=1 op=alice",
+        "PROV_STAGE entity=1 image=1 stacks=core op=alice",
+        "STACK_APPLY entity=1 stacks=core dryRun=1 op=alice",
+    };
+    static const char *const inner[] = { "IMAGE_REFRESH", "PROV_STAGE", "STACK_APPLY" };
+    static const char *const wire[] = {
+        "image%3D1",
+        "entity%3D1%20image%3D1%20stacks%3Dcore",
+        "entity%3D1%20stacks%3Dcore%20dryRun%3D1",
+    };
+    static const char *const stored[] = {
+        "image=1",
+        "entity=1 image=1 stacks=core",
+        "entity=1 stacks=core dryRun=1",
+    };
+    char reply[512], line[512];
+    size_t i;
+    serverContext ctx;
+    serverCtl ctl;
+
+    for (i = 0; i < 3; i++) {
+        /* direct call from the dashboard peer: refused at the peer ACL */
+        prov_call(direct[i], CTL_PEER_DASHBOARD, reply, sizeof reply);
+        TEST_ASSERT_EQUAL_INT(0, strncmp(reply, "ERR", 3));
+        TEST_ASSERT_NOT_NULL(strstr(reply, "privileged verb must be queued via REQUEST_SUBMIT"));
+        TEST_ASSERT_EQUAL_UINT(0, gSpawnCalls);
+        /* an unknown peer gets nothing either */
+        prov_call(direct[i], CTL_PEER_UNKNOWN, reply, sizeof reply);
+        TEST_ASSERT_EQUAL_INT(0, strncmp(reply, "ERR", 3));
+        TEST_ASSERT_EQUAL_UINT(0, gSpawnCalls);
+
+        /* REQUEST_SUBMIT of the verb is accepted as PRIVILEGED and only enqueued */
+        memset(&ctx, 0, sizeof ctx);
+        memset(&ctl, 0, sizeof ctl);
+        ctx.role = SRV_ACTIVE;
+        ctx.db = (serverDb *)1;
+        ctl.ctx = &ctx;
+        gSubmitCalls = 0;
+        gSpawnCalls = 0;
+        snprintf(line, sizeof line, "REQUEST_SUBMIT verb=%s op=alice args=%s idem=k%u",
+                 inner[i], wire[i], (unsigned)i);
+        (void)ctlHandleLine(&ctl, line, CTL_PEER_DASHBOARD, 33, reply, sizeof reply);
+        TEST_ASSERT_EQUAL_STRING("OK request=9001 status=pending\n", reply);
+        TEST_ASSERT_EQUAL_UINT(1, gSubmitCalls);
+        TEST_ASSERT_EQUAL_UINT(0, gSpawnCalls);
+        TEST_ASSERT_EQUAL_STRING(inner[i], gSubmitVerb);
+        TEST_ASSERT_EQUAL_STRING(stored[i], gSubmitArgs);
+        TEST_ASSERT_EQUAL_STRING("alice", gSubmitOp);
+    }
+
+    /* standby: refused before any effect even for the operator peer */
+    memset(&ctx, 0, sizeof ctx);
+    memset(&ctl, 0, sizeof ctl);
+    ctx.role = SRV_STANDBY;
+    ctl.ctx = &ctx;
+    for (i = 0; i < 3; i++) {
+        snprintf(line, sizeof line, "%s", direct[i]);
+        gSpawnCalls = 0;
+        (void)ctlHandleLine(&ctl, line, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
+        TEST_ASSERT_NOT_NULL(strstr(reply, "active server required"));
+        TEST_ASSERT_EQUAL_UINT(0, gSpawnCalls);
+    }
+}
+
+/* The queue consumer binds op from the stored requester, never from an op= the
+ * dashboard smuggled into the queued args. */
+static void test_prov_queue_replay_binds_requester(void)
+{
+    serverCtl ctl;
+    serverContext ctx;
+    memset(&ctl, 0, sizeof ctl);
+    memset(&ctx, 0, sizeof ctx);
+    ctx.db = (serverDb *)1;
+    ctx.role = SRV_ACTIVE;
+    ctl.ctx = &ctx;
+
+    gQueuedCustomReady = true;
+    snprintf(gQueuedVerb, sizeof gQueuedVerb, "STACK_APPLY");
+    snprintf(gQueuedArgs, sizeof gQueuedArgs,
+             "op=mallory entity=12 stacks=core,web dryRun=0");
+    snprintf(gQueuedRequester, sizeof gQueuedRequester, "jason+ops@akoria.org");
+    gSpawnCalls = 0;
+    gQueuedDecommissionCompleted = false;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverCtlQueuePoll(&ctl));
+    TEST_ASSERT_EQUAL_UINT(1, gSpawnCalls);
+    TEST_ASSERT_EQUAL_STRING(
+        "deploy/fleet/stack-apply.py|--entity|12|--stacks|core,web|--op|jason+ops@akoria.org",
+        gSpawnArgv);
+    TEST_ASSERT_TRUE(gQueuedDecommissionCompleted);
+    TEST_ASSERT_EQUAL_STRING("OK log=run/stack-apply-12.log status=applying",
+                             gQueuedDecommissionResult);
+
+    /* a bad queued arg fails the row cleanly and spawns nothing */
+    gQueuedCustomReady = true;
+    snprintf(gQueuedVerb, sizeof gQueuedVerb, "PROV_STAGE");
+    snprintf(gQueuedArgs, sizeof gQueuedArgs, "entity=12 image=3 stacks=core%%3Bid");
+    snprintf(gQueuedRequester, sizeof gQueuedRequester, "alice");
+    gSpawnCalls = 0;
+    gQueuedDecommissionCompleted = true;
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK, serverCtlQueuePoll(&ctl));
+    TEST_ASSERT_EQUAL_UINT(0, gSpawnCalls);
+    TEST_ASSERT_FALSE(gQueuedDecommissionCompleted);
+    TEST_ASSERT_NOT_NULL(strstr(gQueuedDecommissionResult, "invalid stacks"));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -836,5 +1319,11 @@ int main(void)
     RUN_TEST(test_ctl_line_byte_boundaries);
     RUN_TEST(test_ctl_read_eof_and_stall_deadline);
     RUN_TEST(test_ctl_write_partial_and_deadline);
+    RUN_TEST(test_prov_validators_pure);
+    RUN_TEST(test_prov_strict_decode_refuses_embedded_nul);
+    RUN_TEST(test_prov_verbs_exec_exact_argv);
+    RUN_TEST(test_prov_verbs_refuse_bad_args);
+    RUN_TEST(test_prov_verbs_dashboard_must_queue);
+    RUN_TEST(test_prov_queue_replay_binds_requester);
     return UNITY_END();
 }

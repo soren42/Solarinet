@@ -12,7 +12,28 @@ declare(strict_types=1);
  *
  * NOTE: GET /api/discovery moved to routes/discovery.php, which enriches the
  * candidate list with mDNS services + LLDP neighbor cross-reference.
+ *
+ * PROVISIONING CATALOG (P3, docs/Provisioning_UI_Design.md) — SoR-backed via
+ * Sor::db(), tables from migration 029. Field names in and out are the 029
+ * column names (snake_case) so the P4 forms can round-trip a row into PUT.
+ *   Reads (session):
+ *     GET  /api/provisioning/images[/{id}]
+ *     GET  /api/provisioning/software[/{id}]      (+ artifacts/requires/conflicts)
+ *     GET  /api/provisioning/stacks[/{id}]        (+ ordered members, deps)
+ *     GET  /api/provisioning/runs?entity=&mode=&status=&limit=   GET /runs/{id}
+ *   Writes (operator; Origin + X-Solari-CSRF via Policy):
+ *     POST/PUT/DELETE images, software, stacks (DELETE = soft delete)
+ *     POST/DELETE software/{id}/artifacts|requires|conflicts
+ *     POST/PUT/DELETE stacks/{id}/members, POST/DELETE stacks/{id}/deps
+ *   Enqueue (operator) — SolariCtl::callQueued (REQUEST_SUBMIT), never call():
+ *     POST /api/provisioning/image-refresh {image}                 -> IMAGE_REFRESH
+ *     POST /api/provisioning/stage {entity, image, stacks[]}       -> PROV_STAGE
+ *     POST /api/provisioning/apply {entity, stacks[], dry_run}     -> STACK_APPLY
+ *   The operator principal is bound by callQueued (requestedBy); it is never
+ *   placed in args. prov_runs is read-only here (an audit log; 029 triggers).
  */
+
+require_once __DIR__ . '/../lib/ProvCatalog.php';
 
 return static function (Router $router): void {
 
@@ -107,5 +128,653 @@ return static function (Router $router): void {
             'builds'           => $out,
             'nodeVersionDist'  => $dist,
         ]);
+    });
+
+
+    // =================================================================
+    // Provisioning catalog (P3) — see the file header.
+    // =================================================================
+    $P = '/api/provisioning';
+    $IMG_COLS = 'id, distro, family, release_name, release_label, arch, boot_method, source_url, checksum_url,
+                 version, sha256, fetched_at, install_template, refresh_policy, netboot_verified, notes, updated_at';
+    $SW_COLS  = 'id, logical_name, item_type, name_suse, name_debian, name_fedora, applies_families,
+                 applies_arches, ansible_role, source_url, version_pin, spec, notes, updated_at';
+    $ST_COLS  = 'id, slug, name, description, locked, sort_order, updated_at';
+
+    $imageGet = static function (int $id, bool $lock = false) use ($IMG_COLS): ?array {
+        return ProvCatalog::row("SELECT $IMG_COLS FROM prov_images WHERE id = :id AND deleted_at IS NULL"
+            . ($lock ? ' FOR UPDATE' : ''), [':id' => $id]);
+    };
+    $softwareGet = static function (int $id, bool $lock = false) use ($SW_COLS): ?array {
+        return ProvCatalog::row("SELECT $SW_COLS FROM prov_software WHERE id = :id AND deleted_at IS NULL"
+            . ($lock ? ' FOR UPDATE' : ''), [':id' => $id]);
+    };
+    $stackGet = static function (int $id, bool $lock = false) use ($ST_COLS): ?array {
+        return ProvCatalog::row("SELECT $ST_COLS FROM prov_stacks WHERE id = :id AND deleted_at IS NULL"
+            . ($lock ? ' FOR UPDATE' : ''), [':id' => $id]);
+    };
+
+    /** Full software detail: row + artifacts, requires, required_by, conflicts, stacks. */
+    $softwareDetail = static function (array $r): array {
+        $id = (int) $r['id'];
+        $out = ProvCatalog::softwareOut($r);
+        $out['artifacts'] = array_map(static fn (array $a): array => [
+            'id' => (int) $a['id'], 'arch' => $a['arch'], 'url' => $a['url'], 'sha256' => $a['sha256'],
+        ], ProvCatalog::rows(
+            'SELECT id, arch, url, sha256 FROM prov_software_artifacts
+              WHERE software_id = :id AND deleted_at IS NULL ORDER BY arch, id', [':id' => $id]));
+        $edge = static fn (array $e): array => [
+            'software_id' => (int) $e['other_id'], 'logical_name' => $e['logical_name'],
+            'item_type' => $e['item_type'], 'notes' => $e['notes'],
+        ];
+        $out['requires'] = array_map($edge, ProvCatalog::rows(
+            'SELECT r.requires_software_id AS other_id, p.logical_name, p.item_type, r.notes
+               FROM prov_software_requires r JOIN prov_software p ON p.id = r.requires_software_id
+              WHERE r.software_id = :id AND r.deleted_at IS NULL AND p.deleted_at IS NULL
+              ORDER BY p.logical_name', [':id' => $id]));
+        $out['required_by'] = array_map($edge, ProvCatalog::rows(
+            'SELECT r.software_id AS other_id, p.logical_name, p.item_type, r.notes
+               FROM prov_software_requires r JOIN prov_software p ON p.id = r.software_id
+              WHERE r.requires_software_id = :id AND r.deleted_at IS NULL AND p.deleted_at IS NULL
+              ORDER BY p.logical_name', [':id' => $id]));
+        $out['conflicts'] = array_map($edge, ProvCatalog::rows(
+            'SELECT p.id AS other_id, p.logical_name, p.item_type, c.notes
+               FROM prov_software_conflicts c
+               JOIN prov_software p ON p.id = IF(c.software_lo_id = :a, c.software_hi_id, c.software_lo_id)
+              WHERE (c.software_lo_id = :b OR c.software_hi_id = :c)
+                AND c.deleted_at IS NULL AND p.deleted_at IS NULL
+              ORDER BY p.logical_name', [':a' => $id, ':b' => $id, ':c' => $id]));
+        $out['stacks'] = array_map(static fn (array $s): array => [
+            'id' => (int) $s['id'], 'slug' => $s['slug'],
+        ], ProvCatalog::rows(
+            'SELECT s.id, s.slug FROM prov_stack_members m JOIN prov_stacks s ON s.id = m.stack_id
+              WHERE m.software_id = :id AND m.deleted_at IS NULL AND s.deleted_at IS NULL
+              ORDER BY s.slug', [':id' => $id]));
+        return $out;
+    };
+
+    /** Full stack detail: row + members in run order + deps + dependents. */
+    $stackDetail = static function (array $r): array {
+        $id = (int) $r['id'];
+        $out = ProvCatalog::stackOut($r);
+        $rank = ProvCatalog::TYPE_RANK_SQL;
+        $out['members'] = array_map(static fn (array $m): array => [
+            'software_id'     => (int) $m['software_id'],
+            'logical_name'    => $m['logical_name'],
+            'item_type'       => $m['item_type'],
+            'item_order'      => $m['item_order'] === null ? null : (int) $m['item_order'],
+            'effective_order' => (int) $m['effective_order'],
+            'sort_order'      => (int) $m['sort_order'],
+            'notes'           => $m['notes'],
+        ], ProvCatalog::rows(
+            "SELECT m.software_id, p.logical_name, p.item_type, m.item_order, m.sort_order, m.notes,
+                    COALESCE(m.item_order, $rank * 100) AS effective_order
+               FROM prov_stack_members m JOIN prov_software p ON p.id = m.software_id
+              WHERE m.stack_id = :id AND m.deleted_at IS NULL AND p.deleted_at IS NULL
+              ORDER BY effective_order, $rank, m.sort_order, p.logical_name", [':id' => $id]));
+        $dep = static fn (array $d): array => ['stack_id' => (int) $d['id'], 'slug' => $d['slug']];
+        $out['depends_on'] = array_map($dep, ProvCatalog::rows(
+            'SELECT s.id, s.slug FROM prov_stack_deps d JOIN prov_stacks s ON s.id = d.depends_on_stack_id
+              WHERE d.stack_id = :id AND d.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY s.slug',
+            [':id' => $id]));
+        $out['depended_on_by'] = array_map($dep, ProvCatalog::rows(
+            'SELECT s.id, s.slug FROM prov_stack_deps d JOIN prov_stacks s ON s.id = d.stack_id
+              WHERE d.depends_on_stack_id = :id AND d.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY s.slug',
+            [':id' => $id]));
+        return $out;
+    };
+
+    // ------------------------------------------------------------- images
+
+    $router->get("$P/images", static function () use ($IMG_COLS): void {
+        $rows = ProvCatalog::rows("SELECT $IMG_COLS FROM prov_images WHERE deleted_at IS NULL
+                                    ORDER BY distro, release_name, arch, boot_method, id");
+        Response::ok(array_map([ProvCatalog::class, 'imageOut'], $rows));
+    });
+
+    $router->get("$P/images/{id}", static function (array $p) use ($imageGet): void {
+        $r = $imageGet(ProvCatalog::pathId($p['id']));
+        if ($r === null) {
+            ProvCatalog::notFound('Image not found.');
+        }
+        Response::ok(ProvCatalog::imageOut($r));
+    });
+
+    $router->post("$P/images", static function () use ($imageGet): void {
+        Operator::requireOperator();
+        $b = ProvCatalog::body(array_merge(ProvCatalog::IMAGE_FIELDS, ProvCatalog::IMAGE_MANAGED));
+        $set = ProvCatalog::imageFields($b, null);
+        $id = ProvCatalog::insertRow('prov_images', $set);
+        Response::ok(ProvCatalog::imageOut($imageGet($id) ?? ProvCatalog::fail('db_error', 'Created row not readable.', 500)), 201);
+    });
+
+    $router->add('PUT', "$P/images/{id}", static function (array $p) use ($imageGet): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(array_merge(ProvCatalog::IMAGE_FIELDS, ProvCatalog::IMAGE_MANAGED));
+        // Shape-only pre-check (no DB): refresh-owned fields and empty bodies
+        // fail before the row lock. imageFields() re-checks with the row.
+        foreach (ProvCatalog::IMAGE_MANAGED as $k) {
+            if (array_key_exists($k, $b)) {
+                ProvCatalog::bad("$k is managed by image refresh and cannot be set directly.");
+            }
+        }
+        if ($b === []) {
+            ProvCatalog::bad('Nothing to update.');
+        }
+        ProvCatalog::tx(static function () use ($id, $b, $imageGet): void {
+            $cur = $imageGet($id, true);
+            if ($cur === null) {
+                ProvCatalog::notFound('Image not found.');
+            }
+            ProvCatalog::updateRow('prov_images', $id, ProvCatalog::imageFields($b, $cur));
+        });
+        Response::ok(ProvCatalog::imageOut($imageGet($id) ?? ProvCatalog::notFound('Image not found.')));
+    });
+
+    $router->add('DELETE', "$P/images/{id}", static function (array $p): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $n = ProvCatalog::exec(
+            "UPDATE prov_images SET deleted_at = NOW(), source_id = :src, asserted_kind = 'human', asserted_at = NOW()
+              WHERE id = :id AND deleted_at IS NULL", ProvCatalog::prov() + [':id' => $id]);
+        if ($n === 0) {
+            ProvCatalog::notFound('Image not found.');
+        }
+        Response::ok(['id' => $id, 'deleted' => true]);
+    });
+
+    // ----------------------------------------------------------- software
+
+    $router->get("$P/software", static function () use ($SW_COLS): void {
+        $where = 'deleted_at IS NULL';
+        $params = [];
+        $type = $_GET['type'] ?? null;
+        if ($type !== null && $type !== '') {
+            $params[':t'] = ProvCatalog::enum($type, 'type', ProvCatalog::ITEM_TYPES);
+            $where .= ' AND item_type = :t';
+        }
+        $rows = ProvCatalog::rows("SELECT $SW_COLS FROM prov_software WHERE $where ORDER BY logical_name, id", $params);
+        Response::ok(array_map([ProvCatalog::class, 'softwareOut'], $rows));
+    });
+
+    $router->get("$P/software/{id}", static function (array $p) use ($softwareGet, $softwareDetail): void {
+        $r = $softwareGet(ProvCatalog::pathId($p['id']));
+        if ($r === null) {
+            ProvCatalog::notFound('Software entry not found.');
+        }
+        Response::ok($softwareDetail($r));
+    });
+
+    $router->post("$P/software", static function () use ($softwareGet, $softwareDetail): void {
+        Operator::requireOperator();
+        $b = ProvCatalog::body(ProvCatalog::SOFTWARE_FIELDS);
+        $set = ProvCatalog::softwareFields($b, null);
+        $id = ProvCatalog::insertRow('prov_software', $set);
+        Response::ok($softwareDetail($softwareGet($id) ?? ProvCatalog::fail('db_error', 'Created row not readable.', 500)), 201);
+    });
+
+    $router->add('PUT', "$P/software/{id}", static function (array $p) use ($softwareGet, $softwareDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(ProvCatalog::SOFTWARE_FIELDS);
+        ProvCatalog::tx(static function () use ($id, $b, $softwareGet): void {
+            $cur = $softwareGet($id, true);
+            if ($cur === null) {
+                ProvCatalog::notFound('Software entry not found.');
+            }
+            $arts = (int) ProvCatalog::scalar(
+                'SELECT COUNT(*) AS n FROM prov_software_artifacts WHERE software_id = :id AND deleted_at IS NULL',
+                [':id' => $id]);
+            ProvCatalog::updateRow('prov_software', $id, ProvCatalog::softwareFields($b, $cur, $arts > 0));
+        });
+        Response::ok($softwareDetail($softwareGet($id) ?? ProvCatalog::notFound('Software entry not found.')));
+    });
+
+    // Soft delete. Mirrors the RESTRICT FKs on live rows: refused while a live
+    // stack lists it or a live entry requires it. Its own artifacts, outgoing
+    // requires and conflict pairs are soft-deleted with it (029 CASCADE).
+    $router->add('DELETE', "$P/software/{id}", static function (array $p) use ($softwareGet): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        ProvCatalog::tx(static function () use ($id, $softwareGet): void {
+            if ($softwareGet($id, true) === null) {
+                ProvCatalog::notFound('Software entry not found.');
+            }
+            $stacks = ProvCatalog::rows(
+                'SELECT s.slug FROM prov_stack_members m JOIN prov_stacks s ON s.id = m.stack_id
+                  WHERE m.software_id = :id AND m.deleted_at IS NULL AND s.deleted_at IS NULL ORDER BY s.slug',
+                [':id' => $id]);
+            if ($stacks !== []) {
+                ProvCatalog::conflict('Still a member of stack(s): '
+                    . implode(', ', array_column($stacks, 'slug')) . '. Remove the membership first.');
+            }
+            $req = ProvCatalog::rows(
+                'SELECT p.logical_name FROM prov_software_requires r JOIN prov_software p ON p.id = r.software_id
+                  WHERE r.requires_software_id = :id AND r.deleted_at IS NULL AND p.deleted_at IS NULL
+                  ORDER BY p.logical_name', [':id' => $id]);
+            if ($req !== []) {
+                ProvCatalog::conflict('Still required by: '
+                    . implode(', ', array_map([ProvCatalog::class, 'clip'], array_column($req, 'logical_name')))
+                    . '. Remove the requirement first.');
+            }
+            $src = ProvCatalog::prov();
+            ProvCatalog::exec("UPDATE prov_software SET deleted_at = NOW(), source_id = :src, asserted_kind = 'human',
+                                      asserted_at = NOW() WHERE id = :id AND deleted_at IS NULL", $src + [':id' => $id]);
+            ProvCatalog::exec('UPDATE prov_software_artifacts SET deleted_at = NOW()
+                                WHERE software_id = :id AND deleted_at IS NULL', [':id' => $id]);
+            ProvCatalog::exec('UPDATE prov_software_requires SET deleted_at = NOW()
+                                WHERE software_id = :id AND deleted_at IS NULL', [':id' => $id]);
+            ProvCatalog::exec('UPDATE prov_software_conflicts SET deleted_at = NOW()
+                                WHERE (software_lo_id = :lo OR software_hi_id = :hi) AND deleted_at IS NULL',
+                [':lo' => $id, ':hi' => $id]);
+        });
+        Response::ok(['id' => $id, 'deleted' => true]);
+    });
+
+    // artifacts ---------------------------------------------------------
+    $router->post("$P/software/{id}/artifacts", static function (array $p) use ($softwareGet, $softwareDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(['arch', 'url', 'sha256'], 16384);
+        $arch = ProvCatalog::enum(ProvCatalog::requireKey($b, 'arch'), 'arch', ProvCatalog::ART_ARCHES);
+        $url = ProvCatalog::url(ProvCatalog::requireKey($b, 'url'), 'url', false);
+        $sha = ProvCatalog::token(ProvCatalog::requireKey($b, 'sha256'), 'sha256', ProvCatalog::SHA256_RE,
+            '64 lowercase hex characters', false);
+        ProvCatalog::tx(static function () use ($id, $arch, $url, $sha, $softwareGet): void {
+            $sw = $softwareGet($id, true);
+            if ($sw === null) {
+                ProvCatalog::notFound('Software entry not found.');
+            }
+            if ($sw['item_type'] !== 'artifact') {
+                ProvCatalog::bad('Artifacts can only be added to an artifact entry.');
+            }
+            ProvCatalog::insertRow('prov_software_artifacts',
+                ['software_id' => $id, 'arch' => $arch, 'url' => $url, 'sha256' => $sha]);
+        });
+        Response::ok($softwareDetail($softwareGet($id) ?? ProvCatalog::notFound('Software entry not found.')), 201);
+    });
+
+    $router->add('DELETE', "$P/software/{id}/artifacts/{artifactId}", static function (array $p): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $aid = ProvCatalog::pathId($p['artifactId'], 'artifactId');
+        $n = ProvCatalog::exec('UPDATE prov_software_artifacts SET deleted_at = NOW()
+                                 WHERE id = :aid AND software_id = :id AND deleted_at IS NULL',
+            [':aid' => $aid, ':id' => $id]);
+        if ($n === 0) {
+            ProvCatalog::notFound('Artifact not found.');
+        }
+        Response::ok(['id' => $aid, 'deleted' => true]);
+    });
+
+    // requires ----------------------------------------------------------
+    $router->post("$P/software/{id}/requires", static function (array $p) use ($softwareGet, $softwareDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(['requires_software_id', 'notes'], 16384);
+        $req = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'requires_software_id'), 'requires_software_id');
+        $notes = ProvCatalog::text($b['notes'] ?? null, 'notes', 255);
+        if ($req === $id) {
+            ProvCatalog::bad('An entry cannot require itself.');
+        }
+        ProvCatalog::tx(static function () use ($id, $req, $notes, $softwareGet): void {
+            if ($softwareGet($id, true) === null || $softwareGet($req, true) === null) {
+                ProvCatalog::notFound('Software entry not found.');
+            }
+            ProvCatalog::insertRow('prov_software_requires',
+                ['software_id' => $id, 'requires_software_id' => $req, 'notes' => $notes]);
+        });
+        Response::ok($softwareDetail($softwareGet($id) ?? ProvCatalog::notFound('Software entry not found.')), 201);
+    });
+
+    $router->add('DELETE', "$P/software/{id}/requires/{requiresId}", static function (array $p): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $req = ProvCatalog::pathId($p['requiresId'], 'requiresId');
+        $n = ProvCatalog::exec('UPDATE prov_software_requires SET deleted_at = NOW()
+                                 WHERE software_id = :id AND requires_software_id = :req AND deleted_at IS NULL',
+            [':id' => $id, ':req' => $req]);
+        if ($n === 0) {
+            ProvCatalog::notFound('Requirement not found.');
+        }
+        Response::ok(['software_id' => $id, 'requires_software_id' => $req, 'deleted' => true]);
+    });
+
+    // conflicts (stored canonically lo < hi) ------------------------------
+    $router->post("$P/software/{id}/conflicts", static function (array $p) use ($softwareGet, $softwareDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(['software_id', 'notes'], 16384);
+        $other = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'software_id'), 'software_id');
+        $notes = ProvCatalog::text($b['notes'] ?? null, 'notes', 255);
+        if ($other === $id) {
+            ProvCatalog::bad('An entry cannot conflict with itself.');
+        }
+        ProvCatalog::tx(static function () use ($id, $other, $notes, $softwareGet): void {
+            if ($softwareGet($id, true) === null || $softwareGet($other, true) === null) {
+                ProvCatalog::notFound('Software entry not found.');
+            }
+            ProvCatalog::insertRow('prov_software_conflicts', [
+                'software_lo_id' => min($id, $other), 'software_hi_id' => max($id, $other), 'notes' => $notes,
+            ]);
+        });
+        Response::ok($softwareDetail($softwareGet($id) ?? ProvCatalog::notFound('Software entry not found.')), 201);
+    });
+
+    $router->add('DELETE', "$P/software/{id}/conflicts/{otherId}", static function (array $p): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $other = ProvCatalog::pathId($p['otherId'], 'otherId');
+        $n = ProvCatalog::exec('UPDATE prov_software_conflicts SET deleted_at = NOW()
+                                 WHERE software_lo_id = :lo AND software_hi_id = :hi AND deleted_at IS NULL',
+            [':lo' => min($id, $other), ':hi' => max($id, $other)]);
+        if ($n === 0) {
+            ProvCatalog::notFound('Conflict not found.');
+        }
+        Response::ok(['software_id' => $id, 'other_id' => $other, 'deleted' => true]);
+    });
+
+    // ------------------------------------------------------------- stacks
+
+    $router->get("$P/stacks", static function () use ($ST_COLS): void {
+        $rows = ProvCatalog::rows(
+            "SELECT $ST_COLS,
+                    (SELECT COUNT(*) FROM prov_stack_members m JOIN prov_software p ON p.id = m.software_id
+                      WHERE m.stack_id = s.id AND m.deleted_at IS NULL AND p.deleted_at IS NULL) AS member_count
+               FROM prov_stacks s WHERE s.deleted_at IS NULL ORDER BY s.locked DESC, s.sort_order, s.slug");
+        $deps = ProvCatalog::rows(
+            'SELECT d.stack_id, t.slug FROM prov_stack_deps d JOIN prov_stacks t ON t.id = d.depends_on_stack_id
+              WHERE d.deleted_at IS NULL AND t.deleted_at IS NULL ORDER BY t.slug');
+        $byStack = [];
+        foreach ($deps as $d) {
+            $byStack[(int) $d['stack_id']][] = $d['slug'];
+        }
+        Response::ok(array_map(static function (array $r) use ($byStack): array {
+            $o = ProvCatalog::stackOut($r);
+            $o['member_count'] = (int) $r['member_count'];
+            $o['depends_on'] = $byStack[(int) $r['id']] ?? [];
+            return $o;
+        }, $rows));
+    });
+
+    $router->get("$P/stacks/{id}", static function (array $p) use ($stackGet, $stackDetail): void {
+        $r = $stackGet(ProvCatalog::pathId($p['id']));
+        if ($r === null) {
+            ProvCatalog::notFound('Stack not found.');
+        }
+        Response::ok($stackDetail($r));
+    });
+
+    $router->post("$P/stacks", static function () use ($stackGet, $stackDetail): void {
+        Operator::requireOperator();
+        $b = ProvCatalog::body(ProvCatalog::STACK_FIELDS, 16384);
+        $id = ProvCatalog::insertRow('prov_stacks', ProvCatalog::stackFields($b, true));
+        Response::ok($stackDetail($stackGet($id) ?? ProvCatalog::fail('db_error', 'Created row not readable.', 500)), 201);
+    });
+
+    $router->add('PUT', "$P/stacks/{id}", static function (array $p) use ($stackGet, $stackDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(ProvCatalog::STACK_FIELDS, 16384);
+        $set = ProvCatalog::stackFields($b, false);
+        ProvCatalog::tx(static function () use ($id, $set, $stackGet): void {
+            if ($stackGet($id, true) === null) {
+                ProvCatalog::notFound('Stack not found.');
+            }
+            ProvCatalog::updateRow('prov_stacks', $id, $set);
+        });
+        Response::ok($stackDetail($stackGet($id) ?? ProvCatalog::notFound('Stack not found.')));
+    });
+
+    // Soft delete: refused for a locked stack or one a live stack depends on;
+    // its memberships and outgoing deps go with it (029 CASCADE).
+    $router->add('DELETE', "$P/stacks/{id}", static function (array $p) use ($stackGet): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        ProvCatalog::tx(static function () use ($id, $stackGet): void {
+            $st = $stackGet($id, true);
+            if ($st === null) {
+                ProvCatalog::notFound('Stack not found.');
+            }
+            if ((int) $st['locked'] === 1) {
+                ProvCatalog::conflict('A locked stack cannot be deleted.');
+            }
+            $dependents = ProvCatalog::rows(
+                'SELECT s.slug FROM prov_stack_deps d JOIN prov_stacks s ON s.id = d.stack_id
+                  WHERE d.depends_on_stack_id = :id AND d.deleted_at IS NULL AND s.deleted_at IS NULL
+                  ORDER BY s.slug', [':id' => $id]);
+            if ($dependents !== []) {
+                ProvCatalog::conflict('Stack is a dependency of: '
+                    . implode(', ', array_column($dependents, 'slug')) . '. Remove those dependencies first.');
+            }
+            ProvCatalog::exec("UPDATE prov_stacks SET deleted_at = NOW(), source_id = :src, asserted_kind = 'human',
+                                      asserted_at = NOW() WHERE id = :id AND deleted_at IS NULL",
+                ProvCatalog::prov() + [':id' => $id]);
+            ProvCatalog::exec('UPDATE prov_stack_members SET deleted_at = NOW()
+                                WHERE stack_id = :id AND deleted_at IS NULL', [':id' => $id]);
+            ProvCatalog::exec('UPDATE prov_stack_deps SET deleted_at = NOW()
+                                WHERE stack_id = :id AND deleted_at IS NULL', [':id' => $id]);
+        });
+        Response::ok(['id' => $id, 'deleted' => true]);
+    });
+
+    // members -----------------------------------------------------------
+    $router->post("$P/stacks/{id}/members", static function (array $p) use ($stackGet, $softwareGet, $stackDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(['software_id', 'item_order', 'sort_order', 'notes'], 16384);
+        $sw = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'software_id'), 'software_id');
+        $set = ['stack_id' => $id, 'software_id' => $sw] + ProvCatalog::memberFields($b, true);
+        ProvCatalog::tx(static function () use ($id, $sw, $set, $stackGet, $softwareGet): void {
+            if ($stackGet($id, true) === null) {
+                ProvCatalog::notFound('Stack not found.');
+            }
+            if ($softwareGet($sw, true) === null) {
+                ProvCatalog::notFound('Software entry not found.');
+            }
+            ProvCatalog::insertRow('prov_stack_members', $set);
+        });
+        Response::ok($stackDetail($stackGet($id) ?? ProvCatalog::notFound('Stack not found.')), 201);
+    });
+
+    $router->add('PUT', "$P/stacks/{id}/members/{softwareId}", static function (array $p) use ($stackGet, $stackDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $sw = ProvCatalog::pathId($p['softwareId'], 'softwareId');
+        $set = ProvCatalog::memberFields(ProvCatalog::body(ProvCatalog::MEMBER_FIELDS, 16384), false);
+        $params = ProvCatalog::prov() + [':stack' => $id, ':sw' => $sw];
+        $parts = [];
+        foreach ($set as $c => $v) {
+            $parts[] = "$c = :$c";
+            $params[":$c"] = $v;
+        }
+        $n = ProvCatalog::exec('UPDATE prov_stack_members SET ' . implode(', ', $parts)
+            . ", source_id = :src, asserted_kind = 'human', asserted_at = NOW()
+              WHERE stack_id = :stack AND software_id = :sw AND deleted_at IS NULL", $params);
+        if ($n === 0 && ProvCatalog::scalar('SELECT COUNT(*) AS n FROM prov_stack_members
+                 WHERE stack_id = :stack AND software_id = :sw AND deleted_at IS NULL',
+                [':stack' => $id, ':sw' => $sw]) == 0) {
+            ProvCatalog::notFound('Stack member not found.');
+        }
+        Response::ok($stackDetail($stackGet($id) ?? ProvCatalog::notFound('Stack not found.')));
+    });
+
+    $router->add('DELETE', "$P/stacks/{id}/members/{softwareId}", static function (array $p): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $sw = ProvCatalog::pathId($p['softwareId'], 'softwareId');
+        $n = ProvCatalog::exec('UPDATE prov_stack_members SET deleted_at = NOW()
+                                 WHERE stack_id = :stack AND software_id = :sw AND deleted_at IS NULL',
+            [':stack' => $id, ':sw' => $sw]);
+        if ($n === 0) {
+            ProvCatalog::notFound('Stack member not found.');
+        }
+        Response::ok(['stack_id' => $id, 'software_id' => $sw, 'deleted' => true]);
+    });
+
+    // deps --------------------------------------------------------------
+    $router->post("$P/stacks/{id}/deps", static function (array $p) use ($stackGet, $stackDetail): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $b = ProvCatalog::body(['depends_on_stack_id'], 4096);
+        $on = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'depends_on_stack_id'), 'depends_on_stack_id');
+        if ($on === $id) {
+            ProvCatalog::bad('A stack cannot depend on itself.');
+        }
+        ProvCatalog::tx(static function () use ($id, $on, $stackGet): void {
+            if ($stackGet($id, true) === null || $stackGet($on, true) === null) {
+                ProvCatalog::notFound('Stack not found.');
+            }
+            ProvCatalog::insertRow('prov_stack_deps', ['stack_id' => $id, 'depends_on_stack_id' => $on]);
+        });
+        Response::ok($stackDetail($stackGet($id) ?? ProvCatalog::notFound('Stack not found.')), 201);
+    });
+
+    $router->add('DELETE', "$P/stacks/{id}/deps/{dependsOnId}", static function (array $p): void {
+        Operator::requireOperator();
+        $id = ProvCatalog::pathId($p['id']);
+        $on = ProvCatalog::pathId($p['dependsOnId'], 'dependsOnId');
+        $n = ProvCatalog::exec('UPDATE prov_stack_deps SET deleted_at = NOW()
+                                 WHERE stack_id = :id AND depends_on_stack_id = :on AND deleted_at IS NULL',
+            [':id' => $id, ':on' => $on]);
+        if ($n === 0) {
+            ProvCatalog::notFound('Stack dependency not found.');
+        }
+        Response::ok(['stack_id' => $id, 'depends_on_stack_id' => $on, 'deleted' => true]);
+    });
+
+    // --------------------------------------------------------------- runs
+
+    $RUN_SQL = "SELECT r.id, r.mode, r.entity_id, e.name AS entity_name, r.image_id,
+                       CONCAT(i.distro, ' ', i.release_name, ' ', i.arch) AS image_label,
+                       r.stack_slugs, r.requested_by, r.status, r.dry_run, r.detail,
+                       r.requested_at, r.started_at, r.finished_at
+                  FROM prov_runs r
+                  LEFT JOIN entities e ON e.id = r.entity_id
+                  LEFT JOIN prov_images i ON i.id = r.image_id";
+
+    $router->get("$P/runs", static function () use ($RUN_SQL): void {
+        $where = [];
+        $params = [];
+        if (isset($_GET['entity']) && $_GET['entity'] !== '') {
+            $params[':entity'] = ProvCatalog::idValue($_GET['entity'], 'entity');
+            $where[] = 'r.entity_id = :entity';
+        }
+        if (isset($_GET['mode']) && $_GET['mode'] !== '') {
+            $params[':mode'] = ProvCatalog::enum($_GET['mode'], 'mode', ProvCatalog::RUN_MODES);
+            $where[] = 'r.mode = :mode';
+        }
+        if (isset($_GET['status']) && $_GET['status'] !== '') {
+            $params[':status'] = ProvCatalog::enum($_GET['status'], 'status', ProvCatalog::RUN_STATUSES);
+            $where[] = 'r.status = :status';
+        }
+        $limit = 50;
+        if (isset($_GET['limit']) && $_GET['limit'] !== '') {
+            $l = $_GET['limit'];
+            if (!is_string($l) || preg_match('/^[1-9][0-9]{0,2}\z/', $l) !== 1 || (int) $l > 200) {
+                ProvCatalog::bad('limit must be an integer 1..200.');
+            }
+            $limit = (int) $l;
+        }
+        $sql = $RUN_SQL . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
+             . " ORDER BY r.requested_at DESC, r.id DESC LIMIT $limit";
+        Response::ok(array_map([ProvCatalog::class, 'runOut'], ProvCatalog::rows($sql, $params)));
+    });
+
+    $router->get("$P/runs/{id}", static function (array $p) use ($RUN_SQL): void {
+        $raw = (string) $p['id'];
+        if (preg_match('/^[1-9][0-9]{0,17}\z/', $raw) !== 1) {
+            ProvCatalog::bad('id must be a positive integer run id.');
+        }
+        $r = ProvCatalog::row($RUN_SQL . ' WHERE r.id = :id', [':id' => $raw]);
+        if ($r === null) {
+            ProvCatalog::notFound('Run not found.');
+        }
+        Response::ok(ProvCatalog::runOut($r));
+    });
+
+    // ------------------------------------------------------------ enqueue
+    // Pre-validated against the SoR for clean 4xx; the helpers re-validate
+    // everything themselves (TOCTOU is theirs to close). op is bound by
+    // callQueued from the session principal — NEVER placed in $args.
+
+    $liveEntity = static function (int $id): void {
+        if (ProvCatalog::row('SELECT id FROM entities WHERE id = :id AND deleted_at IS NULL', [':id' => $id]) === null) {
+            ProvCatalog::notFound('Entity not found.');
+        }
+    };
+    $liveStacks = static function (array $slugs): void {
+        $params = [];
+        foreach (array_values($slugs) as $i => $s) {
+            $params[":s$i"] = $s;
+        }
+        $found = array_column(ProvCatalog::rows(
+            'SELECT slug FROM prov_stacks WHERE deleted_at IS NULL AND slug IN ('
+            . implode(', ', array_keys($params)) . ')', $params), 'slug');
+        $missing = array_values(array_diff($slugs, $found));
+        if ($missing !== []) {
+            ProvCatalog::notFound('Unknown stack(s): ' . implode(', ', $missing) . '.');
+        }
+    };
+
+    $router->post("$P/image-refresh", static function () use ($imageGet): void {
+        $op = Operator::requireOperator();
+        $idem = ProvCatalog::idemKey();
+        $b = ProvCatalog::body(['image'], 4096);
+        $image = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'image'), 'image');
+        if ($imageGet($image) === null) {
+            ProvCatalog::notFound('Image not found.');
+        }
+        $args = ['image' => (string) $image];
+        $reply = SolariCtl::callQueued('IMAGE_REFRESH', $args, $op, $idem);
+        Response::ok(ProvCatalog::queuedOut(['image' => $image], $reply));
+    });
+
+    $router->post("$P/stage", static function () use ($imageGet, $liveEntity, $liveStacks): void {
+        $op = Operator::requireOperator();
+        $idem = ProvCatalog::idemKey();
+        $b = ProvCatalog::body(['entity', 'image', 'stacks'], 16384);
+        $entity = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'entity'), 'entity');
+        $image  = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'image'), 'image');
+        $stacks = ProvCatalog::stackList(ProvCatalog::requireKey($b, 'stacks'));
+        $liveEntity($entity);
+        if ((int) ProvCatalog::scalar('SELECT COUNT(*) AS n FROM interfaces
+                WHERE entity_id = :id AND deleted_at IS NULL AND mac IS NOT NULL', [':id' => $entity]) === 0) {
+            ProvCatalog::conflict('Entity has no live interface with a MAC address; it cannot be netbooted.');
+        }
+        $img = $imageGet($image);
+        if ($img === null) {
+            ProvCatalog::notFound('Image not found.');
+        }
+        if ($img['boot_method'] !== 'ipxe') {
+            ProvCatalog::conflict('Only ipxe images can be staged for netboot (this image is '
+                . $img['boot_method'] . ').');
+        }
+        if ($img['sha256'] === null || $img['fetched_at'] === null) {
+            ProvCatalog::conflict('image not fetched — refresh it first');
+        }
+        $liveStacks($stacks);
+        $args = ['entity' => (string) $entity, 'image' => (string) $image, 'stacks' => implode(',', $stacks)];
+        $reply = SolariCtl::callQueued('PROV_STAGE', $args, $op, $idem);
+        Response::ok(ProvCatalog::queuedOut(['entity' => $entity, 'image' => $image, 'stacks' => $stacks], $reply));
+    });
+
+    $router->post("$P/apply", static function () use ($liveEntity, $liveStacks): void {
+        $op = Operator::requireOperator();
+        $idem = ProvCatalog::idemKey();
+        $b = ProvCatalog::body(['entity', 'stacks', 'dry_run'], 16384);
+        $entity = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'entity'), 'entity');
+        $stacks = ProvCatalog::stackList(ProvCatalog::requireKey($b, 'stacks'));
+        if (!array_key_exists('dry_run', $b) || !is_bool($b['dry_run'])) {
+            ProvCatalog::bad('dry_run is required and must be a boolean.');
+        }
+        $dry = $b['dry_run'];
+        $liveEntity($entity);
+        $liveStacks($stacks);
+        $args = ['entity' => (string) $entity, 'stacks' => implode(',', $stacks), 'dryRun' => $dry ? '1' : '0'];
+        $reply = SolariCtl::callQueued('STACK_APPLY', $args, $op, $idem);
+        Response::ok(ProvCatalog::queuedOut(
+            ['entity' => $entity, 'stacks' => $stacks, 'dry_run' => $dry], $reply));
     });
 };
