@@ -52,7 +52,8 @@
     <tr><td>benzene infra (Ansible, nginx:8080, TFTP, iPXE, staged proxyDHCP)</td><td class="ok">installed, non-destructive</td></tr>
     <tr><td>Dashboard → bridge → script → benzene path</td><td class="ok">verified end-to-end (staged install + Pi image)</td></tr>
     <tr><td>Raspberry Pi image build</td><td class="ok">verified (built + served a 3.8 GB Pi OS arm64 image)</td></tr>
-    <tr><td>Live PXE (netboot actually booting machines)</td><td class="warn">STAGED — off until the DHCP switch is flipped (see runbook)</td></tr>
+    <tr><td>Live PXE (netboot actually booting machines)</td><td class="ok">LIVE — UniFi DHCP next-server → benzene (runbook Option B); benzene's proxyDHCP stays disabled by design</td></tr>
+    <tr><td>Images &amp; Stacks (SoR catalog + dashboard screen)</td><td class="ok">built (P1–P4); first bare-metal install through it is P6</td></tr>
     <tr><td>Server unit tests</td><td class="ok">23 / 23</td></tr>
   </table>
 
@@ -76,6 +77,25 @@
                └─ stage per-MAC auto-install (inert until PXE is live)
   GET /api/control/fleet-provision?hostname=…  tails run/provision-&lt;host&gt;.log</pre>
 
+  <h2 id="images-stacks">Images &amp; Stacks (SoR catalog)</h2>
+  <p>OS images and software are SoR rows, not files: <code>prov_images</code> (distro → release → arch, boot method,
+     source + checksum URLs, install template), the <code>prov_software</code> pool (pkg · repo · artifact · build ·
+     script · role, with per-family names, pins, per-arch artifacts, requires/conflicts) and <code>prov_stacks</code>
+     (ordered pool references + stack dependencies; the locked <code>core</code> stack is always included and runs
+     first). Dashboard → <b>Images &amp; Stacks</b> edits all of it through <code>/api/provisioning/*</code> — structured
+     forms, no YAML in the browser — and drives one Deploy per target:</p>
+  <table>
+    <tr><th>Action</th><th>Verb</th><th>Does</th></tr>
+    <tr><td>Update (per image)</td><td><code>IMAGE_REFRESH</code></td><td>re-fetches the image on benzene, verifies every sha256, regenerates <code>boot.ipxe</code></td></tr>
+    <tr><td>Deploy · Reimage</td><td><code>PROV_STAGE</code></td><td>stages the target's MAC against a <b>fetched iPXE</b> image; the chosen stacks apply at first boot</td></tr>
+    <tr><td>Deploy · Apply stacks only</td><td><code>STACK_APPLY</code></td><td>one Ansible run over SSH, no reimage; offered as a check-mode dry-run first</td></tr>
+  </table>
+  <p>Every write is operator-gated and goes through the ctl request queue. Runs are audited in
+     <code>prov_runs</code>, and the screen tails the helper log for each run (<code>GET /api/provisioning/log</code>).
+     Stacks are resolved (closure + order) and rendered to Ansible vars at run time; the screen shows the same run
+     order before you confirm. The old read-only <code>catalog.json</code> / <code>/api/control/fleet-catalog</code>
+     reference data is retired.</p>
+
   <h2>The shared software stack (identical everywhere)</h2>
   <p>One logical package set in <code>deploy/fleet/ansible/group_vars/all.yml</code>
      (<code>solari_core_packages</code>) is applied on every distro and arch; a small
@@ -83,7 +103,8 @@
      families. Core set: <span class="mono-sm">sudo curl wget ca-certificates gnupg htop tmux git vim rsync jq
      unzip lsof chrony python3 net-tools openssh-server</span> + the SolariNet agent. The same list feeds the
      netboot unattended installs (<code>@@PACKAGES@@</code>) and the Pi image build, so a machine looks the
-     same however it was provisioned.</p>
+     same however it was provisioned. (This is the legacy <b>OS install</b> path; the Images &amp; Stacks path
+     takes its packages from the SoR <code>core</code> stack instead.)</p>
 
   <h2>What lives on benzene</h2>
   <table>
@@ -99,16 +120,16 @@
     — the provisioning stack runs alongside them, and its PXE responder is a <em>separate</em> dnsmasq bound to
     <code>eno1</code>, never the libvirt one.</div>
 
-  <h2 id="runbook">Go-live runbook (Saturday) — activating live netboot</h2>
-  <p>Everything above is staged and inert. Bare-metal machines only netboot once DHCP tells them where the boot
-     server is. Pick <b>one</b> of these; both coexist with the existing gateway DHCP.</p>
+  <h2 id="runbook">Netboot activation runbook (done — Option B is live)</h2>
+  <p>Kept for reference / re-activation. Bare-metal machines only netboot once DHCP tells them where the boot
+     server is. Use <b>one</b> of these; both coexist with the existing gateway DHCP. The live network uses Option B.</p>
 
   <h3>Option A — proxyDHCP on benzene (self-contained, reversible)</h3>
   <p>A dedicated dnsmasq in <em>proxy</em> mode answers only PXE boot requests; it never hands out IP leases, so
      it does not conflict with the gateway's DHCP.</p>
   <p>First make sure every installer you intend to boot is <b>fetched and verified</b>: run the operator-gated <code>IMAGE_REFRESH</code> verb for each iPXE image row
-     (<code>POST /api/provisioning/image-refresh {"image": &lt;id&gt;}</code>; a dashboard control lands with a later
-     provisioning phase). It downloads
+     (the image row's <b>Update</b> button in Images &amp; Stacks, i.e.
+     <code>POST /api/provisioning/image-refresh {"image": &lt;id&gt;}</code>). It downloads
      the kernel/initrd on benzene, checks every sha256 against the upstream checksum source, writes
      <code>solari-image.json</code>, and regenerates <code>boot.ipxe</code>. <code>fetch-images.sh</code> is now only
      the internal worker of that verb — it has no built-in URL list and no <code>--distro all</code> mode.</p>
@@ -127,8 +148,7 @@
   Filename (UEFI arm64): snp-arm64.efi
 # iPXE then chains to  http://10.5.2.50:8080/ipxe/boot.ipxe</pre>
   <div class="gap"><strong>Network-safety note.</strong> Do not run a second full DHCP <em>server</em> on the flat
-    10.0.0.0/8 — only proxyDHCP (Option A) or the existing UniFi scope (Option B). The user asked to keep the
-    live network undisturbed until Saturday; nothing in tonight's deploy touches DHCP.</div>
+    10.0.0.0/8 — only proxyDHCP (Option A) or the existing UniFi scope (Option B). </div>
 
   <h2>Provisioning flows</h2>
   <h3>Bare-metal x86 (Debian / Ubuntu / openSUSE)</h3>
@@ -165,8 +185,8 @@
 
   <h2>Outstanding / follow-ups</h2>
   <ul>
-    <li><b>Flip PXE live</b> Saturday via the runbook, then boot a real target to validate an unattended install
-        end-to-end (only the final bare-metal wipe step is untested — it needs real hardware set to netboot).</li>
+    <li>Boot a real target through Images &amp; Stacks to validate an unattended install end-to-end (P6: steel →
+        openSUSE Tumbleweed + core). The final bare-metal wipe step is still untested on hardware.</li>
     <li>Installer source/checksum URLs live on each <code>prov_images</code> row and may need adjusting as releases move; a failed checksum makes <code>IMAGE_REFRESH</code> refuse, leaving
         the previous image in place.</li>
     <li>arm64 <em>non-Pi</em> netboot installers, and arm32/mips static agent builds, are future work
@@ -174,8 +194,8 @@
     <li>Enrollment auto-delivery hardening (one-time token) as noted above.</li>
   </ul>
 
-  <p class="footer">SolariNet Fleet Provisioning — generated 2026-06-26. Infrastructure staged non-destructively;
-     live PXE awaits the Saturday go-live. Ansible + dashboard + Pi imaging verified end-to-end.</p>
+  <p class="footer">SolariNet Fleet Provisioning — generated 2026-06-26, updated 2026-10-31 (netboot live;
+     Images &amp; Stacks catalog + screen). Ansible + dashboard + Pi imaging verified end-to-end.</p>
 </div>
 </body>
 </html>

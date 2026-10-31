@@ -1290,7 +1290,7 @@ which capabilities are deliberately switched off.</p>
 <h2 id="s10-1">10.1 &nbsp; Deployment layout</h2>
 <dl class="kv">
 <dt>deploy/host-configs/</dt><dd>Per-host systemd units and Apache vhosts (e.g. <span class="m">xenon/solarinet-server.service</span>, <span class="m">apache-solarinet.conf</span>). Units are hardened (namespacing, restricted syscalls).</dd>
-<dt>deploy/fleet/</dt><dd>Ansible inventory + a netboot <span class="m">catalog.json</span>. The netboot HTTP service on <span class="m">benzene:8080</span> is staged and inert — see freeze below.</dd>
+<dt>deploy/fleet/</dt><dd>Ansible inventory, netboot configs and the stack generator. Image/software catalog data lives in the SoR (<span class="m">prov_*</span>); the netboot HTTP service on <span class="m">benzene:8080</span> is live.</dd>
 <dt>deploy/dns-bare/, netdb/</dt><dd>Zone generation from the SoT: <span class="m">gen-zones.py</span> renders <span class="m">akoria.net</span>; <span class="m">sync-net-to-org.py</span> mirrors into the AD realm hourly; <span class="m">gen-bare.py</span> produces the ~100 split-horizon per-host zones.</dd>
 <dt>deploy/sorsync/</dt><dd>The CDC units — <span class="m">sor-emit</span>, <span class="m">sor-apply-dns</span>, <span class="m">sor-apply-pihole</span>, <span class="m">sor-reconcile</span> — running on xenon.</dd>
 <dt>status-panel/</dt><dd>The Galactic Unicorn firmware, shared USB/TLS wire protocol, and lithium daemon. The subproject’s <a href="panel/SolariNet_Panel_Developer_Reference.html">developer reference</a> covers its module boundaries and test workflow; operator behavior is in the <a href="panel/SolariNet_Panel_Users_Guide.html">panel user guide</a>.</dd>
