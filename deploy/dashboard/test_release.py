@@ -27,6 +27,7 @@ HELPER_ENTRYPOINTS = (
     "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
     "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
     "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
+    "deploy/fleet/prov-finish.py",
 )
 PACKAGER_SPEC = importlib.util.spec_from_file_location("dashboard_package_release", PACKAGER)
 assert PACKAGER_SPEC and PACKAGER_SPEC.loader

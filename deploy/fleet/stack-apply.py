@@ -163,14 +163,21 @@ def _err_tail(proc: subprocess.CompletedProcess) -> str:
     return lines[-1][:160] if lines else f"exit {proc.returncode}"
 
 
-def probe_facts(ansible_dir: str, fqdn: str) -> tuple[str, str]:
+def _login(user: str | None) -> list[str]:
+    return ["-u", user] if user else []
+
+
+def probe_facts(ansible_dir: str, fqdn: str, *, user: str | None = None,
+                extra_env: tuple[str, ...] = ()) -> tuple[str, str]:
     # ANSIBLE_LOAD_CALLBACK_PLUGINS=0 + result_format=json pin ad-hoc output to
     # the built-in `host | SUCCESS => {...}` form whatever ansible.cfg says
     # (it sets callback_result_format=yaml; the `json` callback left
-    # ansible-core for ansible.posix, so it is not assumed).
-    argv = ["env", "-C", ansible_dir, "ANSIBLE_LOAD_CALLBACK_PLUGINS=0",
+    # ansible-core for ansible.posix, so it is not assumed). user/extra_env
+    # (KEY=VALUE) let prov-finish.py log in as the fresh host's admin with a
+    # pinned known_hosts file; STACK_APPLY passes neither.
+    argv = ["env", "-C", ansible_dir, *extra_env, "ANSIBLE_LOAD_CALLBACK_PLUGINS=0",
             "ANSIBLE_CALLBACK_RESULT_FORMAT=json",
-            "ansible", "all", "-i", f"{fqdn},", "-m", "ansible.builtin.setup",
+            "ansible", "all", "-i", f"{fqdn},", *_login(user), "-m", "ansible.builtin.setup",
             "-a", "filter=ansible_os_family,ansible_architecture"]
     proc = provlib.remote_run(argv, check=False, timeout=FACT_TIMEOUT)
     if proc.returncode != 0:
@@ -203,15 +210,17 @@ def render_stacks(family: str, arch: str, slugs: list[str], out_path: str) -> li
     return order
 
 
-def playbook(ansible_dir: str, fqdn: str, vars_path: str, check: bool) -> bool:
+def playbook(ansible_dir: str, fqdn: str, vars_path: str, check: bool, *,
+             user: str | None = None, extra_env: tuple[str, ...] = ()) -> bool:
     # Pin the built-in callback (ansible.cfg's choice too) so a stale cfg on
     # the control node naming the removed `yaml` callback cannot abort the run.
-    argv = ["env", "-C", ansible_dir, "ANSIBLE_STDOUT_CALLBACK=ansible.builtin.default",
-            "ansible-playbook", "-i", f"{fqdn},",
+    argv = ["env", "-C", ansible_dir, *extra_env, "ANSIBLE_STDOUT_CALLBACK=ansible.builtin.default",
+            "ansible-playbook", "-i", f"{fqdn},", *_login(user),
             "playbooks/site.yml", "--tags", "stack", "-e", f"@{vars_path}"]
     if check:
         argv += ["--check", "--diff"]
-    log(("check pass: " if check else "apply pass: ") + " ".join(argv[4:]))
+    log(("check pass: " if check else "apply pass: ")
+        + " ".join(argv[argv.index("ansible-playbook") + 1:]))
     proc = provlib.remote_run(argv, check=False,
                               timeout=CHECK_TIMEOUT if check else APPLY_TIMEOUT)
     sys.stdout.write(_out(proc))

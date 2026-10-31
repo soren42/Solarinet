@@ -195,7 +195,7 @@ jobs:
       - name: Install exercised sync dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y mariadb-client bind9 bind9-utils python3-venv
+          sudo apt-get install -y mariadb-client bind9 bind9-utils python3-venv python3-yaml
           python3 -m venv /tmp/sorsync-ci
           /tmp/sorsync-ci/bin/pip install -r deploy/sorsync/requirements.txt
       - name: Apply SoR migrations to the disposable integration database
@@ -257,7 +257,9 @@ jobs:
           STACKGEN_TEST_USER_HOST: '%'
           IMAGE_REFRESH_REQUIRE_DB: '1'
         run: python3 tests/deploy/test_image_refresh.py
-      - name: PROV_STAGE / STACK_APPLY helpers (prov_runs lifecycle, F-07 gate, faked ansible)
+      - name: Rendered install profiles (AutoYaST XML one package per name, preseed, autoinstall)
+        run: python3 tests/deploy/test_install_profiles.py
+      - name: PROV_STAGE / STACK_APPLY / prov-finish helpers (prov_runs lifecycle, F-07 gate, faked ansible)
         env:
           SOLARI_TEST_SOR_DB: '1'
           MYSQL_HOST: 127.0.0.1
