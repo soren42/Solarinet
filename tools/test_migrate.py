@@ -242,5 +242,28 @@ class MigrationPreflightTests(unittest.TestCase):
             self.assertEqual(2, len(calls))
 
 
+class IsolatedModeTests(unittest.TestCase):
+    """Operators run these tools as `python3 -I tools/<x>.py` on hosts."""
+
+    def test_tools_import_their_siblings_under_isolated_mode(self) -> None:
+        import subprocess
+        import sys
+        tools = pathlib.Path(__file__).resolve().parent
+        for tool in ("audit_schema.py", "export_schema.py", "migrate.py"):
+            with self.subTest(tool=tool):
+                result = subprocess.run([sys.executable, "-I", str(tools / tool), "--help"],
+                                        cwd="/", capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        # --verify-live imports the auditor lazily; prove that path, not just --help
+        probe = ("import importlib.util, sys\n"
+                 f"spec = importlib.util.spec_from_file_location('m', {str(tools / 'migrate.py')!r})\n"
+                 "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+                 "print(m.loadAudit().__module__)\n")
+        result = subprocess.run([sys.executable, "-I", "-c", probe], cwd="/",
+                                capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "audit_schema"),
+                         result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -168,6 +168,16 @@ def migrate(args):
         print(f"APPLIED {fileId} {checksum[:12]}")
 
 
+def loadAudit():
+    """Import the sibling auditor by this file's directory, so --verify-live
+    also works under `python3 -I` (no script directory on sys.path)."""
+    tools = str(pathlib.Path(__file__).resolve().parent)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    from audit_schema import audit
+    return audit
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", choices=["monitoring", "sor"], required=True)
@@ -188,8 +198,7 @@ def main():
             args.check = True
         migrate(args)
         if args.verifyLive:
-            from audit_schema import audit
-            if not audit(args):
+            if not loadAudit()(args):
                 return 1
     except (OSError, RuntimeError, ValueError) as error:
         print(f"migration blocked: {error}", file=sys.stderr)
