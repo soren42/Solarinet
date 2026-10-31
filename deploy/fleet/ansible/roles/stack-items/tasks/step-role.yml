@@ -1,0 +1,4 @@
+---
+- name: Run stack role {{ solari_stack_roles[solari_step.index] }}
+  ansible.builtin.include_role:
+    name: "{{ solari_stack_roles[solari_step.index] }}"

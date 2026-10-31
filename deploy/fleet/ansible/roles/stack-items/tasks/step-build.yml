@@ -1,0 +1,90 @@
+# Source build from a pinned git ref or a sha256-pinned tarball. Build deps
+# were already installed by the preceding pkg step (the generator inserts it).
+---
+- name: Select build
+  ansible.builtin.set_fact:
+    solari_bld: "{{ solari_stack_builds[solari_step.index] }}"
+    solari_guard: "{{ solari_stack_builds[solari_step.index] }}"
+    solari_guard_user: root
+    solari_bld_dir: "{{ solari_stack_work_root }}/build/{{ solari_stack_builds[solari_step.index].id }}/{{ solari_stack_builds[solari_step.index].version }}"
+
+- name: Check whether {{ solari_bld.name }} is already built
+  ansible.builtin.include_tasks: guard.yml
+
+- name: Build {{ solari_bld.name }} {{ solari_bld.version }}
+  when: not (solari_guard_done | bool)
+  block:
+    - name: Create build directory
+      ansible.builtin.file:
+        path: "{{ solari_bld_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Fetch source at pinned ref
+      ansible.builtin.git:
+        repo: "{{ solari_bld.source.git }}"
+        dest: "{{ solari_bld_dir }}/src"
+        version: "{{ solari_bld.source.ref }}"
+        force: true
+      when: solari_bld.source.git is not none
+
+    - name: Fetch and unpack sha256-pinned source tarball
+      when: solari_bld.source.tarball is not none
+      block:
+        - name: Download source tarball
+          ansible.builtin.get_url:
+            url: "{{ solari_bld.source.tarball }}"
+            dest: "{{ solari_bld_dir }}/{{ solari_bld.source.tarball | urlsplit('path') | basename }}"
+            checksum: "sha256:{{ solari_bld.source.sha256 }}"
+            mode: "0644"
+          register: solari_bld_tar
+        - name: Create source directory
+          ansible.builtin.file:
+            path: "{{ solari_bld_dir }}/src"
+            state: directory
+            mode: "0755"
+        - name: Unpack source tarball
+          ansible.builtin.unarchive:
+            src: "{{ solari_bld_tar.dest }}"
+            dest: "{{ solari_bld_dir }}/src"
+            remote_src: true
+            extra_opts: [--strip-components=1]
+
+    - name: Compile and install ({{ solari_bld.system }})
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          {% set p = solari_bld.prefix | quote %}
+          {% set a = solari_bld.configure_args | map('quote') | join(' ') %}
+          {% if solari_bld.system == 'cmake' %}
+          cmake -S . -B _solari_build -DCMAKE_INSTALL_PREFIX={{ p }} {{ a }}
+          cmake --build _solari_build
+          cmake --install _solari_build
+          {% elif solari_bld.system == 'meson' %}
+          meson setup _solari_build --prefix={{ p }} {{ a }}
+          meson compile -C _solari_build
+          meson install -C _solari_build
+          {% elif solari_bld.system == 'autotools' %}
+          [ -x ./configure ] || autoreconf -fi
+          ./configure --prefix={{ p }} {{ a }}
+          make
+          make install
+          {% elif solari_bld.system == 'make' %}
+          make PREFIX={{ p }} {{ a }}
+          make PREFIX={{ p }} install
+          {% else %}
+          {{ solari_bld.commands }}
+          {% endif %}
+        chdir: "{{ solari_bld_dir }}/src"
+        executable: /bin/sh
+      environment: "{{ solari_bld.env | combine({'PREFIX': solari_bld.prefix}) }}"
+      changed_when: true
+
+    - name: Re-check {{ solari_bld.name }} after building
+      ansible.builtin.include_tasks: guard.yml
+
+    - name: Assert {{ solari_bld.name }} converged
+      ansible.builtin.assert:
+        that: solari_guard_done | bool
+        fail_msg: "{{ solari_bld.name }} built but its creates/check guard is still unsatisfied"
+        quiet: true

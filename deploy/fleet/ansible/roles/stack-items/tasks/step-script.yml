@@ -1,0 +1,52 @@
+# Install script: inline body from the SoR, or a remote URL fetched with its
+# pinned sha256 (the generator refuses an unpinned remote). Runs only when the
+# guard says not installed, then re-checks the guard so a script that "ran"
+# without converging fails loudly.
+---
+- name: Select script
+  ansible.builtin.set_fact:
+    solari_scr: "{{ solari_stack_scripts[solari_step.index] }}"
+    solari_guard: "{{ solari_stack_scripts[solari_step.index] }}"
+    solari_guard_user: "{{ solari_stack_admin_user if solari_stack_scripts[solari_step.index].run_as == 'admin' else 'root' }}"
+    solari_scr_path: "{{ solari_stack_work_root }}/scripts/{{ solari_stack_scripts[solari_step.index].id }}.sh"
+
+- name: Check whether {{ solari_scr.name }} is already installed
+  ansible.builtin.include_tasks: guard.yml
+
+- name: Run {{ solari_scr.name }}
+  when: not (solari_guard_done | bool)
+  block:
+    - name: Stage inline script {{ solari_scr.name }}
+      ansible.builtin.copy:
+        content: "{{ solari_scr.body }}\n"
+        dest: "{{ solari_scr_path }}"
+        owner: "{{ solari_guard_user }}"
+        mode: "0700"
+      when: solari_scr.body is not none
+
+    - name: Fetch pinned remote script {{ solari_scr.name }}
+      ansible.builtin.get_url:
+        url: "{{ solari_scr.url }}"
+        dest: "{{ solari_scr_path }}"
+        checksum: "sha256:{{ solari_scr.sha256 }}"
+        owner: "{{ solari_guard_user }}"
+        mode: "0700"
+        force: true
+      when: solari_scr.url is not none
+
+    - name: Execute {{ solari_scr.name }} as {{ solari_guard_user }}
+      ansible.builtin.command:
+        argv: ["{{ solari_scr.interpreter }}", "{{ solari_scr_path }}"]
+      become: true
+      become_user: "{{ solari_guard_user }}"
+      environment: "{{ solari_scr.env }}"
+      changed_when: true
+
+    - name: Re-check {{ solari_scr.name }} after running
+      ansible.builtin.include_tasks: guard.yml
+
+    - name: Assert {{ solari_scr.name }} converged
+      ansible.builtin.assert:
+        that: solari_guard_done | bool
+        fail_msg: "{{ solari_scr.name }} ran but its creates/check guard is still unsatisfied"
+        quiet: true

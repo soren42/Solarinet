@@ -1,0 +1,28 @@
+# Pinned upstream download: get_url refuses anything whose sha256 differs.
+---
+- name: Select artifact
+  ansible.builtin.set_fact:
+    solari_art: "{{ solari_stack_artifacts[solari_step.index] }}"
+    solari_art_dir: "{{ solari_stack_artifact_root }}/{{ solari_stack_artifacts[solari_step.index].id }}/{{ solari_stack_artifacts[solari_step.index].version }}"
+
+- name: Create artifact directory for {{ solari_art.name }}
+  ansible.builtin.file:
+    path: "{{ solari_art_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Download {{ solari_art.name }} {{ solari_art.version }} (sha256-pinned)
+  ansible.builtin.get_url:
+    url: "{{ solari_art.url }}"
+    dest: "{{ solari_art_dir }}/{{ solari_art.url | urlsplit('path') | basename }}"
+    checksum: "sha256:{{ solari_art.sha256 }}"
+    mode: "0644"
+  register: solari_art_dl
+
+- name: Extract {{ solari_art.name }}
+  ansible.builtin.unarchive:
+    src: "{{ solari_art_dl.dest }}"
+    dest: "{{ solari_art_dir }}"
+    remote_src: true
+    creates: "{{ solari_art.creates | default(omit, true) }}"
+  when: solari_art.extract | bool

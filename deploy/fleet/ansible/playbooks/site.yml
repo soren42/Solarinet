@@ -2,7 +2,9 @@
 #
 # Runs the roles in strict order against a target:
 #   base-os          -> identity, users, sshd, time, journald (host is "ours")
-#   common-stack     -> the identical logical package set (name-mapped per family)
+#   common-stack     -> the identical logical package set (name-mapped per family),
+#                       or, given a stackgen render (-e @<host>.stack.json), the
+#                       SoR stacks via the stack-items role
 #   directory-join   -> enroll into Active Directory (AKORIA.ORG) for SSO  [opt-in]
 #   solarinet-client -> install + enroll + supervise the monitoring agent
 #
@@ -24,7 +26,10 @@
       tags: [stack]
     - role: dev-tools
       tags: [devtools, tools]
-      when: solari_devtools_enabled | default(false) | bool
+      # A stack render that already ran dev-tools (stack `dev-tools`) owns it.
+      when: >-
+        solari_devtools_enabled | default(false) | bool
+        and 'dev-tools' not in (solari_stack_roles | default([]))
     - role: directory-join
       tags: [ad, directory]
       when: solari_ad_enabled | default(false) | bool

@@ -1,0 +1,5 @@
+---
+- name: Install stack packages
+  ansible.builtin.package:
+    name: "{{ solari_step.packages }}"
+    state: present
