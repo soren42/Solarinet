@@ -164,10 +164,12 @@ def _err_tail(proc: subprocess.CompletedProcess) -> str:
 
 
 def probe_facts(ansible_dir: str, fqdn: str) -> tuple[str, str]:
-    # ANSIBLE_LOAD_CALLBACK_PLUGINS=0 pins ad-hoc output to the built-in
-    # `host | SUCCESS => {...}` form whatever ansible.cfg's stdout_callback says
-    # (the `json` callback left ansible-core for ansible.posix; not assumed).
+    # ANSIBLE_LOAD_CALLBACK_PLUGINS=0 + result_format=json pin ad-hoc output to
+    # the built-in `host | SUCCESS => {...}` form whatever ansible.cfg says
+    # (it sets callback_result_format=yaml; the `json` callback left
+    # ansible-core for ansible.posix, so it is not assumed).
     argv = ["env", "-C", ansible_dir, "ANSIBLE_LOAD_CALLBACK_PLUGINS=0",
+            "ANSIBLE_CALLBACK_RESULT_FORMAT=json",
             "ansible", "all", "-i", f"{fqdn},", "-m", "ansible.builtin.setup",
             "-a", "filter=ansible_os_family,ansible_architecture"]
     proc = provlib.remote_run(argv, check=False, timeout=FACT_TIMEOUT)
@@ -202,9 +204,8 @@ def render_stacks(family: str, arch: str, slugs: list[str], out_path: str) -> li
 
 
 def playbook(ansible_dir: str, fqdn: str, vars_path: str, check: bool) -> bool:
-    # ansible.cfg sets stdout_callback = yaml, which ansible-core no longer
-    # ships (community.general); pin the built-in callback so a missing
-    # collection cannot abort the run before it starts.
+    # Pin the built-in callback (ansible.cfg's choice too) so a stale cfg on
+    # the control node naming the removed `yaml` callback cannot abort the run.
     argv = ["env", "-C", ansible_dir, "ANSIBLE_STDOUT_CALLBACK=ansible.builtin.default",
             "ansible-playbook", "-i", f"{fqdn},",
             "playbooks/site.yml", "--tags", "stack", "-e", f"@{vars_path}"]

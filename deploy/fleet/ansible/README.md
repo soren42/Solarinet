@@ -30,7 +30,7 @@ playbook runs unmodified on x86_64, arm64, and arm32.
 
 ```
 deploy/fleet/ansible/
-├── ansible.cfg                 # inventory path, no host-key checking, yaml output, pipelining
+├── ansible.cfg                 # inventory path, no host-key checking, YAML results (builtin default callback), pipelining
 ├── inventory/hosts.yml         # example inventory: family groups + role groups + dashboard example
 ├── group_vars/all.yml          # THE shared contract: core packages, pkg map, base config, enroll vars
 ├── playbooks/site.yml          # base-os -> common-stack -> solarinet-client

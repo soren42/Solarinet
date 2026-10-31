@@ -169,7 +169,8 @@ def runs(entity: str, mode: str | None = None) -> list[dict]:
 FAKE_ANSIBLE = r'''#!__PY__
 import json, os, sys
 rec = {"tool": "ansible", "argv": sys.argv[1:], "cwd": os.getcwd(),
-       "load_cb": os.environ.get("ANSIBLE_LOAD_CALLBACK_PLUGINS")}
+       "load_cb": os.environ.get("ANSIBLE_LOAD_CALLBACK_PLUGINS"),
+       "result_fmt": os.environ.get("ANSIBLE_CALLBACK_RESULT_FORMAT")}
 with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps(rec) + "\n")
 host = sys.argv[sys.argv.index("-i") + 1].rstrip(",")
@@ -469,6 +470,7 @@ class StackApply(Base):
                                             "filter=ansible_os_family,ansible_architecture"])
         self.assertEqual(facts[0]["cwd"], os.path.join(self.prov_root, "ansible"))
         self.assertEqual(facts[0]["load_cb"], "0")
+        self.assertEqual(facts[0]["result_fmt"], "json")   # cfg says yaml
         pbs = self.calls("ansible-playbook")
         self.assertEqual([c["argv"] for c in pbs],
                          [self.expected_pb(run["id"], True), self.expected_pb(run["id"], False)])
@@ -579,6 +581,22 @@ class FactMapMirror(unittest.TestCase):
         spec.loader.exec_module(mod)
         self.assertEqual(mod.FAMILY_MAP, maps["solari_stack_family_map"])
         self.assertEqual(mod.ARCH_MAP, maps["solari_stack_arch_map"])
+
+
+class AnsibleCfg(unittest.TestCase):
+    """ansible.cfg must not name a callback ansible-core no longer ships."""
+
+    def test_stdout_callback_is_builtin(self):
+        import configparser
+        cfg = configparser.ConfigParser(inline_comment_prefixes=None)
+        cfg.read(os.path.join(FLEET, "ansible", "ansible.cfg"), encoding="utf-8")
+        d = cfg["defaults"]
+        # `yaml` left ansible-core (community.general) and aborts every
+        # ansible-playbook run with "Could not load 'yaml' callback plugin".
+        self.assertEqual(d.get("stdout_callback"), "ansible.builtin.default")
+        self.assertEqual(d.get("callback_result_format"), "yaml")
+        for cb in (c.strip() for c in d.get("callbacks_enabled", "").split(",")):
+            self.assertFalse(cb.startswith("ansible.builtin.") or cb in {"yaml", "json"}, cb)
 
 
 def main() -> int:
