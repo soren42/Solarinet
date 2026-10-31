@@ -303,7 +303,6 @@
     decommission: "/api/control/decommission",
     survey:       "/api/control/survey",
     deploy:       "/api/control/deploy",
-    fleetCatalog: "/api/control/fleet-catalog",
     fleetProvision: "/api/control/fleet-provision",
     image:        "/api/control/fleet-image",
     login:        "/api/auth/login",
@@ -325,6 +324,16 @@
     dnsZoneRecords: "/api/dns/zones",    // + "/{id}/records?..." (read-only browser)
     dnsHosts:       "/api/dns/hosts",    // next-render preview (hosts/ifaces/cnames)
     dnsRpz:         "/api/dns/rpz",      // standalone RPZ status (future use)
+
+    // ---- provisioning catalog (SoR migration 029; routes/provisioning.php) ----
+    // Images / software pool / stacks CRUD + the operator-gated enqueue verbs
+    // (IMAGE_REFRESH / PROV_STAGE / STACK_APPLY via the ctl request queue).
+    prov:         "/api/provisioning",
+    provPath:     function () {
+      return "/api/provisioning/" + Array.prototype.map.call(arguments, function (seg) {
+        return encodeURIComponent(String(seg));
+      }).join("/");
+    },
 
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // bounded legacy aggregate; browser adapter reads pages below
@@ -1181,7 +1190,6 @@
     deployClient: function (body) { return post(EP.deploy, body || {}); },
     deployLog: function (host) { return getJSON(EP.deploy + "?host=" + encodeURIComponent(host)); },
     // fleet provisioning (bare-metal OS install + Pi imaging), server-side via bridge
-    fleetCatalog: function () { return getJSON(EP.fleetCatalog); },
     fleetProvision: function (body) { return post(EP.fleetProvision, body || {}); },
     buildImage: function (body) { return post(EP.image, body || {}); },
     provisionLog: function (hostname, isImage) {
@@ -1192,6 +1200,43 @@
 
     // survey (already in base §11.2)
     survey: function (scope) { return post(EP.survey, { scope: scope || "all" }); },
+
+    // ---- provisioning catalog (SoR migration 029) ----
+    // Reads are session-only; writes are operator + CSRF (server-enforced).
+    // Enqueue verbs carry an Idempotency-Key so a retried click cannot
+    // double-queue a destructive run; the caller keeps the key for retries.
+    provImages:      function () { return getJSON(EP.provPath("images")); },
+    provImageCreate: function (body) { return post(EP.provPath("images"), body || {}); },
+    provImageUpdate: function (id, body) { return getJSON(EP.provPath("images", id), { method: "PUT", body: body || {} }); },
+    provImageDelete: function (id) { return getJSON(EP.provPath("images", id), { method: "DELETE" }); },
+    provSoftware:    function (type) { return getJSON(EP.provPath("software") + (type ? "?type=" + encodeURIComponent(type) : "")); },
+    provSoftwareGet: function (id) { return getJSON(EP.provPath("software", id)); },
+    provSoftwareCreate: function (body) { return post(EP.provPath("software"), body || {}); },
+    provSoftwareUpdate: function (id, body) { return getJSON(EP.provPath("software", id), { method: "PUT", body: body || {} }); },
+    provSoftwareDelete: function (id) { return getJSON(EP.provPath("software", id), { method: "DELETE" }); },
+    provArtifactAdd: function (id, body) { return post(EP.provPath("software", id, "artifacts"), body || {}); },
+    provArtifactDelete: function (id, artifactId) { return getJSON(EP.provPath("software", id, "artifacts", artifactId), { method: "DELETE" }); },
+    provRequireAdd:  function (id, reqId, notes) { return post(EP.provPath("software", id, "requires"), { requires_software_id: Number(reqId), notes: notes || null }); },
+    provRequireDelete: function (id, reqId) { return getJSON(EP.provPath("software", id, "requires", reqId), { method: "DELETE" }); },
+    provConflictAdd: function (id, otherId, notes) { return post(EP.provPath("software", id, "conflicts"), { software_id: Number(otherId), notes: notes || null }); },
+    provConflictDelete: function (id, otherId) { return getJSON(EP.provPath("software", id, "conflicts", otherId), { method: "DELETE" }); },
+    provStacks:      function () { return getJSON(EP.provPath("stacks")); },
+    provStackGet:    function (id) { return getJSON(EP.provPath("stacks", id)); },
+    provStackCreate: function (body) { return post(EP.provPath("stacks"), body || {}); },
+    provStackUpdate: function (id, body) { return getJSON(EP.provPath("stacks", id), { method: "PUT", body: body || {} }); },
+    provStackDelete: function (id) { return getJSON(EP.provPath("stacks", id), { method: "DELETE" }); },
+    provMemberAdd:   function (id, body) { return post(EP.provPath("stacks", id, "members"), body || {}); },
+    provMemberUpdate: function (id, swId, body) { return getJSON(EP.provPath("stacks", id, "members", swId), { method: "PUT", body: body || {} }); },
+    provMemberDelete: function (id, swId) { return getJSON(EP.provPath("stacks", id, "members", swId), { method: "DELETE" }); },
+    provDepAdd:      function (id, onId) { return post(EP.provPath("stacks", id, "deps"), { depends_on_stack_id: Number(onId) }); },
+    provDepDelete:   function (id, onId) { return getJSON(EP.provPath("stacks", id, "deps", onId), { method: "DELETE" }); },
+    provTargets:     function () { return getJSON(EP.provPath("targets")); },
+    provRuns:        function (qs) { return getJSON(EP.provPath("runs") + (qs || "")); },
+    provLog:         function (kind, id) { return getJSON(EP.provPath("log") + "?kind=" + encodeURIComponent(kind) + "&id=" + encodeURIComponent(id)); },
+    provIdemKey:     function () { return "prov-" + newDiscoveryScanKey().slice(5); },
+    provImageRefresh: function (imageId, key) { return post(EP.provPath("image-refresh"), { image: Number(imageId) }, key ? { "Idempotency-Key": key } : {}); },
+    provStage:       function (body, key) { return post(EP.provPath("stage"), body || {}, key ? { "Idempotency-Key": key } : {}); },
+    provApply:       function (body, key) { return post(EP.provPath("apply"), body || {}, key ? { "Idempotency-Key": key } : {}); },
 
     // ---- inventory (SoR migration 014) ----
     // Combined read → {models,units,locations,receipts,projects,allocations}.

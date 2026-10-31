@@ -66,7 +66,19 @@
     project: <><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M3 9h18M8 4v5" stroke="currentColor" strokeWidth="1.6"/><rect x="6.5" y="12" width="4" height="4" rx="1" fill="currentColor"/></>,
     cart: <><circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/><path d="M2 3h3l2.2 12h10.3l1.8-8H6.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
     tag2: <><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="7.5" cy="7.5" r="1.6"/></>,
+    // provisioning — Images & Stacks screen (stroke glyphs from the approved mockup)
+    layers: <><path d="M12 3l9 5-9 5-9-5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M3 13l9 5 9-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></>,
+    edit: <><path d="M4 20h4L19 9l-4-4L4 16z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M13.5 6.5l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></>,
+    trash: <><path d="M4 7h16M9 7V4h6v3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M6 7l1 13h10l1-13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/></>,
+    lock: <><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.9"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="1.9"/></>,
+    chev: <><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
+    deploy: <><path d="M5 12h12M12 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
+    target: <><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.9"/></>,
+    boot: <><rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M8 20h8M12 16v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></>,
+    arrowup: <><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
+    arrowdown: <><path d="M12 5v14M6 13l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></>,
     // git — commit graph (branch + node), Git (Forgejo) nav
+    logs: <><rect x="4" y="3" width="16" height="18" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></>,
     git: <><circle cx="6" cy="6" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="6" cy="18" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><circle cx="18" cy="9" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.9"/><path d="M6 8.6v6.8M8.4 7.2A6 6 0 0 0 15.4 9M15.4 9a6 6 0 0 1-7 1.8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></>,
     // users — Identity (Keycloak realm users) nav
     users: <><circle cx="9" cy="8" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.9"/><path d="M3 20c0-3.6 2.7-6 6-6s6 2.4 6 6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/><circle cx="17" cy="8.5" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.7" opacity="0.7"/><path d="M15 20c.2-2.7 1.9-4.6 4.4-5.1" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" opacity="0.7"/></>,

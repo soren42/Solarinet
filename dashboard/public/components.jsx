@@ -182,6 +182,7 @@
     { id: "rackwire", label: "RackWire", icon: "rackwire" },
     { id: "discovery", label: "Discovery", icon: "discovery", badge: "discovery" },
     { id: "provision", label: "Provisioning", icon: "provision" },
+    { id: "provimages", label: "Images & Stacks", icon: "layers" },
     { id: "maintenance", label: "Maintenance", icon: "maintenance" },
     { id: "git", label: "Git", icon: "git" },
     { id: "certificates", label: "Certificates", icon: "shield" },
