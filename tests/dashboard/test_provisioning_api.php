@@ -143,7 +143,14 @@ $STACK_CORE = ['id' => 1, 'slug' => 'core', 'name' => 'Core', 'description' => n
 $STACK_WEB = ['id' => 3, 'slug' => 'web', 'name' => 'Web', 'description' => null, 'locked' => 0,
     'sort_order' => 100, 'updated_at' => '2026-10-30 12:00:00'];
 $ENTITY_LIVE = ['match' => 'SELECT id FROM entities WHERE id = :id AND deleted_at IS NULL', 'rows' => [['id' => 9]]];
-$HAS_MAC = ['match' => 'FROM interfaces WHERE entity_id = :id AND deleted_at IS NULL AND mac IS NOT NULL', 'rows' => [['n' => 1]]];
+// POST stage: entity + its hardware model (arch precedence) and live MACs.
+$ENT_Q = 'FROM entities e LEFT JOIN hardware_units hu';
+$ENT_ROW = ['id' => 9, 'name' => 'neon', 'hw_model_id' => 3, 'hw_make' => 'Raspberry Pi', 'hw_model' => 'Pi 5',
+    'hw_arch' => 'x86_64'];
+$ENT = static fn (array $over = []) => ['match' => $ENT_Q, 'rows' => [$over + $ENT_ROW]];
+$MACS = ['match' => 'SELECT mac FROM interfaces WHERE entity_id = :id AND deleted_at IS NULL AND mac IS NOT NULL',
+    'rows' => [['mac' => 'aa:bb:cc:00:00:01'], ['mac' => 'AA:BB:CC:00:00:02']]];
+$MAC1 = 'aa:bb:cc:00:00:01';
 $IMG_Q = 'FROM prov_images WHERE id = :id AND deleted_at IS NULL';
 $STACKS_LIVE = static fn (array $slugs) => ['match' => 'FROM prov_stacks WHERE deleted_at IS NULL AND slug IN',
     'rows' => array_map(static fn ($s) => ['slug' => $s], $slugs)];
@@ -215,6 +222,13 @@ $bad = [
     'stage stacks with bad slug' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4, 'stacks' => ['core', 'Web!']], 'stacks'],
     'stage 33 stacks' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4,
         'stacks' => array_map(static fn ($i) => "s$i", range(1, 33))], 'stacks'],
+    'stage mac missing' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4, 'stacks' => ['core']], 'mac'],
+    'stage mac short' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => 'aa:bb:cc:dd:ee'], 'mac'],
+    'stage mac non-hex' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => 'zz:bb:cc:dd:ee:ff'], 'mac'],
+    'stage mac unseparated' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => 'aabbccddeeff'], 'mac'],
+    'stage mac not a string' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => 12], 'mac'],
+    'stage client arch refused' => ['POST', "$P/stage", ['entity' => 9, 'image' => 4, 'stacks' => ['core'],
+        'mac' => 'aa:bb:cc:00:00:01', 'arch' => 'x86_64'], 'Unknown field'],
     'apply stacks not a list' => ['POST', "$P/apply", ['entity' => 9, 'stacks' => 'core', 'dry_run' => true], 'stacks'],
     'apply empty stacks' => ['POST', "$P/apply", ['entity' => 9, 'stacks' => [], 'dry_run' => true], 'stacks'],
     'apply dry_run string' => ['POST', "$P/apply", ['entity' => 9, 'stacks' => ['core'], 'dry_run' => 'yes'], 'dry_run'],
@@ -238,6 +252,8 @@ $r = pv(['path' => "$P/runs", 'query' => 'limit=201']);
 pv_ok($r['status'] === 400 && $r['sql'] === [], 'runs limit=201 -> 400', "status={$r['status']}");
 $r = pv(['path' => "$P/runs", 'query' => 'status=bogus']);
 pv_ok($r['status'] === 400 && $r['sql'] === [], 'runs status=bogus -> 400', "status={$r['status']}");
+$r = pv(['path' => "$P/runs", 'query' => 'image=0']);
+pv_ok($r['status'] === 400 && str_starts_with(pv_msg($r), 'image') && $r['sql'] === [], 'runs image=0 -> 400', "status={$r['status']}");
 
 // ---------------------------------------------------------------------------
 echo "[3] DB error mapping (no SQL text leaked)\n";
@@ -387,6 +403,25 @@ pv_ok($r['status'] === 200 && ($r['body']['data'][0]['stack_slugs'] ?? null) ===
     'GET runs with filters + limit', "status={$r['status']}");
 $r = pv(['path' => "$P/runs/8", 'db' => [['match' => 'FROM prov_runs r', 'rows' => []]]]);
 pv_ok($r['status'] === 404, 'GET missing run -> 404', "status={$r['status']}");
+// 031 refresh runs: image, no entity. Mixed with an old reimage row.
+$runRow = ['id' => '8', 'mode' => 'reimage', 'entity_id' => '9', 'entity_name' => 'neon', 'image_id' => 4,
+    'image_label' => 'debian 13 x86_64', 'stack_slugs' => '["core"]', 'requested_by' => 'tester', 'status' => 'succeeded',
+    'dry_run' => 0, 'detail' => null, 'requested_at' => '2026-10-30 12:00:00', 'started_at' => null, 'finished_at' => null];
+$r = pv(['path' => "$P/runs", 'role' => 'viewer', 'db' => [['match' => 'FROM prov_runs r', 'rows' => [
+    ['id' => '11', 'mode' => 'refresh', 'entity_id' => null, 'entity_name' => null, 'stack_slugs' => '[]',
+     'status' => 'failed', 'detail' => 'checksum mismatch', 'finished_at' => '2026-10-30 12:05:00'] + $runRow,
+    $runRow,
+]]]]);
+$d = $r['body']['data'] ?? [];
+pv_ok($r['status'] === 200 && ($d[0]['mode'] ?? '') === 'refresh' && array_key_exists('entity_id', $d[0] ?? [])
+    && $d[0]['entity_id'] === null && ($d[0]['image_id'] ?? null) === 4 && ($d[0]['image_label'] ?? '') === 'debian 13 x86_64'
+    && ($d[0]['status'] ?? '') === 'failed' && ($d[0]['stack_slugs'] ?? null) === []
+    && ($d[1]['entity_id'] ?? null) === '9' && ($d[1]['mode'] ?? '') === 'reimage',
+    'GET runs: refresh row (entity null, image label) alongside a reimage row', json_encode($d[0] ?? null));
+$r = pv(['path' => "$P/runs", 'query' => 'mode=refresh&image=4', 'db' => [['match' => 'FROM prov_runs r', 'rows' => []]]]);
+$runSql = $r['sql'][0] ?? '';
+pv_ok($r['status'] === 200 && str_contains($runSql, 'r.mode = :mode') && str_contains($runSql, 'r.image_id = :image'),
+    'GET runs ?mode=refresh&image=4 filters by mode + image', "status={$r['status']}");
 
 // ---------------------------------------------------------------------------
 echo "[5a] software list carries live conflict pairs\n";
@@ -405,13 +440,13 @@ echo "[5b] P4 reads: targets + helper log tail\n";
 $TGT_Q = 'FROM entities e JOIN interfaces i';
 $tgtRows = [
     ['id' => 9, 'name' => 'neon', 'entity_type' => 'server', 'lifecycle' => 'active', 'role' => 'compute',
-     'hw_make' => 'Raspberry Pi', 'hw_model' => 'Pi 5', 'hw_type' => 'sbc', 'if_name' => 'eth0',
+     'hw_model_id' => 3, 'hw_make' => 'Raspberry Pi', 'hw_model' => 'Pi 5', 'hw_type' => 'sbc', 'hw_arch' => null, 'if_name' => 'eth0',
      'mac' => 'aa:bb:cc:00:00:01', 'is_management' => 1],
     ['id' => 9, 'name' => 'neon', 'entity_type' => 'server', 'lifecycle' => 'active', 'role' => 'compute',
-     'hw_make' => 'Raspberry Pi', 'hw_model' => 'Pi 5', 'hw_type' => 'sbc', 'if_name' => 'wlan0',
+     'hw_model_id' => 3, 'hw_make' => 'Raspberry Pi', 'hw_model' => 'Pi 5', 'hw_type' => 'sbc', 'hw_arch' => null, 'if_name' => 'wlan0',
      'mac' => 'aa:bb:cc:00:00:02', 'is_management' => 0],
     ['id' => 12, 'name' => 'argon', 'entity_type' => 'vm', 'lifecycle' => 'active', 'role' => null,
-     'hw_make' => null, 'hw_model' => null, 'hw_type' => null, 'if_name' => 'ens18',
+     'hw_model_id' => null, 'hw_make' => null, 'hw_model' => null, 'hw_type' => null, 'hw_arch' => null, 'if_name' => 'ens18',
      'mac' => 'aa:bb:cc:00:00:03', 'is_management' => 0],
 ];
 $nodes = json_encode([['hostFqdn' => 'neon.akoria.net', 'arch' => 'aarch64'], ['hostFqdn' => 'xenon.akoria.net', 'arch' => 'amd64']]);
@@ -429,6 +464,21 @@ pv_ok(($d[0]['arch'] ?? null) === 'arm64' && ($d[0]['arch_source'] ?? null) === 
 pv_ok(str_contains($tsql, 'e.deleted_at IS NULL') && str_contains($tsql, 'i.mac IS NOT NULL')
     && str_contains($tsql, "NOT IN ('retired', 'decommissioned')"),
     'targets: live, non-retired entities with a MAC only', $tsql);
+// Precedence: hardware_models.arch beats the agent; agent beats unknown.
+$hwRows = $tgtRows;
+$hwRows[0]['hw_arch'] = $hwRows[1]['hw_arch'] = 'x86_64';   // neon: model says x86_64, agent says aarch64
+$r = pv(['path' => "$P/targets", 'env' => ['PV_NODES' => $nodes], 'db' => [['match' => $TGT_Q, 'rows' => $hwRows]]]);
+$d = $r['body']['data'] ?? [];
+pv_ok($r['status'] === 200 && ($d[0]['arch'] ?? null) === 'x86_64' && ($d[0]['arch_source'] ?? null) === 'hardware_model'
+    && ($d[0]['agent_arch'] ?? null) === 'arm64' && ($d[0]['hw_model_id'] ?? null) === 3
+    && array_key_exists('hw_model_id', $d[1] ?? []) && $d[1]['hw_model_id'] === null && $d[1]['arch'] === null,
+    'targets: hardware_models.arch wins over agent (agent_arch still reported); no model + no agent -> null',
+    json_encode(array_map(static fn ($t) => [$t['arch'] ?? 0, $t['arch_source'] ?? 0, $t['agent_arch'] ?? 0], $d)));
+$r = pv(['path' => "$P/targets", 'db' => [['match' => $TGT_Q, 'rows' => $hwRows]]]);
+pv_ok($r['status'] === 200 && ($r['body']['data'][0]['arch_source'] ?? null) === 'hardware_model'
+    && array_key_exists('agent_arch', $r['body']['data'][0] ?? []) && $r['body']['data'][0]['agent_arch'] === null,
+    'targets: hardware-model arch still resolves with the monitoring DB down', "status={$r['status']}");
+pv_ok(str_contains($tsql, 'hm.arch AS hw_arch'), 'targets SQL reads hardware_models.arch', $tsql);
 $r = pv(['path' => "$P/targets", 'db' => [['match' => $TGT_Q, 'rows' => $tgtRows]]]);
 pv_ok($r['status'] === 200 && count($r['body']['data'] ?? []) === 2 && array_key_exists('arch', $r['body']['data'][0] ?? []) && $r['body']['data'][0]['arch'] === null,
     'targets still list when the monitoring DB is unavailable (arch null)', "status={$r['status']}");
@@ -488,38 +538,79 @@ pv_ok($r['status'] === 200 && count($r['ctl']) === 1 && ($c['verb'] ?? '') === '
     && ($r['body']['data']['status'] ?? '') === 'queued' && ($r['body']['data']['request'] ?? '') === '42',
     'IMAGE_REFRESH image=4, op bound by callQueued, idem forwarded', json_encode($c));
 
-$stageDb = [$ENTITY_LIVE, $HAS_MAC, ['match' => $IMG_Q, 'rows' => [$IMG]], $STACKS_LIVE(['core', 'web'])];
-$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => '4', 'stacks' => ['core', 'web', 'core']],
-    'db' => $stageDb]);
+$stageDb = [$ENT(), $MACS, ['match' => $IMG_Q, 'rows' => [$IMG]], $STACKS_LIVE(['core', 'web'])];
+// Operator-picked MAC in vendor spelling: normalised, matched against the
+// SoR's (case-insensitively stored) live MACs, sent lowercase-colon.
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => '4', 'stacks' => ['core', 'web', 'core'],
+    'mac' => ' AA-BB-CC-00-00-02 '], 'db' => $stageDb]);
 $c = $r['ctl'][0] ?? [];
 pv_ok($r['status'] === 200 && ($c['verb'] ?? '') === 'PROV_STAGE'
-    && ($c['args'] ?? null) === ['entity' => '9', 'image' => '4', 'stacks' => 'core,web']
-    && array_key_exists('idem', $c) && $c['idem'] === null,
-    'PROV_STAGE entity=9 image=4 stacks=core,web (dupes collapsed)', json_encode($c));
+    && ($c['args'] ?? null) === ['entity' => '9', 'image' => '4', 'stacks' => 'core,web', 'mac' => 'aa:bb:cc:00:00:02',
+        'arch' => 'x86_64']
+    && array_key_exists('idem', $c) && $c['idem'] === null
+    && ($r['body']['data']['mac'] ?? '') === 'aa:bb:cc:00:00:02' && ($r['body']['data']['arch_source'] ?? '') === 'hardware_model',
+    'PROV_STAGE entity=9 image=4 stacks=core,web mac=aa:bb:cc:00:00:02 arch=x86_64 (MAC normalised, dupes collapsed)',
+    json_encode($c));
+$stageQ = implode("\n", $r['sql']);
+pv_ok(str_contains($stageQ, 'e.deleted_at IS NULL') && str_contains($stageQ, 'hm.arch AS hw_arch'),
+    'stage resolves arch from the live entity\'s hardware model', $stageQ);
+// No model arch: the agent's report is used (server-side, same as targets).
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => $MAC1],
+    'env' => ['PV_NODES' => json_encode([['hostFqdn' => 'neon.akoria.net', 'arch' => 'amd64']])],
+    'db' => [$ENT(['hw_arch' => null]), $MACS, ['match' => $IMG_Q, 'rows' => [$IMG]], $STACKS_LIVE(['core'])]]);
+$c = $r['ctl'][0] ?? [];
+pv_ok($r['status'] === 200 && ($c['args']['arch'] ?? '') === 'x86_64' && ($c['args']['mac'] ?? '') === $MAC1
+    && ($r['body']['data']['arch_source'] ?? '') === 'agent',
+    'stage: no hardware-model arch -> agent arch (amd64 -> x86_64)', "status={$r['status']} " . json_encode($c));
 
-$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core']], 'db' => [
-    $ENTITY_LIVE, $HAS_MAC, ['match' => $IMG_Q, 'rows' => [$IMG_UNFETCHED]],
+$archCases = [
+    'model arch beats a matching agent: arm64 model vs x86_64 image -> 409' => [
+        ['hw_arch' => 'arm64'], [['hostFqdn' => 'neon.akoria.net', 'arch' => 'x86_64']],
+        'Image is x86_64 but target is arm64 (hardware model).'],
+    'agent arch mismatch -> 409' => [
+        ['hw_arch' => null], [['hostFqdn' => 'neon.akoria.net', 'arch' => 'aarch64']],
+        'Image is x86_64 but target is arm64 (agent-reported).'],
+    'unknown arch, model without arch -> 409 naming the model' => [
+        ['hw_arch' => null], null,
+        'Target CPU architecture is unknown: set the CPU architecture on hardware model Raspberry Pi Pi 5 (Inventory) or let the agent report it.'],
+    'unknown arch, no hardware model -> 409' => [
+        ['hw_arch' => null, 'hw_model_id' => null, 'hw_make' => null, 'hw_model' => null], [],
+        'Target CPU architecture is unknown: assign neon a hardware model with a CPU architecture (Inventory) or let the agent report it.'],
+];
+foreach ($archCases as $label => [$over, $nodesFx, $msg]) {
+    $r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => $MAC1],
+        'env' => $nodesFx === null ? [] : ['PV_NODES' => json_encode($nodesFx)],
+        'db' => [$ENT($over), $MACS, ['match' => $IMG_Q, 'rows' => [$IMG]], $STACKS_LIVE(['core'])]]);
+    pv_ok($r['status'] === 409 && pv_msg($r) === $msg && $r['ctl'] === [], "stage $label", "status={$r['status']} msg=" . pv_msg($r));
+}
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'],
+    'mac' => 'aa:bb:cc:00:00:99'], 'db' => [$ENT(), $MACS, ['match' => $IMG_Q, 'rows' => [$IMG]], $STACKS_LIVE(['core'])]]);
+pv_ok($r['status'] === 409 && pv_msg($r) === 'MAC aa:bb:cc:00:00:99 is not a live interface of neon.' && $r['ctl'] === [],
+    'stage MAC not on a live interface of the entity -> 409', "status={$r['status']} msg=" . pv_msg($r));
+
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => $MAC1], 'db' => [
+    $ENT(), $MACS, ['match' => $IMG_Q, 'rows' => [$IMG_UNFETCHED]],
 ]]);
 pv_ok($r['status'] === 409 && pv_msg($r) === 'image not fetched — refresh it first' && $r['ctl'] === [],
     'stage with unfetched image -> 409 "image not fetched — refresh it first"', "status={$r['status']} msg=" . pv_msg($r));
-$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core']], 'db' => [
-    $ENTITY_LIVE, $HAS_MAC, ['match' => $IMG_Q, 'rows' => [['sha256' => $SHA, 'fetched_at' => null] + $IMG]],
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => $MAC1], 'db' => [
+    $ENT(), $MACS, ['match' => $IMG_Q, 'rows' => [['sha256' => $SHA, 'fetched_at' => null] + $IMG]],
 ]]);
 pv_ok($r['status'] === 409 && $r['ctl'] === [], 'stage with sha256 but no fetched_at -> 409', "status={$r['status']}");
-$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core']], 'db' => [
-    $ENTITY_LIVE, $HAS_MAC, ['match' => $IMG_Q, 'rows' => [['boot_method' => 'media'] + $IMG]],
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => $MAC1], 'db' => [
+    $ENT(), $MACS, ['match' => $IMG_Q, 'rows' => [['boot_method' => 'media'] + $IMG]],
 ]]);
 pv_ok($r['status'] === 409 && str_contains(pv_msg($r), 'ipxe') && $r['ctl'] === [], 'stage non-ipxe image -> 409', "status={$r['status']}");
-$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core']], 'db' => [
-    $ENTITY_LIVE, ['match' => 'FROM interfaces WHERE entity_id', 'rows' => [['n' => 0]]],
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => $MAC1], 'db' => [
+    $ENT(), ['match' => 'FROM interfaces WHERE entity_id', 'rows' => []],
 ]]);
 pv_ok($r['status'] === 409 && str_contains(pv_msg($r), 'MAC') && $r['ctl'] === [], 'stage entity without a live MAC -> 409', "status={$r['status']}");
-$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core']], 'db' => [
-    ['match' => 'SELECT id FROM entities WHERE id = :id AND deleted_at IS NULL', 'rows' => []],
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core'], 'mac' => $MAC1], 'db' => [
+    ['match' => $ENT_Q, 'rows' => []],
 ]]);
 pv_ok($r['status'] === 404 && $r['ctl'] === [], 'stage unknown/deleted entity -> 404', "status={$r['status']}");
-$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core', 'gone']], 'db' => [
-    $ENTITY_LIVE, $HAS_MAC, ['match' => $IMG_Q, 'rows' => [$IMG]], $STACKS_LIVE(['core']),
+$r = pv(['method' => 'POST', 'path' => "$P/stage", 'body' => ['entity' => 9, 'image' => 4, 'stacks' => ['core', 'gone'], 'mac' => $MAC1], 'db' => [
+    $ENT(), $MACS, ['match' => $IMG_Q, 'rows' => [$IMG]], $STACKS_LIVE(['core']),
 ]]);
 pv_ok($r['status'] === 404 && str_contains(pv_msg($r), 'gone') && $r['ctl'] === [], 'stage unknown stack -> 404 naming it', "status={$r['status']}");
 $r = pv(['method' => 'POST', 'path' => "$P/image-refresh", 'body' => ['image' => 4], 'db' => [['match' => $IMG_Q, 'rows' => []]]]);
@@ -540,8 +631,8 @@ foreach ($ALL_CTL as $call) {
         $opInArgs = true;
     }
 }
-pv_ok(count($ALL_CTL) === 4 && !$opInArgs && !$ANY_DIRECT,
-    'across the whole run: 4 enqueues, none with op in args, no direct SolariCtl::call/send', 'ctl=' . count($ALL_CTL));
+pv_ok(count($ALL_CTL) === 5 && !$opInArgs && !$ANY_DIRECT,
+    'across the whole run: 5 enqueues, none with op in args, no direct SolariCtl::call/send', 'ctl=' . count($ALL_CTL));
 
 // Static: provisioning.php never calls SolariCtl::call/send directly.
 $src = (string) file_get_contents(dirname(__DIR__, 2) . '/dashboard/api/routes/provisioning.php');

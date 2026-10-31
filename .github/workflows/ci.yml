@@ -716,6 +716,9 @@ jobs:
           $MYSQL < netdb/sor/migrations/026_unifi_network_cdc.sql
           $MYSQL < netdb/sor/migrations/027_interconnect_cable_details.sql
           $MYSQL < netdb/sor/migrations/028_entity_unit_association.sql
+          $MYSQL < netdb/sor/migrations/029_provisioning_images_stacks.sql
+          $MYSQL < netdb/sor/migrations/030_provisioning_cdc.sql
+          $MYSQL < netdb/sor/migrations/031_provisioning_arch_refresh.sql
           $MYSQL -e "CREATE TABLE _solarinet_test_scratch (marker VARCHAR(64) PRIMARY KEY); INSERT INTO _solarinet_test_scratch VALUES ('solarinet-ci-scratch-v1')"
           echo "-- re-applying idempotent network/RackWire migrations --"
           $MYSQL < netdb/sor/migrations/025_network_allocator_gate.sql

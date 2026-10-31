@@ -664,23 +664,13 @@ return static function (Router $router): void {
     // ------------------------------------------------------------ targets
     // Deploy targets for the P4 screen: live SoR entities with at least one
     // live MAC-bearing interface (PROV_STAGE refuses anything else) plus the
-    // hardware model. The SoR has no CPU-arch column, so arch comes from the
-    // agent-reported monitoring `node.arch` (matched on the short hostname),
-    // normalised to the prov_images arch enum; null = unknown.
+    // hardware model. CPU arch precedence (031): the operator-set
+    // hardware_models.arch, else the agent-reported monitoring `node.arch`
+    // (matched on the short hostname, normalised to the prov_images arch
+    // enum), else null = unknown. POST stage resolves it the same way.
 
-    $router->get("$P/targets", static function (): void {
-        $rows = ProvCatalog::rows(
-            "SELECT e.id, e.name, e.entity_type, e.lifecycle, e.role,
-                    hm.make AS hw_make, hm.model AS hw_model, hm.hw_type,
-                    i.name AS if_name, i.mac, i.is_management
-               FROM entities e
-               JOIN interfaces i ON i.entity_id = e.id AND i.deleted_at IS NULL AND i.mac IS NOT NULL
-               LEFT JOIN hardware_units hu ON hu.id = e.hardware_unit_id AND hu.deleted_at IS NULL
-               LEFT JOIN hardware_models hm ON hm.id = hu.model_id AND hm.deleted_at IS NULL
-              WHERE e.deleted_at IS NULL
-                AND e.lifecycle NOT IN ('retired', 'decommissioned')
-                AND e.entity_type IN ('server', 'workstation', 'vm', 'appliance', 'iot_device', 'other')
-              ORDER BY e.name, e.id, i.is_management DESC, i.name");
+    // short hostname => normalised agent arch; [] when monitoring is down.
+    $agentArch = static function (): array {
         $arch = [];
         try {
             foreach (Db::rows("SELECT hostFqdn, arch FROM node WHERE state <> 'retired' AND arch IS NOT NULL") as $n) {
@@ -691,24 +681,55 @@ return static function (Router $router): void {
                 }
             }
         } catch (Throwable $e) {
-            $arch = [];   // monitoring DB unavailable: targets still list, arch unknown
+            return [];   // monitoring DB unavailable: arch falls back to unknown
         }
+        return $arch;
+    };
+    // [arch|null, source 'hardware_model'|'agent'|null]
+    $resolveArch = static function (?string $hwArch, string $name, array $agent): array {
+        $hw = $hwArch === null ? null : ProvCatalog::normArch($hwArch);
+        if ($hw !== null) {
+            return [$hw, 'hardware_model'];
+        }
+        $a = $agent[strtolower($name)] ?? null;
+        return $a === null ? [null, null] : [$a, 'agent'];
+    };
+
+    $router->get("$P/targets", static function () use ($agentArch, $resolveArch): void {
+        $rows = ProvCatalog::rows(
+            "SELECT e.id, e.name, e.entity_type, e.lifecycle, e.role,
+                    hm.id AS hw_model_id, hm.make AS hw_make, hm.model AS hw_model, hm.hw_type,
+                    hm.arch AS hw_arch,
+                    i.name AS if_name, i.mac, i.is_management
+               FROM entities e
+               JOIN interfaces i ON i.entity_id = e.id AND i.deleted_at IS NULL AND i.mac IS NOT NULL
+               LEFT JOIN hardware_units hu ON hu.id = e.hardware_unit_id AND hu.deleted_at IS NULL
+               LEFT JOIN hardware_models hm ON hm.id = hu.model_id AND hm.deleted_at IS NULL
+              WHERE e.deleted_at IS NULL
+                AND e.lifecycle NOT IN ('retired', 'decommissioned')
+                AND e.entity_type IN ('server', 'workstation', 'vm', 'appliance', 'iot_device', 'other')
+              ORDER BY e.name, e.id, i.is_management DESC, i.name");
+        $agent = $agentArch();
         $out = [];
         foreach ($rows as $r) {
             $id = (string) $r['id'];
             if (!isset($out[$id])) {
-                $a = $arch[strtolower((string) $r['name'])] ?? null;
+                [$a, $src] = $resolveArch($r['hw_arch'] ?? null, (string) $r['name'], $agent);
                 $out[$id] = [
                     'id'          => $id,
                     'name'        => $r['name'],
                     'entity_type' => $r['entity_type'],
                     'lifecycle'   => $r['lifecycle'],
                     'role'        => $r['role'],
+                    'hw_model_id' => ($r['hw_model_id'] ?? null) === null ? null : (int) $r['hw_model_id'],
                     'hw_make'     => $r['hw_make'],
                     'hw_model'    => $r['hw_model'],
                     'hw_type'     => $r['hw_type'],
                     'arch'        => $a,
-                    'arch_source' => $a === null ? null : 'agent',
+                    'arch_source' => $src,
+                    // agent's view even when the hardware model wins, so the
+                    // UI can flag a model/agent disagreement
+                    'agent_arch'  => $agent[strtolower((string) $r['name'])] ?? null,
                     'interfaces'  => [],
                 ];
             }
@@ -786,6 +807,10 @@ return static function (Router $router): void {
             $params[':entity'] = ProvCatalog::idValue($_GET['entity'], 'entity');
             $where[] = 'r.entity_id = :entity';
         }
+        if (isset($_GET['image']) && $_GET['image'] !== '') {
+            $params[':image'] = ProvCatalog::idValue($_GET['image'], 'image');
+            $where[] = 'r.image_id = :image';
+        }
         if (isset($_GET['mode']) && $_GET['mode'] !== '') {
             $params[':mode'] = ProvCatalog::enum($_GET['mode'], 'mode', ProvCatalog::RUN_MODES);
             $where[] = 'r.mode = :mode';
@@ -856,17 +881,38 @@ return static function (Router $router): void {
         Response::ok(ProvCatalog::queuedOut(['image' => $image], $reply));
     });
 
-    $router->post("$P/stage", static function () use ($imageGet, $liveEntity, $liveStacks): void {
+    // PROV_STAGE: the operator picks which interface netboots (mac), and the
+    // target arch is resolved here exactly as GET targets does — a client
+    // arch is never accepted. Unknown arch or an image/target mismatch is
+    // refused: staging the wrong arch boots nothing (or the wrong thing).
+    $router->post("$P/stage", static function () use ($imageGet, $liveStacks, $agentArch, $resolveArch): void {
         $op = Operator::requireOperator();
         $idem = ProvCatalog::idemKey();
-        $b = ProvCatalog::body(['entity', 'image', 'stacks'], 16384);
+        $b = ProvCatalog::body(['entity', 'image', 'stacks', 'mac'], 16384);
         $entity = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'entity'), 'entity');
         $image  = ProvCatalog::idValue(ProvCatalog::requireKey($b, 'image'), 'image');
         $stacks = ProvCatalog::stackList(ProvCatalog::requireKey($b, 'stacks'));
-        $liveEntity($entity);
-        if ((int) ProvCatalog::scalar('SELECT COUNT(*) AS n FROM interfaces
-                WHERE entity_id = :id AND deleted_at IS NULL AND mac IS NOT NULL', [':id' => $entity]) === 0) {
+        $mac    = ProvCatalog::macValue(ProvCatalog::requireKey($b, 'mac'));
+        $ent = ProvCatalog::row(
+            'SELECT e.id, e.name, hm.id AS hw_model_id, hm.make AS hw_make, hm.model AS hw_model,
+                    hm.arch AS hw_arch
+               FROM entities e
+               LEFT JOIN hardware_units hu ON hu.id = e.hardware_unit_id AND hu.deleted_at IS NULL
+               LEFT JOIN hardware_models hm ON hm.id = hu.model_id AND hm.deleted_at IS NULL
+              WHERE e.id = :id AND e.deleted_at IS NULL', [':id' => $entity]);
+        if ($ent === null) {
+            ProvCatalog::notFound('Entity not found.');
+        }
+        $macs = [];
+        foreach (ProvCatalog::rows('SELECT mac FROM interfaces
+                WHERE entity_id = :id AND deleted_at IS NULL AND mac IS NOT NULL', [':id' => $entity]) as $m) {
+            $macs[ProvCatalog::normMac((string) $m['mac'])] = true;
+        }
+        if ($macs === []) {
             ProvCatalog::conflict('Entity has no live interface with a MAC address; it cannot be netbooted.');
+        }
+        if (!isset($macs[$mac])) {
+            ProvCatalog::conflict("MAC $mac is not a live interface of " . $ent['name'] . '.');
         }
         $img = $imageGet($image);
         if ($img === null) {
@@ -879,10 +925,24 @@ return static function (Router $router): void {
         if ($img['sha256'] === null || $img['fetched_at'] === null) {
             ProvCatalog::conflict('image not fetched — refresh it first');
         }
+        [$arch, $archSrc] = $resolveArch($ent['hw_arch'] ?? null, (string) $ent['name'], $agentArch());
+        if ($arch === null) {
+            ProvCatalog::conflict(($ent['hw_model_id'] ?? null) === null
+                ? 'Target CPU architecture is unknown: assign ' . $ent['name']
+                  . ' a hardware model with a CPU architecture (Inventory) or let the agent report it.'
+                : 'Target CPU architecture is unknown: set the CPU architecture on hardware model '
+                  . trim($ent['hw_make'] . ' ' . $ent['hw_model']) . ' (Inventory) or let the agent report it.');
+        }
+        if ($img['arch'] !== $arch) {
+            ProvCatalog::conflict('Image is ' . $img['arch'] . ' but target is ' . $arch
+                . ($archSrc === 'agent' ? ' (agent-reported)' : ' (hardware model)') . '.');
+        }
         $liveStacks($stacks);
-        $args = ['entity' => (string) $entity, 'image' => (string) $image, 'stacks' => implode(',', $stacks)];
+        $args = ['entity' => (string) $entity, 'image' => (string) $image, 'stacks' => implode(',', $stacks),
+                 'mac' => $mac, 'arch' => $arch];
         $reply = SolariCtl::callQueued('PROV_STAGE', $args, $op, $idem);
-        Response::ok(ProvCatalog::queuedOut(['entity' => $entity, 'image' => $image, 'stacks' => $stacks], $reply));
+        Response::ok(ProvCatalog::queuedOut(['entity' => $entity, 'image' => $image, 'stacks' => $stacks,
+                                             'mac' => $mac, 'arch' => $arch, 'arch_source' => $archSrc], $reply));
     });
 
     $router->post("$P/apply", static function () use ($liveEntity, $liveStacks): void {

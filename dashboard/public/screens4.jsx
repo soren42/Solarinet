@@ -36,6 +36,8 @@
   const STOCK_LABEL = { in_stock: "in stock", allocated: "allocated", deployed: "deployed", consumed: "consumed", retired: "retired" };
   const ALLOC_TONE = { needed: "var(--warn)", committed: "var(--teal)", installed: "var(--ok)", returned: "var(--ink-faint)" };
   const PROJ_TONE = { planning: "var(--ink-dim)", active: "var(--ok)", staged: "var(--violet)", on_hold: "var(--warn)", complete: "var(--teal)", archived: "var(--ink-faint)" };
+  // hardware_models.arch (031) — the CPU arch provisioning matches images against.
+  const HW_ARCHES = ["x86_64", "arm64", "armhf", "riscv64", "i386"];
   const HW_TYPES = ["server", "workstation", "sbc", "nas", "router", "switch", "ap", "printer", "scanner", "iot", "appliance", "console", "media", "vehicle", "tablet", "phone", "kvm", "sensor", "camera", "ups", "moca", "other"];
   const LOC_TYPES = ["site", "building", "floor", "room", "rack", "shelf", "position", "zone", "cabinet", "drawer", "tray", "bin", "container"];
   const LOC_ICON = { room: "location", rack: "server", shelf: "arch", cabinet: "box", drawer: "box", tray: "inventory", bin: "box", container: "box" };
@@ -766,10 +768,11 @@
     const [make, setMake] = useState("");
     const [model, setModel] = useState("");
     const [hwType, setHwType] = useState("other");
+    const [arch, setArch] = useState("");
     const [notes, setNotes] = useState("");
     function submit() {
       if (!make.trim() || !model.trim()) { toast("Make and model are required", "close"); return; }
-      const id = act.saveModel({ make: make.trim(), model: model.trim(), hw_type: hwType, notes: notes.trim() || "" });
+      const id = act.saveModel({ make: make.trim(), model: model.trim(), hw_type: hwType, arch: arch || null, notes: notes.trim() || "" });
       onCreated && onCreated(id);
     }
     return (
@@ -781,6 +784,10 @@
         </div>
         <label style={LBL}>Type</label>
         <select style={FLD} value={hwType} onChange={function (e) { setHwType(e.target.value); }}>{HW_TYPES.map(function (t) { return <option key={t} value={t}>{t}</option>; })}</select>
+        <label style={LBL}>CPU architecture</label>
+        <select style={FLD} value={arch} onChange={function (e) { setArch(e.target.value); }} title="Provisioning only reimages a machine whose CPU architecture is known">
+          <option value="">unknown</option>{HW_ARCHES.map(function (t) { return <option key={t} value={t}>{t}</option>; })}
+        </select>
         <label style={LBL}>Notes</label>
         <input style={FLD} value={notes} onChange={function (e) { setNotes(e.target.value); }} placeholder="spec links, quirks…" />
       </Modal>

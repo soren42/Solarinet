@@ -353,8 +353,47 @@
     const ifs = (t && t.interfaces) || [];
     return ifs.find((i) => i.management) || ifs[0] || null;
   }
+  function modelName(t) { return [t.hw_make, t.hw_model].filter(Boolean).join(" "); }
+  // Why a reimage cannot run on a target whose CPU arch is unknown, and the fix.
+  function archUnknownReason(t) {
+    return "Target CPU architecture unknown — " + (t.hw_model_id
+      ? "set the CPU architecture on hardware model " + modelName(t) + " (Inventory) or let the agent report it."
+      : "give " + t.name + " a hardware model with a CPU architecture (Inventory) or let the agent report it.");
+  }
   const RUN_TAG = { succeeded: "ok", failed: "crit", running: "teal", queued: "", cancelled: "" };
-  const RUN_LOG_KIND = { reimage: "prov-stage", apply: "stack-apply" };
+  const RUN_DONE = { succeeded: true, failed: true, cancelled: true };
+  const RUN_LOG_KIND = { reimage: "prov-stage", apply: "stack-apply", refresh: "image-refresh" };
+  // Log id for a run: refresh logs are per image, the others per entity.
+  function runLogId(r) { return r.mode === "refresh" ? r.image_id : r.entity_id; }
+  function runLogTitle(r) {
+    if (r.mode === "refresh") return "Refresh log · " + (r.image_label || "image " + r.image_id);
+    return (r.mode === "reimage" ? "Stage" : "Apply") + " log · " + (r.entity_name || r.entity_id);
+  }
+  function maxRunId(runs) { return (runs || []).reduce((n, r) => Math.max(n, Number(r.id) || 0), 0); }
+
+  // Set hardware_models.arch (PUT /api/inventory/models/{id}) — the first
+  // arch source provisioning trusts. "" clears it back to unknown.
+  function ModelArchDialog({ target, say, onClose, onSaved }) {
+    const [arch, setArch] = useState(target.arch_source === "hardware_model" ? target.arch : "");
+    const model = modelName(target) || "model " + target.hw_model_id;
+    return (
+      <Confirm title={"CPU architecture of " + model} sub={"hardware model #" + target.hw_model_id + " · Inventory"}
+        verb="Save" busyVerb="Saving…"
+        onConfirm={() => api().updateModel(target.hw_model_id, { arch: arch }).then(() => {
+          say("Hardware model " + model + ": arch " + (arch || "unknown"), "check");
+          onSaved();
+          onClose();
+        })} onClose={onClose}>
+        <Field label="CPU architecture" htmlFor="prov-model-arch"
+          hint={"Applies to every machine of this model. " + (target.agent_arch ? "The agent on " + target.name + " reports " + target.agent_arch + "." : "No agent report for " + target.name + ".")}>
+          <select id="prov-model-arch" className="prov-input" value={arch} data-autofocus onChange={(e) => setArch(e.target.value)}>
+            <option value="">unknown</option>
+            {ARCHES.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </Field>
+      </Confirm>
+    );
+  }
 
   function ProvImagesScreen({ toast, onNavigate }) {
     const say = useCallback((m, i) => {
@@ -375,7 +414,8 @@
     const [runsMine, setRunsMine] = useState(false);
     const [collapsed, setCollapsed] = useState(() => new Set());
     const [modal, setModal] = useState(null);
-    const [refreshing, setRefreshing] = useState({});   // imageId -> { at, fetched_at }
+    const [refreshing, setRefreshing] = useState({});   // imageId -> { at, fetched_at, afterRun }
+    const [ifaceMac, setIfaceMac] = useState("");
     const [pollUntil, setPollUntil] = useState(0);
     const op = canOp();
     const live = isLive();
@@ -389,12 +429,13 @@
     const target = targets.find((t) => t.id === targetId) || null;
     const tArch = target ? target.arch : null;
     const node = nodeFor(target);
-    const iface = primaryIface(target);
+    // Netboot interface: the operator's pick, else the management one.
+    const iface = (target && target.interfaces.find((i) => i.mac === ifaceMac)) || primaryIface(target);
 
     function reloadAll() { reloadImages(); reloadStacks(); reloadSoft(); reloadTargets(); reloadRuns(); }
 
     // A different machine invalidates the picked image (the mockup does the same).
-    useEffect(() => { setImageId(null); }, [targetId]);
+    useEffect(() => { setImageId(null); setIfaceMac(""); }, [targetId]);
 
     // Poll runs while any is in flight, or for a minute after an enqueue
     // (the helper inserts its prov_runs row when it picks the request up).
@@ -427,6 +468,28 @@
       });
       if (changed) setRefreshing(next);
     }, [imagesR.data]);
+    // A refresh records a prov_runs row (031); its terminal status ends the
+    // wait and is reported, so the operator is not left with "started".
+    useEffect(() => {
+      if (!pendingRefresh || !runsR.data) return;
+      const next = Object.assign({}, refreshing);
+      let changed = false;
+      Object.keys(refreshing).forEach((id) => {
+        const w = refreshing[id];
+        const run = runsR.data.find((r) => r.mode === "refresh" && String(r.image_id) === id && Number(r.id) > w.afterRun);
+        if (!run) return;
+        if (RUN_DONE[run.status]) {
+          delete next[id];
+          say("Refresh of " + (run.image_label || "image " + id) + " " + run.status + (run.detail ? ": " + run.detail : ""),
+            run.status === "succeeded" ? "check" : "close");
+          if (run.status === "succeeded") reloadImages();
+        } else if (w.run !== run.id || w.status !== run.status) {
+          next[id] = Object.assign({}, w, { run: run.id, status: run.status });
+        } else return;
+        changed = true;
+      });
+      if (changed) setRefreshing(next);
+    }, [runsR.data]);
 
     // ---- selection model -------------------------------------------------
     const slugs = useMemo(() => new Set(stacks.map((s) => s.slug)), [stacks]);
@@ -436,7 +499,7 @@
     const itemCount = plan.order.reduce((n, s) => n + ((bySlug[s] && bySlug[s].member_count) || 0), 0);
 
     function offReason(img) {
-      if (tArch && img.arch !== tArch) return "arch mismatch (target is " + tArch + ")";
+      if (tArch && img.arch !== tArch) return "image is " + img.arch + ", target is " + tArch;
       if (mode === "apply") return "not used in apply-only mode";
       return "";
     }
@@ -492,11 +555,13 @@
     else if (plan.cycle) blocked = "Stack dependency cycle: " + plan.cycle.join(" → ") + ".";
     else if (!plan.order.length) blocked = "No stacks to run.";
     else if (conflicts.length) blocked = "Conflicting entries selected: " + conflicts.join("; ") + ".";
+    else if (mode === "reimage" && !tArch) blocked = archUnknownReason(target);
+    else if (mode === "reimage" && !iface) blocked = "Target has no interface with a MAC address.";
     else if (mode === "reimage" && !selOk) blocked = selImage ? "Image not deployable: " + pickReason(selImage) + "." : "Select an image.";
 
     let warnline = "";
     if (target && mode === "reimage" && selOk) {
-      warnline = "Wipes the install disk on " + target.name + "'s next network boot. Staged per-MAC (" + (iface ? iface.mac : "no MAC") + "); unstaged machines fall back to local disk.";
+      warnline = "Wipes the install disk on " + target.name + "'s next network boot from " + iface.name + " (" + iface.mac + "). Staged per-MAC; unstaged machines fall back to local disk.";
     } else if (target && mode === "apply") {
       const st = node && node.state;
       if (!node) warnline = "No monitoring agent matches this target; apply needs SSH + sudo on the target.";
@@ -511,9 +576,13 @@
     function refreshImage(img) {
       const a = api();
       const key = a.provIdemKey();
+      const afterRun = maxRunId(runsR.data);
       return a.provImageRefresh(img.id, key).then((res) => {
-        setRefreshing((r) => Object.assign({}, r, { [img.id]: { at: Date.now(), fetched_at: img.fetched_at } }));
-        say("Refresh of " + imageLabel(img) + (res.status === "queued" ? " queued (request " + res.request + ")" : " started"), "refresh");
+        setRefreshing((r) => Object.assign({}, r, { [img.id]: { at: Date.now(), fetched_at: img.fetched_at, afterRun: afterRun } }));
+        setPollUntil(Date.now() + 60000);
+        reloadRuns();
+        say("Refresh of " + imageLabel(img) + (res.status === "queued" ? " queued (request " + res.request + ")" : " started")
+          + " — follow it in Recent runs", "refresh");
       }, (e) => say("Refresh failed: " + errText(e), "close"));
     }
 
@@ -521,11 +590,11 @@
       const a = api();
       const m = modal;
       if (mode === "reimage") {
-        return a.provStage({ entity: target.id, image: selImage.id, stacks: plan.order }, m.keys.stage).then((res) => {
+        return a.provStage({ entity: target.id, image: selImage.id, stacks: plan.order, mac: iface.mac }, m.keys.stage).then((res) => {
           setModal(null);
           setPollUntil(Date.now() + 60000);
           reloadRuns();
-          say("Reinstall of " + target.name + " staged" + (res.status === "queued" ? " — request " + res.request + " queued" : ""), "provision");
+          say("Reinstall of " + target.name + " staged on " + iface.mac + (res.status === "queued" ? " — request " + res.request + " queued" : ""), "provision");
         });
       }
       return a.provApply({ entity: target.id, stacks: plan.order, dry_run: dry }, dry ? m.keys.dry : m.keys.apply).then((res) => {
@@ -627,9 +696,19 @@
                   {target ? (
                     <>
                       <div className="prov-fact"><div className="prov-kicker">Arch</div><div className="v">{tArch
-                        ? <span className="tag teal" title={target.arch_source === "agent" ? "Reported by the SolariNet agent" : undefined}>{tArch}</span>
-                        : <span className="tag warn" title="The SoR has no CPU arch and no agent has reported one; image rows are not filtered">unknown</span>}</div></div>
-                      <div className="prov-fact"><div className="prov-kicker">MAC</div><div className="v">{iface ? iface.mac : "—"}{target.interfaces.length > 1 ? <span className="prov-faint" title={target.interfaces.map((i) => i.name + " " + i.mac).join("\n")}> +{target.interfaces.length - 1}</span> : null}</div></div>
+                        ? <span className="tag teal" title={target.arch_source === "hardware_model" ? "From hardware model " + modelName(target) + " (Inventory)" : "Reported by the SolariNet agent"}>{tArch}</span>
+                        : <span className="tag warn" title="No CPU arch on the hardware model and no agent report; reimage is blocked">unknown</span>}
+                        {target.arch_source === "hardware_model" && target.agent_arch && target.agent_arch !== tArch &&
+                          <span className="tag warn" title={"The hardware model says " + tArch + " but the agent reports " + target.agent_arch + "; the hardware model wins"}>agent: {target.agent_arch}</span>}
+                        {target.hw_model_id && op && live &&
+                          <button type="button" className="chip" style={{ marginLeft: 4 }} title={"Set the CPU architecture on hardware model " + modelName(target)}
+                            onClick={() => setModal({ kind: "modelArch" })}>Set</button>}</div></div>
+                      <div className="prov-fact"><div className="prov-kicker"><label htmlFor="prov-iface">Netboot interface</label></div><div className="v">
+                        <select id="prov-iface" className="prov-input mono" style={{ padding: "2px 6px", fontSize: 12 }} value={iface ? iface.mac : ""}
+                          disabled={target.interfaces.length < 2} title="The interface whose MAC is staged for netboot"
+                          onChange={(e) => setIfaceMac(e.target.value)}>
+                          {target.interfaces.map((i) => <option key={i.mac} value={i.mac}>{i.name} · {i.mac}{i.management ? " (mgmt)" : ""}</option>)}
+                        </select></div></div>
                       <div className="prov-fact"><div className="prov-kicker">Model</div><div className="v">{[target.hw_make, target.hw_model].filter(Boolean).join(" ") || "—"}</div></div>
                       <div className="prov-fact"><div className="prov-kicker">Current OS</div><div className="v">{(node && node.osName) || "—"}</div></div>
                       <div className="prov-fact"><div className="prov-kicker">Lifecycle</div><div className="v">{target.lifecycle || "—"}</div></div>
@@ -703,7 +782,7 @@
                                           <span>v {img.version || "—"}</span><span>· fetched {fmtDate(img.fetched_at)}</span>
                                           <span className={"tag " + (fr.state === "ok" ? "ok" : fr.state === "stale" ? "warn" : "")} title={fr.why}>{fr.label}</span>
                                           {img.boot_method === "ipxe" && !img.netboot_verified && <span className="tag warn" title="No real bare-metal netboot install from this image has been confirmed yet">netboot unverified</span>}
-                                          {busy && <span className="tag teal">refreshing…</span>}
+                                          {busy && <span className="tag teal" title={refreshing[img.id].run ? "Run " + refreshing[img.id].run + " in Recent runs" : "Waiting for the refresh run to appear in Recent runs"}>{refreshing[img.id].status ? "refresh " + refreshing[img.id].status + "…" : "refreshing…"}</span>}
                                         </span>
                                         <span className="prov-acts">
                                           <IconBtn icon="refresh" label={"Refresh " + imageLabel(img) + " from upstream"} title={op ? "Refresh from upstream (IMAGE_REFRESH)" : OP_ONLY}
@@ -806,14 +885,16 @@
                         <div key={r.id} className="row">
                           <span className="when prov-faint" title={"requested " + fmtWhen(r.requested_at) + (r.finished_at ? " · finished " + fmtWhen(r.finished_at) : "")}>{fmtWhen(r.requested_at)}</span>
                           <span>
-                            {r.mode === "reimage" ? "stage  " + (r.image_label || "image " + r.image_id) + " + " : "apply  "}
-                            {(r.stack_slugs || []).join("+")} → {r.entity_name || "entity " + r.entity_id}
-                            {r.dry_run ? " (dry-run)" : ""}
+                            {r.mode === "refresh" ? "refresh  " + (r.image_label || "image " + r.image_id) : <>
+                              {r.mode === "reimage" ? "stage  " + (r.image_label || "image " + r.image_id) + " + " : "apply  "}
+                              {(r.stack_slugs || []).join("+")} → {r.entity_name || "entity " + r.entity_id}
+                              {r.dry_run ? " (dry-run)" : ""}
+                            </>}
                             <span className="prov-faint"> · {r.requested_by}</span>
                           </span>
                           <span className={"tag " + (RUN_TAG[r.status] || "")}>{r.status}</span>
-                          <IconBtn icon="logs" label={"Helper log for run " + r.id}
-                            onClick={() => setModal({ kind: "log", logKind: RUN_LOG_KIND[r.mode], logId: r.entity_id, title: (r.mode === "reimage" ? "Stage" : "Apply") + " log · " + (r.entity_name || r.entity_id) })} />
+                          {RUN_LOG_KIND[r.mode] && runLogId(r) != null ? <IconBtn icon="logs" label={"Helper log for run " + r.id}
+                            onClick={() => setModal({ kind: "log", logKind: RUN_LOG_KIND[r.mode], logId: runLogId(r), title: runLogTitle(r) })} /> : <span />}
                           {r.detail && <span className="detail">{r.detail}</span>}
                         </div>
                       ))}
@@ -848,11 +929,11 @@
 
         {modal && modal.kind === "deploy" && target && (
           mode === "reimage" ? (
-            <Confirm title={"Stage reinstall of " + target.name + "?"} sub={"PROV_STAGE · " + (iface ? iface.mac : "")}
+            <Confirm title={"Stage reinstall of " + target.name + "?"} sub={"PROV_STAGE · " + iface.name + " " + iface.mac + " · " + tArch}
               danger verb="Stage reinstall" busyVerb="Staging…" confirmWord={target.name}
               onConfirm={() => submitDeploy(false)} onClose={() => setModal(null)}>
               <p style={{ marginTop: 0 }}>Stacks applied at first boot, in order: <b>{plan.order.map((s) => (bySlug[s] && bySlug[s].name) || s).join(" → ")}</b>.</p>
-              <p><b style={{ color: "var(--warn)" }}>Destructive.</b> {imageLabel(selImage)} will wipe the install disk on {target.name}'s next network boot. Its node certificate is re-minted at first boot.</p>
+              <p><b style={{ color: "var(--warn)" }}>Destructive.</b> {imageLabel(selImage)} will wipe the install disk on {target.name}'s next network boot from <span className="mono">{iface.name} ({iface.mac})</span>. Its node certificate is re-minted at first boot.</p>
               {famBlockers.length > 0 && <div className="prov-err">Unmapped on {fam}: {famBlockers.join("; ")}. The first-boot apply will fail until these are mapped.</div>}
             </Confirm>
           ) : (
@@ -889,6 +970,9 @@
         {modal && modal.kind === "stack" && (
           <StackEditor id={modal.id} stacks={stacks} software={software} op={op && live} say={say}
             onClose={() => setModal(null)} onChanged={reloadStacks} />
+        )}
+        {modal && modal.kind === "modelArch" && target && target.hw_model_id && (
+          <ModelArchDialog target={target} say={say} onClose={() => setModal(null)} onSaved={reloadTargets} />
         )}
         {modal && modal.kind === "log" && (
           <LogViewer kind={modal.logKind} id={modal.logId} title={modal.title} onClose={() => setModal(null)} />

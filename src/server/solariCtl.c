@@ -30,7 +30,7 @@
  *   FLEET_PROVISION* target=<mac|host> distro=<id> arch=<id> hostname=<name> op=<operator> [...]
  *   FLEET_IMAGE* hostname=<name> arch=<id> op=<operator> [distro=] [...]
  *   IMAGE_REFRESH* image=<id> op=<operator>
- *   PROV_STAGE* entity=<id> image=<id> stacks=<slug[,slug...]> op=<operator>
+ *   PROV_STAGE* entity=<id> image=<id> stacks=<slug[,slug...]> mac=<mac> arch=<arch> op=<operator>
  *   STACK_APPLY* entity=<id> stacks=<slug[,slug...]> dryRun=<0|1> op=<operator>
  *   ADOPT     disc=<id> [pool=<id>] [heartbeat=0|1] [name=] [class=] [tags=] [notes=] [services=]
  *   IGNORE    disc=<id>                             -> suppress discovered row
@@ -948,6 +948,9 @@ static solariStatus ctlCheckRbac(const char *verb, const char *args,
 /*             the distinct slugs — exactly provlib.parse_stacks()         */
 /*   dryRun    exactly "0" or "1"                                         */
 /*   principal ^[A-Za-z0-9][A-Za-z0-9._@+:-]{0,127}$                      */
+/*   mac       ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ (lowercase, colon; PHP      */
+/*             normalises upper/hyphen forms BEFORE sending — refused here)*/
+/*   arch      one of x86_64 arm64 armhf riscv64 i386 (provlib.ARCHES)     */
 /* Every check runs on the percent-DECODED value, and a decoded value     */
 /* carrying an embedded NUL is refused (ctlArgStrStrict).                 */
 /* ===================================================================== */
@@ -1110,6 +1113,33 @@ static bool ctlProvValidPrincipal(const char *s)
             return false;
     }
     return n > 0;
+}
+
+/* ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ — exactly provlib.MAC_RE. Pure. */
+static bool ctlProvValidMac(const char *s)
+{
+    size_t i;
+    if (!s) return false;
+    for (i = 0; i < 17; i++) {
+        char c = s[i];
+        if (i % 3 == 2) {
+            if (c != ':') return false;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            return false;                    /* also stops at an early NUL */
+        }
+    }
+    return s[17] == '\0';
+}
+
+/* One of the prov_images.arch / provlib.ARCHES values. Pure. */
+static bool ctlProvValidArch(const char *s)
+{
+    static const char *const arches[] = { "x86_64", "arm64", "armhf", "riscv64", "i386" };
+    size_t i;
+    if (!s) return false;
+    for (i = 0; i < sizeof arches / sizeof arches[0]; i++)
+        if (strcmp(s, arches[i]) == 0) return true;
+    return false;
 }
 
 /* Extract + validate one id argument (strict decode). Pure. */
@@ -1492,8 +1522,9 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
      * and the reply's log= is that absolute path (see ctlSpawnHelper).
      *   IMAGE_REFRESH image=<id> op=<principal>
      *     -> deploy/fleet/image-refresh.py --image <id> --op <principal>
-     *   PROV_STAGE entity=<id> image=<id> stacks=<a,b> op=<principal>
-     *     -> deploy/fleet/prov-stage.py --entity <id> --image <id> --stacks <a,b> --op <principal>
+     *   PROV_STAGE entity=<id> image=<id> stacks=<a,b> mac=<mac> arch=<arch> op=<principal>
+     *     -> deploy/fleet/prov-stage.py --entity <id> --image <id> --stacks <a,b>
+     *          --mac <mac> --arch <arch> --op <principal>
      *   STACK_APPLY entity=<id> stacks=<a,b> dryRun=<0|1> op=<principal>
      *     -> deploy/fleet/stack-apply.py --entity <id> --stacks <a,b> [--dry-run] --op <principal> */
     if (strcmp(verb, "IMAGE_REFRESH") == 0) {
@@ -1521,10 +1552,10 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
     }
 
     if (strcmp(verb, "PROV_STAGE") == 0) {
-        char entity[16], image[16], stacks[CTL_PROV_STACKS_CAP];
+        char entity[16], image[16], stacks[CTL_PROV_STACKS_CAP], mac[64], arch[32];
         char op[CTL_PROV_PRINCIPAL_MAX + 1], logname[64];
         char logpath[SERVER_PATH_MAX], extra[SERVER_PATH_MAX + 64], why[160];
-        char *argv[10];
+        char *argv[14];
         int   n = 0;
         if (!ctlProvArgId(args, "entity", entity, sizeof entity))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid entity id");
@@ -1532,6 +1563,10 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid image id");
         if (!ctlProvArgStacks(args, stacks, sizeof stacks))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid stacks");
+        if (ctlArgStrStrict(args, "mac", mac, sizeof mac) != SOLARI_OK || !ctlProvValidMac(mac))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid mac");
+        if (ctlArgStrStrict(args, "arch", arch, sizeof arch) != SOLARI_OK || !ctlProvValidArch(arch))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid arch");
         if (!ctlProvArgPrincipal(args, op, sizeof op))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
         (void)snprintf(logname, sizeof logname, "prov-stage-%s.log", entity);
@@ -1539,14 +1574,16 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         argv[n++] = (char *)"--entity"; argv[n++] = entity;
         argv[n++] = (char *)"--image";  argv[n++] = image;
         argv[n++] = (char *)"--stacks"; argv[n++] = stacks;
+        argv[n++] = (char *)"--mac";    argv[n++] = mac;
+        argv[n++] = (char *)"--arch";   argv[n++] = arch;
         argv[n++] = (char *)"--op";     argv[n++] = op;
         argv[n]   = NULL;
         st = ctlSpawnHelper(ctl, "deploy/fleet/prov-stage.py", argv, logname,
                             logpath, sizeof logpath, why, sizeof why);
         if (st != SOLARI_OK)
             return ctlReplyErr(replyOut, replyCap, st, why);
-        solariLogf(SOLARI_LOG_INFO, "ctl: prov stage entity=%s image=%s stacks=%s op=%s -> %s",
-                   entity, image, stacks, op, logpath);
+        solariLogf(SOLARI_LOG_INFO, "ctl: prov stage entity=%s image=%s stacks=%s mac=%s arch=%s op=%s -> %s",
+                   entity, image, stacks, mac, arch, op, logpath);
         (void)snprintf(extra, sizeof extra, "log=%s status=staging", logpath);
         return ctlReplyOk(replyOut, replyCap, extra);
     }
