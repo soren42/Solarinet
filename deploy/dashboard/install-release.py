@@ -27,6 +27,31 @@ PYTHON_RUNTIME_FILES = {
     "apps/alertbridge/alertbridge.py", "apps/unifi/unifipolld.py",
     "apps/discovery/avahi_import.py", "apps/discovery/mdns_inspect.py",
 }
+# solariServer ctl helpers (repo-shaped under deploy/) and the SIGN client they
+# use. Releases predating them carry neither; one that carries any must carry
+# all entry points, executable, or a ctl verb would fail at exec time.
+HELPER_ENTRYPOINTS = {
+    "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
+    "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
+    "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
+}
+HELPER_RUNTIME_FILES = HELPER_ENTRYPOINTS | {
+    "bin/solariCtlClient",
+    "deploy/fleet/fleet-lib.sh", "deploy/fleet/provlib.py", "deploy/fleet/netbootlib.py",
+    "deploy/fleet/stackgen.py", "deploy/fleet/fetch-images.sh",
+    "deploy/fleet/provisioning-guard.sh",
+    "deploy/fleet/ansible/ansible.cfg", "deploy/fleet/ansible/playbooks/site.yml",
+}
+
+
+def check_helpers(release: Path, files: set[str]) -> None:
+    if not any(n == "bin/solariCtlClient" or n.startswith("deploy/") for n in files):
+        return
+    if not HELPER_RUNTIME_FILES.issubset(files):
+        raise ValueError("release is missing a required ctl helper entry")
+    for name in sorted(HELPER_ENTRYPOINTS | {"bin/solariCtlClient"}):
+        if not os.access(release.joinpath(*PurePosixPath(name).parts), os.X_OK):
+            raise ValueError(f"ctl helper is not executable: {name}")
 
 
 def sha256(path: Path) -> str:
@@ -58,9 +83,10 @@ def load_archive(bundle: Path, destination: Path, *, allow_dirty: bool = False) 
                 raise ValueError(f"generated Python environments are not permitted in the archive: {name}")
             if not (name in {"RELEASE.json", "bin", "bin/solariServer", "bin/solariScanWorker",
                             "bin/solariClient", "bin/solariMonitor", "bin/solariSnmpPoll",
-                            "dashboard", "dashboard/api", "dashboard/public", "apps"}
+                            "bin/solariCtlClient", "dashboard", "dashboard/api", "dashboard/public",
+                            "apps", "deploy", "deploy/fleet", "deploy/remote-deploy.sh"}
                     or name.startswith("dashboard/api/") or name.startswith("dashboard/public/")
-                    or name.startswith("apps/")):
+                    or name.startswith("apps/") or name.startswith("deploy/fleet/")):
                 raise ValueError(f"path is outside the release allowlist: {name}")
             lower_name = path.name.lower()
             if lower_name.startswith(".env") or lower_name == "solari-auth.json" or path.suffix.lower() in {".key", ".pem"}:
@@ -135,6 +161,7 @@ def load_archive(bundle: Path, destination: Path, *, allow_dirty: bool = False) 
         })
     if not required.issubset(actual):
         raise ValueError("release is missing a required runtime entry")
+    check_helpers(destination, actual)
     return version, metadata
 
 
@@ -187,6 +214,7 @@ def validate_installed(release: Path, *, allow_dirty: bool = False) -> str:
             raise ValueError(f"installed release hash mismatch: {name}")
     if "apps/requirements.txt" in declared and not (release / ".venv/bin/python3").is_file():
         raise ValueError("installed release Python environment is missing")
+    check_helpers(release, set(declared))
     return version
 
 

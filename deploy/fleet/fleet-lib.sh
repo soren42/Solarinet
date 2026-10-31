@@ -17,8 +17,11 @@ set -euo pipefail
 : "${HTTP_BASE:=http://${BENZENE_IP}:${HTTP_PORT}}"
 : "${PROV_ROOT:=/srv/solari-provision}"
 : "${HTTP_ROOT:=${PROV_ROOT}/netboot/http}"
-: "${CTL_SOCK:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/run/solariCtl.sock}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# solariServer exports SOLARI_CTL_SOCK / SOLARI_CA_PEM to the helpers it spawns
+# (an installed release has no run/ tree); the run/ paths are the dev fallback.
+: "${CTL_SOCK:=${SOLARI_CTL_SOCK:-${REPO_ROOT}/run/solariCtl.sock}}"
+: "${CA_PEM:=${SOLARI_CA_PEM:-${REPO_ROOT}/run/pki/ca.pem}}"
 # Shared by fleet-provision.sh and fleet-image.sh after this library is sourced.
 # shellcheck disable=SC2034
 FLEET_DIR="${REPO_ROOT}/deploy/fleet"
@@ -93,8 +96,8 @@ sign_node_cert() {
     openssl ecparam -name prime256v1 -genkey -noout -out "${out}/node.key"
     openssl req -new -key "${out}/node.key" \
       -subj "/CN=client.${fqdn}/O=SolariNet/OU=client" -out "${out}/node.csr" )
-  cp "${REPO_ROOT}/run/pki/ca.pem" "${out}/ca.pem" 2>/dev/null || \
-    fwarn "run/pki/ca.pem not found; ca.pem will be missing"
+  cp "${CA_PEM}" "${out}/ca.pem" 2>/dev/null || \
+    fwarn "${CA_PEM} not found; ca.pem will be missing"
   python3 - "${CTL_SOCK}" "${out}/node.csr" "${out}/node.pem" "${op}" <<'PY'
 import sys, socket, urllib.parse
 sock, csrf, outf, op = sys.argv[1:5]

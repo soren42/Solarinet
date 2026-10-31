@@ -22,6 +22,12 @@ INSTALLER = ROOT / "deploy/dashboard/install-release.py"
 BIN_DIR = Path(os.environ.get("SOLARI_RELEASE_BIN_DIR", ROOT / "build-server/src/server"))
 BINARY = BIN_DIR / "solariServer"
 SCAN_WORKER = BIN_DIR / "solariScanWorker"
+CTL_CLIENT = BIN_DIR / "solariCtlClient"
+HELPER_ENTRYPOINTS = (
+    "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
+    "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
+    "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
+)
 PACKAGER_SPEC = importlib.util.spec_from_file_location("dashboard_package_release", PACKAGER)
 assert PACKAGER_SPEC and PACKAGER_SPEC.loader
 PACKAGER_MODULE = importlib.util.module_from_spec(PACKAGER_SPEC)
@@ -46,7 +52,8 @@ class ReleaseFlowTests(unittest.TestCase):
     def run_packager(self, version: str, output: Path) -> None:
         subprocess.run(
             [sys.executable, str(PACKAGER), "--version", version, "--binary", str(BINARY),
-             "--scan-worker-binary", str(SCAN_WORKER), "--output", str(output),
+             "--scan-worker-binary", str(SCAN_WORKER), "--ctl-client-binary", str(CTL_CLIENT),
+             "--output", str(output),
              *( ["--allow-dirty"] if SOURCE_DIRTY else [] )],
             check=True,
             cwd=ROOT,
@@ -75,7 +82,7 @@ class ReleaseFlowTests(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(PACKAGER), "--version", "dirty-rejected",
                  "--binary", str(BINARY), "--scan-worker-binary", str(SCAN_WORKER),
-                 "--output", str(output)],
+                 "--ctl-client-binary", str(CTL_CLIENT), "--output", str(output)],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
@@ -180,6 +187,40 @@ class ReleaseFlowTests(unittest.TestCase):
                         stream = io.BytesIO(payload)
                     dest.addfile(member, stream)
             self.run_installer(root, "--bundle", str(incomplete), success=False)
+            self.assertFalse((root / "current").exists())
+
+    def test_release_ships_executable_ctl_helpers(self) -> None:
+        tracked = set(subprocess.check_output(
+            ["git", "-C", str(ROOT), "ls-files", "--", "deploy/fleet", "deploy/remote-deploy.sh"],
+            text=True).split())
+        with tempfile.TemporaryDirectory(prefix="solarinet-release-helpers-") as temp:
+            base = Path(temp)
+            bundle, root = base / "helpers.tar.gz", base / "install"
+            self.run_packager("helpers", bundle)
+            with tarfile.open(bundle, "r:gz") as archive:
+                shipped = {m.name for m in archive.getmembers() if m.isfile()
+                           and (m.name.startswith("deploy/"))}
+            # exactly the Git-tracked helper tree: no ignored build droppings
+            self.assertEqual(shipped, tracked)
+            self.run_installer(root, "--bundle", str(bundle))
+            current = root / "current"
+            for name in (*HELPER_ENTRYPOINTS, "bin/solariCtlClient"):
+                self.assertTrue(os.access(current / name, os.X_OK), name)
+            self.assertTrue((current / "deploy/fleet/ansible/ansible.cfg").is_file())
+
+    def test_rejects_release_with_non_executable_ctl_helper(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="solarinet-release-helper-mode-") as temp:
+            base = Path(temp)
+            good, broken, root = base / "good.tar.gz", base / "broken.tar.gz", base / "install"
+            self.run_packager("helper-mode", good)
+            with tarfile.open(good, "r:gz") as source, tarfile.open(broken, "w:gz") as dest:
+                for member in source.getmembers():
+                    stream = source.extractfile(member) if member.isfile() else None
+                    if member.name == "deploy/fleet/stack-apply.py":
+                        member.mode = 0o644
+                    dest.addfile(member, stream)
+            result = self.run_installer(root, "--bundle", str(broken), success=False)
+            self.assertIn("ctl helper is not executable: deploy/fleet/stack-apply.py", result.stderr)
             self.assertFalse((root / "current").exists())
 
     def test_rejects_path_traversal_without_writing_outside_root(self) -> None:

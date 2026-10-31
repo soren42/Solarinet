@@ -117,11 +117,21 @@ health_check() {
     "$SYSTEMCTL" is-active --quiet "$unit.service" || return 1
   fi
 }
+# A unit is "in service" when it is active, or is a timer-driven oneshot whose
+# .timer is active. Only in-service units are restarted: a stopped/disabled one
+# (e.g. the retired sor-apply-pihole) gets its new unit file but stays stopped.
+# rollback-immutable.sh reads the same record.
+in_service() {
+  local unit="$1"
+  "$SYSTEMCTL" is-active --quiet "$unit.service" && return 0
+  grep -Eq '^Type=oneshot([[:space:]]|$)' "$SCRIPT_DIR/$unit.service" \
+    && "$SYSTEMCTL" is-active --quiet "$unit.timer"
+}
 was_active=()
-attempted=()
+attempted=()   # indices into UNITS
 : > "$BACKUP/active"
 for unit in "${UNITS[@]}"; do
-  if "$SYSTEMCTL" is-active --quiet "$unit.service"; then
+  if in_service "$unit"; then
     was_active+=(1)
     echo "$unit=1" >> "$BACKUP/active"
   else
@@ -134,8 +144,8 @@ rollback_after_failure() {
   echo "cutover failed; restoring unit backup" >&2
   restore_units || result=1
   "$SYSTEMCTL" daemon-reload || result=1
-  for index in "${!attempted[@]}"; do
-    unit="${attempted[$index]}"
+  for index in "${attempted[@]}"; do
+    unit="${UNITS[$index]}"
     if [[ "${was_active[$index]}" == 1 ]]; then
       "$SYSTEMCTL" restart "$unit.service" || result=1
     else
@@ -157,7 +167,11 @@ fi
 if ! "$SYSTEMCTL" daemon-reload; then rollback_after_failure; exit 1; fi
 for index in "${!UNITS[@]}"; do
   unit="${UNITS[$index]}"
-  attempted+=("$unit")
+  if [[ "${was_active[$index]}" != 1 ]]; then
+    echo "leaving $unit.service stopped (not in service before cutover)"
+    continue
+  fi
+  attempted+=("$index")
   echo "restarting $unit.service"
   if grep -Eq '^Type=oneshot([[:space:]]|$)' "$SCRIPT_DIR/$unit.service"; then
     if ! "$SYSTEMCTL" start "$unit.service" || ! health_check "$unit"; then

@@ -54,7 +54,7 @@ flog "minted enrollment cert CN=client.${FQDN} (enroll token ${ENROLL_TOKEN:0:8}
 # ---- sync the Pi imaging scripts + client binary to benzene -----------------
 bssh "install -d -m 755 ${PROV_ROOT}/pi ${PROV_ROOT}/pi/bin"
 rsync -a -e "ssh -o BatchMode=yes" "${FLEET_DIR}/pi/" "${BENZENE}:${PROV_ROOT}/pi/" >/dev/null
-CLIENT_BIN="${REPO_ROOT}/deploy/dist/${ARCH}/solariClient"
+CLIENT_BIN="${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient"
 if [ -x "${CLIENT_BIN}" ]; then
   rsync -a -e "ssh -o BatchMode=yes" "${CLIENT_BIN}" "${BENZENE}:${PROV_ROOT}/pi/bin/solariClient.${ARCH}" >/dev/null
   flog "shipped solariClient.${ARCH} to benzene"
