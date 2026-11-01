@@ -13,7 +13,7 @@
     HOSTNAME FQDN DOMAIN TIMEZONE
     ADMIN_USER ADMIN_PWHASH AUTHORIZED_KEYS_XML
     DISK PACKAGES_XML PROV_RUN_ID
-    HTTP_BASE ARCH SERVER_URL SERVER_NAME SERVER_IP
+    HTTP_BASE ARCH SERVER_URL SERVER_NAME SERVER_IP SUSE_PRODUCT
 
   Reference: https://doc.opensuse.org/projects/autoyast/
   ===========================================================================
@@ -95,6 +95,11 @@
   <!-- FLEET_BOOTSTRAP_PACKAGES_SUSE). Everything else (Core and the other  -->
   <!-- stacks) is applied after first boot by prov-finish.py over SSH.      -->
   <software>
+    <!-- Base product: the Tumbleweed repo offers several (Aeon, Kalpa, MicroOS, -->
+    <!-- openSUSE); without this the install stops on an error dialog.       -->
+    <products config:type="list">
+      <product>@@SUSE_PRODUCT@@</product>
+    </products>
     <install_recommended config:type="boolean">false</install_recommended>
     <patterns config:type="list">
       <pattern>base</pattern>

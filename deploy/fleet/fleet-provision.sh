@@ -95,6 +95,16 @@ if [ -z "${RELEASE}" ]; then
   fwarn "--release not given; defaulting to ${DISTRO} ${RELEASE}. Pass --release <prov_images.release_name> to pick the image explicitly."
 fi
 [[ "${RELEASE}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$ ]] || fdie "invalid --release: ${RELEASE}"
+# AutoYaST must name the base product: the Tumbleweed repo also carries Aeon,
+# Kalpa and MicroOS, and an unnamed product stops the install on a dialog.
+SUSE_PRODUCT=""
+if [ "${DISTRO}" = opensuse ]; then
+  case "${RELEASE}" in
+    tumbleweed)      SUSE_PRODUCT=openSUSE ;;
+    15.*|leap*|Leap*) SUSE_PRODUCT=Leap ;;
+    *) fdie "no AutoYaST base product known for openSUSE release ${RELEASE} (tumbleweed|15.x)" ;;
+  esac
+fi
 [[ "${HOSTNAME_}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || fdie "invalid --hostname: ${HOSTNAME_}"
 [[ "${DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] || fdie "invalid --domain: ${DOMAIN}"
 [[ "${ADMIN_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fdie "invalid ADMIN_USER: ${ADMIN_USER}"
@@ -169,7 +179,7 @@ export TOK_HOSTNAME="${HOSTNAME_}" TOK_FQDN="${FQDN}" TOK_DOMAIN="${DOMAIN}" \
        TOK_PROV_RUN_ID="${RUN_ID}" TOK_DISK="${DISK}" \
        TOK_HTTP_BASE="${HTTP_BASE}" TOK_ARCH="${ARCH}" TOK_SERVER_URL="${SERVER_URL}" \
        TOK_SERVER_NAME="${SERVER_NAME}" TOK_SERVER_IP="${SERVER_IP}" \
-       TOK_MAC="${CFGKEY}" TOK_DISTRO="${DISTRO}"
+       TOK_MAC="${CFGKEY}" TOK_DISTRO="${DISTRO}" TOK_SUSE_PRODUCT="${SUSE_PRODUCT}"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
 CERTTMP="${WORK}/cert"
