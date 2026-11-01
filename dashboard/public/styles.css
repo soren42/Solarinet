@@ -1514,9 +1514,13 @@ textarea.prov-input { min-height: 90px; resize: vertical; line-height: 1.5; }
 .prov-store .chip { min-height: 44px; padding: 0 14px; }   /* touch target (iPad) */
 .prov-ico { color: var(--teal); flex: 0 0 auto; }
 .prov-ib { width: 32px; height: 32px; display: inline-grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink-faint); cursor: pointer; }
-.prov-ib:hover, .prov-ib:focus-visible { border-color: var(--line-2); background: var(--panel-2); color: var(--ink); }
+.prov-ib:focus-visible { border-color: var(--line-2); background: var(--panel-2); color: var(--ink); }
 .prov-ib:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
-.prov-ib.danger:hover, .prov-ib.danger:focus-visible { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 40%, transparent); }
+.prov-ib.danger:focus-visible { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 40%, transparent); }
+@media (hover: hover) {   /* no sticky hover after a tap */
+  .prov-ib:hover { border-color: var(--line-2); background: var(--panel-2); color: var(--ink); }
+  .prov-ib.danger:hover { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 40%, transparent); }
+}
 .prov-ib:disabled { opacity: .25; cursor: not-allowed; background: transparent; border-color: transparent; color: var(--ink-faint); }
 .prov-ib.spin svg { animation: vp-spin 1s linear infinite; }
 .prov-tabs { margin-left: auto; }
@@ -1542,13 +1546,12 @@ textarea.prov-input { min-height: 90px; resize: vertical; line-height: 1.5; }
 .prov-release { padding: 0 16px 10px 40px; }
 .prov-release h4 { margin: 8px 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-dim); display: flex; gap: 8px; align-items: center; }
 .prov-irow { display: grid; grid-template-columns: 24px 74px 108px 1fr auto; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid transparent; border-radius: 9px; }
-.prov-irow:hover { background: var(--panel-2); }
+@media (hover: hover) { .prov-irow:hover { background: var(--panel-2); } }
 .prov-irow.sel { border-color: var(--line-glow); background: var(--panel-hi); }
 .prov-irow.off > :not(.prov-acts) { opacity: .38; }
 .prov-irow .arch { font-family: var(--mono); font-size: 12.5px; }
 .prov-irow .meta { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; min-width: 0; }
 .prov-acts { display: flex; gap: 2px; }
-@media (max-width: 640px) { .prov-irow { grid-template-columns: 24px 1fr auto; } .prov-irow .boot { display: none; } .prov-irow .meta { grid-column: 2 / -1; } .prov-release { padding-left: 16px; } }
 .prov-pick { appearance: none; width: 16px; height: 16px; border: 1.5px solid var(--line-2); border-radius: 50%; margin: 0; cursor: pointer; display: grid; place-items: center; background: transparent; }
 .prov-pick:checked { border-color: var(--teal); }
 .prov-pick:checked::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--teal); }
@@ -1618,3 +1621,204 @@ table.prov-pool td.fam.none { color: var(--ink-faint); }
 @media (prefers-reduced-motion: reduce) { .prov-skel { animation: none; } .prov-distro > summary .chev { transition: none; } .prov-ib.spin svg { animation: none; } }
 .prov-empty { padding: 26px 18px; text-align: center; color: var(--ink-faint); font-size: 12.5px; line-height: 1.55; }
 .prov-empty .btn-ghost { margin-top: 10px; }
+
+/* ===================== TOUCH + NARROW PASS (iPad / iPhone) =====================
+   SolariNet is used mostly on iPad Safari (portrait + landscape) and iPhone:
+   no hover, fat fingers, an on-screen keyboard and safe-area insets. Sizing is
+   raised only for coarse pointers so the desktop look is unchanged. */
+
+/* Shell: the topbar search must shrink, or at ~768px the profile chip
+   overflows and a programmatic scroll (focus, scrollIntoView) pans the whole
+   app sideways inside the overflow:hidden body. clip makes body unscrollable. */
+.topbar .search { min-width: 0; }
+.topbar .search input { min-width: 0; width: 100%; }
+@supports (overflow: clip) { body { overflow: clip; } }
+/* iPad portrait (641-900px): the status chip and the ⌘K hint crowd the search
+   down to a few letters. Keep the dot and the active server's name visible
+   (touch users can't read the aria-label/title); drop the label and failover. */
+@media (min-width: 641px) and (max-width: 900px) {
+  .topbar .search .kbd { display: none; }
+  .topbar .statuschip { flex: 0 0 auto; max-width: 160px; gap: 6px; padding: 0 10px; }
+  .topbar .statuschip > :not(.dot):not(b) { display: none; }
+  .topbar .statuschip b { overflow: hidden; text-overflow: ellipsis; }
+}
+.toasts { bottom: max(22px, calc(env(safe-area-inset-bottom) + 12px)); right: max(22px, calc(env(safe-area-inset-right) + 12px)); }
+/* While a sheet is open its footer owns the bottom edge: toasts go top-left
+   and let taps through to whatever they cover. */
+body:has(.modal-overlay) .toasts { top: max(12px, env(safe-area-inset-top)); bottom: auto; right: auto; left: max(12px, env(safe-area-inset-left)); pointer-events: none; }
+@media (max-width: 640px) { .toasts { left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); } .toast { min-width: 0; } }
+/* Phone sheets are full-screen with the title on top: float toasts just above
+   the sheet footer instead, so neither the title nor the actions are covered. */
+@media (max-width: 640px) { body:has(.modal-overlay) .toasts { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); } }
+
+.prov-page { touch-action: manipulation; }
+
+/* panel heads wrap instead of pushing buttons out of the panel */
+.prov-page .panel__head { flex-wrap: wrap; row-gap: 8px; }
+.prov-page .panel__head .right { flex-wrap: wrap; justify-content: flex-end; row-gap: 6px; }
+.prov-section__head { flex-wrap: wrap; }
+
+/* panels never pan sideways under a programmatic scroll (focus, scrollIntoView) */
+@supports (overflow: clip) { .prov-page .panel { overflow: clip; } }
+
+/* target band; long option text must not set a grid track's minimum */
+@media (max-width: 1050px) { .prov-target { grid-template-columns: minmax(0, 1fr); } }
+.prov-target > * { min-width: 0; }
+.prov-fact { min-width: 0; max-width: 100%; }
+.prov-fact .v { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.prov-fact__src { font-family: var(--sans); font-size: 11px; color: var(--ink-faint); }
+.prov-input--inline { width: auto; max-width: 100%; min-width: 0; min-height: 0; padding: 2px 6px; font-size: 12px; }
+
+/* images: rows reflow by the panel's own width (the two-column layout makes
+   it narrow on iPad landscape, not just on phones) */
+.prov-imgs { container: prov-imgs / inline-size; }
+.prov-irow__why { grid-column: 2 / -1; font-size: 12px; line-height: 1.45; color: var(--ink-dim); overflow-wrap: anywhere; }
+.prov-irow.off > .prov-irow__why { opacity: 1; }
+.prov-irow[data-tap-row] { cursor: pointer; }
+.prov-irow.off[data-tap-row] { cursor: help; }
+@container prov-imgs (max-width: 560px) {
+  .prov-release { padding-left: 16px; padding-right: 12px; }
+  .prov-irow { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; }
+  .prov-irow .prov-acts { order: 4; margin-left: auto; }
+  .prov-irow .meta { order: 5; flex: 1 1 100%; padding-left: 34px; }
+  .prov-irow__why { order: 6; flex: 1 1 100%; padding-left: 34px; }
+}
+/* Safari < 16 has no container queries: fall back to the viewport so phone
+   image rows still reflow instead of clipping. (The pool table keeps its
+   scrolling fallback.) Supported target: iPadOS/iOS Safari 16+. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 640px) {
+    .prov-release { padding-left: 16px; padding-right: 12px; }
+    .prov-irow { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; }
+    .prov-irow .prov-acts { order: 4; margin-left: auto; }
+    .prov-irow .meta { order: 5; flex: 1 1 100%; padding-left: 34px; }
+    .prov-irow__why { order: 6; flex: 1 1 100%; padding-left: 34px; }
+  }
+}
+
+/* stacks */
+.prov-stack { grid-template-columns: 22px minmax(0, 1fr) auto; }
+.prov-stack[data-tap-row] { cursor: pointer; }
+.prov-stack__note { margin-top: 6px; font-size: 11.5px; line-height: 1.45; color: var(--ink-faint); overflow-wrap: anywhere; }
+
+/* deploy bar: clears the home indicator; never wider than the page */
+.prov-dbar { bottom: env(safe-area-inset-bottom, 0px); }
+.prov-dbar__text { flex: 1 1 280px; min-width: 0; }
+.prov-dbar .sum { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px), (max-height: 520px) {
+  .prov-dbar .in { padding: 10px 12px; gap: 8px; }
+  .prov-dbar__text { max-height: 18vh; max-height: 18dvh; overflow-y: auto; overscroll-behavior: contain; }
+  .prov-dbar .sum { line-height: 1.65; }
+  .prov-dbar .in > .btn-primary { flex: 1 1 100%; justify-content: center; }
+}
+
+/* sheets: safe-area padding, scroll inside, close always reachable */
+.prov-drawer-overlay { padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.prov-confirm-overlay { z-index: 1200; padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); }
+.prov-confirm { width: min(520px, 94vw); max-height: 100%; }
+.prov-confirm.danger { border-color: var(--crit); }
+.prov-page .modal { overscroll-behavior: contain; }
+.prov-page .modal__body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.prov-page .modal__foot { flex-wrap: wrap; }
+.prov-page .modal__head > div { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  /* editor/log drawer → full-screen sheet */
+  .prov-drawer-overlay { padding: 0; }
+  .prov-drawer { width: 100%; height: 100%; border: 0; border-radius: 0; }
+  .prov-drawer .modal__head { padding: max(12px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left)); }
+  .prov-drawer .modal__body { padding: 14px max(14px, env(safe-area-inset-right)) 18px max(14px, env(safe-area-inset-left)); }
+  /* confirm → bottom sheet, thumb-reachable actions */
+  .prov-confirm-overlay { align-items: flex-end; padding: max(12px, env(safe-area-inset-top)) 0 0; }
+  .prov-confirm { width: 100%; border-bottom: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+  .prov-page .modal__foot { padding: 12px max(14px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); }
+  .prov-confirm .modal__foot > button { flex: 1 1 0; justify-content: center; }
+}
+
+/* log tail: contained, readable */
+.prov-tail { max-height: 52dvh; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+@media (max-width: 640px) { .prov-tail { max-height: calc(100vh - 240px); max-height: calc(100dvh - 240px); min-height: 12em; } }
+
+/* stack-editor dependency / requires tag remove (×) */
+.prov-tagx { width: 18px; height: 18px; margin-left: 2px; }
+
+/* pool: search, cards below ~960px, edge fade when the table scrolls */
+.prov-pool__search { flex: 0 1 320px; min-width: 220px; }
+.prov-pool__search input[type="search"] { -webkit-appearance: none; appearance: none; }
+.prov-pool__search input::-webkit-search-decoration { -webkit-appearance: none; }
+@media (max-width: 640px) { .prov-pool__search { flex: 1 1 100%; min-width: 0; max-width: none; } }
+.prov-pool__wrap { container: prov-pool / inline-size; }
+.prov-pool__wrap[data-more-right] { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); }
+.prov-pool__wrap[data-more-left] { -webkit-mask-image: linear-gradient(to right, transparent, #000 36px); mask-image: linear-gradient(to right, transparent, #000 36px); }
+.prov-pool__wrap[data-more-left][data-more-right] { -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
+@container prov-pool (max-width: 959px) {
+  table.prov-pool, table.prov-pool tbody { display: block; }
+  table.prov-pool thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  table.prov-pool tbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 10px; padding: 12px; }
+  table.prov-pool tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-content: start; padding: 8px 10px 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); }
+  table.prov-pool td, table.prov-pool tr:last-child td { display: flex; align-items: baseline; gap: 10px; grid-column: 1 / -1; min-width: 0; padding: 3px 0; border: 0; }
+  table.prov-pool td.c-name { display: block; grid-column: 1; grid-row: 1; font-weight: 600; }
+  table.prov-pool td.c-type { grid-column: 1; grid-row: 2; padding-bottom: 6px; }
+  table.prov-pool td.c-acts { grid-column: 2; grid-row: 1 / span 2; align-self: start; display: flex; justify-content: flex-end; }
+  table.prov-pool td[data-label]::before { content: attr(data-label); flex: 0 0 118px; font-family: var(--sans); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
+  table.prov-pool td.fam { max-width: none; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+}
+
+/* editor tables on phones (the drawer is full-screen there) */
+.prov-sha > summary { list-style: none; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.prov-sha > summary::-webkit-details-marker { display: none; }
+.prov-sha > span { display: block; margin-top: 4px; overflow-wrap: anywhere; color: var(--ink-dim); user-select: all; -webkit-user-select: all; }
+.prov-addrow--art { flex-wrap: wrap; }
+.prov-addrow--art > select.prov-input { flex: 0 0 110px; }
+.prov-addrow--art > input.prov-input { flex: 1 1 180px; }
+@media (max-width: 640px) {
+  table.prov-items--members, table.prov-items--members tbody,
+  table.prov-items--art, table.prov-items--art tbody { display: block; }
+  table.prov-items--members thead, table.prov-items--art thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  table.prov-items--members tr { display: grid; grid-template-columns: 22px auto minmax(0, 1fr) auto; grid-template-areas: "num entry entry acts" "num type order acts"; column-gap: 8px; row-gap: 2px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  table.prov-items--art tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "arch acts" "url url" "sha sha"; column-gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  table.prov-items--members td, table.prov-items--art td { display: block; padding: 0; border: 0; min-width: 0; }
+  table.prov-items .c-num { grid-area: num; } table.prov-items .c-entry { grid-area: entry; overflow-wrap: anywhere; }
+  table.prov-items .c-type { grid-area: type; } table.prov-items .c-order { grid-area: order; }
+  table.prov-items .c-acts { grid-area: acts; display: flex; }
+  table.prov-items .c-arch { grid-area: arch; align-self: center; } table.prov-items .c-url { grid-area: url; }
+  table.prov-items .c-sha { grid-area: sha; }
+  .prov-addrow--art > select.prov-input { flex: 1 1 100%; }
+  .prov-addrow--art > input.prov-input { flex: 1 1 100%; }
+  .prov-addrow--art > .btn-ghost { margin-left: auto; }
+}
+
+/* ---- coarse pointers (touch iPad / iPhone): ≥44px targets ---- */
+@media (any-pointer: coarse) {
+  .prov-page .prov-ib { width: 44px; height: 44px; border-radius: 10px; }
+  .prov-page .chip, .prov-page .seg button,
+  .prov-page .btn-ghost, .prov-page .btn-primary, .prov-page .btn-danger { min-height: 44px; min-width: 44px; justify-content: center; }
+  .prov-page .prov-input, table.prov-items .prov-input, .prov-pool__filters .prov-input { min-height: 44px; }
+  .prov-input--inline { padding: 6px 10px; }
+  .prov-page .linkbtn { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
+  .prov-page .prov-pick { width: 22px; height: 22px; }
+  .prov-page .prov-pick:checked::after { width: 11px; height: 11px; }
+  .prov-page .prov-cb { width: 24px; height: 24px; }
+  .prov-page .prov-cb:checked::after { width: 12px; height: 6px; }
+  .prov-stack { grid-template-columns: 26px minmax(0, 1fr) auto; }
+  .prov-irow { min-height: 52px; }
+  .prov-checkrow { min-height: 44px; align-items: center; }
+  .prov-page label:has(> input[type="checkbox"]) { min-height: 44px; }
+  .prov-distro > summary { min-height: 52px; }
+  .prov-sha > summary { display: flex; align-items: center; min-height: 44px; }
+  .prov-pool__search { height: auto; padding-block: 0; }
+  /* the × sits in a small tag: a 44px hit area with the tag's footprint */
+  .prov-page .prov-tagx { width: 44px; height: 44px; margin: -12px -12px -12px -6px; }
+  .prov-page .prov-checks:has(.prov-tagx) { gap: 16px 18px; }
+  .prov-tail { font-size: 12.5px; line-height: 1.6; }
+}
+/* ≥16px text entry: iOS zooms the page into any smaller focused field */
+@media (any-pointer: coarse) {
+  .prov-page .prov-input, .prov-page .prov-input.mono, .prov-page textarea.prov-input,
+  .prov-input--inline, .topbar .search input { font-size: 16px; }
+}
+@supports (-webkit-touch-callout: none) {
+  .prov-page .prov-input, .prov-page .prov-input.mono, .prov-page textarea.prov-input,
+  .prov-input--inline, .topbar .search input { font-size: 16px; }
+}
+/* inline-styled inventory form fields (shared FLD style) on touch screens */
+@media (any-pointer: coarse) { .touch-field { min-height: 44px; font-size: 16px !important; } }
