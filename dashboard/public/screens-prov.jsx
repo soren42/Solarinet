@@ -16,6 +16,9 @@
   function isLive() { return !!(window.SOLARI && window.SOLARI.source === "live"); }
   function canOp() { return !!(window.solariCanOperate && window.solariCanOperate()); }
   const OP_ONLY = "Operator role required";
+  // Machine tokens (MACs, hostnames, URLs, hashes, paths, slugs): no iOS
+  // auto-capitalise, autocorrect, spellcheck or autofill.
+  const RAW = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false, autoComplete: "off" };
 
   // ------------------------------------------------------------ vocabulary
   const FAMS = ["suse", "debian", "fedora"];
@@ -262,13 +265,69 @@
     return box;
   }
 
+  // Keeps a fixed overlay inside the visual viewport while the on-screen
+  // keyboard is up (iOS shrinks only the visual viewport), so the focused
+  // field and the sheet's action buttons stay reachable, and scrolls the
+  // focused field into view inside the sheet.
+  function useKeyboardFit() {
+    const ref = useRef(null);
+    useEffect(() => {
+      const el = ref.current;
+      const vv = window.visualViewport;
+      if (!el) return undefined;
+      function fit() {
+        const kb = Math.abs(vv.scale - 1) < 0.01 && window.innerHeight - vv.height > 80;
+        el.style.top = kb ? vv.offsetTop + "px" : "";
+        el.style.bottom = kb ? "auto" : "";
+        el.style.height = kb ? vv.height + "px" : "";
+      }
+      let t = null;
+      function onFocus(e) {
+        const f = e.target;
+        if (!f || !f.matches || !f.matches("input,select,textarea")) return;
+        clearTimeout(t);
+        t = setTimeout(() => { if (document.activeElement === f) f.scrollIntoView({ block: "nearest" }); }, 320);
+      }
+      if (vv) { vv.addEventListener("resize", fit); vv.addEventListener("scroll", fit); }
+      el.addEventListener("focusin", onFocus);
+      return () => {
+        clearTimeout(t);
+        if (vv) { vv.removeEventListener("resize", fit); vv.removeEventListener("scroll", fit); }
+        el.removeEventListener("focusin", onFocus);
+      };
+    }, []);
+    return ref;
+  }
+
+  // Overflowing horizontal scroller → data-more-left/right drive edge fades,
+  // so a contained table visibly signals that it scrolls.
+  function useScrollEdges(dep) {
+    const ref = useRef(null);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el) return undefined;
+      function upd() {
+        const max = el.scrollWidth - el.clientWidth;
+        el.toggleAttribute("data-more-left", max > 1 && el.scrollLeft > 1);
+        el.toggleAttribute("data-more-right", max > 1 && el.scrollLeft < max - 1);
+      }
+      upd();
+      el.addEventListener("scroll", upd, { passive: true });
+      const ro = window.ResizeObserver ? new ResizeObserver(upd) : null;
+      if (ro) { ro.observe(el); if (el.firstElementChild) ro.observe(el.firstElementChild); }
+      return () => { el.removeEventListener("scroll", upd); if (ro) ro.disconnect(); };
+    }, [dep]);
+    return ref;
+  }
+
   // Right-anchored editor sheet (the mockup's drawer).
   let dialogSeq = 0;
   function Drawer({ title, sub, icon, onClose, children, footer }) {
     const box = useDialogFocus(onClose);
+    const fit = useKeyboardFit();
     const [id] = useState(() => "prov-dlg-" + (++dialogSeq));
     return (
-      <div className="modal-overlay prov-drawer-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-overlay prov-drawer-overlay" ref={fit} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
         <div className="modal prov-drawer" role="dialog" aria-modal="true" aria-labelledby={id} ref={box}>
           <div className="modal__head">
             {icon && <Icon name={icon} size={20} className="prov-ico" />}
@@ -290,6 +349,7 @@
   // stays open so the operator can retry (same Idempotency-Key upstream).
   function Confirm({ title, sub, danger, children, verb, busyVerb, confirmWord, disabled, onConfirm, onClose }) {
     const box = useDialogFocus(onClose);
+    const fit = useKeyboardFit();
     const [id] = useState(() => "prov-cfm-" + (++dialogSeq));
     const [typed, setTyped] = useState("");
     const [busy, setBusy] = useState(false);
@@ -303,9 +363,8 @@
       Promise.resolve().then(onConfirm).then(() => setBusy(false), (err) => { setBusy(false); setError(err); });
     }
     return (
-      <div className="modal-overlay" style={{ zIndex: 1200 }} onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-        <form className="modal" role="alertdialog" aria-modal="true" aria-labelledby={id} ref={box} onSubmit={go}
-          style={{ width: "min(520px, 94vw)", borderColor: danger ? "var(--crit)" : undefined }}>
+      <div className="modal-overlay prov-confirm-overlay" ref={fit} onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+        <form className={"modal prov-confirm" + (danger ? " danger" : "")} role="alertdialog" aria-modal="true" aria-labelledby={id} ref={box} onSubmit={go}>
           <div className="modal__head">
             <Icon name={danger ? "trash" : "deploy"} size={20} style={{ color: danger ? "var(--crit)" : "var(--teal)" }} />
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -319,7 +378,7 @@
             {confirmWord && (
               <div className="prov-field" style={{ marginTop: 14 }}>
                 <label className="prov-kicker" htmlFor={id + "-w"}>Type <span className="mono" style={{ color: "var(--ink)", letterSpacing: 0, textTransform: "none" }}>{confirmWord}</span> to confirm</label>
-                <input id={id + "-w"} className="prov-input mono" autoComplete="off" spellCheck={false} value={typed}
+                <input id={id + "-w"} className="prov-input mono" {...RAW} enterKeyHint="done" value={typed}
                   data-autofocus onChange={(e) => setTyped(e.target.value)} />
               </div>
             )}
@@ -457,6 +516,7 @@
     const [targetId, setTargetId] = useState("");
     const [mode, setMode] = useState("reimage");
     const [imageId, setImageId] = useState(null);
+    const [whyId, setWhyId] = useState(null);      // image row whose reasons are shown (touch has no hover title)
     const [picked, setPicked] = useState(() => new Set());
     const [onlyCompat, setOnlyCompat] = useState(false);
     const [runsMine, setRunsMine] = useState(false);
@@ -750,15 +810,17 @@
                   {target ? (
                     <>
                       <div className="prov-fact"><div className="prov-kicker">Arch</div><div className="v">{tArch
-                        ? <span className="tag teal" title={target.arch_source === "hardware_model" ? "From hardware model " + modelName(target) + " (Inventory)" : "Reported by the SolariNet agent"}>{tArch}</span>
-                        : <span className="tag warn" title="No CPU arch on the hardware model and no agent report; reimage is blocked">unknown</span>}
+                        ? <><span className="tag teal" title={target.arch_source === "hardware_model" ? "From hardware model " + modelName(target) + " (Inventory)" : "Reported by the SolariNet agent"}>{tArch}</span>
+                          <span className="prov-fact__src">{target.arch_source === "hardware_model" ? "via hardware model" : "via agent"}</span></>
+                        : <><span className="tag warn" title="No CPU arch on the hardware model and no agent report; reimage is blocked">unknown</span>
+                          <span className="prov-fact__src">no model arch, no agent report</span></>}
                         {target.arch_source === "hardware_model" && target.agent_arch && target.agent_arch !== tArch &&
                           <span className="tag warn" title={"The hardware model says " + tArch + " but the agent reports " + target.agent_arch + "; the hardware model wins"}>agent: {target.agent_arch}</span>}
                         {target.hw_model_id && op && live &&
                           <button type="button" className="chip" style={{ marginLeft: 4 }} title={"Set the CPU architecture on hardware model " + modelName(target)}
                             onClick={() => setModal({ kind: "modelArch" })}>Set</button>}</div></div>
                       <div className="prov-fact"><div className="prov-kicker"><label htmlFor="prov-iface">Netboot interface</label></div><div className="v">
-                        <select id="prov-iface" className="prov-input mono" style={{ padding: "2px 6px", fontSize: 12 }} value={iface ? iface.mac : ""}
+                        <select id="prov-iface" className="prov-input prov-input--inline mono" value={iface ? iface.mac : ""}
                           disabled={target.interfaces.length < 2} title="The interface whose MAC is staged for netboot"
                           onChange={(e) => setIfaceMac(e.target.value)}>
                           {target.interfaces.map((i) => <option key={i.mac} value={i.mac}>{i.name} · {i.mac}{i.management ? " (mgmt)" : ""}</option>)}
@@ -780,7 +842,7 @@
 
             <div className="prov-cols">
               {/* 2 · images */}
-              <section className="panel" aria-labelledby="prov-h-img">
+              <section className="panel prov-imgs" aria-labelledby="prov-h-img">
                 <div className="panel__head">
                   <Icon name="boot" size={16} className="ico" />
                   <h3 id="prov-h-img">Images</h3>
@@ -827,7 +889,12 @@
                                     const busy = !!refreshing[img.id];
                                     const [bl, bc] = BOOT[img.boot_method] || [img.boot_method, ""];
                                     return (
-                                      <div key={img.id} className={"prov-irow" + (sel ? " sel" : "") + (off ? " off" : "")} title={why || undefined}>
+                                      <div key={img.id} className={"prov-irow" + (sel ? " sel" : "") + (off ? " off" : "")} title={why || undefined} data-tap-row=""
+                                        onClick={(e) => {
+                                          if (e.target.closest("button, input, label, select, a")) return;
+                                          if (!why) setImageId(img.id);
+                                          setWhyId(whyId === img.id ? null : img.id);
+                                        }}>
                                         <input className="prov-pick" type="radio" name="prov-image" checked={sel} disabled={!!why}
                                           aria-label={"Select " + imageLabel(img) + (why ? " (" + why + ")" : "")}
                                           onChange={() => setImageId(img.id)} />
@@ -847,6 +914,13 @@
                                           <IconBtn icon="trash" danger label={"Delete " + imageLabel(img)} title={op ? "Delete" : OP_ONLY}
                                             disabled={!op || !live} onClick={() => setModal({ kind: "delImage", img: img })} />
                                         </span>
+                                        {whyId === img.id && (
+                                          <span className="prov-irow__why">
+                                            {[why, fr.why,
+                                              img.boot_method === "ipxe" && !img.netboot_verified ? "Netboot unverified: no real bare-metal install from this image has been confirmed yet." : null,
+                                              busy && refreshing[img.id].run ? "Refresh is run " + refreshing[img.id].run + " in Recent runs." : null].filter(Boolean).join(" · ")}
+                                          </span>
+                                        )}
                                       </div>
                                     );
                                   })}
@@ -882,7 +956,8 @@
                         const on = s.locked || auto || picked.has(s.slug);
                         const c = s.members ? stackCompat(s.members, swById, tArch) : null;
                         return (
-                          <div key={s.id} className="prov-stack">
+                          <div key={s.id} className="prov-stack" data-tap-row=""
+                            onClick={(e) => { if (s.locked || auto || e.target.closest("button, input, label, select, a")) return; toggleStack(s.slug, !on); }}>
                             <input className="prov-cb" type="checkbox" id={"prov-st-" + s.id} checked={on} disabled={s.locked || auto}
                               title={s.locked ? "Always included" : auto ? "Required by another selected stack" : undefined}
                               onChange={(e) => toggleStack(s.slug, e.target.checked)} />
@@ -906,6 +981,12 @@
                                 <span className="tag">{s.member_count} item{s.member_count === 1 ? "" : "s"}</span>
                                 {c && c.archSkipped.length > 0 && <span className="tag warn" title={"Skipped on " + tArch + ": " + c.archSkipped.join(", ")}>{c.archSkipped.length} skipped on {tArch}</span>}
                               </div>
+                              {c && (() => {
+                                const notes = FAMS.filter((f) => c.fams[f].applicable && c.fams[f].unmapped.length)
+                                  .map((f) => "Unmapped on " + FAM_LABEL[f] + ": " + c.fams[f].unmapped.join(", "));
+                                if (c.archSkipped.length) notes.push("Skipped on " + tArch + ": " + c.archSkipped.join(", "));
+                                return notes.length ? <div className="prov-stack__note">{notes.join(" · ")}</div> : null;
+                              })()}
                             </div>
                             <div className="prov-acts">
                               <IconBtn icon="edit" label={"Edit stack " + s.name} onClick={() => setModal({ kind: "stack", id: s.id })} />
@@ -945,7 +1026,7 @@
                               {(r.stack_slugs || []).join("+")} → {r.entity_name || "entity " + r.entity_id}
                               {r.dry_run ? " (dry-run)" : ""}
                             </>}
-                            <span className="prov-faint"> · {r.requested_by}</span>
+                            <span className="prov-faint"> · {r.requested_by}{r.finished_at ? " · finished " + fmtWhen(r.finished_at) : ""}</span>
                           </span>
                           <span className={"tag " + (RUN_TAG[r.status] || "")}>{r.status}</span>
                           {RUN_LOG_KIND[r.mode] && runLogId(r) != null ? <IconBtn icon="logs" label={"Helper log for run " + r.id}
@@ -960,7 +1041,7 @@
             {/* deploy bar */}
             <div className="prov-dbar" role="region" aria-label="Deploy">
               <div className="in">
-                <div style={{ flex: 1, minWidth: 280 }}>
+                <div className="prov-dbar__text">
                   <div className="sum">
                     <b>{target ? target.name : <span className="prov-faint">choose a target</span>}</b>
                     {" ← "}
@@ -997,7 +1078,7 @@
               confirmWord={modal.dry ? null : target.name}
               onConfirm={() => submitDeploy(modal.dry)} onClose={() => setModal(null)}>
               <p style={{ marginTop: 0 }}>One Ansible run over SSH, in order: <b>{plan.order.map((s) => (bySlug[s] && bySlug[s].name) || s).join(" → ")}</b>.</p>
-              <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+              <label className="prov-checkrow" style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
                 <input type="checkbox" className="prov-cb" checked={modal.dry} onChange={(e) => setModal(Object.assign({}, modal, { dry: e.target.checked }))} />
                 <span><b>Dry-run first</b> <span className="muted">— Ansible check mode with a diff; nothing changes on the target. Review the log in Recent runs, then come back and untick this to apply.</span></span>
               </label>
@@ -1051,7 +1132,7 @@
     return (
       <Drawer title={title} sub={kind + "-" + id + ".log"} icon="logs" onClose={onClose}
         footer={<>
-          <label style={{ display: "flex", gap: 8, alignItems: "center", marginRight: "auto", fontSize: 12.5 }} className="muted">
+          <label style={{ display: "flex", gap: 8, alignItems: "center", marginRight: "auto", fontSize: 12.5 }} className="muted prov-checkrow">
             <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow (3 s)
           </label>
           <button type="button" className="btn-ghost" onClick={reload}>Reload</button>
@@ -1162,8 +1243,8 @@
               <div className="prov-section__head"><h3>Identity</h3></div>
               <div className="prov-grid3">
                 <Field label="Distro" htmlFor="pie-distro" hint="lowercase slug">
-                  <input id="pie-distro" className="prov-input mono" list="pie-distros" value={f.distro} onChange={setDistro}
-                    aria-invalid={inv("distro")} autoComplete="off" spellCheck={false} data-autofocus />
+                  <input id="pie-distro" className="prov-input mono" {...RAW} list="pie-distros" value={f.distro} onChange={setDistro}
+                    aria-invalid={inv("distro")} data-autofocus />
                   <datalist id="pie-distros">{Object.keys(DISTRO_LABEL).map((d) => <option key={d} value={d}>{DISTRO_LABEL[d]}</option>)}</datalist>
                 </Field>
                 <Field label="Family" htmlFor="pie-family" hint="selects the package-name column">
@@ -1178,8 +1259,8 @@
                   </select>
                 </Field>
                 <Field label="Release" htmlFor="pie-rel" hint="token, e.g. 16.0 or bookworm">
-                  <input id="pie-rel" className="prov-input mono" value={f.release_name} onChange={onField(setF, "release_name")}
-                    aria-invalid={inv("release_name")} autoComplete="off" spellCheck={false} />
+                  <input id="pie-rel" className="prov-input mono" {...RAW} value={f.release_name} onChange={onField(setF, "release_name")}
+                    aria-invalid={inv("release_name")} />
                 </Field>
                 <Field label="Release label" htmlFor="pie-rlab" hint="shown in the tree (optional)">
                   <input id="pie-rlab" className="prov-input" value={f.release_label} onChange={onField(setF, "release_label")}
@@ -1197,17 +1278,17 @@
             <div className="prov-section">
               <div className="prov-section__head"><h3>Source</h3><span className="prov-faint" style={{ fontSize: 11.5 }}>Only iPXE images can be staged per-MAC today.</span></div>
               <Field label="Source URL" htmlFor="pie-src" hint="where the kernel/initrd (or media image) comes from">
-                <input id="pie-src" className="prov-input mono" type="url" value={f.source_url} onChange={onField(setF, "source_url")}
-                  aria-invalid={inv("source_url")} placeholder="https://…" spellCheck={false} />
+                <input id="pie-src" className="prov-input mono" {...RAW} type="url" value={f.source_url} onChange={onField(setF, "source_url")}
+                  aria-invalid={inv("source_url")} placeholder="https://…" />
               </Field>
               <Field label="Checksum URL" htmlFor="pie-sum" hint="SHA256SUMS the refresh verifies against">
-                <input id="pie-sum" className="prov-input mono" type="url" value={f.checksum_url} onChange={onField(setF, "checksum_url")}
-                  aria-invalid={inv("checksum_url")} placeholder="https://…/SHA256SUMS" spellCheck={false} />
+                <input id="pie-sum" className="prov-input mono" {...RAW} type="url" value={f.checksum_url} onChange={onField(setF, "checksum_url")}
+                  aria-invalid={inv("checksum_url")} placeholder="https://…/SHA256SUMS" />
               </Field>
               <div className="prov-grid2">
                 <Field label="Install template" htmlFor="pie-tpl" hint="deploy/fleet/netboot/configs/">
-                  <input id="pie-tpl" className="prov-input mono" list="pie-tpls" value={f.install_template} onChange={onField(setF, "install_template")}
-                    aria-invalid={inv("install_template")} autoComplete="off" spellCheck={false} />
+                  <input id="pie-tpl" className="prov-input mono" {...RAW} list="pie-tpls" value={f.install_template} onChange={onField(setF, "install_template")}
+                    aria-invalid={inv("install_template")} />
                   <datalist id="pie-tpls">{TEMPLATES.map((t) => <option key={t} value={t} />)}</datalist>
                 </Field>
                 <Field label="Refresh policy" htmlFor="pie-pol" hint="drives the stale flag">
@@ -1354,8 +1435,8 @@
             <fieldset disabled={ro || busy} style={{ border: 0, padding: 0, margin: 0 }}>
               <div className="prov-grid2">
                 <Field label="Slug" htmlFor="pse-slug" hint="lowercase, used in run requests; cannot change later">
-                  <input id="pse-slug" className="prov-input mono" value={nf.slug} onChange={onField(setNf, "slug")} aria-invalid={invalid(metaErr, "slug") || undefined}
-                    autoComplete="off" spellCheck={false} data-autofocus placeholder="media-tools" />
+                  <input id="pse-slug" className="prov-input mono" {...RAW} value={nf.slug} onChange={onField(setNf, "slug")} aria-invalid={invalid(metaErr, "slug") || undefined}
+                    data-autofocus placeholder="media-tools" />
                 </Field>
                 <Field label="Name" htmlFor="pse-name">
                   <input id="pse-name" className="prov-input" value={nf.name} onChange={onField(setNf, "name")} aria-invalid={invalid(metaErr, "name") || undefined} />
@@ -1366,7 +1447,7 @@
               </Field>
               <div className="prov-grid2">
                 <Field label="Sort order" htmlFor="pse-so" hint="tie-break between independent stacks (lower first)">
-                  <input id="pse-so" className="prov-input mono" inputMode="numeric" value={nf.sort_order} onChange={onField(setNf, "sort_order")} aria-invalid={invalid(metaErr, "sort_order") || undefined} />
+                  <input id="pse-so" className="prov-input mono" {...RAW} inputMode="numeric" value={nf.sort_order} onChange={onField(setNf, "sort_order")} aria-invalid={invalid(metaErr, "sort_order") || undefined} />
                 </Field>
                 <label style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12.5, cursor: "pointer", alignSelf: "center" }}>
                   <input type="checkbox" className="prov-cb" checked={nf.locked} onChange={onField(setNf, "locked")} />
@@ -1403,7 +1484,7 @@
                   <fieldset disabled={ro || busy} style={{ border: 0, padding: 0, margin: 0 }}>
                     <div className="prov-grid2">
                       <Field label="Slug" htmlFor="pse-slug-ro" hint="fixed — run requests and dependencies refer to it">
-                        <input id="pse-slug-ro" className="prov-input mono" value={det.slug} readOnly disabled />
+                        <input id="pse-slug-ro" className="prov-input mono" {...RAW} value={det.slug} readOnly disabled />
                       </Field>
                       <Field label="Name" htmlFor="pse-name">
                         <input id="pse-name" className="prov-input" value={f.name} onChange={onField(setF, "name")} aria-invalid={invalid(metaErr, "name") || undefined} data-autofocus />
@@ -1414,7 +1495,7 @@
                     </Field>
                     <div className="prov-grid2" style={{ alignItems: "end" }}>
                       <Field label="Sort order" htmlFor="pse-so">
-                        <input id="pse-so" className="prov-input mono" inputMode="numeric" value={f.sort_order} onChange={onField(setF, "sort_order")} aria-invalid={invalid(metaErr, "sort_order") || undefined} />
+                        <input id="pse-so" className="prov-input mono" {...RAW} inputMode="numeric" value={f.sort_order} onChange={onField(setF, "sort_order")} aria-invalid={invalid(metaErr, "sort_order") || undefined} />
                       </Field>
                       <label style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12.5, cursor: "pointer", paddingBottom: 12 }}>
                         <input type="checkbox" className="prov-cb" checked={f.locked} onChange={onField(setF, "locked")} />
@@ -1432,16 +1513,16 @@
                     {explicit && !ro && <button type="button" className="linkbtn" style={{ marginLeft: "auto" }} disabled={busy} onClick={resetOrder}>Reset to default order</button>}
                   </div>
                   {!members.length ? <div className="prov-empty" style={{ padding: "18px 0" }}>No members yet — add pool entries below.</div> : (
-                    <table className="prov-items">
-                      <thead><tr><th scope="col">#</th><th scope="col">Entry</th><th scope="col">Type</th><th scope="col">Order</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-                      <tbody>
+                    <table className="prov-items prov-items--members" role="table">
+                      <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">#</th><th scope="col" role="columnheader">Entry</th><th scope="col" role="columnheader">Type</th><th scope="col" role="columnheader">Order</th><th scope="col" role="columnheader"><span className="sr-only">Actions</span></th></tr></thead>
+                      <tbody role="rowgroup">
                         {members.map((m, i) => (
-                          <tr key={m.software_id} data-prov-member={m.software_id}>
-                            <td className="mono prov-faint">{i + 1}</td>
-                            <td>{m.logical_name}{m.notes && <div className="prov-faint" style={{ fontSize: 11 }}>{m.notes}</div>}</td>
-                            <td><span className="tag">{m.item_type}</span></td>
-                            <td className="mono" title={m.item_order === null ? "Type default (" + m.item_type + " rank × 100)" : "Explicit order"}>{m.effective_order}{m.item_order === null && <span className="prov-faint"> · default</span>}</td>
-                            <td className="prov-acts" style={{ whiteSpace: "nowrap" }}>
+                          <tr key={m.software_id} role="row" data-prov-member={m.software_id}>
+                            <td role="cell" className="mono prov-faint c-num">{i + 1}</td>
+                            <td role="cell" className="c-entry">{m.logical_name}{m.notes && <div className="prov-faint" style={{ fontSize: 11 }}>{m.notes}</div>}</td>
+                            <td role="cell" className="c-type"><span className="tag">{m.item_type}</span></td>
+                            <td role="cell" className="mono c-order" title={m.item_order === null ? "Type default (" + m.item_type + " rank × 100)" : "Explicit order"}>{m.effective_order}{m.item_order === null && <span className="prov-faint"> · default</span>}</td>
+                            <td role="cell" className="prov-acts c-acts" style={{ whiteSpace: "nowrap" }}>
                               <IconBtn icon="arrowup" label={"Move " + m.logical_name + " earlier"} disabled={ro || busy || i === 0} onClick={() => move(i, -1)} />
                               <IconBtn icon="arrowdown" label={"Move " + m.logical_name + " later"} disabled={ro || busy || i === members.length - 1} onClick={() => move(i, 1)} />
                               <IconBtn icon="close" danger label={"Remove " + m.logical_name + " from this stack"} disabled={ro || busy} onClick={() => removeMember(m)} />
@@ -1474,7 +1555,7 @@
                     {!det.depends_on.length && <span className="prov-faint" style={{ fontSize: 12 }}>No stack dependencies{det.locked ? "" : " (locked stacks always run first anyway)"}.</span>}
                     {det.depends_on.map((d) => (
                       <span key={d.stack_id} className="tag teal">{d.slug}
-                        {!ro && <button type="button" className="prov-ib" style={{ width: 18, height: 18, marginLeft: 2 }} disabled={busy}
+                        {!ro && <button type="button" className="prov-ib prov-tagx" disabled={busy}
                           aria-label={"Remove dependency on " + d.slug} onClick={() => removeDependency(d)}><Icon name="close" size={10} /></button>}
                       </span>
                     ))}
@@ -1515,14 +1596,16 @@
     const needle = q.trim().toLowerCase();
     const shown = rows.filter((r) => (type === "all" || r.item_type === type) && (!needle || [r.logical_name, r.name_suse, r.name_debian, r.name_fedora, r.ansible_role, r.version_pin, r.notes]
       .some((v) => v && String(v).toLowerCase().indexOf(needle) >= 0)));
+    const poolWrap = useScrollEdges(shown.length);
 
     function famCell(r, fam) {
       const n = r["name_" + fam];
       const skipped = r.applies_families && r.applies_families.indexOf(fam) < 0;
-      if (skipped) return <td key={fam} className="fam none" title={"Not applied on " + FAM_LABEL[fam]}>skipped</td>;
-      if (n == null) return <td key={fam} className="fam none" title={"Unmapped on " + FAM_LABEL[fam] + " — a run there is refused"}><span className="tag crit">unmapped</span></td>;
-      if (r.item_type !== "pkg") return <td key={fam} className="fam" title={"Supported on " + FAM_LABEL[fam]}><Icon name="check" size={13} style={{ color: "var(--ok)" }} /></td>;
-      return <td key={fam} className="fam mono">{n}</td>;
+      const cell = { key: fam, role: "cell", "data-label": FAM_LABEL[fam] };
+      if (skipped) return <td {...cell} className="fam c-fam none" title={"Not applied on " + FAM_LABEL[fam]}>skipped</td>;
+      if (n == null) return <td {...cell} className="fam c-fam none" title={"Unmapped on " + FAM_LABEL[fam] + " — a run there is refused"}><span className="tag crit">unmapped</span></td>;
+      if (r.item_type !== "pkg") return <td {...cell} className="fam c-fam" title={"Supported on " + FAM_LABEL[fam]}><Icon name="check" size={13} style={{ color: "var(--ok)" }} /><span className="sr-only">supported</span></td>;
+      return <td {...cell} className="fam c-fam mono">{n}</td>;
     }
     function del(r) {
       return api().provSoftwareDelete(r.id).then(() => {
@@ -1550,10 +1633,10 @@
             {" "}Stored in the SoR; rendered to Ansible vars at run time. No YAML is edited here.
           </div>
           <div className="prov-pool__filters">
-            <div className="search" style={{ minWidth: 220, flex: "0 1 320px" }}>
+            <div className="search prov-pool__search">
               <Icon name="search" size={14} />
               <label className="sr-only" htmlFor="prov-pool-q">Search the pool</label>
-              <input id="prov-pool-q" className="prov-input" placeholder="Search names, pins, roles…" value={q} onChange={(e) => setQ(e.target.value)} />
+              <input id="prov-pool-q" className="prov-input" type="search" enterKeyHint="search" {...RAW} placeholder="Search names, pins, roles…" value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
             <div className="prov-checks" role="group" aria-label="Filter by type">
               {["all"].concat(ITEM_TYPES).map((t) => (
@@ -1572,28 +1655,28 @@
               </div>
             ) : !shown.length ? <div className="prov-empty">Nothing matches{needle ? " “" + q.trim() + "”" : ""}{type !== "all" ? " in " + type : ""}. <button type="button" className="linkbtn" onClick={() => { setQ(""); setType("all"); }}>Clear filters</button></div>
               : (
-                <div className="prov-pool__wrap">
-                  <table className="prov-pool">
-                    <thead><tr>
-                      <th scope="col">Logical name</th><th scope="col">Type</th>
-                      {FAMS.map((f) => <th key={f} scope="col">{FAM_LABEL[f]}</th>)}
-                      <th scope="col">Pin</th><th scope="col">Applies</th><th scope="col">Used in</th><th scope="col"><span className="sr-only">Actions</span></th>
+                <div className="prov-pool__wrap" ref={poolWrap}>
+                  <table className="prov-pool" role="table">
+                    <thead role="rowgroup"><tr role="row">
+                      <th scope="col" role="columnheader">Logical name</th><th scope="col" role="columnheader">Type</th>
+                      {FAMS.map((f) => <th key={f} scope="col" role="columnheader">{FAM_LABEL[f]}</th>)}
+                      <th scope="col" role="columnheader">Pin</th><th scope="col" role="columnheader">Applies</th><th scope="col" role="columnheader">Used in</th><th scope="col" role="columnheader"><span className="sr-only">Actions</span></th>
                     </tr></thead>
-                    <tbody>
+                    <tbody role="rowgroup">
                       {shown.map((r) => {
                         const used = usedIn[r.id] || [];
                         const applies = [r.applies_families ? r.applies_families.join(", ") : null, r.applies_arches ? r.applies_arches.join(", ") : null].filter(Boolean).join(" · ");
                         return (
-                          <tr key={r.id}>
-                            <td><button type="button" className="linkbtn" onClick={() => setModal({ kind: "sw", id: r.id })}>{r.logical_name}</button>
+                          <tr key={r.id} role="row">
+                            <td role="cell" className="c-name"><button type="button" className="linkbtn" onClick={() => setModal({ kind: "sw", id: r.id })}>{r.logical_name}</button>
                               {r.item_type === "role" && r.ansible_role && <div className="mono prov-faint" style={{ fontSize: 11 }}>{r.ansible_role}</div>}
                               {r.notes && <div className="prov-faint" style={{ fontSize: 11 }}>{r.notes}</div>}</td>
-                            <td><span className="tag">{r.item_type}</span></td>
+                            <td role="cell" className="c-type"><span className="tag">{r.item_type}</span></td>
                             {FAMS.map((f) => famCell(r, f))}
-                            <td className="mono">{r.version_pin || <span className="prov-faint">—</span>}</td>
-                            <td className="mono" style={{ fontSize: 11.5 }}>{applies || <span className="prov-faint">all</span>}</td>
-                            <td style={{ fontSize: 12 }}>{used.length ? used.join(", ") : <span className="prov-faint">unused</span>}</td>
-                            <td className="prov-acts" style={{ whiteSpace: "nowrap" }}>
+                            <td role="cell" className="mono c-pin" data-label="Pin">{r.version_pin || <span className="prov-faint">—</span>}</td>
+                            <td role="cell" className="mono c-applies" data-label="Applies" style={{ fontSize: 11.5 }}>{applies || <span className="prov-faint">all</span>}</td>
+                            <td role="cell" className="c-used" data-label="Used in" style={{ fontSize: 12 }}>{used.length ? used.join(", ") : <span className="prov-faint">unused</span>}</td>
+                            <td role="cell" className="prov-acts c-acts" style={{ whiteSpace: "nowrap" }}>
                               <IconBtn icon="edit" label={"Edit " + r.logical_name} onClick={() => setModal({ kind: "sw", id: r.id })} />
                               <IconBtn icon="trash" danger label={"Delete " + r.logical_name}
                                 title={!op ? OP_ONLY : used.length ? "Used in " + used.join(", ") + " — remove it from those stacks first" : "Delete"}
@@ -1702,14 +1785,14 @@
       <>
         <div className="prov-grid2">
           <Field label="Creates" htmlFor="pss-creates" hint="absolute path; present = already installed (guard)">
-            <input id="pss-creates" className="prov-input mono" value={st.creates} onChange={upd("creates")} aria-invalid={inv("creates")} placeholder="/usr/local/bin/tool" spellCheck={false} />
+            <input id="pss-creates" className="prov-input mono" {...RAW} value={st.creates} onChange={upd("creates")} aria-invalid={inv("creates")} placeholder="/usr/local/bin/tool" />
           </Field>
           <Field label="Version check" htmlFor="pss-vc" hint="regex with one group, matched against the check output; needs a pin">
-            <input id="pss-vc" className="prov-input mono" value={st.version_check} onChange={upd("version_check")} aria-invalid={inv("version_check")} placeholder="v([0-9.]+)" spellCheck={false} />
+            <input id="pss-vc" className="prov-input mono" {...RAW} value={st.version_check} onChange={upd("version_check")} aria-invalid={inv("version_check")} placeholder="v([0-9.]+)" />
           </Field>
         </div>
         <Field label="Check command" htmlFor="pss-check" hint="argv, one argument per line; exit 0 = installed (guard)">
-          <textarea id="pss-check" className="prov-input mono" rows={2} value={st.check} onChange={upd("check")} aria-invalid={inv("check")} placeholder={"/usr/local/bin/tool\n--version"} spellCheck={false} />
+          <textarea id="pss-check" className="prov-input mono" {...RAW} rows={2} value={st.check} onChange={upd("check")} aria-invalid={inv("check")} placeholder={"/usr/local/bin/tool\n--version"} />
         </Field>
       </>
     );
@@ -1718,9 +1801,9 @@
         <span className="prov-kicker">Environment</span>
         {st.env.map((r, i) => (
           <div key={i} className="prov-addrow" style={{ marginTop: 0, marginBottom: 6 }}>
-            <input className="prov-input mono" aria-label={"Variable " + (i + 1) + " name"} value={r.k} placeholder="NAME" spellCheck={false}
+            <input className="prov-input mono" {...RAW} aria-label={"Variable " + (i + 1) + " name"} value={r.k} placeholder="NAME"
               onChange={(e) => setSt((p) => { const env = p.env.slice(); env[i] = { k: e.target.value, v: r.v }; return Object.assign({}, p, { env: env }); })} />
-            <input className="prov-input mono" aria-label={"Variable " + (i + 1) + " value"} value={r.v} spellCheck={false}
+            <input className="prov-input mono" {...RAW} aria-label={"Variable " + (i + 1) + " value"} value={r.v}
               onChange={(e) => setSt((p) => { const env = p.env.slice(); env[i] = { k: r.k, v: e.target.value }; return Object.assign({}, p, { env: env }); })} />
             <IconBtn icon="close" danger label={"Remove variable " + (r.k || i + 1)} onClick={() => setSt((p) => Object.assign({}, p, { env: p.env.filter((_, j) => j !== i) }))} />
           </div>
@@ -1740,7 +1823,7 @@
             <span>Extract <span className="muted">— the artifact is an archive to unpack</span></span>
           </label>
           <Field label="Creates" htmlFor="pss-creates" hint="absolute path the install produces (idempotency guard)">
-            <input id="pss-creates" className="prov-input mono" value={st.creates} onChange={upd("creates")} aria-invalid={inv("creates")} spellCheck={false} />
+            <input id="pss-creates" className="prov-input mono" {...RAW} value={st.creates} onChange={upd("creates")} aria-invalid={inv("creates")} />
           </Field>
           <div className="prov-note">Per-arch download URLs and sha256s are managed under <b>Artifacts</b> below once the entry is saved.</div>
         </>
@@ -1757,17 +1840,17 @@
           </div>
           {st.src === "inline" ? (
             <Field label="Body" htmlFor="pss-body">
-              <textarea id="pss-body" className="prov-input mono" rows={7} value={st.body} onChange={upd("body")} aria-invalid={inv("body")} spellCheck={false} placeholder={"set -eu\n…"} />
+              <textarea id="pss-body" className="prov-input mono" {...RAW} rows={7} value={st.body} onChange={upd("body")} aria-invalid={inv("body")} placeholder={"set -eu\n…"} />
             </Field>
           ) : (
             <div className="prov-grid2">
-              <Field label="URL" htmlFor="pss-url"><input id="pss-url" className="prov-input mono" value={st.url} onChange={upd("url")} aria-invalid={inv("url")} spellCheck={false} placeholder="https://…/install.sh" /></Field>
-              <Field label="sha256" htmlFor="pss-sha" hint="mandatory — an unpinned remote script is refused"><input id="pss-sha" className="prov-input mono" value={st.sha256} onChange={upd("sha256")} aria-invalid={inv("sha256")} spellCheck={false} /></Field>
+              <Field label="URL" htmlFor="pss-url"><input id="pss-url" className="prov-input mono" {...RAW} value={st.url} onChange={upd("url")} aria-invalid={inv("url")} placeholder="https://…/install.sh" /></Field>
+              <Field label="sha256" htmlFor="pss-sha" hint="mandatory — an unpinned remote script is refused"><input id="pss-sha" className="prov-input mono" {...RAW} value={st.sha256} onChange={upd("sha256")} aria-invalid={inv("sha256")} /></Field>
             </div>
           )}
           <div className="prov-grid2">
             <Field label="Interpreter" htmlFor="pss-int" hint="absolute path (default /bin/sh)">
-              <input id="pss-int" className="prov-input mono" value={st.interpreter} onChange={upd("interpreter")} aria-invalid={inv("interpreter")} placeholder="/bin/sh" spellCheck={false} />
+              <input id="pss-int" className="prov-input mono" {...RAW} value={st.interpreter} onChange={upd("interpreter")} aria-invalid={inv("interpreter")} placeholder="/bin/sh" />
             </Field>
             <Field label="Run as" htmlFor="pss-runas">
               <select id="pss-runas" className="prov-input" value={st.run_as} onChange={upd("run_as")} aria-invalid={inv("run_as")}>
@@ -1792,13 +1875,13 @@
           </div>
           {st.bsrc === "git" ? (
             <div className="prov-grid2">
-              <Field label="Git URL" htmlFor="pss-git"><input id="pss-git" className="prov-input mono" value={st.git} onChange={upd("git")} aria-invalid={inv("source")} spellCheck={false} /></Field>
-              <Field label="Tag (informational)" htmlFor="pss-tag" hint="the version pin must be the full commit hash"><input id="pss-tag" className="prov-input mono" value={st.tag} onChange={upd("tag")} spellCheck={false} /></Field>
+              <Field label="Git URL" htmlFor="pss-git"><input id="pss-git" className="prov-input mono" {...RAW} value={st.git} onChange={upd("git")} aria-invalid={inv("source")} /></Field>
+              <Field label="Tag (informational)" htmlFor="pss-tag" hint="the version pin must be the full commit hash"><input id="pss-tag" className="prov-input mono" {...RAW} value={st.tag} onChange={upd("tag")} /></Field>
             </div>
           ) : (
             <div className="prov-grid2">
-              <Field label="Tarball URL" htmlFor="pss-tb"><input id="pss-tb" className="prov-input mono" value={st.tarball} onChange={upd("tarball")} aria-invalid={inv("source")} spellCheck={false} /></Field>
-              <Field label="sha256" htmlFor="pss-tsha"><input id="pss-tsha" className="prov-input mono" value={st.tsha} onChange={upd("tsha")} aria-invalid={inv("source")} spellCheck={false} /></Field>
+              <Field label="Tarball URL" htmlFor="pss-tb"><input id="pss-tb" className="prov-input mono" {...RAW} value={st.tarball} onChange={upd("tarball")} aria-invalid={inv("source")} /></Field>
+              <Field label="sha256" htmlFor="pss-tsha"><input id="pss-tsha" className="prov-input mono" {...RAW} value={st.tsha} onChange={upd("tsha")} aria-invalid={inv("source")} /></Field>
             </div>
           )}
           <div className="prov-grid2">
@@ -1808,16 +1891,16 @@
               </select>
             </Field>
             <Field label="Prefix" htmlFor="pss-prefix" hint="default /usr/local">
-              <input id="pss-prefix" className="prov-input mono" value={st.prefix} onChange={upd("prefix")} aria-invalid={inv("prefix")} placeholder="/usr/local" spellCheck={false} />
+              <input id="pss-prefix" className="prov-input mono" {...RAW} value={st.prefix} onChange={upd("prefix")} aria-invalid={inv("prefix")} placeholder="/usr/local" />
             </Field>
           </div>
           <Field label="Configure arguments" htmlFor="pss-cfg" hint="one per line">
-            <textarea id="pss-cfg" className="prov-input mono" rows={2} value={st.configure_args} onChange={upd("configure_args")} aria-invalid={inv("configure_args")} spellCheck={false} />
+            <textarea id="pss-cfg" className="prov-input mono" {...RAW} rows={2} value={st.configure_args} onChange={upd("configure_args")} aria-invalid={inv("configure_args")} />
           </Field>
           {st.system === "custom" && (
             <div className="prov-grid2">
-              <Field label="Build command" htmlFor="pss-b"><input id="pss-b" className="prov-input mono" value={st.build} onChange={upd("build")} aria-invalid={inv("build")} spellCheck={false} /></Field>
-              <Field label="Install command" htmlFor="pss-i" hint="installs into $DESTDIR"><input id="pss-i" className="prov-input mono" value={st.install} onChange={upd("install")} aria-invalid={inv("install")} spellCheck={false} /></Field>
+              <Field label="Build command" htmlFor="pss-b"><input id="pss-b" className="prov-input mono" {...RAW} value={st.build} onChange={upd("build")} aria-invalid={inv("build")} /></Field>
+              <Field label="Install command" htmlFor="pss-i" hint="installs into $DESTDIR"><input id="pss-i" className="prov-input mono" {...RAW} value={st.install} onChange={upd("install")} aria-invalid={inv("install")} /></Field>
             </div>
           )}
           {guard}
@@ -1841,16 +1924,16 @@
               {r.on && (
                 <div style={{ marginTop: 8 }}>
                   <div className="prov-grid2">
-                    <Field label="Repository URL" htmlFor={"pss-r-" + f + "-url"}><input id={"pss-r-" + f + "-url"} className="prov-input mono" value={r.url} onChange={set("url")} aria-invalid={inv(f)} spellCheck={false} /></Field>
-                    <Field label="Key URL" htmlFor={"pss-r-" + f + "-key"}><input id={"pss-r-" + f + "-key"} className="prov-input mono" value={r.key_url} onChange={set("key_url")} aria-invalid={inv(f)} spellCheck={false} /></Field>
+                    <Field label="Repository URL" htmlFor={"pss-r-" + f + "-url"}><input id={"pss-r-" + f + "-url"} className="prov-input mono" {...RAW} value={r.url} onChange={set("url")} aria-invalid={inv(f)} /></Field>
+                    <Field label="Key URL" htmlFor={"pss-r-" + f + "-key"}><input id={"pss-r-" + f + "-key"} className="prov-input mono" {...RAW} value={r.key_url} onChange={set("key_url")} aria-invalid={inv(f)} /></Field>
                   </div>
                   <Field label="Key fingerprint" htmlFor={"pss-r-" + f + "-fp"} hint="full 40- or 64-hex fingerprint; the key is verified before it is trusted">
-                    <input id={"pss-r-" + f + "-fp"} className="prov-input mono" value={r.fingerprint} onChange={set("fingerprint")} aria-invalid={inv(f)} spellCheck={false} />
+                    <input id={"pss-r-" + f + "-fp"} className="prov-input mono" {...RAW} value={r.fingerprint} onChange={set("fingerprint")} aria-invalid={inv(f)} />
                   </Field>
                   {f === "debian" && (
                     <div className="prov-grid2">
-                      <Field label="Suite" htmlFor="pss-r-suite"><input id="pss-r-suite" className="prov-input mono" value={r.suite} onChange={set("suite")} aria-invalid={inv(f)} placeholder="bookworm" spellCheck={false} /></Field>
-                      <Field label="Components" htmlFor="pss-r-comp" hint="space-separated"><input id="pss-r-comp" className="prov-input mono" value={r.components} onChange={set("components")} aria-invalid={inv(f)} placeholder="main" spellCheck={false} /></Field>
+                      <Field label="Suite" htmlFor="pss-r-suite"><input id="pss-r-suite" className="prov-input mono" {...RAW} value={r.suite} onChange={set("suite")} aria-invalid={inv(f)} placeholder="bookworm" /></Field>
+                      <Field label="Components" htmlFor="pss-r-comp" hint="space-separated"><input id="pss-r-comp" className="prov-input mono" {...RAW} value={r.components} onChange={set("components")} aria-invalid={inv(f)} placeholder="main" /></Field>
                     </div>
                   )}
                 </div>
@@ -1967,7 +2050,7 @@
               <div className="prov-section__head"><h3>Entry</h3></div>
               <div className="prov-grid2">
                 <Field label="Logical name" htmlFor="psw-name" hint="what stacks and the operator call it">
-                  <input id="psw-name" className="prov-input" value={f.logical_name} onChange={onField(setF, "logical_name")} aria-invalid={inv("logical_name")} maxLength={96} data-autofocus />
+                  <input id="psw-name" className="prov-input" {...RAW} value={f.logical_name} onChange={onField(setF, "logical_name")} aria-invalid={inv("logical_name")} maxLength={96} data-autofocus />
                 </Field>
                 <Field label="Type" htmlFor="psw-type" hint={TYPE_HELP[f.item_type]}>
                   <select id="psw-type" className="prov-input" value={f.item_type} onChange={(e) => setType(e.target.value)} aria-invalid={inv("item_type")}>
@@ -1981,7 +2064,7 @@
                 <div className="prov-grid3">
                   {FAMS.map((x) => (
                     <Field key={x} label={FAM_LABEL[x] + " package"} htmlFor={"psw-n-" + x}>
-                      <input id={"psw-n-" + x} className="prov-input mono" value={f.names[x]} placeholder="blank = unmapped" spellCheck={false} maxLength={128}
+                      <input id={"psw-n-" + x} className="prov-input mono" {...RAW} value={f.names[x]} placeholder="blank = unmapped" maxLength={128}
                         aria-invalid={inv("name_" + x)}
                         onChange={(e) => { const v = e.target.value; setF((p) => Object.assign({}, p, { names: Object.assign({}, p.names, { [x]: v }) })); }} />
                     </Field>
@@ -2010,15 +2093,15 @@
               <div className="prov-grid2">
                 <Field label={"Version pin" + (f.item_type === "artifact" || f.item_type === "build" ? " (required)" : "")} htmlFor="psw-pin"
                   hint={f.item_type === "build" && st.bsrc === "git" ? "full 40/64-hex commit hash" : "one safe token, e.g. 1.4.2"}>
-                  <input id="psw-pin" className="prov-input mono" value={f.version_pin} onChange={onField(setF, "version_pin")} aria-invalid={inv("version_pin")} spellCheck={false} maxLength={64} />
+                  <input id="psw-pin" className="prov-input mono" {...RAW} value={f.version_pin} onChange={onField(setF, "version_pin")} aria-invalid={inv("version_pin")} maxLength={64} />
                 </Field>
                 {f.item_type === "role" ? (
                   <Field label="Ansible role" htmlFor="psw-role">
-                    <input id="psw-role" className="prov-input mono" value={f.ansible_role} onChange={onField(setF, "ansible_role")} aria-invalid={inv("ansible_role")} spellCheck={false} />
+                    <input id="psw-role" className="prov-input mono" {...RAW} value={f.ansible_role} onChange={onField(setF, "ansible_role")} aria-invalid={inv("ansible_role")} />
                   </Field>
                 ) : (
                   <Field label="Source URL" htmlFor="psw-src" hint="upstream project page (informational)">
-                    <input id="psw-src" className="prov-input mono" value={f.source_url} onChange={onField(setF, "source_url")} aria-invalid={inv("source_url")} spellCheck={false} placeholder="https://…" />
+                    <input id="psw-src" className="prov-input mono" {...RAW} value={f.source_url} onChange={onField(setF, "source_url")} aria-invalid={inv("source_url")} placeholder="https://…" />
                   </Field>
                 )}
               </div>
@@ -2041,25 +2124,28 @@
               <div className="prov-section">
                 <div className="prov-section__head"><h3>Artifacts</h3><span className="prov-faint" style={{ fontSize: 11.5 }}>one download per arch (“any” = arch-independent)</span></div>
                 {det.artifacts.length ? (
-                  <table className="prov-items">
-                    <thead><tr><th scope="col">Arch</th><th scope="col">URL</th><th scope="col">sha256</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-                    <tbody>{det.artifacts.map((x) => (
-                      <tr key={x.id}>
-                        <td className="mono">{x.arch}</td>
-                        <td className="mono" style={{ wordBreak: "break-all", fontSize: 11.5 }}>{x.url}</td>
-                        <td className="mono prov-faint" title={x.sha256} style={{ fontSize: 11.5 }}>{x.sha256.slice(0, 12)}…</td>
-                        <td className="prov-acts"><IconBtn icon="trash" danger label={"Remove the " + x.arch + " artifact"} onClick={() => rel(a.provArtifactDelete(det.id, x.id))} /></td>
+                  <table className="prov-items prov-items--art" role="table">
+                    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Arch</th><th scope="col" role="columnheader">URL</th><th scope="col" role="columnheader">sha256</th><th scope="col" role="columnheader"><span className="sr-only">Actions</span></th></tr></thead>
+                    <tbody role="rowgroup">{det.artifacts.map((x) => (
+                      <tr key={x.id} role="row">
+                        <td role="cell" className="mono c-arch">{x.arch}</td>
+                        <td role="cell" className="mono c-url" style={{ wordBreak: "break-all", fontSize: 11.5 }}>{x.url}</td>
+                        <td role="cell" className="mono prov-faint c-sha" style={{ fontSize: 11.5 }}>
+                          {/* details, not a button: the read-only fieldset would disable a button */}
+                          <details className="prov-sha"><summary title={x.sha256} aria-label={"sha256 " + x.sha256.slice(0, 12) + "…, show the full hash"}>{x.sha256.slice(0, 12)}…</summary><span>{x.sha256}</span></details>
+                        </td>
+                        <td role="cell" className="prov-acts c-acts"><IconBtn icon="trash" danger label={"Remove the " + x.arch + " artifact"} onClick={() => rel(a.provArtifactDelete(det.id, x.id))} /></td>
                       </tr>
                     ))}</tbody>
                   </table>
                 ) : <div className="prov-faint" style={{ fontSize: 12, marginBottom: 8 }}>No artifacts yet — a run on any arch fails until one is added.</div>}
                 {!ro && (
-                  <div className="prov-addrow" style={{ gridTemplateColumns: "110px 1fr 1fr auto" }}>
+                  <div className="prov-addrow prov-addrow--art">
                     <select className="prov-input mono" aria-label="Artifact arch" value={art.arch} onChange={(e) => setArt(Object.assign({}, art, { arch: e.target.value }))}>
                       {ART_ARCHES.map((x) => <option key={x} value={x}>{x}</option>)}
                     </select>
-                    <input className="prov-input mono" aria-label="Artifact URL" placeholder="https://…" value={art.url} spellCheck={false} onChange={(e) => setArt(Object.assign({}, art, { url: e.target.value }))} />
-                    <input className="prov-input mono" aria-label="Artifact sha256" placeholder="sha256" value={art.sha256} spellCheck={false} onChange={(e) => setArt(Object.assign({}, art, { sha256: e.target.value }))} />
+                    <input className="prov-input mono" {...RAW} aria-label="Artifact URL" placeholder="https://…" value={art.url} onChange={(e) => setArt(Object.assign({}, art, { url: e.target.value }))} />
+                    <input className="prov-input mono" {...RAW} aria-label="Artifact sha256" placeholder="sha256" value={art.sha256} onChange={(e) => setArt(Object.assign({}, art, { sha256: e.target.value }))} />
                     <button type="button" className="btn-ghost" disabled={!art.url.trim() || !art.sha256.trim()}
                       onClick={() => rel(a.provArtifactAdd(det.id, { arch: art.arch, url: art.url.trim(), sha256: art.sha256.trim().toLowerCase() }), () => setArt({ arch: "any", url: "", sha256: "" }))}>
                       <Icon name="plus" size={14} /> Add</button>
@@ -2080,7 +2166,7 @@
                     {!det[key].length && <span className="prov-faint" style={{ fontSize: 12 }}>None.</span>}
                     {det[key].map((x) => (
                       <span key={x.software_id} className={"tag" + (key === "conflicts" ? " warn" : " teal")}>{x.logical_name}
-                        {!ro && <button type="button" className="prov-ib" style={{ width: 18, height: 18, marginLeft: 2 }}
+                        {!ro && <button type="button" className="prov-ib prov-tagx"
                           aria-label={"Remove " + title.toLowerCase() + " " + x.logical_name} onClick={() => rel(remove(x))}><Icon name="close" size={10} /></button>}
                       </span>
                     ))}

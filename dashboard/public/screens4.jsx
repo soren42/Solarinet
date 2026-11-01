@@ -779,17 +779,18 @@
       <Modal title="New model" icon="tag2" sub="Add a make/model to the catalog" onClose={onClose}
         footer={<><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" onClick={submit}><Icon name="check" size={14} />Add model</button></>}>
         <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}><label style={LBL}>Make</label><input autoFocus style={FLD} value={make} onChange={function (e) { setMake(e.target.value); }} placeholder="Dell, Ubiquiti…" /></div>
-          <div style={{ flex: 1 }}><label style={LBL}>Model</label><input style={FLD} value={model} onChange={function (e) { setModel(e.target.value); }} placeholder="R410, U7 Pro…" /></div>
+          <div style={{ flex: 1 }}><label style={LBL}>Make</label><input autoFocus className="touch-field" style={FLD} value={make} onChange={function (e) { setMake(e.target.value); }} placeholder="Dell, Ubiquiti…" /></div>
+          <div style={{ flex: 1 }}><label style={LBL}>Model</label><input className="touch-field" style={FLD} value={model} onChange={function (e) { setModel(e.target.value); }} placeholder="R410, U7 Pro…" /></div>
         </div>
         <label style={LBL}>Type</label>
-        <select style={FLD} value={hwType} onChange={function (e) { setHwType(e.target.value); }}>{HW_TYPES.map(function (t) { return <option key={t} value={t}>{t}</option>; })}</select>
-        <label style={LBL}>CPU architecture</label>
-        <select style={FLD} value={arch} onChange={function (e) { setArch(e.target.value); }} title="Provisioning only reimages a machine whose CPU architecture is known">
+        <select className="touch-field" style={FLD} value={hwType} onChange={function (e) { setHwType(e.target.value); }}>{HW_TYPES.map(function (t) { return <option key={t} value={t}>{t}</option>; })}</select>
+        <label style={LBL} htmlFor="inv-model-arch">CPU architecture</label>
+        <select id="inv-model-arch" className="touch-field" style={FLD} value={arch} onChange={function (e) { setArch(e.target.value); }} aria-describedby="inv-model-arch-hint">
           <option value="">unknown</option>{HW_ARCHES.map(function (t) { return <option key={t} value={t}>{t}</option>; })}
         </select>
+        <div id="inv-model-arch-hint" className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Provisioning only reimages a machine whose CPU architecture is known.</div>
         <label style={LBL}>Notes</label>
-        <input style={FLD} value={notes} onChange={function (e) { setNotes(e.target.value); }} placeholder="spec links, quirks…" />
+        <input className="touch-field" style={FLD} value={notes} onChange={function (e) { setNotes(e.target.value); }} placeholder="spec links, quirks…" />
       </Modal>
     );
   }
