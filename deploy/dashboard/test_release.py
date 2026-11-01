@@ -50,6 +50,31 @@ class ReleaseFlowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "required submodule is not initialized"):
                 PACKAGER_MODULE.source_submodules()
 
+    def test_transport_marker_detection_spans_read_chunks(self) -> None:
+        marker = PACKAGER_MODULE.TRANSPORT_MARKER
+        with tempfile.TemporaryDirectory(prefix="solarinet-release-marker-") as temp:
+            path = Path(temp) / "bin"
+            path.write_bytes(b"\0" * ((1 << 20) - 5) + marker + b"\0")
+            self.assertTrue(PACKAGER_MODULE.has_transport_marker(path))
+            path.write_bytes(b"\0" * (1 << 21))
+            self.assertFalse(PACKAGER_MODULE.has_transport_marker(path))
+
+    def test_stub_transport_binary_is_rejected(self) -> None:
+        # solariCtlClient has no transport, so it stands in for a stub build.
+        with tempfile.TemporaryDirectory(prefix="solarinet-release-stub-") as temp:
+            output = Path(temp) / "must-not-exist.tar.gz"
+            result = subprocess.run(
+                [sys.executable, str(PACKAGER), "--version", "stub-rejected",
+                 "--binary", str(CTL_CLIENT), "--scan-worker-binary", str(SCAN_WORKER),
+                 "--ctl-client-binary", str(CTL_CLIENT), "--output", str(output), "--allow-dirty"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("bin/solariServer was built without SOLARI_WITH_IO", result.stderr)
+            self.assertFalse(output.exists())
+
     def run_packager(self, version: str, output: Path) -> None:
         subprocess.run(
             [sys.executable, str(PACKAGER), "--version", version, "--binary", str(BINARY),

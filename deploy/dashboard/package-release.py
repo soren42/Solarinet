@@ -138,6 +138,25 @@ def tracked_files(*paths: str) -> list[str]:
     return names
 
 
+# Defined in lib/solari/solariNet.c, and only in builds with SOLARI_WITH_IO.
+# A networked binary without it links the ERR_PLATFORM transport stubs and
+# cannot bind or connect (2026-10-31: a stub build was released and ingest was
+# down for ~10.7 h while every service still started cleanly).
+TRANSPORT_MARKER = b"SOLARI-TRANSPORT:nng+mbedtls"
+NETWORKED_BINARIES = ("bin/solariServer", "bin/solariScanWorker", "bin/solariClient",
+                      "bin/solariMonitor", "bin/solariSnmpPoll")
+
+
+def has_transport_marker(path: Path) -> bool:
+    tail = b""
+    with path.open("rb") as handle:
+        while chunk := handle.read(1 << 20):
+            if TRANSPORT_MARKER in tail + chunk:
+                return True
+            tail = chunk[-(len(TRANSPORT_MARKER) - 1):]
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="immutable release directory name")
@@ -168,6 +187,10 @@ def main() -> int:
     for name, path in binaries.items():
         if not path.is_file() or not os.access(path, os.X_OK):
             parser.error(f"{name} binary is missing or not executable: {path}")
+    for name, path in (("bin/solariServer", binary), *binaries.items()):
+        if name in NETWORKED_BINARIES and not has_transport_marker(path):
+            parser.error(f"{name} was built without SOLARI_WITH_IO (stub transport, cannot bind or "
+                         f"connect); rebuild with -DSOLARI_WITH_IO=ON: {path}")
 
     output = (args.output or ROOT / "deploy/dist" / f"solarinet-dashboard-{args.version}.tar.gz").resolve()
     try:

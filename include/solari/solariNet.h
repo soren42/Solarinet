@@ -53,6 +53,9 @@ solariStatus solariConnOpen(const solariConnOpts *opts, solariConn **out);
 /* Bind a listener for the given pattern (server side). Same error contract. */
 solariStatus solariConnListen(const solariConnOpts *opts, solariConn **out);
 
+/* Present only in builds with the real transport (see solariNet.c). */
+extern const char solariTransportMarker[];
+
 /* Send one fully-built SCP frame. Honors sendTimeoutMs. On a transient failure
  * (peer not currently reachable, would-block) returns ERR_CONN_RETRY so the
  * caller knows to spool and retry; ERR_CONN_FATAL on an unrecoverable error. */
