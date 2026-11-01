@@ -24,11 +24,40 @@
   <!-- ==== mode =========================================================== -->
   <!-- confirm defaults to true, which parks the install at the Installation  -->
   <!-- Settings screen waiting for a click. Unattended installs must not.     -->
+  <!-- second_stage=false: everything here is written in the first stage.     -->
+  <!-- A second stage would run on first boot holding logins (pam_nologin),   -->
+  <!-- and if the installer was booted with ssh=1 it waits there for someone  -->
+  <!-- to run yast.ssh, which no key on the new system allows.                -->
   <general>
     <mode>
       <confirm config:type="boolean">false</confirm>
+      <second_stage config:type="boolean">false</second_stage>
     </mode>
   </general>
+  <!-- report: warnings and notes time out instead of waiting for a click;    -->
+  <!-- errors still stop so a broken install is never silently half-done.    -->
+  <report>
+    <errors>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">0</timeout>
+      <log config:type="boolean">true</log>
+    </errors>
+    <warnings>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">10</timeout>
+      <log config:type="boolean">true</log>
+    </warnings>
+    <messages>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">10</timeout>
+      <log config:type="boolean">true</log>
+    </messages>
+    <yesno_messages>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">10</timeout>
+      <log config:type="boolean">true</log>
+    </yesno_messages>
+  </report>
 
   <!-- ==== language / keyboard / timezone ================================= -->
   <language>
@@ -179,6 +208,14 @@ fi
 command -v python3 >/dev/null 2>&1 \
   || zypper --non-interactive install --no-recommends python3 \
   || echo 'solari: python3 not installed here; prov-finish.py will install it' >&2
+
+# solariClient's shared libraries (the release build links nng, mbedTLS 3.x,
+# cJSON and SQLite). Soname package names differ between Tumbleweed and Leap,
+# so they are not AutoYaST <package>s (an unresolvable name stops the install);
+# a miss here leaves the agent unable to start, not the install broken.
+zypper --non-interactive install --no-recommends \
+    libnng1 libmbedtls21 libmbedcrypto16 libmbedx509-7 libcjson1 libsqlite3-0 \
+  || echo 'solari: agent libraries not all installed; solariClient will not start' >&2
 
 # fetch + run the SolariNet first-boot installer
 curl --fail --silent --show-error --location \
