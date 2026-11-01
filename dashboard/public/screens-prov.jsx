@@ -907,7 +907,7 @@
                                           {busy && <span className="tag teal" title={refreshing[img.id].run ? "Run " + refreshing[img.id].run + " in Recent runs" : "Waiting for the refresh run to appear in Recent runs"}>{refreshing[img.id].status ? "refresh " + refreshing[img.id].status + "…" : "refreshing…"}</span>}
                                         </span>
                                         <span className="prov-acts">
-                                          <button type="button" className="prov-ib" aria-expanded={whyId === img.id} aria-controls={"prov-why-" + img.id}
+                                          <button type="button" className="prov-ib" aria-expanded={whyId === img.id} aria-controls={whyId === img.id ? "prov-why-" + img.id : undefined}
                                             aria-label={"Details for " + imageLabel(img)} title="Details" onClick={() => setWhyId(whyId === img.id ? null : img.id)}>
                                             <span aria-hidden="true" style={{ fontWeight: 700, fontFamily: "var(--mono)" }}>i</span>
                                           </button>
