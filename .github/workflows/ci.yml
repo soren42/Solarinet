@@ -693,6 +693,10 @@ jobs:
         env:
           NODE_PATH: /tmp/dashboard-playwright/node_modules
         run: node tests/browser/test_provisioning_images_e2e.cjs
+      - name: Images & Stacks touch acceptance (iPad/iPhone emulation)
+        env:
+          NODE_PATH: /tmp/dashboard-playwright/node_modules
+        run: node tests/browser/test_provisioning_touch_e2e.cjs
       - name: Lifecycle UI suite
         run: node tests/dashboard/test_lifecycle_ui.js
       - name: Panel AW UI suite

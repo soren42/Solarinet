@@ -107,6 +107,19 @@ if (str_starts_with($path, '/api/')) {
                     return $o;
                 }, $s['stacks'])));
             }
+            if (preg_match('~\\Asoftware/(\\d+)\\z~', $rest, $m) && isset($s['software'][$m[1]])) {
+                $sw = $s['software'][$m[1]];
+                $ref = static fn ($id) => ['software_id'=>$id, 'logical_name'=>$s['software'][(string)$id]['logical_name']];
+                $sw['artifacts'] = $sw['artifacts'] ?? [];
+                $sw['requires'] = array_map($ref, $sw['requires'] ?? []);
+                $sw['conflicts'] = array_map($ref, $sw['conflicts_with'] ?? []);
+                $sw['required_by'] = [];
+                $sw['stacks'] = [];
+                foreach ($s['stacks'] as $st) {
+                    if (in_array((int)$m[1], $st['members'], true)) $sw['stacks'][] = ['slug'=>$st['slug']];
+                }
+                fx_out($sw);
+            }
             if (preg_match('~\\Astacks/(\\d+)\\z~', $rest, $m) && isset($s['stacks'][$m[1]])) {
                 $st = $s['stacks'][$m[1]];
                 $st['members'] = array_map(static function ($swId, $i) use ($s) {
@@ -207,7 +220,9 @@ function fixtureState() {
     software: {
       10: sw(10, 'chrony', 'pkg', ['chrony', 'chrony', 'chrony']),
       11: sw(11, 'nginx', 'pkg', ['nginx', 'nginx', 'nginx'], { conflicts_with: [14] }),
-      12: sw(12, 'node-exporter', 'artifact', ['=', '=', '='], { version_pin: '1.8.2' }),
+      12: sw(12, 'node-exporter', 'artifact', ['=', '=', '='], { version_pin: '1.8.2', requires: [10],
+        artifacts: [{ id: 1, arch: 'arm64', sha256: 'cd'.repeat(32),
+          url: 'https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-arm64.tar.gz' }] }),
       13: sw(13, 'prom-tools', 'pkg', ['golang-github-prometheus', null, 'golang-github-prometheus']),
       14: sw(14, 'apache2', 'pkg', ['apache2', 'apache2', 'httpd'], { conflicts_with: [11] }),
     },
@@ -525,8 +540,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error && error.message ? error.message : String(error));
-  if (error && error.stack) console.error(error.stack);
-  process.exitCode = 1;
-});
+// The touch/mobile pass (test_provisioning_touch_e2e.cjs) drives the same fixture.
+module.exports = { freePort, waitForServer, phpRouter, fixtureState };
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error && error.message ? error.message : String(error));
+    if (error && error.stack) console.error(error.stack);
+    process.exitCode = 1;
+  });
+}
