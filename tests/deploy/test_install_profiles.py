@@ -213,6 +213,8 @@ class InstallProfiles(unittest.TestCase):
         enabled = root.findall("./a:services-manager/a:services/a:enable/a:service", NS)
         self.assertEqual([e.text for e in enabled], ["sshd"])
         self.assertIsNone(root.find(".//a:service_status", NS))
+        products = root.findall("./a:software/a:products/a:product", NS)
+        self.assertEqual([e.text for e in products], ["openSUSE"])
         # Full RELAX NG check where the YaST schema is installed (openSUSE:
         # yast2-schema-default), e.g. SOLARI_AUTOYAST_RNG=/usr/share/YaST2/
         # schema/autoyast/rng/profile.rng.
@@ -225,6 +227,13 @@ class InstallProfiles(unittest.TestCase):
             r = subprocess.run(["xmllint", "--noout", "--relaxng", rng, fh.name],
                                capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_unknown_opensuse_release_has_no_base_product(self):
+        # The base product is required; an unmapped release must not render.
+        p = self.provision("opensuse", "--release", "slowroll")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no AutoYaST base product", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.http, "configs", f"{MACH}.xml")))
 
     def test_tumbleweed_without_run_id_has_no_marker_or_control_key(self):
         _text, root = self.autoyast(FLEET_CONTROL_PUBKEY="")
