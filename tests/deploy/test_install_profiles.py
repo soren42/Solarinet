@@ -205,6 +205,27 @@ class InstallProfiles(unittest.TestCase):
         self.assertEqual(self.profile_env()["run_id"], "4242")
         self.assertIn("node-31.lab.example", text)
 
+    def test_tumbleweed_autoyast_schema(self):
+        # A profile that fails AutoYaST validation stops the install at a dialog.
+        text, root = self.autoyast("--run-id", "4242")
+        self.assertEqual(root.findtext("./a:general/a:mode/a:confirm", namespaces=NS), "false")
+        self.assertEqual(root.findtext("./a:bootloader/a:loader_type", namespaces=NS), "default")
+        enabled = root.findall("./a:services-manager/a:services/a:enable/a:service", NS)
+        self.assertEqual([e.text for e in enabled], ["sshd"])
+        self.assertIsNone(root.find(".//a:service_status", NS))
+        # Full RELAX NG check where the YaST schema is installed (openSUSE:
+        # yast2-schema-default), e.g. SOLARI_AUTOYAST_RNG=/usr/share/YaST2/
+        # schema/autoyast/rng/profile.rng.
+        rng = os.environ.get("SOLARI_AUTOYAST_RNG")
+        if not rng or not shutil.which("xmllint"):
+            self.skipTest("SOLARI_AUTOYAST_RNG unset or xmllint missing")
+        with tempfile.NamedTemporaryFile("w", suffix=".xml") as fh:
+            fh.write(text)
+            fh.flush()
+            r = subprocess.run(["xmllint", "--noout", "--relaxng", rng, fh.name],
+                               capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_tumbleweed_without_run_id_has_no_marker_or_control_key(self):
         _text, root = self.autoyast(FLEET_CONTROL_PUBKEY="")
         keys = [e.text for e in root.iter("{%s}listentry" % NS["a"])

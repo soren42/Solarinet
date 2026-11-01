@@ -21,6 +21,15 @@
 <profile xmlns="http://www.suse.com/1.0/yast2ns"
          xmlns:config="http://www.suse.com/1.0/configns">
 
+  <!-- ==== mode =========================================================== -->
+  <!-- confirm defaults to true, which parks the install at the Installation  -->
+  <!-- Settings screen waiting for a click. Unattended installs must not.     -->
+  <general>
+    <mode>
+      <confirm config:type="boolean">false</confirm>
+    </mode>
+  </general>
+
   <!-- ==== language / keyboard / timezone ================================= -->
   <language>
     <language>en_US</language>
@@ -44,8 +53,10 @@
   </networking>
 
   <!-- ==== bootloader ===================================================== -->
+  <!-- "default" lets YaST pick per platform (grub2-efi on UEFI, grub2 on    -->
+  <!-- BIOS). Plain "grub2" is BIOS GRUB and does not boot a UEFI-only box.  -->
   <bootloader>
-    <loader_type>grub2</loader_type>
+    <loader_type>default</loader_type>
   </bootloader>
 
   <!-- ===================================================================== -->
@@ -98,11 +109,13 @@
   <!-- ==== services ======================================================= -->
   <services-manager>
     <default_target>multi-user</default_target>
+    <!-- Current schema form. The SLE 11 <service>/<service_status> form   -->
+    <!-- fails AutoYaST's profile validation, which stops an unattended    -->
+    <!-- install at a confirmation dialog nobody is there to answer.       -->
     <services>
-      <service>
-        <service_name>sshd</service_name>
-        <service_status>enable</service_status>
-      </service>
+      <enable config:type="list">
+        <service>sshd</service>
+      </enable>
     </services>
   </services-manager>
 
