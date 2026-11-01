@@ -139,12 +139,17 @@ class InstallProfiles(unittest.TestCase):
             os.makedirs(self.http, exist_ok=True)
             os.symlink(os.path.join(store, sub), os.path.join(self.http, sub))
         self.sign = _SignStub(os.path.join(self.tmp, "ctl.sock"))
+        self.client_bin = os.path.join(self.tmp, "solariClient")
+        with open(self.client_bin, "wb") as fh:
+            fh.write(b"\x7fELF fake agent\n")
+        os.chmod(self.client_bin, 0o755)
         self.env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", HOME=home,
                         BENZENE="p5-test-benzene", HTTP_ROOT=self.http, PROV_ROOT=self.prov,
                         HTTP_BASE=BASE, CTL_SOCK=self.sign.path,
                         FLEET_CONTROL_PUBKEY=CONTROL_KEY,
                         SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1",
-                        PROV_STORE=store, PROV_STORE_FSTYPE="cifs", STUB_STORE=store)
+                        PROV_STORE=store, PROV_STORE_FSTYPE="cifs", STUB_STORE=store,
+                        SOLARI_CLIENT_BIN=self.client_bin)
         for k in ("SOLARI_PROV_LOCAL", "ADMIN_USER", "DOMAIN"):
             self.env.pop(k, None)
         for distro, (release, src) in IMAGES.items():
@@ -209,6 +214,12 @@ class InstallProfiles(unittest.TestCase):
         # A profile that fails AutoYaST validation stops the install at a dialog.
         text, root = self.autoyast("--run-id", "4242")
         self.assertEqual(root.findtext("./a:general/a:mode/a:confirm", namespaces=NS), "false")
+        # No second stage: it holds logins on first boot and, after an ssh=1
+        # installer boot, waits for a yast.ssh login nobody can make.
+        self.assertEqual(root.findtext("./a:general/a:mode/a:second_stage", namespaces=NS), "false")
+        # Warnings time out; errors still stop the install.
+        self.assertEqual(root.findtext("./a:report/a:warnings/a:timeout", namespaces=NS), "10")
+        self.assertEqual(root.findtext("./a:report/a:errors/a:timeout", namespaces=NS), "0")
         self.assertEqual(root.findtext("./a:bootloader/a:loader_type", namespaces=NS), "default")
         enabled = root.findall("./a:services-manager/a:services/a:enable/a:service", NS)
         self.assertEqual([e.text for e in enabled], ["sshd"])
@@ -233,6 +244,25 @@ class InstallProfiles(unittest.TestCase):
         p = self.provision("opensuse", "--release", "slowroll")
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("no AutoYaST base product", p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.http, "configs", f"{MACH}.xml")))
+
+    def test_agent_binary_published_with_its_libraries(self):
+        # firstboot installs installers/solariClient.<arch>; staging publishes it
+        # and the chroot script installs its shared libraries (non-fatally).
+        _text, root = self.autoyast("--run-id", "4242")
+        with open(os.path.join(self.http, "installers", "solariClient.x86_64"), "rb") as fh:
+            self.assertEqual(fh.read(), b"\x7fELF fake agent\n")
+        scripts = "\n".join(s.text or "" for s in root.iter("{%s}source" % NS["a"]))
+        self.assertIn("libnng1 libmbedtls21 libmbedcrypto16 libmbedx509-7", scripts)
+        self.assertIn("|| echo 'solari: agent libraries not all installed", scripts)
+
+    def test_missing_agent_binary_stages_nothing(self):
+        # No binary to publish and none in the store: refuse, so a node never
+        # installs agentless.
+        p = self.provision("opensuse", "--run-id", "4242", SOLARI_CLIENT_BIN="",
+                           SOLARI_DIST_DIR=os.path.join(self.tmp, "nodist"))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no solariClient.x86_64 to install at first boot", p.stdout + p.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.http, "configs", f"{MACH}.xml")))
 
     def test_tumbleweed_without_run_id_has_no_marker_or_control_key(self):

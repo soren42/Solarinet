@@ -190,6 +190,29 @@ CERTTMP="${WORK}/cert"
 # written to benzene's local disk under the mountpoint: refuse before staging.
 fleet_require_store installers
 
+# ---- the agent binary solari-firstboot.sh installs --------------------------
+# firstboot fetches installers/solariClient.<arch>; without it the node installs
+# but never runs an agent. Publish this release's client (bin/, built for the
+# host arch) or a cross-build from deploy/dist/<arch>/; otherwise one must
+# already be in the store. Checked before anything is staged.
+CLIENT_BIN="${SOLARI_CLIENT_BIN:-}"
+if [ -z "${CLIENT_BIN}" ]; then
+  if [ -x "${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient" ]; then
+    CLIENT_BIN="${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient"
+  elif [ "${ARCH}" = "$(uname -m)" ] && [ -x "${REPO_ROOT}/bin/solariClient" ]; then
+    CLIENT_BIN="${REPO_ROOT}/bin/solariClient"
+  fi
+fi
+if [ -n "${CLIENT_BIN}" ]; then
+  [ -s "${CLIENT_BIN}" ] || fdie "agent binary ${CLIENT_BIN} is missing or empty; nothing staged."
+  bput_store installers "solariClient.${ARCH}" 0755 < "${CLIENT_BIN}" \
+    || fdie "cannot publish installers/solariClient.${ARCH} into the image store; nothing staged."
+  flog "published solariClient.${ARCH} from ${CLIENT_BIN}"
+else
+  bssh "test -s '${HTTP_ROOT}/installers/solariClient.${ARCH}'" \
+    || fdie "no solariClient.${ARCH} to install at first boot: build it with deploy/cross-build-client.sh ${ARCH} (deploy/dist/${ARCH}/solariClient); nothing staged."
+fi
+
 # ---- the installer image must be fetched + verified before staging ----------
 # image-refresh.py (IMAGE_REFRESH) writes solari-image.json into the image dir
 # only after every file's sha256 checked out. The per-MAC profile is rendered
