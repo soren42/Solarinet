@@ -195,11 +195,19 @@ fleet_require_store installers
 # but never runs an agent. Publish this release's client (bin/, built for the
 # host arch) or a cross-build from deploy/dist/<arch>/; otherwise one must
 # already be in the store. Checked before anything is staged.
-CLIENT_BIN="${SOLARI_CLIENT_BIN:-}"
+CLIENT_BIN="${SOLARI_CLIENT_BIN:-}"; HOST_ARCH=""
 if [ -z "${CLIENT_BIN}" ]; then
   if [ -x "${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient" ]; then
     CLIENT_BIN="${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient"
-  elif [ "${ARCH}" = "$(uname -m)" ] && [ -x "${REPO_ROOT}/bin/solariClient" ]; then
+  elif [ -x "${REPO_ROOT}/bin/solariClient" ]; then
+    case "$(uname -m)" in                      # same aliases as ARCH above
+      x86_64|amd64)  HOST_ARCH=x86_64 ;;
+      arm64|aarch64) HOST_ARCH=arm64 ;;
+      armv7l|armv6l|armhf) HOST_ARCH=arm32 ;;
+      *) HOST_ARCH="" ;;
+    esac
+  fi
+  if [ -z "${CLIENT_BIN}" ] && [ "${ARCH}" = "${HOST_ARCH:-}" ]; then
     CLIENT_BIN="${REPO_ROOT}/bin/solariClient"
   fi
 fi
