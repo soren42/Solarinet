@@ -208,6 +208,7 @@ class InstallProfiles(unittest.TestCase):
     def test_tumbleweed_autoyast_schema(self):
         # A profile that fails AutoYaST validation stops the install at a dialog.
         text, root = self.autoyast("--run-id", "4242")
+        self.assertEqual(root.findtext("./a:general/a:mode/a:confirm", namespaces=NS), "false")
         self.assertEqual(root.findtext("./a:bootloader/a:loader_type", namespaces=NS), "default")
         enabled = root.findall("./a:services-manager/a:services/a:enable/a:service", NS)
         self.assertEqual([e.text for e in enabled], ["sshd"])
