@@ -37,6 +37,12 @@ struct solariConn {
     nng_pipe   rxpipe;    /* pipe the last message arrived on (peer TLS identity) */
 };
 
+/* Release-packaging marker. deploy/dashboard/package-release.py refuses a
+ * networked binary that does not contain this string: such a binary was built
+ * without SOLARI_WITH_IO and links the ERR_PLATFORM transport stubs, so it
+ * cannot bind or connect. */
+const char solariTransportMarker[] = "SOLARI-TRANSPORT:nng+mbedtls";
+
 /* Map an nng return code to solariStatus for send/recv paths. */
 static solariStatus mapTransient(int rv)
 {
