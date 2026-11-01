@@ -192,23 +192,25 @@ fleet_require_store installers
 
 # ---- the agent binary solari-firstboot.sh installs --------------------------
 # firstboot fetches installers/solariClient.<arch>; without it the node installs
-# but never runs an agent. Publish this release's client (bin/, built for the
-# host arch) or a cross-build from deploy/dist/<arch>/; otherwise one must
-# already be in the store. Checked before anything is staged.
-CLIENT_BIN="${SOLARI_CLIENT_BIN:-}"; HOST_ARCH=""
+# but never runs an agent. For the host's own arch this release's client (bin/)
+# always wins: SOLARI_DIST_DIR may point at an old cross-build tree, and the
+# node must run the agent this server was released with. deploy/dist/<arch>/
+# supplies the other arches; failing both, one must already be in the store.
+# Checked before anything is staged.
+case "$(uname -m)" in                          # same aliases as ARCH above
+  x86_64|amd64)        HOST_ARCH=x86_64 ;;
+  arm64|aarch64)       HOST_ARCH=arm64 ;;
+  armv7l|armv6l|armhf) HOST_ARCH=arm32 ;;
+  *)                   HOST_ARCH="" ;;
+esac
+RELEASE_CLIENT="${SOLARI_RELEASE_CLIENT:-${REPO_ROOT}/bin/solariClient}"
+DIST_CLIENT="${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient"
+CLIENT_BIN="${SOLARI_CLIENT_BIN:-}"
 if [ -z "${CLIENT_BIN}" ]; then
-  if [ -x "${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient" ]; then
-    CLIENT_BIN="${SOLARI_DIST_DIR:-${REPO_ROOT}/deploy/dist}/${ARCH}/solariClient"
-  elif [ -x "${REPO_ROOT}/bin/solariClient" ]; then
-    case "$(uname -m)" in                      # same aliases as ARCH above
-      x86_64|amd64)  HOST_ARCH=x86_64 ;;
-      arm64|aarch64) HOST_ARCH=arm64 ;;
-      armv7l|armv6l|armhf) HOST_ARCH=arm32 ;;
-      *) HOST_ARCH="" ;;
-    esac
-  fi
-  if [ -z "${CLIENT_BIN}" ] && [ "${ARCH}" = "${HOST_ARCH:-}" ]; then
-    CLIENT_BIN="${REPO_ROOT}/bin/solariClient"
+  if [ "${ARCH}" = "${HOST_ARCH}" ] && [ -x "${RELEASE_CLIENT}" ]; then
+    CLIENT_BIN="${RELEASE_CLIENT}"
+  elif [ -x "${DIST_CLIENT}" ]; then
+    CLIENT_BIN="${DIST_CLIENT}"
   fi
 fi
 if [ -n "${CLIENT_BIN}" ]; then
