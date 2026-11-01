@@ -91,6 +91,12 @@ function audit(scope) {
       for (let p = el.parentElement; p && !clippedBy; p = p.parentElement) {
         const cs = getComputedStyle(p);
         if (cs.position === 'fixed') break;
+        // vertical: a non-scrolling (hidden/clip) ancestor that cuts the
+        // control off top or bottom hides it with no way to reach it
+        if ((cs.overflowY === 'hidden' || cs.overflowY === 'clip') && p !== document.body && p !== document.documentElement) {
+          const py = p.getBoundingClientRect();
+          if (r.bottom > py.bottom + 1 || r.top < py.top - 1) { clippedBy = desc(p) + ' (vertical)'; break; }
+        }
         if (cs.overflowX === 'visible') continue;
         const pr = p.getBoundingClientRect();
         if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') { contained = p.scrollWidth > p.clientWidth || r.right <= pr.right + 1; break; }
@@ -240,6 +246,21 @@ async function main() {
       const stage = dialog.getByRole('button', { name: 'Stage reinstall' });
       const sb = await stage.boundingBox();
       must(sb && sb.y + sb.height <= vp.height + 1 && sb.x + sb.width <= vp.width + 1, `${vp.name}: confirm action on screen`);
+      // On-screen keyboard stand-in: Chromium emulation can't raise one, so
+      // shrink the viewport to roughly what stays visible above it and check
+      // the typed field and the action stay reachable in the sheet.
+      const kbH = Math.round(vp.height * (vp.width > vp.height ? 0.45 : 0.55));
+      await page.setViewportSize({ width: vp.width, height: kbH });
+      await page.waitForTimeout(150);
+      await word.scrollIntoViewIfNeeded();
+      const wb = await word.boundingBox();
+      must(wb && wb.y >= -1 && wb.y + wb.height <= kbH + 1, `${vp.name}: confirm field visible above keyboard (${kbH}px)`);
+      await stage.scrollIntoViewIfNeeded();
+      const kb = await stage.boundingBox();
+      must(kb && kb.y >= -1 && kb.y + kb.height <= kbH + 1, `${vp.name}: confirm action reachable above keyboard (${kbH}px)`);
+      await check('confirm-reimage-kb', '[role=alertdialog]');
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.waitForTimeout(150);
       await shot('confirm-reimage');
       await stage.tap();
       await dialog.waitFor({ state: 'detached' });

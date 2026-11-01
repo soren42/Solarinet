@@ -907,6 +907,10 @@
                                           {busy && <span className="tag teal" title={refreshing[img.id].run ? "Run " + refreshing[img.id].run + " in Recent runs" : "Waiting for the refresh run to appear in Recent runs"}>{refreshing[img.id].status ? "refresh " + refreshing[img.id].status + "…" : "refreshing…"}</span>}
                                         </span>
                                         <span className="prov-acts">
+                                          <button type="button" className="prov-ib" aria-expanded={whyId === img.id} aria-controls={"prov-why-" + img.id}
+                                            aria-label={"Details for " + imageLabel(img)} title="Details" onClick={() => setWhyId(whyId === img.id ? null : img.id)}>
+                                            <span aria-hidden="true" style={{ fontWeight: 700, fontFamily: "var(--mono)" }}>i</span>
+                                          </button>
                                           <IconBtn icon="refresh" label={"Refresh " + imageLabel(img) + " from upstream"} title={op ? "Refresh from upstream (IMAGE_REFRESH)" : OP_ONLY}
                                             disabled={!op || !live || busy} busy={busy} onClick={() => refreshImage(img)} />
                                           <IconBtn icon="edit" label={"Edit " + imageLabel(img)} title="Edit source / install template"
@@ -915,7 +919,7 @@
                                             disabled={!op || !live} onClick={() => setModal({ kind: "delImage", img: img })} />
                                         </span>
                                         {whyId === img.id && (
-                                          <span className="prov-irow__why">
+                                          <span className="prov-irow__why" id={"prov-why-" + img.id} role="note">
                                             {[why, fr.why,
                                               img.boot_method === "ipxe" && !img.netboot_verified ? "Netboot unverified: no real bare-metal install from this image has been confirmed yet." : null,
                                               busy && refreshing[img.id].run ? "Refresh is run " + refreshing[img.id].run + " in Recent runs." : null].filter(Boolean).join(" · ")}

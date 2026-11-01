@@ -1634,11 +1634,13 @@ table.prov-pool td.fam.none { color: var(--ink-faint); }
 .topbar .search input { min-width: 0; width: 100%; }
 @supports (overflow: clip) { body { overflow: clip; } }
 /* iPad portrait (641-900px): the status chip and the ⌘K hint crowd the search
-   down to a few letters; keep only the status dot, as the phone layout does. */
+   down to a few letters. Keep the dot and the active server's name visible
+   (touch users can't read the aria-label/title); drop the label and failover. */
 @media (min-width: 641px) and (max-width: 900px) {
   .topbar .search .kbd { display: none; }
-  .topbar .statuschip { flex: 0 0 20px; justify-content: center; width: 20px; min-width: 20px; padding: 0; border: 0; background: transparent; }
-  .topbar .statuschip > :not(.dot) { display: none; }
+  .topbar .statuschip { flex: 0 0 auto; max-width: 160px; gap: 6px; padding: 0 10px; }
+  .topbar .statuschip > :not(.dot):not(b) { display: none; }
+  .topbar .statuschip b { overflow: hidden; text-overflow: ellipsis; }
 }
 .toasts { bottom: max(22px, calc(env(safe-area-inset-bottom) + 12px)); right: max(22px, calc(env(safe-area-inset-right) + 12px)); }
 /* While a sheet is open its footer owns the bottom edge: toasts go top-left
@@ -1680,6 +1682,18 @@ body:has(.modal-overlay) .toasts { top: max(12px, env(safe-area-inset-top)); bot
   .prov-irow .prov-acts { order: 4; margin-left: auto; }
   .prov-irow .meta { order: 5; flex: 1 1 100%; padding-left: 34px; }
   .prov-irow__why { order: 6; flex: 1 1 100%; padding-left: 34px; }
+}
+/* Safari < 16 has no container queries: fall back to the viewport so phone
+   image rows still reflow instead of clipping. (The pool table keeps its
+   scrolling fallback.) Supported target: iPadOS/iOS Safari 16+. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 640px) {
+    .prov-release { padding-left: 16px; padding-right: 12px; }
+    .prov-irow { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; }
+    .prov-irow .prov-acts { order: 4; margin-left: auto; }
+    .prov-irow .meta { order: 5; flex: 1 1 100%; padding-left: 34px; }
+    .prov-irow__why { order: 6; flex: 1 1 100%; padding-left: 34px; }
+  }
 }
 
 /* stacks */
