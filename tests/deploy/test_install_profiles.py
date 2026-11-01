@@ -256,11 +256,30 @@ class InstallProfiles(unittest.TestCase):
         self.assertIn("libnng1 libmbedtls21 libmbedcrypto16 libmbedx509-7", scripts)
         self.assertIn("|| echo 'solari: agent libraries not all installed", scripts)
 
+    def test_release_agent_beats_stale_dist_tree(self):
+        # SOLARI_DIST_DIR may hold an old cross-build; for the host arch the
+        # release's own client is what gets published.
+        if os.uname().machine not in ("x86_64", "amd64"):
+            self.skipTest("host arch is not x86_64")
+        dist = os.path.join(self.tmp, "dist", "x86_64")
+        os.makedirs(dist)
+        stale = os.path.join(dist, "solariClient")
+        with open(stale, "wb") as fh:
+            fh.write(b"\x7fELF stale dist agent\n")
+        os.chmod(stale, 0o755)
+        p = self.provision("opensuse", "--run-id", "4242", SOLARI_CLIENT_BIN="",
+                           SOLARI_DIST_DIR=os.path.join(self.tmp, "dist"),
+                           SOLARI_RELEASE_CLIENT=self.client_bin)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        with open(os.path.join(self.http, "installers", "solariClient.x86_64"), "rb") as fh:
+            self.assertEqual(fh.read(), b"\x7fELF fake agent\n")
+
     def test_missing_agent_binary_stages_nothing(self):
         # No binary to publish and none in the store: refuse, so a node never
         # installs agentless.
         p = self.provision("opensuse", "--run-id", "4242", SOLARI_CLIENT_BIN="",
-                           SOLARI_DIST_DIR=os.path.join(self.tmp, "nodist"))
+                           SOLARI_DIST_DIR=os.path.join(self.tmp, "nodist"),
+                           SOLARI_RELEASE_CLIENT=os.path.join(self.tmp, "norelease"))
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("no solariClient.x86_64 to install at first boot", p.stdout + p.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.http, "configs", f"{MACH}.xml")))
