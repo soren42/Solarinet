@@ -172,6 +172,10 @@ static solariStatus openCommon(const solariConnOpts *opts, solariConn **out, boo
 
     if (!opts || !opts->url || !out) return ERR_INVALID_ARG;
 
+    /* Keep the release marker live: a volatile read from every open/listen
+     * path stops --gc-sections or LTO from discarding it in a real build. */
+    (void)*(const volatile char *)solariTransportMarker;
+
     c = (solariConn *)calloc(1, sizeof *c);
     if (!c) return ERR_PLATFORM;
 
