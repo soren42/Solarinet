@@ -8,9 +8,14 @@ manage recursion, RPZ, DHCP, or the nameserver set. Xenon remains primary at
 
 ## Deployment sequence
 
-1. On Xenon, update forward and reverse transfer/NOTIFY declarations and bare
-   zone defaults to include `10.0.0.11`; validate the complete configuration,
-   then apply it. Do not add steel to any NS record.
+1. On Xenon, add `10.0.0.11` to `transfer` (forward and reverse zones) and
+   `bareTransfer` (bare zones) in the root-owned `/etc/solarinet/dns-release.json`
+   (back it up first). `solarinet-dns-release` writes those lists into each
+   staged generation's `allow-transfer`/`also-notify`, so they take effect with
+   the next generation (restart `sor-apply-dns` to stage one). The
+   `gen-zones`/`gen-bare` transfer defaults do not control the live primary.
+   Zones outside the release (`named.conf.rpz`) carry their own lists. Do not
+   add steel to any NS record.
 2. Authorize the Xenon DNS applier's existing SSH public key in
    `solari-admin`'s `authorized_keys` on steel. Do not copy private key
    material. Confirm host-key verification from Xenon.
@@ -25,7 +30,7 @@ manage recursion, RPZ, DHCP, or the nameserver set. Xenon remains primary at
    ```
 
 4. Apply the target SoR stack to steel through `prov-finish` / `STACK_APPLY`
-   (Apply-stacks-only). The defaults fit steel: `dns_secondary_address` is the
+   (Apply-stacks-only; it logs in as the admin user of steel's last reimage). The defaults fit steel: `dns_secondary_address` is the
    default-route IPv4 (`10.0.0.11`), and the provisioning baseline already gives
    `solari-admin` NOPASSWD sudo. Set `dns_secondary_admin_user: solari-admin`
    and `dns_secondary_manage_sudoers: true` only where the baseline grant is
@@ -46,6 +51,8 @@ dig @10.0.0.20 akoria.net SOA +noall +answer
 
 The AXFR from the primary must complete (its last line reports the XFR size),
 steel must hold a db file per zone, and the SOA serials must match. Then send a DNS change
-through SoR and confirm the applier logs steel's secondary refresh and records
-SOA parity before acknowledging the event. Steel must not be added to NS until
+through SoR and confirm the applier records steel's secondary refresh with SOA
+parity before acknowledging the event: `secondary:steel` in
+`/var/lib/solarinet-dns/state/targets.json` reaches `phase: applied` at the
+primary's `desiredSource`. Steel must not be added to NS until
 a separate change explicitly authorizes it.
