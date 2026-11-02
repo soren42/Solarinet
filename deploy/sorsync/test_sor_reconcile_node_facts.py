@@ -122,5 +122,57 @@ class NodeFactsReconciliationTest(unittest.TestCase):
         self.assertEqual("arm64", params[0][0])
 
 
+class DiscoveryCursor(Cursor):
+    """Monitoring/SoR double for the adopted-discovery insertion path."""
+
+    def __init__(self):
+        super().__init__()
+        self.ip_row = None
+        self.name_taken = False
+
+    def execute(self, query, params=None):
+        self.sql.append((query, params))
+        self.rowcount = 0
+        if query.startswith("SELECT discId"):
+            self.rows = [{"discId": 81, "ip": "10.0.0.254", "host": None,
+                          "mdnsName": "hole.local", "deviceRole": None}]
+        elif query.startswith("SELECT id FROM sources"):
+            self.rows = [{"id": 7}]
+        elif query.startswith("SELECT entity_id, deleted_at FROM ip_addresses"):
+            self.rows = [self.ip_row] if self.ip_row else []
+        elif query.startswith("SELECT 1 FROM entities"):
+            self.rows = [{"1": 1}] if self.name_taken else []
+        else:
+            self.rows = []
+
+
+class DiscoveryAdoptionTest(unittest.TestCase):
+    def setUp(self):
+        self.mon_cursor, self.sor_cursor = DiscoveryCursor(), DiscoveryCursor()
+        self.mon, self.sor = Connection(self.mon_cursor), Connection(self.sor_cursor)
+        config = configparser.ConfigParser()
+        config["discovery"] = {"mon_user": "test", "mon_password": "test"}
+        self.config = config
+
+    invoke = NodeFactsReconciliationTest.invoke
+
+    def inserts(self):
+        return [sql for sql, _ in self.sor_cursor.sql if sql.startswith("INSERT INTO entities")]
+
+    def test_free_ip_and_name_is_adopted(self):
+        self.invoke()
+        self.assertEqual(1, len(self.inserts()))
+
+    def test_tombstoned_ip_is_not_resurrected(self):
+        self.sor_cursor.ip_row = {"entity_id": 21, "deleted_at": "2026-11-02 17:51:10"}
+        self.invoke()
+        self.assertEqual([], self.inserts())
+
+    def test_name_colliding_with_host_or_alias_is_not_adopted(self):
+        self.sor_cursor.name_taken = True
+        self.invoke()
+        self.assertEqual([], self.inserts())
+
+
 if __name__ == "__main__":
     unittest.main()

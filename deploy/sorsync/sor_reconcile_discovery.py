@@ -159,11 +159,26 @@ def reconcile(cfg, dry_run):
                 name = short_name(r["host"], r["mdnsName"], r["ip"])
                 if not name:
                     continue                                   # nameless: not a DNS-worthy entity
-                sc.execute("SELECT entity_id FROM ip_addresses "
-                           "WHERE address=INET6_ATON(%s) AND deleted_at IS NULL", (aton_arg(r["ip"]),))
-                if sc.fetchone():
+                # Any row counts, tombstoned included: a soft-deleted address is
+                # an SoR decision that stale discovery must not resurrect.
+                sc.execute("SELECT entity_id, deleted_at FROM ip_addresses "
+                           "WHERE address=INET6_ATON(%s) ORDER BY deleted_at IS NULL DESC LIMIT 1",
+                           (aton_arg(r["ip"]),))
+                owner = sc.fetchone()
+                if owner:
+                    if owner["deleted_at"] is not None:
+                        log(f"skip {name} ({r['ip']}): address is tombstoned in the SoR")
                     skipped += 1
                     continue                                   # IP already owned in the SoR
+                # A new entity must not reuse a live host name or CNAME alias;
+                # either would render conflicting records and fail the zone.
+                sc.execute("SELECT 1 FROM entities WHERE LOWER(name)=%s AND deleted_at IS NULL "
+                           "UNION ALL SELECT 1 FROM v_dns_cnames WHERE LOWER(alias)=%s LIMIT 1",
+                           (name, name))
+                if sc.fetchone():
+                    log(f"skip {name} ({r['ip']}): name already used by an SoR host or alias")
+                    skipped += 1
+                    continue
                 if dry_run:
                     log(f"WOULD add {name} ({r['ip']})")
                     added += 1
