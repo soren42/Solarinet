@@ -183,6 +183,9 @@ solariStatus serverDbUpsertNode(serverDb *db, uint64_t nodeId, solariRole role,
 solariStatus serverDbTouchNode(serverDb *db, uint64_t nodeId, uint64_t whenUnixMs);
 /* Set derived health state ('up'/'degraded'/'down'/'unknown'/'retired'). */
 solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *state);
+/* Refresh node osName/arch from a report; empty values keep the stored ones. */
+solariStatus serverDbSetNodeFacts(serverDb *db, uint64_t nodeId,
+                                  const char *osName, const char *arch);
 /* Decommission confirmation stores only a token digest. Each issue advances a
  * per-node generation. Confirm consumes the challenge atomically but leaves the
  * node active until a matching authenticated node acknowledgement is received. */

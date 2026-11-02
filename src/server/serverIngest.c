@@ -543,6 +543,9 @@ static solariStatus serverIngestClientReport(serverContext *ctx,
      * advance lastSeenAt so the dashboard reflects a live agent (best-effort;
      * derived health for probe targets is reconciled separately). */
     (void)serverDbSetNodeState(ctx->db, hdr->sourceNodeId, "up");
+    /* Reports have always carried os/arch; persist them so agents that predate
+     * os/arch in HELLO still populate the node row. */
+    (void)serverDbSetNodeFacts(ctx->db, hdr->sourceNodeId, rep.osName, rep.arch);
     (void)serverDbTouchNode(ctx->db, hdr->sourceNodeId,
                             hdr->sendTimeUnixMs ? hdr->sendTimeUnixMs : solariNowUnixMs());
 
