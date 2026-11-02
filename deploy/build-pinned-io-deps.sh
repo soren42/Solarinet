@@ -42,6 +42,13 @@ clone_pinned() {
 mkdir -p "${PREFIX}" "${SOURCE_ROOT}"
 clone_pinned "https://github.com/Mbed-TLS/mbedtls.git" "${MBEDTLS_TAG}" \
   "${SOURCE_ROOT}/mbedtls"
+# nng uses TLS and PSA crypto from several threads. Set threading in the
+# config header itself (not a -D) so the installed header carries it to nng
+# and SolariNet, matching third_party/mbedtls_solari_config.h.
+python3 "${SOURCE_ROOT}/mbedtls/scripts/config.py" \
+  -f "${SOURCE_ROOT}/mbedtls/include/mbedtls/mbedtls_config.h" set MBEDTLS_THREADING_C
+python3 "${SOURCE_ROOT}/mbedtls/scripts/config.py" \
+  -f "${SOURCE_ROOT}/mbedtls/include/mbedtls/mbedtls_config.h" set MBEDTLS_THREADING_PTHREAD
 cmake -S "${SOURCE_ROOT}/mbedtls" -B "${SOURCE_ROOT}/mbedtls-build" \
   -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
   -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
