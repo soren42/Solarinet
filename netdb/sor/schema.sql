@@ -482,7 +482,7 @@ CREATE TABLE IF NOT EXISTS `dns_records` (
   `id`               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
   `zone_id`          INT UNSIGNED NOT NULL COMMENT 'FK: owning zone',
   `name`             VARCHAR(255) NOT NULL COMMENT 'owner name relative to zone origin; @ for apex',
-  `rrtype`           ENUM('A','AAAA','CNAME','PTR','SRV','TXT','MX','NS','SOA','CAA','DS','DNSKEY','HINFO')
+  `rrtype`           ENUM('A','AAAA','CNAME','PTR','SRV','TXT','MX','NS','SOA','CAA','DS','DNSKEY')
                      NOT NULL COMMENT 'record type',
   `rdata`            VARCHAR(1024) NOT NULL COMMENT 'record data as zone-file text (address, target FQDN, TXT string, SRV fields...)',
   `ttl`              INT UNSIGNED NULL COMMENT 'per-record TTL; NULL = zone default',
