@@ -90,7 +90,12 @@ target_link_libraries(servercore PUBLIC solari ${MARIADB_LIBS})
 # headers but omit parsed CSR extensions; those builds must fail closed.
 if(SOLARI_WITH_IO)
   include(CheckCSourceCompiles)
-  find_path(SOLARI_MBEDTLS_INCLUDE_DIR mbedtls/x509_csr.h)
+  if(TARGET mbedtls)
+    # Probe the vendored headers the server compiles against, not /usr/include.
+    set(SOLARI_MBEDTLS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third_party/mbedtls/include")
+  else()
+    find_path(SOLARI_MBEDTLS_INCLUDE_DIR mbedtls/x509_csr.h)
+  endif()
   if(SOLARI_MBEDTLS_INCLUDE_DIR)
     set(_SOLARI_TRY_COMPILE_TYPE "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
     set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)

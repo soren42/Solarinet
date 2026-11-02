@@ -31,6 +31,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/mbedtls/CMakeLists.txt" AND
   set(_solari_vendored_deps_default ON)
 endif()
 option(SOLARI_VENDORED_DEPS "Build vendored static nng, mbedTLS, and cJSON" ${_solari_vendored_deps_default})
+option(SOLARI_ALLOW_SYSTEM_DEPS "Permit a Release I/O build against system nng/mbedTLS" OFF)
 
 if(SOLARI_BUILD_FUZZERS)
   if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -62,6 +63,8 @@ if(SOLARI_WITH_IO OR SOLARI_WITH_JSON)
       set(NNG_ENABLE_DOC OFF CACHE BOOL "Disable nng documentation" FORCE)
       set(NNG_ENABLE_TLS ON CACHE BOOL "Enable TLS in nng" FORCE)
       set(NNG_TLS_ENGINE mbed CACHE STRING "Use the in-tree mbedTLS engine" FORCE)
+      set(MBEDTLS_USER_CONFIG_FILE "${CMAKE_SOURCE_DIR}/third_party/mbedtls_solari_config.h"
+        CACHE FILEPATH "Thread-safe Mbed TLS for nng" FORCE)
       add_subdirectory(third_party/mbedtls)
       # NNG exports a build-tree package during configuration. Register its
       # private static TLS dependency in that export set to satisfy CMake's
@@ -91,6 +94,10 @@ if(SOLARI_WITH_IO OR SOLARI_WITH_JSON)
       add_subdirectory(third_party/cJSON)
       set_target_properties(cjson PROPERTIES POSITION_INDEPENDENT_CODE ON)
     endif()
+  elseif(SOLARI_WITH_IO AND CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT SOLARI_ALLOW_SYSTEM_DEPS)
+    # A release agent linked to distro nng runs only where that nng was built
+    # with TLS (not Tumbleweed), so refuse rather than ship one by accident.
+    message(FATAL_ERROR "Release builds with SOLARI_WITH_IO need the vendored dependencies: run git submodule update --init --recursive, or pass -DSOLARI_ALLOW_SYSTEM_DEPS=ON to link system libraries anyway")
   else()
     message(WARNING "SolariNet dependencies: system libraries (fallback mode); release builds requiring TLS should use vendored dependencies")
   endif()
