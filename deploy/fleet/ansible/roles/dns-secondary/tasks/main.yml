@@ -103,6 +103,30 @@
     state: absent
   when: not dns_secondary_manage_sudoers | bool
 
+# Without python3-selinux, Ansible moves files in from its temp dir keeping that
+# label, and rndc-confgen/mkdir inherit their parent's. Restore the policy labels
+# (named_conf_t for /etc/rndc.*, named_cache_t under /var/lib/named) before named
+# first reads them. A no-op when SELinux is off or the tools are absent.
+- name: Restore SELinux labels on BIND files
+  ansible.builtin.shell: |
+    [ -d /sys/fs/selinux ] && command -v restorecon >/dev/null 2>&1 || exit 0
+    for p in {{ dns_secondary_selinux_paths | map('quote') | join(' ') }}; do
+      if [ -e "$p" ]; then restorecon -RFv "$p" || exit 1; fi
+    done
+  args:
+    executable: /bin/sh
+  register: dns_secondary_restorecon
+  changed_when: dns_secondary_restorecon.stdout | length > 0
+  vars:
+    dns_secondary_selinux_paths:
+      - "{{ dns_secondary_main_conf }}"
+      - "{{ dns_secondary_conf_dir }}"
+      - "{{ dns_secondary_data_dir }}"
+      - "{{ dns_secondary_update_helper }}"
+      - "{{ dns_secondary_sudoers_file }}"
+      - /etc/rndc.key
+      - /etc/bind/rndc.key
+
 - name: Ensure authoritative secondary is enabled and running
   ansible.builtin.systemd:
     name: "{{ dns_secondary_service }}.service"

@@ -76,5 +76,29 @@ class UpdateHelperTest(unittest.TestCase):
             HELPER.validate('zone "akoria.net" { type forward; forwarders { 1.1.1.1; }; };\n')
 
 
+class RoleTaskOrderTest(unittest.TestCase):
+    """A fresh SELinux host needs the key and labels in place before named runs."""
+
+    def setUp(self):
+        self.tasks = (ROOT / "deploy/fleet/ansible/roles/dns-secondary/tasks/main.yml").read_text()
+
+    def pos(self, name):
+        idx = self.tasks.find("- name: " + name)
+        self.assertGreaterEqual(idx, 0, name)
+        return idx
+
+    def test_suse_key_generated_before_validated_templates(self):
+        self.assertLess(self.pos("Ensure SUSE rndc key exists"),
+                        self.pos("Install authoritative-only BIND configuration"))
+
+    def test_labels_restored_before_named_starts(self):
+        restore = self.pos("Restore SELinux labels on BIND files")
+        self.assertGreater(restore, self.pos("Install privileged zone update helper"))
+        self.assertGreater(restore, self.pos("Configure narrowly scoped update sudo access"))
+        self.assertLess(restore, self.pos("Ensure authoritative secondary is enabled and running"))
+        self.assertIn("restorecon -RFv", self.tasks)
+        self.assertIn("/etc/rndc.key", self.tasks)
+
+
 if __name__ == "__main__":
     unittest.main()
