@@ -100,7 +100,8 @@ class EnrollmentInstallTest(unittest.TestCase):
                             "-CAcreateserial", "-out", str(cert_path), "-days", "1")
                     cert = cert_path.read_text()
                 ca = self.server.foreign_ca_text if mode == "untrusted" else self.server.ca_text
-                node_id = "1234;evil" if mode == "bad-nodeid" else "1234"
+                node_id = {"bad-nodeid": "1234;evil",
+                           "big-nodeid": "18446744073709551616"}.get(mode, "1234")
                 body = json.dumps({"nodeId": node_id, "cert": cert, "ca": ca}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -134,7 +135,7 @@ class EnrollmentInstallTest(unittest.TestCase):
             conf.mkdir()
             config = conf / "client.conf"
             config.write_text("[identity]\nnodeId = 0\n")
-            if mode in ("append-nodeid", "bad-nodeid"):
+            if mode in ("append-nodeid", "bad-nodeid", "big-nodeid"):
                 config.write_text("[identity]\nhostFqdn = steel.test\n\n[server]\nprimaryUrl = tls+tcp://x:1\n")
             elif mode == "no-identity":
                 config.write_text("[server]\nprimaryUrl = tls+tcp://x:1\n")
@@ -203,7 +204,7 @@ class EnrollmentInstallTest(unittest.TestCase):
             self.assertEqual(config.read_text(),
                              "[identity]\nnodeId = 1234\n\n[server]\nprimaryUrl = tls+tcp://x:1\n")
             return
-        if mode == "bad-nodeid":
+        if mode in ("bad-nodeid", "big-nodeid"):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertNotIn("nodeId", config.read_text())
             self.assertIn("not stamped", proc.stderr)
@@ -285,6 +286,9 @@ class EnrollmentInstallTest(unittest.TestCase):
 
     def test_malformed_nodeid_is_not_stamped(self):
         self.run_case("bad-nodeid")
+
+    def test_nodeid_over_64_bits_is_not_stamped(self):
+        self.run_case("big-nodeid")
 
     def test_key_is_group_readable_for_agent_group(self):
         self.run_case("group-key")

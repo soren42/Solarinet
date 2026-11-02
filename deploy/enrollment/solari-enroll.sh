@@ -420,6 +420,11 @@ stamp_node_id() {
   # so a malformed server reply can never inject text into the config.
   printf '%s' "${nodeId}" | grep -qE '^(0x[0-9A-Fa-f]{1,16}|[1-9][0-9]{0,19})$' \
     || { warn "nodeId '${nodeId}' is not a decimal/0x-hex id; not stamped"; return 0; }
+  # ...and must fit in 64 bits (strtoull saturates silently; same-width digit
+  # strings compare correctly as text).
+  if [ "${#nodeId}" -eq 20 ] && [[ "${nodeId}" > "18446744073709551615" ]]; then
+    warn "nodeId '${nodeId}' exceeds 64 bits; not stamped"; return 0
+  fi
 
   if grep -qE '^[[:space:]]*nodeId[[:space:]]*=' "${CONFIG}"; then
     log "updating nodeId in ${CONFIG}"

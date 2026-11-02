@@ -31,13 +31,19 @@ sudo test -x /opt/solarinet/current/.venv/bin/python3
 
 Stack applies and provisioning finishes run playbooks from benzene's
 `/srv/solari-provision/ansible/`, not from the release. Publish the release's
-Ansible tree there (as the operator with SSH to benzene; benzene's
-`inventory/` is kept and the old tree stays at `ansible.prev`):
+Ansible tree there (as the operator with SSH to benzene). Each publish lands in
+its own directory under `ansible.releases/` and `ansible` is an atomically
+switched symlink to it, so running playbooks are not disturbed; benzene's
+`inventory/` is carried forward, the newest three trees are kept, and
+`ansible.prev` points at the previous one. The first publish converts the old
+plain directory in place and refuses while a playbook is running.
 
 ```sh
-/opt/solarinet/current/deploy/fleet/sync-ansible.sh --check   # show drift
+/opt/solarinet/current/deploy/fleet/sync-ansible.sh --check   # 0 in sync, 1 drift, 2 check failed
 /opt/solarinet/current/deploy/fleet/sync-ansible.sh
 ```
+
+Rollback on benzene: `ln -sfn "$(readlink /srv/solari-provision/ansible.prev)" /srv/solari-provision/ansible.swap && mv -T /srv/solari-provision/ansible.swap /srv/solari-provision/ansible`.
 
 ## Cutover
 

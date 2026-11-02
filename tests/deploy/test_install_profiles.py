@@ -315,6 +315,8 @@ class InstallProfiles(unittest.TestCase):
         self.assertNotRegex(src, r"systemctl (enable|start) solari-client")
         self.assertIn('chown root:solari "${CONF_DIR}"', src)
         self.assertIn("useradd --system --user-group", src)
+        # A re-run on an older install retires the legacy unit name.
+        self.assertIn("systemctl disable --now solari-client.service", src)
 
     def test_release_agent_beats_stale_dist_tree(self):
         # SOLARI_DIST_DIR may hold an old cross-build; for the host arch the

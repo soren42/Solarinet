@@ -182,6 +182,14 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 [Install]
 WantedBy=multi-user.target
 EOF
+  # Older images installed the agent as solari-client.service; retire it so a
+  # re-run never leaves two agents enabled.
+  if [ -f /etc/systemd/system/solari-client.service ]; then
+    log "retiring legacy solari-client.service"
+    systemctl disable --now solari-client.service 2>/dev/null || true
+    rm -rf /etc/systemd/system/solari-client.service \
+      /etc/systemd/system/solari-client.service.d
+  fi
   if [ -d /run/systemd/system ]; then systemctl daemon-reload 2>/dev/null || true; fi
   systemctl enable solarinet-client.service 2>/dev/null \
     || warn "could not enable solarinet-client.service"

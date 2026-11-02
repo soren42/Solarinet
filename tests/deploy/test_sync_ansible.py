@@ -63,7 +63,39 @@ class SyncAnsibleTest(unittest.TestCase):
         with open(os.path.join(self.prov, "ansible.prev", "ansible.cfg")) as fh:
             self.assertEqual(fh.read(), "old\n")
         self.assertTrue(os.path.isfile(os.path.join(self.dst, ".release")))
-        self.assertFalse(os.path.exists(self.dst + ".new"))
+        self.assertTrue(os.path.islink(self.dst))
+        self.assertFalse(os.path.lexists(self.dst + ".swap"))
+
+    def test_republish_switches_symlink_and_prunes(self):
+        self.seed_remote()
+        for _ in range(5):
+            p = self.run_sync()
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        rels = os.path.join(self.prov, "ansible.releases")
+        trees = sorted(os.listdir(rels))
+        self.assertEqual(len(trees), 3, trees)
+        live = os.path.realpath(self.dst)
+        prev = os.path.realpath(self.dst + ".prev")
+        self.assertNotEqual(live, prev)
+        self.assertEqual(os.path.dirname(live), os.path.realpath(rels))
+        self.assertEqual(os.path.dirname(prev), os.path.realpath(rels))
+        with open(os.path.join(self.dst, "inventory", "hosts.yml")) as fh:
+            self.assertEqual(fh.read(), "site-local inventory\n")
+
+    def test_running_playbook_keeps_its_tree(self):
+        self.run_sync()
+        started_in = os.path.realpath(self.dst)   # what `env -C` resolves to
+        self.run_sync()
+        self.assertNotEqual(os.path.realpath(self.dst), started_in)
+        self.assertTrue(os.path.isfile(os.path.join(started_in, "playbooks", "site.yml")))
+
+    def test_check_reports_failed_comparison(self):
+        self.env["BENZENE"] = "unreachable-host"
+        p = self.run_sync("--check")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("failed", p.stderr)
+        p = self.run_sync()
+        self.assertNotEqual(p.returncode, 0)
 
     def test_first_publish_without_existing_tree(self):
         p = self.run_sync()
@@ -74,12 +106,13 @@ class SyncAnsibleTest(unittest.TestCase):
     def test_check_reports_drift_without_changing_remote(self):
         self.seed_remote()
         p = self.run_sync("--check")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("differ", p.stdout + p.stderr)
         with open(os.path.join(self.dst, "ansible.cfg")) as fh:
             self.assertEqual(fh.read(), "old\n")
         self.assertEqual(self.run_sync().returncode, 0)
         p = self.run_sync("--check")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("in sync", p.stdout)
 
     def test_unsafe_prov_root_refused(self):
