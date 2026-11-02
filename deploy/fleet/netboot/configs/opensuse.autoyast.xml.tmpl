@@ -153,6 +153,28 @@
     </services>
   </services-manager>
 
+  <!-- ==== firewall ======================================================= -->
+  <!-- Enabling sshd does not open its port. With no <firewall> section the -->
+  <!-- product default applies: firewalld on, ssh closed unless the install -->
+  <!-- was booted with ssh=1. That locks out prov-finish (Ansible over SSH) -->
+  <!-- and the operator, so open ssh in the default zone explicitly. The   -->
+  <!-- list REPLACES the zone's services, so keep firewalld's stock         -->
+  <!-- public-zone dhcpv6-client alongside it.                              -->
+  <firewall>
+    <enable_firewall config:type="boolean">true</enable_firewall>
+    <start_firewall config:type="boolean">true</start_firewall>
+    <default_zone>public</default_zone>
+    <zones config:type="list">
+      <zone>
+        <name>public</name>
+        <services config:type="list">
+          <service>ssh</service>
+          <service>dhcpv6-client</service>
+        </services>
+      </zone>
+    </zones>
+  </firewall>
+
   <!-- ==== accounts ======================================================= -->
   <!-- root password locked-ish (set to the same hash but SSH is key-only);  -->
   <!-- admin user gets the operator key and, for a PROV_STAGE install, the  -->

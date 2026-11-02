@@ -224,6 +224,15 @@ class InstallProfiles(unittest.TestCase):
         enabled = root.findall("./a:services-manager/a:services/a:enable/a:service", NS)
         self.assertEqual([e.text for e in enabled], ["sshd"])
         self.assertIsNone(root.find(".//a:service_status", NS))
+        # sshd alone leaves firewalld's ssh port closed without ssh=1.
+        self.assertEqual(root.findtext("./a:firewall/a:enable_firewall", namespaces=NS), "true")
+        self.assertEqual(root.findtext("./a:firewall/a:start_firewall", namespaces=NS), "true")
+        zone = root.find("./a:firewall/a:zones/a:zone", NS)
+        self.assertEqual(zone.findtext("a:name", namespaces=NS),
+                         root.findtext("./a:firewall/a:default_zone", namespaces=NS))
+        # The list replaces the zone's services: keep the stock dhcpv6-client.
+        self.assertEqual(sorted(e.text for e in zone.findall("a:services/a:service", NS)),
+                         ["dhcpv6-client", "ssh"])
         products = root.findall("./a:software/a:products/a:product", NS)
         self.assertEqual([e.text for e in products], ["openSUSE"])
         # Full RELAX NG check where the YaST schema is installed (openSUSE:
