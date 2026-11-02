@@ -652,7 +652,7 @@ return static function (Router $router): void {
 final class InvCodes
 {
     /** Polymorphic subjects a barcode may bind to (mirrors external_refs; API-enforced). */
-    public const SUBJECTS = ['hardware_units', 'locations', 'projects', 'interfaces'];
+    public const SUBJECTS = ['hardware_units', 'locations', 'projects', 'interfaces', 'product_types'];
 
     /**
      * code_type → auto-generated tag prefix (types absent here require an
