@@ -262,7 +262,8 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 | — | `v_dns_hosts` / `v_dns_ifaces` / `v_dns_cnames` | Renderer-facing views matching the YAML shapes |
 
 The inventory above is `schema.sql`. Migration-owned tables are listed with
-their migration: RackWire in §7, provisioning images and stacks (029) in §8.
+their migration: RackWire in §7, provisioning images and stacks (029) in §8,
+and the broader product catalog (033) below.
 
 ## 6. Conventions
 
@@ -498,6 +499,32 @@ column-scoped `UPDATE (arch, …)` on `hardware_models` names the new column).
 The rollback refuses while any refresh run or non-NULL `arch` exists; since
 `prov_runs` refuses deletes, a recorded refresh run makes 031 effectively
 forward-only.
+
+Migration 033 (`migrations/033_inventory_catalog.sql`, compensating rollback
+[`rollback/033-down.sql`](rollback/033-down.sql)) adds the broad `product_types`
+catalog and separate `product_barcodes` namespace. Every existing
+`hardware_models` row backfills to a `product_types` row with the same ID;
+`printer`/`scanner` map to `peripheral`, `other` to `other`, and all remaining
+legacy `hw_type` values to `hardware`. Brand/model/notes are copied and legacy
+columns remain available. Unit rows link to the mapped product type without
+changing `model_id`; no commercial barcode associations are created. New
+product-type provenance uses the dashboard source plus
+`lookup_source='migration:033'` and a `hardware_models:<id>` lookup reference.
+
+The migration adds nullable unit/model product-type links and nullable
+licence-reference fields. `installed_on_unit_id` references another unit with
+`ON DELETE SET NULL`; insert/update guards reject self-reference and targets
+whose product type is software, and prevent changing an active target's kind to
+software. Licence fields hold counts, expiry, and a reference only, never a key
+or token. System `barcodes.subject_table` now
+accepts `product_types` through the `InvCodes::SUBJECTS` allowlist; commercial
+codes remain in `product_barcodes`.
+
+The rollback refuses when catalog values differ from the exact backfill, when
+product barcodes or system barcodes for product types exist, when model/unit
+links have changed, or when licence/installation fields are populated. It is
+for a controlled maintenance window after catalog writers are disabled; DDL
+autocommits. No product types are seeded from UI mockups.
 
 The seed is inserted once and never resurrected; a soft-deleted seed row stays
 deleted on re-run:

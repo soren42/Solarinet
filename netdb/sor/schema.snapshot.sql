@@ -19,6 +19,8 @@
 --   029_provisioning_images_stacks sha256=9a728c89089100963c81ce7cff7f4c6b611c74921b6d7cdde5d10859cc48001f
 --   030_provisioning_cdc sha256=ef9686d459c230ae7a05aa704ca59debef5f6c36204b35b46e684ba92a52ec6f
 --   031_provisioning_arch_refresh sha256=bc46d8210e86b02268bc44a634115d7bcd4a55f7f9a883a151e152c59a58ce6e
+--   032_node_os_hinfo sha256=117ac174184b5dbf5e0067aaf953a64da21674b575bdd9edd1e35923e9e4138c
+--   033_inventory_catalog sha256=f6110a624bc833f3200e148e5530047fac9030f54e57635d53d3de93e042cda5
 
 /*M!999999\- enable the sandbox mode */
 
@@ -110,7 +112,7 @@ CREATE TABLE `barcodes` (
   `code` varchar(128) NOT NULL COMMENT 'scanned payload: AKO-0042, LOC-0007, PRJ-0003, factory serial, UPC…',
   `code_type` enum('asset_tag','serial','upc','location','project','port','custom') NOT NULL DEFAULT 'custom',
   `symbology` enum('qr','code128','both') NOT NULL DEFAULT 'both',
-  `subject_table` varchar(64) NOT NULL COMMENT 'hardware_units|locations|projects|interfaces (polymorphic, mirrors external_refs; enforced in the API)',
+  `subject_table` varchar(64) NOT NULL COMMENT 'hardware_units|locations|projects|interfaces|product_types (polymorphic; enforced in the API)',
   `subject_id` bigint(20) unsigned NOT NULL COMMENT 'PK value in subject_table (no FK possible)',
   `label_printed_at` datetime DEFAULT NULL COMMENT 'when a physical label was last generated+confirmed printed',
   `notes` varchar(255) DEFAULT NULL,
@@ -970,6 +972,7 @@ CREATE TABLE `hardware_models` (
   `model` varchar(128) NOT NULL COMMENT 'product model, e.g. U7 Pro, PowerEdge R410, CM5',
   `hw_type` enum('server','workstation','sbc','nas','router','switch','ap','printer','scanner','iot','appliance','console','media','vehicle','tablet','phone','kvm','sensor','camera','ups','moca','other') NOT NULL DEFAULT 'other' COMMENT 'coarse device class for filtering and dashboard icons',
   `arch` enum('x86_64','arm64','armhf','riscv64','i386') DEFAULT NULL COMMENT 'CPU architecture (prov_images.arch vocabulary); NULL = unknown. First arch source for reimage targets',
+  `product_type_id` int(10) unsigned DEFAULT NULL COMMENT 'FK to the broader product catalog; legacy make/model/hw_type remain during transition',
   `notes` text DEFAULT NULL COMMENT 'free-form notes (spec links, quirks)',
   `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
@@ -979,17 +982,84 @@ CREATE TABLE `hardware_models` (
   `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_hw_models_make_model` (`make`,`model`),
+  UNIQUE KEY `uq_hw_models_product_type` (`product_type_id`),
   KEY `ix_hw_models_type` (`hw_type`),
   KEY `fk_hw_models_source` (`source_id`),
+  CONSTRAINT `fk_hw_models_product_type` FOREIGN KEY (`product_type_id`) REFERENCES `product_types` (`id`),
   CONSTRAINT `fk_hw_models_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Catalog of hardware products (make+model); one row per product, not per unit';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_models_catalog_ins` BEFORE INSERT ON `hardware_models`
+FOR EACH ROW
+BEGIN
+  IF NEW.`product_type_id` IS NULL THEN
+    INSERT INTO `product_types`
+      (`kind`,`name`,`brand`,`model`,`notes`,`lookup_source`,`source_id`,`asserted_kind`,`deleted_at`)
+    VALUES (CASE NEW.`hw_type`
+              WHEN 'printer' THEN 'peripheral'
+              WHEN 'scanner' THEN 'peripheral'
+              WHEN 'other' THEN 'other'
+              ELSE 'hardware'
+            END,
+            NEW.`model`, NEW.`make`, NEW.`model`, NEW.`notes`, 'legacy:hardware_models',
+            NEW.`source_id`, NEW.`asserted_kind`, NEW.`deleted_at`);
+    SET NEW.`product_type_id` = LAST_INSERT_ID();
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_models_catalog_upd` AFTER UPDATE ON `hardware_models`
+FOR EACH ROW
+BEGIN
+  IF NOT (NEW.`make` <=> OLD.`make`) OR NOT (NEW.`model` <=> OLD.`model`)
+     OR NOT (NEW.`hw_type` <=> OLD.`hw_type`) OR NOT (NEW.`notes` <=> OLD.`notes`)
+     OR NOT (NEW.`deleted_at` <=> OLD.`deleted_at`) THEN
+    UPDATE `product_types`
+       SET `kind` = CASE NEW.`hw_type`
+                      WHEN 'printer' THEN 'peripheral'
+                      WHEN 'scanner' THEN 'peripheral'
+                      WHEN 'other' THEN 'other'
+                      ELSE 'hardware'
+                    END,
+           `name`=NEW.`model`, `brand`=NEW.`make`, `model`=NEW.`model`,
+           `notes`=NEW.`notes`, `deleted_at`=NEW.`deleted_at`
+     WHERE `id`=NEW.`product_type_id`
+       AND `lookup_source` IN ('migration:033','legacy:hardware_models');
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `hardware_units`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `hardware_units` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
   `model_id` int(10) unsigned NOT NULL COMMENT 'FK: which product this unit is',
+  `product_type_id` int(10) unsigned DEFAULT NULL COMMENT 'broader product catalog link; legacy model_id remains during transition',
   `serial` varchar(128) DEFAULT NULL COMMENT 'manufacturer serial number (unique per model when known)',
   `asset_tag` varchar(64) DEFAULT NULL COMMENT 'internal inventory tag, if labeled',
   `location_id` int(10) unsigned DEFAULT NULL COMMENT 'FK: where this unit physically sits',
@@ -1005,17 +1075,98 @@ CREATE TABLE `hardware_units` (
   `unit_cost_cents` int(11) DEFAULT NULL,
   `stock_status` enum('in_stock','allocated','deployed','consumed','retired') NOT NULL DEFAULT 'in_stock',
   `receipt_id` int(10) unsigned DEFAULT NULL,
+  `licence_seats` int(10) unsigned DEFAULT NULL COMMENT 'licensed seat count; software instances only',
+  `licence_expires_on` date DEFAULT NULL COMMENT 'licence expiry date; software instances only',
+  `licence_reference` varchar(1024) DEFAULT NULL COMMENT 'pointer to licence material; never store a key or token here',
+  `installed_on_unit_id` int(10) unsigned DEFAULT NULL COMMENT 'software installation target hardware unit; never a person',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_hw_units_model_serial` (`model_id`,`serial`),
   KEY `ix_hw_units_location` (`location_id`),
   KEY `fk_hw_units_source` (`source_id`),
   KEY `fk_hwunit_receipt` (`receipt_id`),
+  KEY `ix_hw_units_product_type` (`product_type_id`),
+  KEY `ix_hw_units_installed_on_unit` (`installed_on_unit_id`),
+  KEY `ix_hw_units_licence_expiry` (`licence_expires_on`,`deleted_at`),
+  CONSTRAINT `fk_hw_units_installed_on_unit` FOREIGN KEY (`installed_on_unit_id`) REFERENCES `hardware_units` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_hw_units_location` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_hw_units_model` FOREIGN KEY (`model_id`) REFERENCES `hardware_models` (`id`),
+  CONSTRAINT `fk_hw_units_product_type` FOREIGN KEY (`product_type_id`) REFERENCES `product_types` (`id`),
   CONSTRAINT `fk_hw_units_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
   CONSTRAINT `fk_hwunit_receipt` FOREIGN KEY (`receipt_id`) REFERENCES `receipts` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Individual physical hardware units (one row per serial-numbered box)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_units_installed_target_ins` BEFORE INSERT ON `hardware_units`
+FOR EACH ROW
+BEGIN
+
+  IF NEW.`product_type_id` IS NULL THEN
+    SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+  END IF;
+  IF NEW.`installed_on_unit_id` IS NOT NULL THEN
+    IF NEW.`id`=NEW.`installed_on_unit_id` THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id cannot reference the same unit';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM `hardware_units` target
+      JOIN `product_types` product ON product.`id`=target.`product_type_id`
+      WHERE target.`id`=NEW.`installed_on_unit_id`
+        AND product.`kind`<>'software'
+    ) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id must reference a non-software unit';
+    END IF;
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_units_installed_target_upd` BEFORE UPDATE ON `hardware_units`
+FOR EACH ROW
+BEGIN
+
+  IF NEW.`product_type_id` IS NULL
+     OR (NOT (NEW.`model_id` <=> OLD.`model_id`)
+         AND NEW.`product_type_id` <=> OLD.`product_type_id`) THEN
+    SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+  END IF;
+  IF NEW.`installed_on_unit_id` IS NOT NULL THEN
+    IF NEW.`id`=NEW.`installed_on_unit_id` THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id cannot reference the same unit';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM `hardware_units` target
+      JOIN `product_types` product ON product.`id`=target.`product_type_id`
+      WHERE target.`id`=NEW.`installed_on_unit_id`
+        AND product.`kind`<>'software'
+    ) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id must reference a non-software unit';
+    END IF;
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `interconnects`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -1417,6 +1568,85 @@ CREATE TABLE `power_circuits` (
   CONSTRAINT `fk_power_circuits_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AC/DC branch circuits and PDU/UPS rails as a self-referencing tree (D5)';
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `product_barcodes`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `product_barcodes` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `product_type_id` int(10) unsigned NOT NULL,
+  `code` varchar(128) NOT NULL,
+  `code_type` enum('gtin','sku','other') NOT NULL DEFAULT 'other',
+  `source_id` smallint(5) unsigned NOT NULL,
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `deleted_at` datetime DEFAULT NULL,
+  `live_flag` tinyint(4) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) STORED,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_product_barcodes_code_live` (`code`,`live_flag`),
+  KEY `ix_product_barcodes_product_deleted` (`product_type_id`,`deleted_at`),
+  KEY `ix_product_barcodes_code` (`code`),
+  KEY `fk_product_barcodes_source` (`source_id`),
+  CONSTRAINT `fk_product_barcodes_product` FOREIGN KEY (`product_type_id`) REFERENCES `product_types` (`id`),
+  CONSTRAINT `fk_product_barcodes_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Commercial product codes, distinct from SolariNet system barcodes';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `product_types`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `product_types` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK; legacy hardware model IDs are preserved during migration 033',
+  `kind` enum('hardware','peripheral','component','software','accessory','consumable','other') NOT NULL,
+  `name` varchar(160) NOT NULL,
+  `brand` varchar(128) DEFAULT NULL,
+  `model` varchar(128) DEFAULT NULL,
+  `category` varchar(128) DEFAULT NULL,
+  `specs` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`specs`)),
+  `notes` text DEFAULT NULL,
+  `image_url` varchar(1024) DEFAULT NULL,
+  `lookup_source` varchar(64) DEFAULT NULL COMMENT 'external lookup provider or migration source identifier',
+  `lookup_ref` varchar(255) DEFAULT NULL COMMENT 'external lookup reference or source-row reference',
+  `source_id` smallint(5) unsigned NOT NULL COMMENT 'SoR provenance source',
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `deleted_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix_product_types_kind` (`kind`,`deleted_at`),
+  KEY `ix_product_types_name` (`name`),
+  KEY `fk_product_types_source` (`source_id`),
+  CONSTRAINT `fk_product_types_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Broad catalog of hardware, software, peripherals, and other products';
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_product_types_no_software_install_target` BEFORE UPDATE ON `product_types`
+FOR EACH ROW
+BEGIN
+  IF NEW.`kind`='software' AND OLD.`kind`<>'software' AND EXISTS (
+    SELECT 1
+      FROM `hardware_units` target
+      JOIN `hardware_units` installed ON installed.`installed_on_unit_id`=target.`id`
+     WHERE target.`product_type_id`=OLD.`id`
+  ) THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT='product type cannot become software while installed units target it';
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `project_allocations`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
