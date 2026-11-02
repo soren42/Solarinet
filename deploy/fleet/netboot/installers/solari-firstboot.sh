@@ -48,7 +48,7 @@ SERVER_IP="${SOLARI_SERVER_IP:-@@SERVER_IP@@}"
 
 CONF_DIR=/etc/solari
 BIN_PATH=/usr/local/bin/solariClient
-UNIT_PATH=/etc/systemd/system/solari-client.service
+UNIT_PATH=/etc/systemd/system/solarinet-client.service
 LOG_TAG="solari-firstboot"
 
 log()  { printf '[%s] %s\n' "$LOG_TAG" "$*"; logger -t "$LOG_TAG" "$*" 2>/dev/null || true; }
@@ -105,11 +105,13 @@ rm -f "${TMP_BIN}"
 # Matches deploy/systemd/solari-client.service (User=solari, Group=solari).
 if ! id solari >/dev/null 2>&1; then
   log "creating system user 'solari'"
-  useradd --system --no-create-home --shell /usr/sbin/nologin solari \
+  useradd --system --user-group --no-create-home --shell /usr/sbin/nologin solari \
     2>/dev/null || warn "useradd solari failed (may already exist)"
 fi
 
+# The agent runs as solari and must read its key, so the dir is root:solari.
 mkdir -p "${CONF_DIR}"
+chown root:solari "${CONF_DIR}" 2>/dev/null || warn "could not chgrp ${CONF_DIR} to solari"
 chmod 0750 "${CONF_DIR}"
 
 # INI config identical in shape to deploy/dashboard/client.conf.sample.
@@ -137,7 +139,8 @@ EOF
 chmod 0644 "${CONF_DIR}/client.conf"
 
 # ---- 4. install + enable the systemd unit -----------------------------------
-# A trimmed copy of deploy/systemd/solari-client.service. We only enable (not
+# A trimmed copy of deploy/systemd/solari-client.service, installed under the
+# fleet unit name solarinet-client (remote-deploy.sh, the Ansible role). We only enable (not
 # start) it here: without certificates the client cannot connect, so it would
 # crash-loop. It starts cleanly after the enrollment hook installs certs and the
 # marker is cleared. systemd will bring it up on the next boot regardless.
@@ -158,7 +161,7 @@ ConditionPathExists=!${CONF_DIR}/PENDING_ENROLLMENT
 
 [Service]
 Type=simple
-ExecStart=${BIN_PATH} --config ${CONF_DIR}/client.conf
+ExecStart=${BIN_PATH} --config ${CONF_DIR}/client.conf --loop
 Restart=always
 RestartSec=2
 User=solari
@@ -180,8 +183,8 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 WantedBy=multi-user.target
 EOF
   if [ -d /run/systemd/system ]; then systemctl daemon-reload 2>/dev/null || true; fi
-  systemctl enable solari-client.service 2>/dev/null \
-    || warn "could not enable solari-client.service"
+  systemctl enable solarinet-client.service 2>/dev/null \
+    || warn "could not enable solarinet-client.service"
 else
   warn "systemd not detected; skipping unit install (wire your init manually)"
 fi
@@ -206,12 +209,12 @@ fi
 # solari-enroll.sh then writes ${CONF_DIR}/{node.pem,node.key,ca.pem}; after
 # that succeeds, clear the marker and start the service:
 #     rm -f "${CONF_DIR}/PENDING_ENROLLMENT"
-#     systemctl start solari-client.service
+#     systemctl start solarinet-client.service
 # -----------------------------------------------------------------------------
 if [ -f "${CONF_DIR}/node.pem" ] && [ -f "${CONF_DIR}/ca.pem" ]; then
   log "certificate material already present; clearing enrollment marker"
   rm -f "${CONF_DIR}/PENDING_ENROLLMENT"
-  systemctl start solari-client.service 2>/dev/null || true
+  systemctl start solarinet-client.service 2>/dev/null || true
 else
   log "no certificate yet; staging PENDING_ENROLLMENT marker"
   {
@@ -223,7 +226,7 @@ else
   } > "${CONF_DIR}/PENDING_ENROLLMENT"
   chmod 0640 "${CONF_DIR}/PENDING_ENROLLMENT"
   warn "PENDING_ENROLLMENT: ${FQDN:-$HOSTNAME_S} needs a client certificate."
-  warn "Run enrollment, then: rm ${CONF_DIR}/PENDING_ENROLLMENT && systemctl start solari-client"
+  warn "Run enrollment, then: rm ${CONF_DIR}/PENDING_ENROLLMENT && systemctl start solarinet-client"
 fi
 # =====================  END SOLARINET ENROLLMENT HOOK  =======================
 

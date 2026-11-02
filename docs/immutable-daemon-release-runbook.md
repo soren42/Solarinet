@@ -29,6 +29,16 @@ readlink -f /opt/solarinet/current
 sudo test -x /opt/solarinet/current/.venv/bin/python3
 ```
 
+Stack applies and provisioning finishes run playbooks from benzene's
+`/srv/solari-provision/ansible/`, not from the release. Publish the release's
+Ansible tree there (as the operator with SSH to benzene; benzene's
+`inventory/` is kept and the old tree stays at `ansible.prev`):
+
+```sh
+/opt/solarinet/current/deploy/fleet/sync-ansible.sh --check   # show drift
+/opt/solarinet/current/deploy/fleet/sync-ansible.sh
+```
+
 ## Cutover
 
 The cutover saves the existing unit files below `/var/backups/solarinet-immutable-<UTC timestamp>`, installs the release-backed units, reloads systemd, then restarts and checks one unit at a time. On a failed restart or check it restores the saved definitions and attempts to restore each service's prior active state. Keep the printed backup path for rollback.

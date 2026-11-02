@@ -37,7 +37,12 @@
 #   --key-bits N         RSA key size when not using EC (default: EC P-256).
 #   --rsa                Use RSA-3072 instead of the default EC P-256 key.
 #   --csr-only           Generate key+CSR and stop (print CSR path); no submit.
+#   --ca-bundle FILE     Verify the enrollment endpoint against FILE (curl
+#                        --cacert), e.g. the internal CA root before ca.pem is
+#                        installed. Mutually exclusive with --insecure.
 #   --insecure           Allow curl to skip TLS verification (bootstrap only).
+#   --group GROUP        Group that runs the agent and must read node.key
+#                        (default: solari; skipped if the group is absent).
 #   --force              Regenerate key/CSR and overwrite installed material.
 #   --resume             Recover an installed cert whose server ACK failed; only
 #                        succeeds if the server returns the exact installed cert.
@@ -56,6 +61,8 @@ KEY_BITS=3072
 USE_RSA=0
 CSR_ONLY=0
 INSECURE=0
+CA_BUNDLE=""
+SERVICE_GROUP="solari"
 FORCE=0
 RESUME=0
 TEMP_KEY_FILE=""
@@ -78,6 +85,8 @@ while [ $# -gt 0 ]; do
     --rsa)         USE_RSA=1 ;;
     --csr-only)    CSR_ONLY=1 ;;
     --insecure)    INSECURE=1 ;;
+    --ca-bundle)   CA_BUNDLE="${2:?}"; shift ;;
+    --group)       SERVICE_GROUP="${2:?}"; shift ;;
     --force)       FORCE=1 ;;
     --resume)      RESUME=1 ;;
     -h|--help)     grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -88,6 +97,13 @@ done
 
 if [ "${RESUME}" -eq 1 ] && { [ "${FORCE}" -eq 1 ] || [ "${CSR_ONLY}" -eq 1 ]; }; then
   die "--resume cannot be combined with --force or --csr-only"
+fi
+
+if [ "${INSECURE}" -eq 1 ] && [ -n "${CA_BUNDLE}" ]; then
+  die "--ca-bundle cannot be combined with --insecure"
+fi
+if [ -n "${CA_BUNDLE}" ] && [ ! -r "${CA_BUNDLE}" ]; then
+  die "--ca-bundle ${CA_BUNDLE} is not readable"
 fi
 
 # ---- validation -----------------------------------------------------------
@@ -125,6 +141,25 @@ if [ ! -d "${CONF_DIR}" ]; then
   mkdir -p "${CONF_DIR}" || die "cannot create ${CONF_DIR} (need root?)"
 fi
 chmod 0750 "${CONF_DIR}" 2>/dev/null || true
+# The agent runs unprivileged in SERVICE_GROUP and must traverse CONF_DIR and
+# read node.key; without the group the dir and key stay root-only.
+GROUP_OK=0
+if getent group "${SERVICE_GROUP}" >/dev/null 2>&1; then
+  GROUP_OK=1
+  chgrp "${SERVICE_GROUP}" "${CONF_DIR}" 2>/dev/null \
+    || warn "cannot chgrp ${CONF_DIR} to ${SERVICE_GROUP}"
+else
+  warn "group ${SERVICE_GROUP} not found; ${CONF_DIR} and node.key stay root-only"
+fi
+
+# Make a private key readable by the agent group (0640), or root-only (0600).
+secure_key() {
+  if [ "${GROUP_OK}" -eq 1 ] && chgrp "${SERVICE_GROUP}" "$1" 2>/dev/null; then
+    chmod 0640 "$1" || warn "cannot chmod 0640 $1"
+  else
+    chmod 0600 "$1" || warn "cannot chmod 0600 $1"
+  fi
+}
 
 cleanup_temp_key() {
   if [ -n "${TEMP_KEY_FILE}" ] && [ -e "${TEMP_KEY_FILE}" ]; then
@@ -137,6 +172,7 @@ trap cleanup_temp_key EXIT
 generate_key_and_csr() {
   if [ -f "${KEY_FILE}" ] && [ "${FORCE}" -eq 0 ]; then
     log "reusing existing private key ${KEY_FILE} (--force to regenerate)"
+    secure_key "${KEY_FILE}"
   else
     if [ "${FORCE}" -eq 1 ] && [ -f "${CERT_FILE}" ]; then
       TEMP_KEY_FILE="$(mktemp "${CONF_DIR}/.node.key.XXXXXXXX")" || die "cannot create staged private key"
@@ -151,7 +187,7 @@ generate_key_and_csr() {
       openssl genpkey -algorithm EC \
         -pkeyopt ec_paramgen_curve:P-256 -out "${WORK_KEY_FILE}"
     fi
-    chmod 0600 "${WORK_KEY_FILE}"
+    secure_key "${WORK_KEY_FILE}"
   fi
 
   log "generating CSR ${CSR_FILE} (CN=${CERT_CN})"
@@ -190,6 +226,7 @@ submit_enrollment() {
                       -H 'Content-Type: application/json'
                       -X POST --data-binary @-)
   [ "${INSECURE}" -eq 1 ] && curl_args+=(--insecure)
+  [ -n "${CA_BUNDLE}" ] && curl_args+=(--cacert "${CA_BUNDLE}")
 
   log "submitting CSR to ${SERVER_URL}/api/enrollments"
   resp="$(printf '%s' "${payload}" | curl "${curl_args[@]}" \
@@ -207,6 +244,7 @@ ack_enrollment() {
                       -H 'Content-Type: application/json'
                       -X POST --data-binary @-)
   [ "${INSECURE}" -eq 1 ] && curl_args+=(--insecure)
+  [ -n "${CA_BUNDLE}" ] && curl_args+=(--cacert "${CA_BUNDLE}")
   resp="$(printf '%s' "${payload}" | curl "${curl_args[@]}" \
     "${SERVER_URL%/}/api/enrollments/ack")" || {
       warn "certificate installed, but server acknowledgement failed; retry enrollment with the same token"
@@ -378,6 +416,10 @@ stamp_node_id() {
   local nodeId="$1"
   [ -n "${nodeId}" ] || { warn "no nodeId returned; leaving config untouched"; return 0; }
   [ -f "${CONFIG}" ] || { warn "config ${CONFIG} not found; nodeId=${nodeId} not stamped"; return 0; }
+  # The client parses nodeId with strtoull(base 0): accept decimal or 0x-hex only,
+  # so a malformed server reply can never inject text into the config.
+  printf '%s' "${nodeId}" | grep -qE '^(0x[0-9A-Fa-f]{1,16}|[1-9][0-9]{0,19})$' \
+    || { warn "nodeId '${nodeId}' is not a decimal/0x-hex id; not stamped"; return 0; }
 
   if grep -qE '^[[:space:]]*nodeId[[:space:]]*=' "${CONFIG}"; then
     log "updating nodeId in ${CONFIG}"
@@ -388,8 +430,20 @@ stamp_node_id() {
     cat "${tmp}" > "${CONFIG}"
     rm -f "${tmp}"
   else
-    warn "no nodeId key in ${CONFIG}; appending under [identity] is not safe to"
-    warn "automate - set 'nodeId = ${nodeId}' manually under [identity]."
+    local tmp; tmp="$(mktemp)"
+    if grep -qE '^[[:space:]]*\[identity\][[:space:]]*$' "${CONFIG}"; then
+      log "adding nodeId under [identity] in ${CONFIG}"
+      awk -v id="${nodeId}" '
+        { print }
+        !done && $0 ~ /^[[:space:]]*\[identity\][[:space:]]*$/ {
+          print "nodeId = " id; done = 1
+        }' "${CONFIG}" > "${tmp}"
+    else
+      log "adding [identity] nodeId to ${CONFIG}"
+      { printf '[identity]\nnodeId = %s\n\n' "${nodeId}"; cat "${CONFIG}"; } > "${tmp}"
+    fi
+    cat "${tmp}" > "${CONFIG}"
+    rm -f "${tmp}"
   fi
 }
 

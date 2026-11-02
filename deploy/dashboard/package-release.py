@@ -48,7 +48,7 @@ HELPER_ENTRYPOINTS = (
     "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
     "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
     "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
-    "deploy/fleet/prov-finish.py",
+    "deploy/fleet/prov-finish.py", "deploy/fleet/sync-ansible.sh",
 )
 HELPER_SUPPORT = (
     "deploy/fleet/fleet-lib.sh", "deploy/fleet/provlib.py", "deploy/fleet/netbootlib.py",
