@@ -616,7 +616,8 @@ static solariStatus serverIngestWatchdog(serverContext *ctx,
 
 solariStatus serverIngestDispatch(serverContext *ctx,
                                   const solariFrameHeader *hdr,
-                                  const uint8_t *payload, size_t len)
+                                  const uint8_t *payload, size_t len,
+                                  const char *peerCertCn)
 {
     if (!ctx || !hdr) return ERR_INVALID_ARG;
     if (len > 0 && !payload) return ERR_INVALID_ARG;
@@ -664,7 +665,7 @@ solariStatus serverIngestDispatch(serverContext *ctx,
                        (unsigned long long)hdr->sourceNodeId, solariStrError(rc));
             return rc;
         }
-        return serverMasterAcceptHello(ctx, hdr, &hello, NULL,
+        return serverMasterAcceptHello(ctx, hdr, &hello, peerCertCn,
                                        wbuf, sizeof wbuf, &wlen, &wtc);
     }
 
