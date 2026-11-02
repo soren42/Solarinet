@@ -22,8 +22,8 @@ ZONEDIR    = "/etc/bind/zones"          # where the files land on the BIND host
 # zones. It does not serve the reverse zones, so it must not be listed there.
 NS_HOSTS = ["xenon", "radium", "chlorine"]
 REVERSE_NS_HOSTS = ["xenon", "chlorine"]
-FORWARD_SECONDARIES = ["10.1.0.10", "10.7.0.10"]
-REVERSE_SECONDARIES = ["10.7.0.10"]
+FORWARD_SECONDARIES = ["10.1.0.10", "10.7.0.10", "10.0.0.11"]
+REVERSE_SECONDARIES = ["10.7.0.10", "10.0.0.11"]
 # Zone-apex A records: the bare domain (e.g. https://akoria.net/) resolves to a
 # host IP. akoria.net -> xenon (10.0.0.20), the web / service-directory host.
 APEX_A = {"akoria.net": "10.0.0.20"}

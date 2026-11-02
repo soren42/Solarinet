@@ -1,0 +1,10 @@
+options {
+    directory "{{ dns_secondary_data_dir }}";
+    listen-on port 53 { {{ dns_secondary_address }}; };
+    listen-on-v6 { none; };
+    recursion no;
+    allow-query { {{ dns_secondary_allow_query }}; localhost; };
+    allow-transfer { none; };
+    dnssec-validation no;
+    minimal-responses yes;
+};

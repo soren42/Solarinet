@@ -1,0 +1,15 @@
+---
+dns_secondary_primary: 10.0.0.20
+dns_secondary_address: "{{ ansible_default_ipv4.address }}"
+dns_secondary_allow_query: 10.0.0.0/8
+dns_secondary_admin_user: ""
+dns_secondary_manage_sudoers: false
+dns_secondary_update_helper: /usr/local/sbin/solari-bind9-update-zones
+dns_secondary_checkconf: /usr/sbin/named-checkconf
+dns_secondary_rndc: /usr/sbin/rndc
+dns_secondary_sudoers_file: /etc/sudoers.d/solari-bind9-update-zones
+dns_secondary_suse_main_conf: /etc/named.conf
+dns_secondary_suse_conf_dir: /etc/named.d/solari-secondary
+dns_secondary_suse_data_dir: /var/lib/named/solari-secondary
+dns_secondary_debian_conf_dir: /etc/bind/solari-secondary
+dns_secondary_debian_data_dir: /var/cache/bind/solari-secondary

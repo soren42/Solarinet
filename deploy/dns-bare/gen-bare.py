@@ -3,8 +3,8 @@
 
 Usage: gen-bare.py FORWARD_ZONE OUTPUT [--previous APPLIED_ZONES]
 The runtime zone path defaults to /etc/bind/zones and is configurable for an
-atomic release directory. Calls without --transfer authorize the active Khadas
-secondary only. Add further addresses explicitly after they are provisioned. No source or previous-
+atomic release directory. Calls without --transfer authorize the provisioned
+Khadas and steel secondaries. No source or previous-
 generation file is modified.
 """
 import argparse
@@ -61,7 +61,7 @@ def main():
     names = renderNames(args.source)
     if not names:
         raise ValueError("forward zone contains no usable bare-name records")
-    transfers = args.transfer if args.transfer is not None else ["10.7.0.10"]
+    transfers = args.transfer if args.transfer is not None else ["10.7.0.10", "10.0.0.11"]
     transfer_ips = sorted({str(ipaddress.IPv4Address(address)) for address in transfers})
     transfer = "; ".join(transfer_ips)
     previous = pathlib.Path(args.previous or args.output)

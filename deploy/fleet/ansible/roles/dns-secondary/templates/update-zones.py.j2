@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Privileged, atomic BIND secondary-zone update. Reads declarations on stdin."""
+import fcntl
+import os
+import pathlib
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+CONFIG_DIR = pathlib.Path({{ dns_secondary_conf_dir | to_json }})
+OPTIONS = CONFIG_DIR / "options.conf"
+ZONES = CONFIG_DIR / "zones.conf"
+LOCK = CONFIG_DIR / ".zones.lock"
+DATA_DIR = {{ dns_secondary_data_dir | to_json }}
+PRIMARY = {{ dns_secondary_primary | to_json }}
+MAIN_CONF = {{ dns_secondary_main_conf | to_json }}
+CHECKCONF = {{ dns_secondary_checkconf | to_json }}
+RNDC = {{ dns_secondary_rndc | to_json }}
+INPUT_RE = re.compile(
+    r'^zone "([A-Za-z0-9._-]+)" \{ type secondary; primaries \{ ' + re.escape(PRIMARY)
+    + r'; \}; file "/var/cache/bind/solarinet-secondary/db\.([A-Za-z0-9._-]+)"; \};$'
+)
+ZONE_RE = re.compile(
+    r'^zone "([A-Za-z0-9._-]+)" \{ type secondary; primaries \{ ' + re.escape(PRIMARY)
+    + r'; \}; file "' + re.escape(DATA_DIR) + r'/db\.([A-Za-z0-9._-]+)"; \};$'
+)
+
+def validate(text):
+    if len(text.encode("utf-8")) > 65536:
+        raise ValueError("zone config exceeds 64 KiB")
+    zones = set()
+    for line in text.splitlines():
+        if not line or line.startswith("// Generated"):
+            continue
+        match = ZONE_RE.fullmatch(line)
+        if not match or match.group(1) != match.group(2):
+            raise ValueError("zone config contains an unsupported declaration")
+        zone = match.group(1)
+        if ".." in zone or zone.startswith(".") or zone in zones:
+            raise ValueError("zone config contains an invalid or duplicate name")
+        zones.add(zone)
+    if not zones or len(zones) > 256:
+        raise ValueError("zone config must contain 1 to 256 zones")
+
+def safe_config_dir():
+    info = CONFIG_DIR.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise ValueError("BIND config directory must be root-owned and not writable by group/other")
+    for path in (OPTIONS, ZONES):
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("BIND config file has unsafe ownership or mode")
+
+def atomic_write(data):
+    fd, name = tempfile.mkstemp(prefix=".zones-", dir=CONFIG_DIR)
+    try:
+        os.fchmod(fd, 0o644)
+        os.fchown(fd, 0, 0)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, ZONES)
+        dfd = os.open(CONFIG_DIR, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    finally:
+        try: os.unlink(name)
+        except FileNotFoundError: pass
+
+def check(candidate):
+    fd, name = tempfile.mkstemp(prefix=".check-", dir=CONFIG_DIR, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write('include "' + str(OPTIONS) + '";\ninclude "' + str(candidate) + '";\n')
+            out.flush()
+            os.fsync(out.fileno())
+        subprocess.run([CHECKCONF, name], check=True, timeout=15, capture_output=True)
+    finally:
+        try: os.unlink(name)
+        except FileNotFoundError: pass
+
+def apply(text):
+    lines = []
+    for line in text.splitlines():
+        match = INPUT_RE.fullmatch(line)
+        if match:
+            line = ('zone "' + match.group(1) + '" { type secondary; primaries { ' + PRIMARY
+                    + '; }; file "' + DATA_DIR + '/db.' + match.group(2) + '"; };')
+        lines.append(line)
+    text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    validate(text)
+    safe_config_dir()
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+            raise ValueError("update lock must be private and root-owned")
+        lock_stream = os.fdopen(fd, "r+")
+        fd = -1
+        with lock_stream as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            old = ZONES.read_bytes()
+            cfd, candidate_name = tempfile.mkstemp(prefix=".candidate-", dir=CONFIG_DIR)
+            try:
+                with os.fdopen(cfd, "w", encoding="utf-8") as out:
+                    out.write(text)
+                    out.flush()
+                    os.fsync(out.fileno())
+                check(candidate_name)
+                data = text.encode("utf-8")
+                if data == old:
+                    return
+                atomic_write(data)
+                try:
+                    subprocess.run([CHECKCONF, MAIN_CONF], check=True, timeout=15, capture_output=True)
+                    subprocess.run([RNDC, "reconfig"], check=True, timeout=20, capture_output=True)
+                except Exception:
+                    atomic_write(old)
+                    subprocess.run([RNDC, "reconfig"], check=False, timeout=20, capture_output=True)
+                    raise
+            finally:
+                try: os.unlink(candidate_name)
+                except FileNotFoundError: pass
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+def main():
+    if os.geteuid() != 0:
+        raise SystemExit("must run as root")
+    try:
+        data = sys.stdin.buffer.read(65537)
+        if len(data) > 65536:
+            raise ValueError("zone config exceeds 64 KiB")
+        apply(data.decode("utf-8"))
+    except Exception as exc:
+        print("BIND secondary update failed: " + str(exc), file=sys.stderr)
+        raise SystemExit(1)
+    print("BIND secondary zone config validated and applied")
+
+if __name__ == "__main__":
+    main()

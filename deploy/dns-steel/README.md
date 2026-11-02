@@ -1,63 +1,51 @@
-# steel — akoria.net authoritative secondary (Docker BIND9)
+# steel DNS secondary
 
-**steel** (`10.0.0.11`) is the inventory-labeled ZimaBlade. Jason booted it on
-2026-10-21 and observed no useful running service; it is on port 12 of the
-`laboratory` switch. Network discovery and SSH checks still found `.11`
-unreachable. The separately verified Khadas VIM4 is **chlorine** (`10.7.0.10`),
-which runs the internal CA; its BIND deployment is documented in
-[`../dns-khadas/README.md`](../dns-khadas/README.md). Do not install the Khadas
-configuration on steel. The ZimaBlade will be considered for a future tertiary
-DNS role after console access and redeployment. The operator confirms exactly
-three distinct Zima devices: one ZimaBlade, one ZimaBoard, and one ZimaBoard 2;
-the mapping of the other two units to inventory records remains pending.
+Steel (`10.0.0.11`) was reimaged in P6 to openSUSE Tumbleweed. The former
+Docker BIND configuration is retired. Apply the native Ansible `dns-secondary`
+role through the host's SoR stack using Apply-stacks-only; this role does not
+manage recursion, RPZ, DHCP, or the nameserver set. Xenon remains primary at
+`10.0.0.20`; chlorine remains a secondary at `10.7.0.10`.
 
-The Docker BIND files below are an unverified deployment candidate for steel,
-not a description of its current runtime. Recheck the physical device, address
-handoff, container, mounts, and listeners before using them. Steel is not
-currently advertised as an authoritative nameserver.
+## Deployment sequence
 
-## Files (config, no secrets)
+1. On Xenon, update forward and reverse transfer/NOTIFY declarations and bare
+   zone defaults to include `10.0.0.11`; validate the complete configuration,
+   then apply it. Do not add steel to any NS record.
+2. Authorize the Xenon DNS applier's existing SSH public key in
+   `solari-admin`'s `authorized_keys` on steel. Do not copy private key
+   material. Confirm host-key verification from Xenon.
+3. Prepare the `[dns.secondary.steel]` section in Xenon's `sorsync.conf` and
+   keep `sor-apply-dns` stopped until the role has been applied:
 
-- `named.conf` — top-level include of the two files below.
-- `named.conf.options` — authoritative-only (`recursion no`), listen on all,
-  `allow-query { any; }`. The resolver/recursion role is added at cutover.
-- `named.conf.local` — includes `named.conf.bare` for the legacy SoR-managed
-  bare zones, followed by one `type secondary` stanza per zone (forward +
-  16 reverses), `primaries { 10.0.0.20; }`. The release helper removes the
-  legacy bare include as it replaces this parent with the managed generation.
-  Regenerate the secondary zone list from the live primary's `named.conf.akoria`
-  if zones are added/removed.
+   ```ini
+   [dns.secondary.steel]
+   address = 10.0.0.11
+   ssh_host = solari-admin@steel.akoria.net
+   update_helper = /usr/local/sbin/solari-bind9-update-zones
+   ```
 
-## Deploy
-
-Config lives on the host at `/mnt/data/bind/config` (this dir); BIND's writable
-zone store is `/mnt/data/bind/cache`.
-
-```sh
-docker run -d --name bind9 --restart unless-stopped \
-  -p 53:53/tcp -p 53:53/udp \
-  -v /mnt/data/bind/config:/etc/bind:ro \
-  -v /mnt/data/bind/cache:/var/cache/bind \
-  internetsystemsconsortium/bind9:9.20 \
-  -g -c /etc/bind/named.conf
-```
-
-Note the trailing `-g -c /etc/bind/named.conf`: it **overrides the image's
-default CMD**, which otherwise logs to a file (`-L /var/log/bind/default.log`)
-that doesn't exist in the container — named then exits 1 with empty
-`docker logs`. `-g` logs to stderr so `docker logs bind9` works.
-
-## Transfer authorization (on the primary)
-
-xenon authorizes steel via the zone generator: `netdb/gen-zones.py` lists steel
-in `SECONDARIES`, so every zone renders `allow-transfer { 10.1.0.10; 10.0.0.11; }`
-and `also-notify { … }` — NOTIFY-driven AXFR, no polling lag. Never hand-edit
-`named.conf.akoria`; edit the SoR / generator and let `sor-apply-dns` re-render.
+4. Apply the target SoR stack to steel through `prov-finish` / `STACK_APPLY`
+   (Apply-stacks-only). The defaults fit steel: `dns_secondary_address` is the
+   default-route IPv4 (`10.0.0.11`), and the provisioning baseline already gives
+   `solari-admin` NOPASSWD sudo. Set `dns_secondary_admin_user: solari-admin`
+   and `dns_secondary_manage_sudoers: true` only where the baseline grant is
+   removed. Then enable the prepared sorsync section and resume `sor-apply-dns`.
 
 ## Validate
 
+Steel serves no transfers of its own (`allow-transfer { none; }`), so an AXFR
+query *to* steel is refused by design. Verify that the primary allows steel to
+transfer (run from steel), that steel loaded the zones, and that SOA serials match:
+
 ```sh
-dig +short @10.0.0.11 steel.akoria.net          # -> 10.0.0.11
-dig +short @10.0.0.11 akoria.net SOA | awk '{print $3}'   # serial == xenon's
-dig +short @10.0.0.11 -x 10.0.0.20              # -> xenon.akoria.net.
+ssh solari-admin@steel.akoria.net 'dig +tcp @10.0.0.20 akoria.net AXFR | tail -1'
+ssh solari-admin@steel.akoria.net 'sudo -n /usr/bin/named-checkconf /etc/named.conf; sudo -n systemctl is-active named.service; sudo -n ls /var/lib/named/solari-secondary'
+dig @10.0.0.11 akoria.net SOA +noall +answer
+dig @10.0.0.20 akoria.net SOA +noall +answer
 ```
+
+The AXFR from the primary must complete (its last line reports the XFR size),
+steel must hold a db file per zone, and the SOA serials must match. Then send a DNS change
+through SoR and confirm the applier logs steel's secondary refresh and records
+SOA parity before acknowledging the event. Steel must not be added to NS until
+a separate change explicitly authorizes it.
