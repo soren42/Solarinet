@@ -162,7 +162,9 @@ PWHASH="$(openssl passwd -6 "$(openssl rand -base64 18)")"   # account exists; s
 
 # Installer package set (finding: one <package> per name, family names).
 case "${DISTRO}" in
-  opensuse) PKGS="${FLEET_BOOTSTRAP_PACKAGES_SUSE}" ;;
+  opensuse) PKGS="${FLEET_BOOTSTRAP_PACKAGES_SUSE}"
+     if [ "${RELEASE}" = tumbleweed ]; then PKGS="${PKGS} ${FLEET_AGENT_LIBS_TUMBLEWEED}"
+     else fwarn "no agent library set for openSUSE ${RELEASE}; solariClient will not start there"; fi ;;
   *) PKGS="${FLEET_BOOTSTRAP_PACKAGES_DEB}"
      if [ -z "${RUN_ID}" ]; then
        if [ "${PROFILE}" = "minimal" ]; then PKGS="${PKGS} chrony rsync jq"
