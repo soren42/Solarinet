@@ -14,6 +14,8 @@ for file in libnng.a libmbedx509.a libmbedtls.a libmbedcrypto.a; do
   fi
 done
 
+# The prefix above is itself a pinned static build, so link it rather than the
+# submodules; the Release gate only exists to stop a dynamic distro nng.
 cmake -S "${ROOT}" -B "${BUILD_DIR}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="${PREFIX}" \
@@ -24,6 +26,8 @@ cmake -S "${ROOT}" -B "${BUILD_DIR}" \
   -DMBED_mbedtls="${PREFIX}/lib/libmbedtls.a" \
   -DMBED_mbedcrypto="${PREFIX}/lib/libmbedcrypto.a" \
   -DSOLARI_MBEDTLS_INCLUDE_DIR="${PREFIX}/include" \
+  -DSOLARI_VENDORED_DEPS=OFF \
+  -DSOLARI_ALLOW_SYSTEM_DEPS=ON \
   -DSOLARI_BUILD_SERVER=ON \
   -DSOLARI_BUILD_TESTS=OFF \
   -DSOLARI_WITH_IO=ON \
