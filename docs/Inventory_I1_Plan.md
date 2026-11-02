@@ -17,7 +17,7 @@
 | API | `dashboard/api/routes/inventory.php` uses Router closures, `Inv` validation helpers, prepared PDO statements and standard `Response::error` envelopes. Reads require an authenticated session; writes are subject to operator policy and CSRF. | Add endpoints following Router and Policy conventions, not direct ad-hoc handlers. |
 | UI | `dashboard/public/screens4.jsx` is the inventory screen; `screens8.jsx` implements Tags & Scan. UI is vanilla JSX in existing dashboard runtime. | Extend Inventory screen for hierarchy and batch actions; no build or bundler. |
 | Tests | `tests/dashboard/test_inventory_http.php` refuses anything except loopback scratch SoR DBs matching `solarinet_*`; migration guard exists under `tests/netdb`. | Add unit and HTTP coverage on isolated scratch DB only. |
-| Locations conflict | Live SoR `sor` on `cesium` has live root rows 9103 and 9104, both named Painted Fern and `loc_type=site`. Appendix A (independently re-verified 2026-11-02) found zero references of any kind; they are the only two location rows in the SoR. | Plan merge endpoint, but perform no merge/delete in I1 implementation until operator sees the report and explicitly requests execution. |
+| Locations conflict | Live SoR `sor` on `cesium` has live root rows 9103 and 9104, both named Painted Fern and `loc_type=site`. Appendix A (independently re-verified 2026-11-02) found zero references of any kind; they are the only two location rows in the SoR. | Merge executed 2026-11-02 (D6); the merge endpoint is still built for future duplicates. |
 
 ## Numbered schema migrations
 
@@ -31,14 +31,14 @@
 4. Add `hardware_units.product_type_id INT UNSIGNED NULL`, indexed FK `ON DELETE RESTRICT`. During compatibility window populate it from model link; after staged client rollout, require non-null in a later migration, not I1's first migration.
 5. Create `product_barcodes`: `id BIGINT UNSIGNED PK`; `product_type_id INT UNSIGNED NOT NULL FK RESTRICT`; `code VARCHAR(128) NOT NULL`; `code_type ENUM('gtin','sku','other') NOT NULL DEFAULT 'other'`; `source_id`, assertion fields, timestamps, `deleted_at`; generated live marker `live_flag TINYINT AS (IF(deleted_at IS NULL,1,NULL)) PERSISTENT`; unique `(code,live_flag)`; indexes `(product_type_id,deleted_at)` and `code`. No lookup cache/provider work in I1.
 6. Extend `barcodes.subject_table` validation (`InvCodes::SUBJECTS` and any enum) to `product_types`, per remit §4.1, so a product type can carry a SolariNet system code. `product_barcodes` remains the separate namespace for commercial GTIN/UPC/EAN/SKU codes.
-7. Software licence references: add nullable `licence_seats INT UNSIGNED`, `licence_expires_on DATE`, `licence_assigned_to VARCHAR(255)`, and `licence_reference VARCHAR(1024)` to `hardware_units`, plus index `(licence_expires_on,deleted_at)`. Reference only; never store key text, token, or secret. Operator decision needed whether assigned-to belongs on item or allocation.
+7. Software follows the hardware pattern (decision D1): one `product_types` row (`kind='software'`) per product, one `hardware_units` row per installed instance. Add nullable `licence_seats INT UNSIGNED`, `licence_expires_on DATE`, `licence_reference VARCHAR(1024)` and `installed_on_unit_id INT UNSIGNED` (FK `hardware_units(id)` `ON DELETE SET NULL`, indexed; must point at a non-software unit; no self-reference) to `hardware_units`, plus index `(licence_expires_on,deleted_at)`. Assignment is the SQL relation installation → hardware running it (D2), not a person. Reference only; never store key text, token, or secret.
 
 ### Backfill and rollback for 032
 
 - Backfill one `product_types` row per existing `hardware_models` row with `product_types.id = hardware_models.id` (remit §4.1: "preserving IDs and links"; decided, not open). `product_types` is created empty in the same migration, so there is no collision; set `AUTO_INCREMENT` above `MAX(hardware_models.id)` afterwards. Observed live: 41 models, IDs 1–9105. No mapping table.
 - Map kind from `hw_type` with a documented deterministic translation; default hardware. Map name from existing `model`, brand from `make`, model from `model`, notes copied. Preserve arch and source/provenance on hardware_models; product type provenance should identify migration/dashboard source and mark machine-derived only if schema supports it, otherwise human-asserted migration with note.
 - Set hardware_units.product_type_id by joining model map; do not rewrite `model_id`. Preserve serials, asset tags, receipts, allocations and existing barcode rows unchanged.
-- Do not auto-convert existing generic `barcodes` UPC rows into `product_barcodes` until a SELECT audit proves subject mappings and uniqueness; record conflicts for operator resolution. Backfill only reliable data with lossless provenance.
+- Do not auto-convert existing generic `barcodes` rows into `product_barcodes` (D3): barcode-derived data only ever **prefills an editable form**, and is committed when the operator saves. Backfill creates no barcode associations; live data has none to convert (3 system codes only).
 - Validate counts: models mapped 1:1, units mapped to corresponding product type, no dangling references, barcode unique-live conflicts enumerated. Write counts into migration log/release record.
 - Rollback: first stop application writes; verify no product types/barcodes/licence fields were created/edited after migration. Delete only migration-created product rows and mapping rows, then drop FKs/indexes/columns/tables in reverse order. If post-migration references exist, rollback exits/refuses and requires forward repair. Never cascade-delete user-created data.
 
@@ -46,7 +46,7 @@
 
 1. Replace `loc_type` enum with `ENUM('property','floor','room','section','storage_unit') NOT NULL` (widen enum → UPDATE → narrow); map legacy `site`/`building`→property; `floor`→floor; `room`→room; all other current types (`rack`,`shelf`,`position`,`zone`,`cabinet`,`drawer`,`tray`,`bin`,`container`)→storage_unit. Preserve ID, parent, code, notes, provenance, dates. Audit invalid parent/child combinations before enabling enforcement. Observed live: the only rows are the two `site` roots, so the mapping table only matters for fixtures and other installs.
 2. Add `location_name_key VARCHAR(128) GENERATED ALWAYS AS (IF(deleted_at IS NULL,name,NULL)) PERSISTENT`; replace old unique key with `uq_locations_live_sibling(parent_id,location_name_key)`. MariaDB permits multiple NULLs in unique keys, so root uniqueness needs generated normalized parent sentinel; use generated `parent_key BIGINT UNSIGNED AS (IFNULL(parent_id,0)) PERSISTENT` plus unique `(parent_key,location_name_key)`. Confirm 0 cannot be a real location ID.
-3. Add `container_type_id INT UNSIGNED NULL` on `locations`. Create editable `container_types(id INT UNSIGNED PK,name VARCHAR(64) NOT NULL, active TINYINT NOT NULL DEFAULT 1, source/provenance, timestamps, deleted_at)` with live unique name generated-key pattern. Seed only generic types already present in existing rows if explicit types are inferable; avoid mockup-derived catalog population.
+3. Add `container_type_id INT UNSIGNED NULL` on `locations`. Create editable `container_types(id INT UNSIGNED PK,name VARCHAR(64) NOT NULL, source/provenance, timestamps, deleted_at)` with live unique name generated-key pattern. Rename and soft-delete are both allowed, **including in-use types** (D5): existing containers keep their reference and show the type as retired; it leaves pick lists. Nothing (types, locations, product types) is ever auto-deleted when empty. Seed only generic types already present in existing rows if explicit types are inferable; avoid mockup-derived catalog population.
 4. Add `assigned_project_id INT UNSIGNED NULL` FK to projects `ON DELETE SET NULL`, index `(assigned_project_id,deleted_at)`. Existing `projects.tray_location_id` remains compatible; assignment is explicit container ownership. Empty/release clears project assignment while retaining location ID/code and physical identity.
 5. Add DB triggers or equivalent enforced stored procedure constraints for valid parent-child levels and acyclic parent chain only if the MariaDB trigger/privilege model supports safe recursive checks; otherwise enforce all writes through transactional API and add DB constraints/triggers to prevent bypass where feasible. Record this residual in implementation review.
 6. Add indexes for `parent_id`, `(loc_type,deleted_at)`, `container_type_id`; do not remove `code` or barcodes.
@@ -67,7 +67,7 @@ All routes use the existing `/api/inventory/...` prefix and JSON envelopes. **Ob
 | `POST /api/inventory/product-barcodes` | operator / required | attach validated code/type; unique live code; `gtin` syntax/check digit optional validation only when declared GTIN | `bad_request` 400, `not_found` 404, `duplicate_barcode` 409 |
 | `DELETE /api/inventory/product-barcodes/{id}` | operator / required | soft-delete and audit; no physical record delete | `not_found` 404 |
 | `GET /api/inventory/locations` | authenticated / n/a | retain existing tree/flat and pagination shapes; include level and container metadata | existing errors |
-| `POST /api/inventory/locations` | operator / required | validate parent transition: root property only; property→floor; floor→room; room→section; storage unit under **any** non-storage level (property, floor, room, section) so containers can sit off-site/"In transit" (remit §4.2: "moved anywhere"); storage unit children per open question 4. Trim name, enforce live sibling uniqueness | `bad_request` 400, `duplicate_location` 409, `not_found` 404 |
+| `POST /api/inventory/locations` | operator / required | validate parent transition: root property only; property→floor; floor→room; room→section; storage unit under **any** non-storage level (property, floor, room, section) so containers can sit off-site/"In transit" (remit §4.2: "moved anywhere"); storage unit may contain storage units (D4: bag inside a crate), so the move cycle guard applies to container nesting too. Trim name, enforce live sibling uniqueness | `bad_request` 400, `duplicate_location` 409, `not_found` 404 |
 | `PUT /api/inventory/locations/{id}` | operator / required | patch name/type/code/notes/container type/project; validate proposed transition and descendants atomically | `bad_request` 400, `not_found` 404, `duplicate_location` 409, `location_cycle` 409 |
 | `POST /api/inventory/locations/{id}/move` | operator / required | body `parent_id` nullable; reject self/descendant, invalid level, sibling collision; transaction and audit old/new parent | `bad_request` 400, `not_found` 404, `location_cycle` 409, `duplicate_location` 409 |
 | `POST /api/inventory/locations/{id}/merge` | operator / required | body `target_id`, preview required confirmation token/counts; merge source into target only when same level and compatible names/types; never hard delete | `bad_request` 400, `not_found` 404, `merge_conflict` 409 |
@@ -138,16 +138,16 @@ No test may point at `sor`, `solarinet`, `solarinet_stage`, or `sor_probe`. Exis
 8. Live DB credentials may be able to write; operational procedure must enforce SELECT-only report query and separate tested scratch credentials for implementation.
 9. Licence assignment and expiry data may be sensitive; reference-only policy prohibits storing keys or licence text.
 
-## OPEN QUESTIONS for operator
+## Operator decisions (Jason, 2026-11-02)
 
-Already decided in remit §6 and not re-asked here: product-type ID preservation, licence reference-only, Painted Fern merge in principle.
-
-1. Software licences: one `hardware_units` row per licence/seat bundle with reference fields (I1 proposal), or a dedicated licence table later?
-2. Does licence `assigned-to` mean a free-text person/team, or a relation to an existing user/project?
-3. Commercial barcode conflicts during backfill (same live code on different subjects): stop for operator resolution (recommended). Observed live: 3 barcodes, all `hardware_units` system codes, so there is no conflict today.
-4. May a storage unit contain child storage units (bag inside a crate), or direct items only (recommended for I1)?
-5. Container types: may an in-use type be renamed or soft-deleted? Recommended: rename yes, soft-delete only when unused.
-6. Painted Fern: go to merge 9104 → 9103 once WP4 ships, as a distinct instruction?
+| # | Decision |
+|---|---|
+| D1 | Software mirrors hardware: one product type per product, one item per instance. |
+| D2 | A software item is assigned to the system it is installed on, as an FK installation → hardware unit; not to a user. |
+| D3 | Product barcode data only prefills editable fields; nothing barcode-derived is committed without operator save. |
+| D4 | Containers nest: storage unit → storage unit allowed. |
+| D5 | Container types support rename and delete; nothing auto-deletes when empty (items are often transient). |
+| D6 | Painted Fern duplicate is an integration artifact. **Executed 2026-11-02:** 9104 soft-deleted into 9103 (`audit_log` id 17); zero references moved. WP6 no longer carries a merge. |
 
 ## UNVERIFIED
 
