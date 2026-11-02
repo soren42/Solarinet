@@ -69,6 +69,18 @@ if(SOLARI_WITH_IO)
   add_test(NAME test_net_loopback COMMAND test_net_loopback)
 endif()
 
+# Release artifact guard: the client must not acquire runtime dependencies on
+# the vendored transport/TLS/JSON libraries.
+if(SOLARI_WITH_IO AND SOLARI_VENDORED_DEPS AND TARGET solariClient AND
+   CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_program(SOLARI_OBJDUMP NAMES objdump llvm-objdump REQUIRED)
+  add_test(NAME test_client_static_dependencies
+    COMMAND ${CMAKE_COMMAND}
+      -DCLIENT_BIN=$<TARGET_FILE:solariClient>
+      -DOBJDUMP=${SOLARI_OBJDUMP}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/check_static_deps.cmake)
+endif()
+
 # Linux PAL test (Phase 3) - compiles the platform reference impl directly so
 # the seam is covered before the full client target is wired.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
