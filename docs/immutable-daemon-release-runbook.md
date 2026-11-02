@@ -43,7 +43,7 @@ plain directory in place and refuses while a playbook is running.
 /opt/solarinet/current/deploy/fleet/sync-ansible.sh
 ```
 
-Rollback on benzene: `ln -sfn "$(readlink /srv/solari-provision/ansible.prev)" /srv/solari-provision/ansible.swap && mv -T /srv/solari-provision/ansible.swap /srv/solari-provision/ansible`.
+Rollback on benzene (once `ansible.prev` exists, i.e. after the second publish): `ln -sfn "$(readlink /srv/solari-provision/ansible.prev)" /srv/solari-provision/ansible.swap && mv -T /srv/solari-provision/ansible.swap /srv/solari-provision/ansible`.
 
 ## Cutover
 

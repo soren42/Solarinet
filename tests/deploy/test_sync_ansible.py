@@ -74,6 +74,9 @@ class SyncAnsibleTest(unittest.TestCase):
         rels = os.path.join(self.prov, "ansible.releases")
         trees = sorted(os.listdir(rels))
         self.assertEqual(len(trees), 3, trees)
+        # The three kept are the three newest publishes, live one last.
+        self.assertEqual(os.path.basename(os.path.realpath(self.dst)), trees[-1])
+        self.assertEqual(os.path.basename(os.path.realpath(self.dst + ".prev")), trees[-2])
         live = os.path.realpath(self.dst)
         prev = os.path.realpath(self.dst + ".prev")
         self.assertNotEqual(live, prev)
@@ -90,6 +93,22 @@ class SyncAnsibleTest(unittest.TestCase):
         self.assertTrue(os.path.islink(self.prov + "/ansible.prev"))
         with open(os.path.join(self.prov, "ansible.prev", "ansible.cfg")) as fh:
             self.assertEqual(fh.read(), "old\n")
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores the read-only directory")
+    def test_housekeeping_failure_after_switch_still_succeeds(self):
+        for _ in range(3):
+            self.run_sync()
+        rels = os.path.join(self.prov, "ansible.releases")
+        oldest = os.path.join(rels, sorted(os.listdir(rels))[0], "roles")
+        os.chmod(oldest, 0o555)          # its contents cannot be removed
+        try:
+            before = os.path.realpath(self.dst)
+            p = self.run_sync()
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("could not prune", p.stderr)
+            self.assertNotEqual(os.path.realpath(self.dst), before)
+        finally:
+            os.chmod(oldest, 0o755)
 
     def test_running_playbook_keeps_its_tree(self):
         self.run_sync()

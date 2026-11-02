@@ -74,8 +74,8 @@ fi
 # shellcheck disable=SC2016
 body='set -eu; dst="$1"; rev="$2"; keep="$3"; rels="$dst.releases"
 mkdir -p "$rels"
-new="$rels/$(date -u +%Y%m%dT%H%M%SZ)-$rev"
-[ ! -e "$new" ] || new="$new-$$"
+# Names sort in publish order (nanosecond stamp), which pruning relies on.
+new="$rels/$(date -u +%Y%m%dT%H%M%S.%NZ)-$rev"
 mkdir "$new"
 if ! tar -C "$new" -xf - || [ ! -f "$new/ansible.cfg" ]; then
   echo "sync-ansible: tree did not extract" >&2; rm -rf "$new"; exit 1
@@ -85,7 +85,7 @@ printf "%s\n" "$rev" > "$new/.release"
 # An ansible.prev left as a real directory by the old two-rename scheme would
 # block the symlink below; file it with the other trees (pruned normally).
 if [ -d "$dst.prev" ] && [ ! -L "$dst.prev" ]; then
-  mv -T "$dst.prev" "$rels/$(date -u +%Y%m%dT%H%M%SZ)-oldprev"
+  mv -T "$dst.prev" "$rels/$(date -u +%Y%m%dT%H%M%S.%NZ)-oldprev"
 fi
 rm -f "$dst.swap"; ln -s "$new" "$dst.swap"
 if [ -d "$dst" ] && [ ! -L "$dst" ]; then
@@ -98,18 +98,25 @@ if [ -d "$dst" ] && [ ! -L "$dst" ]; then
     echo "sync-ansible: $dst is a directory and mv --exchange is unavailable; convert it by hand" >&2
     exit 1
   fi
-  prev="$rels/$(date -u +%Y%m%dT%H%M%SZ)-legacy"
+  prev="$rels/$(date -u +%Y%m%dT%H%M%S.%NZ)-legacy"
   mv -T "$dst.swap" "$prev"
 else
   prev="$(readlink "$dst" 2>/dev/null || true)"
   mv -T "$dst.swap" "$dst"
 fi
-if [ -n "$prev" ]; then ln -sfn "$prev" "$dst.swap" && mv -T "$dst.swap" "$dst.prev"; fi
+# The publish is done; what follows is housekeeping and only warns.
+set +e
+if [ -n "$prev" ]; then
+  { ln -sfn "$prev" "$dst.swap" && mv -T "$dst.swap" "$dst.prev"; } \
+    || echo "sync-ansible: warning: could not update $dst.prev (previous: $prev)" >&2
+fi
 # Prune all but the newest $keep trees, never the live or previous one.
 ls -1d "$rels"/*/ 2>/dev/null | sed "s:/\$::" | sort -r | tail -n +"$((keep + 1))" |
 while IFS= read -r old; do
-  [ "$old" = "$new" ] || [ "$old" = "$prev" ] || rm -rf "$old"
-done'
+  [ "$old" = "$new" ] || [ "$old" = "$prev" ] || rm -rf "$old" \
+    || echo "sync-ansible: warning: could not prune $old" >&2
+done
+exit 0'
 flog "publishing ${SRC} (${REV}) to ${BENZENE}:${DST}"
 tarball | bssh "sh -c $(fleet_sq "$body") sync-ansible $(fleet_sq "$DST") $(fleet_sq "$REV") $(fleet_sq "$KEEP")" \
   || fdie "Ansible tree sync to ${BENZENE} failed (see above); ${DST} is switched only by the final rename"
