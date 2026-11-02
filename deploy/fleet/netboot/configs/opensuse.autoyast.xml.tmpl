@@ -157,7 +157,9 @@
   <!-- Enabling sshd does not open its port. With no <firewall> section the -->
   <!-- product default applies: firewalld on, ssh closed unless the install -->
   <!-- was booted with ssh=1. That locks out prov-finish (Ansible over SSH) -->
-  <!-- and the operator, so open ssh in the default zone explicitly.       -->
+  <!-- and the operator, so open ssh in the default zone explicitly. The   -->
+  <!-- list REPLACES the zone's services, so keep firewalld's stock         -->
+  <!-- public-zone dhcpv6-client alongside it.                              -->
   <firewall>
     <enable_firewall config:type="boolean">true</enable_firewall>
     <start_firewall config:type="boolean">true</start_firewall>
@@ -167,6 +169,7 @@
         <name>public</name>
         <services config:type="list">
           <service>ssh</service>
+          <service>dhcpv6-client</service>
         </services>
       </zone>
     </zones>
