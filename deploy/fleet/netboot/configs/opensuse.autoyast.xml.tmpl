@@ -205,7 +205,7 @@
   <!-- chrooted=true => runs inside the freshly installed root after the     -->
   <!-- package install. We grant passwordless sudo, record the PROV_STAGE   -->
   <!-- run id as an Ansible local fact (prov-finish.py's "this install of   -->
-  <!-- run N completed" signal), ensure python3 for Ansible, then fetch     -->
+  <!-- run N completed" signal), then fetch                                 -->
   <!-- solari-firstboot.sh and run it with the SolariNet tokens as env vars. -->
   <scripts>
     <chroot-scripts config:type="list">
@@ -226,13 +226,10 @@ if [ -n '@@PROV_RUN_ID@@' ]; then
   chmod 0644 /etc/ansible/facts.d/solari_prov.fact
 fi
 
-# python3 for Ansible (a capability on Tumbleweed; prov-finish retries it)
-command -v python3 >/dev/null 2>&1 \
-  || zypper --non-interactive install --no-recommends python3 \
-  || echo 'solari: python3 not installed here; prov-finish.py will install it' >&2
-
-# solariClient's shared libraries arrive as profile <package>s
-# (FLEET_AGENT_LIBS_TUMBLEWEED): zypper here would lose to YaST's libzypp lock.
+# python3 for Ansible and solariClient's shared library: neither is installed
+# here, since zypper in this chroot loses to YaST's libzypp lock. The library
+# is a profile <package> (FLEET_AGENT_LIBS_SUSE); prov-finish.py installs
+# python3 over SSH once the host is up.
 
 # fetch + run the SolariNet first-boot installer
 curl --fail --silent --show-error --location \

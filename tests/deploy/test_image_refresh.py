@@ -634,7 +634,13 @@ class FleetProvisionTests(unittest.TestCase):
         self.mounted = os.path.join(self.tmp, "store-mounted")
         open(self.mounted, "w").close()
         self.sign = _SignStub(os.path.join(self.tmp, "ctl.sock"))
+        # Staging refuses to publish a profile without an agent to install.
+        client_bin = os.path.join(self.tmp, "solariClient")
+        with open(client_bin, "wb") as fh:
+            fh.write(b"\x7fELF fake agent\n")
+        os.chmod(client_bin, 0o755)
         self.env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", HOME=home,
+                        SOLARI_CLIENT_BIN=client_bin,
                         BENZENE="p3-test-benzene", HTTP_ROOT=self.http, PROV_ROOT=self.prov,
                         HTTP_BASE=BASE, CTL_SOCK=self.sign.path,
                         SOLARI_ALLOW_UNVERIFIED_PROVISIONING="1",

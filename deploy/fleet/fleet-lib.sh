@@ -53,19 +53,20 @@ FLEET_CORE_PACKAGES="sudo curl wget ca-certificates gnupg htop tmux git vim rsyn
 # stack arrive after the install via prov-finish.py (SoR stacks over SSH).
 # openSUSE: python3 is a capability provided by the versioned interpreter
 # (python3xx), not a package NAME on Tumbleweed, so it is not an AutoYaST
-# <package> (an unresolvable name stops an unattended install); the AutoYaST
-# chroot script installs it with zypper and prov-finish.py ensures it again.
+# <package> (an unresolvable name stops an unattended install). A zypper call
+# from the AutoYaST chroot script loses to YaST's libzypp lock, so prov-finish.py
+# installs it over SSH once the host is up.
 # shellcheck disable=SC2034
 FLEET_BOOTSTRAP_PACKAGES_SUSE="openssh sudo curl ca-certificates"
 # shellcheck disable=SC2034
 FLEET_BOOTSTRAP_PACKAGES_DEB="openssh-server sudo curl ca-certificates python3"
-# solariClient's shared libraries (the release build links nng, mbedTLS 3.x,
-# cJSON and SQLite), as Tumbleweed soname packages. They go in the profile's
-# <packages> so YaST installs them in its own transaction: a zypper call from
-# the chroot script loses to YaST's libzypp lock. Leap 15 ships mbedTLS 2.x,
-# so no Leap set exists; the agent cannot run there.
+# solariClient's shared libraries. The release client statically links nng,
+# mbedTLS and cJSON (vendored), leaving SQLite plus glibc (floor 2.38 for a
+# xenon-built release). They go in the profile's <packages> so YaST installs
+# them in its own transaction: a zypper call from the chroot script loses to
+# YaST's libzypp lock. Same soname package on Tumbleweed and Leap.
 # shellcheck disable=SC2034
-FLEET_AGENT_LIBS_TUMBLEWEED="libnng1 libmbedtls21 libmbedcrypto16 libmbedx509-7 libcjson1 libsqlite3-0"
+FLEET_AGENT_LIBS_SUSE="libsqlite3-0"
 
 # ---- logging (matches the PHP GET log-tail markers) -------------------------
 flog()  { printf '\033[1;36m[fleet]\033[0m %s\n' "$*"; }

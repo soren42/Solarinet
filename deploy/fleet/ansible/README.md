@@ -2,7 +2,10 @@
 
 This tree provisions **fresh** remote machines into the SolariNet fleet. An
 Ansible control node runs on host `benzene` (openSUSE); the whole repo Ansible
-tree is rsync'd to `/srv/solari-provision/ansible/` there and executed in place.
+tree is published to `/srv/solari-provision/ansible/` there by
+`deploy/fleet/sync-ansible.sh` (run from the installed release after each
+install; `ansible` there is a symlink to the current tree under
+`ansible.releases/`) and executed in place.
 
 Managed targets span **Debian, Ubuntu, and openSUSE** across **x86_64 / arm64 /
 arm32** (including Raspberry Pi OS). The design goal, verbatim from the project

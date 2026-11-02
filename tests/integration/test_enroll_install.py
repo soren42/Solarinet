@@ -5,6 +5,9 @@ import json
 import os
 from pathlib import Path
 import socketserver
+import grp
+import ssl
+import stat
 import subprocess
 import tempfile
 import threading
@@ -45,6 +48,19 @@ class EnrollmentInstallTest(unittest.TestCase):
         run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt",
             "ec_paramgen_curve:P-256", "-nodes", "-keyout", str(cls.foreign_key),
             "-out", str(cls.foreign_ca), "-days", "2", "-subj", "/CN=Foreign CA")
+        # Endpoint certificate for the --ca-bundle (curl --cacert) case.
+        cls.tls_key = cls.work / "tls.key"
+        cls.tls_csr = cls.work / "tls.csr"
+        cls.tls_cert = cls.work / "tls.pem"
+        cls.tls_ext = cls.work / "tls.ext"
+        cls.tls_ext.write_text("subjectAltName=IP:127.0.0.1\n")
+        run("openssl", "genpkey", "-algorithm", "EC", "-pkeyopt",
+            "ec_paramgen_curve:P-256", "-out", str(cls.tls_key))
+        run("openssl", "req", "-new", "-key", str(cls.tls_key), "-out",
+            str(cls.tls_csr), "-subj", "/CN=127.0.0.1")
+        run("openssl", "x509", "-req", "-in", str(cls.tls_csr), "-CA",
+            str(cls.ca_pem), "-CAkey", str(cls.ca_key), "-CAcreateserial",
+            "-extfile", str(cls.tls_ext), "-out", str(cls.tls_cert), "-days", "1")
         cls.ca_text = cls.ca_pem.read_text()
         cls.foreign_ca_text = cls.foreign_ca.read_text()
         cls.wrong_cert_text = cls.wrong_cert.read_text()
@@ -84,7 +100,9 @@ class EnrollmentInstallTest(unittest.TestCase):
                             "-CAcreateserial", "-out", str(cert_path), "-days", "1")
                     cert = cert_path.read_text()
                 ca = self.server.foreign_ca_text if mode == "untrusted" else self.server.ca_text
-                body = json.dumps({"nodeId": "1234", "cert": cert, "ca": ca}).encode()
+                node_id = {"bad-nodeid": "1234;evil",
+                           "big-nodeid": "18446744073709551616"}.get(mode, "1234")
+                body = json.dumps({"nodeId": node_id, "cert": cert, "ca": ca}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -104,23 +122,40 @@ class EnrollmentInstallTest(unittest.TestCase):
             server.acknowledged = False
             server.ack_calls = 0
             server.submit_calls = 0
+            scheme = "http"
+            if mode in ("ca-bundle", "ca-bundle-wrong"):
+                tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                tls.load_cert_chain(str(self.tls_cert), str(self.tls_key))
+                server.socket = tls.wrap_socket(server.socket, server_side=True)
+                server.handle_error = lambda *_a: None  # expected handshake failures
+                scheme = "https"
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             conf = self.work / f"conf-{mode}"
             conf.mkdir()
             config = conf / "client.conf"
             config.write_text("[identity]\nnodeId = 0\n")
+            if mode in ("append-nodeid", "bad-nodeid", "big-nodeid"):
+                config.write_text("[identity]\nhostFqdn = steel.test\n\n[server]\nprimaryUrl = tls+tcp://x:1\n")
+            elif mode == "no-identity":
+                config.write_text("[server]\nprimaryUrl = tls+tcp://x:1\n")
             if mode in ("mismatch-existing", "force-valid", "force-install-fails"):
                 (conf / "node.key").write_text(self.wrong_key.read_text())
                 (conf / "node.pem").write_text(self.wrong_cert_text)
                 (conf / "ca.pem").write_text(self.ca_text)
                 config.write_text("[identity]\nnodeId = 77\n")
             args = ["bash", str(SCRIPT), "--role", "client", "--token", "test-token",
-                    "--server", f"http://127.0.0.1:{server.server_address[1]}",
+                    "--server", f"{scheme}://127.0.0.1:{server.server_address[1]}",
                     "--fqdn", f"{mode}.test", "--conf-dir", str(conf),
                     "--config", str(config)]
             if mode in ("mismatch-existing", "force-valid"):
                 args.append("--force")
+            if mode == "ca-bundle":
+                args += ["--ca-bundle", str(self.ca_pem)]
+            elif mode == "ca-bundle-wrong":
+                args += ["--ca-bundle", str(self.foreign_ca)]
+            elif mode == "group-key":
+                args += ["--group", grp.getgrgid(os.getgid()).gr_name]
             run_env = None
             if mode == "force-install-fails":
                 args.append("--force")
@@ -158,7 +193,35 @@ class EnrollmentInstallTest(unittest.TestCase):
 
         cert_path = conf / "node.pem"
         ca_path = conf / "ca.pem"
-        if mode in ("valid", "force-valid", "ack-first-fails", "resume-different"):
+        if mode == "append-nodeid":
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertTrue(config.read_text().startswith(
+                "[identity]\nnodeId = 1234\nhostFqdn = steel.test\n"), config.read_text())
+            self.assertIn("[server]\nprimaryUrl = tls+tcp://x:1\n", config.read_text())
+            return
+        if mode == "no-identity":
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(config.read_text(),
+                             "[identity]\nnodeId = 1234\n\n[server]\nprimaryUrl = tls+tcp://x:1\n")
+            return
+        if mode in ("bad-nodeid", "big-nodeid"):
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertNotIn("nodeId", config.read_text())
+            self.assertIn("not stamped", proc.stderr)
+            return
+        if mode == "group-key":
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(stat.S_IMODE((conf / "node.key").stat().st_mode), 0o640)
+            self.assertEqual((conf / "node.key").stat().st_gid, os.getgid())
+            self.assertEqual(stat.S_IMODE(conf.stat().st_mode), 0o750)
+            return
+        if mode == "ca-bundle-wrong":
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("enrollment submission failed", proc.stderr)
+            self.assertFalse(cert_path.exists())
+            self.assertEqual(server.submit_calls, 0)
+            return
+        if mode in ("valid", "force-valid", "ack-first-fails", "resume-different", "ca-bundle"):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertTrue(cert_path.is_file())
             self.assertTrue(ca_path.is_file())
@@ -166,7 +229,7 @@ class EnrollmentInstallTest(unittest.TestCase):
             if mode == "force-valid":
                 self.assertNotEqual((conf / "node.key").read_text(), self.wrong_key.read_text())
                 run("openssl", "pkey", "-in", str(conf / "node.key"), "-check", "-noout")
-            if mode in ("valid", "force-valid"):
+            if mode in ("valid", "force-valid", "ca-bundle"):
                 self.assertTrue(server.acknowledged, "successful install must acknowledge token use")
             elif mode == "ack-first-fails":
                 self.assertIn("server acknowledgement failed", proc.stderr)
@@ -214,6 +277,35 @@ class EnrollmentInstallTest(unittest.TestCase):
 
     def test_resume_rejects_different_certificate_and_preserves_identity(self):
         self.run_case("resume-different")
+
+    def test_missing_nodeid_is_added_under_identity(self):
+        self.run_case("append-nodeid")
+
+    def test_missing_identity_section_is_created_with_nodeid(self):
+        self.run_case("no-identity")
+
+    def test_malformed_nodeid_is_not_stamped(self):
+        self.run_case("bad-nodeid")
+
+    def test_nodeid_over_64_bits_is_not_stamped(self):
+        self.run_case("big-nodeid")
+
+    def test_key_is_group_readable_for_agent_group(self):
+        self.run_case("group-key")
+
+    def test_ca_bundle_pins_enrollment_endpoint(self):
+        self.run_case("ca-bundle")
+
+    def test_ca_bundle_rejects_endpoint_from_other_ca(self):
+        self.run_case("ca-bundle-wrong")
+
+    def test_ca_bundle_and_insecure_conflict(self):
+        proc = subprocess.run(
+            ["bash", str(SCRIPT), "--role", "client", "--token", "t", "--insecure",
+             "--ca-bundle", str(self.ca_pem), "--conf-dir", str(self.work / "conf-conflict")],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("cannot be combined with --insecure", proc.stderr)
 
     def test_force_and_resume_conflict_is_rejected_before_key_change(self):
         conf = self.work / "conf-force-resume-conflict"

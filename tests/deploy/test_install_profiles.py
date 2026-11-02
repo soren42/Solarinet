@@ -39,8 +39,7 @@ MACH = "02-00-5e-00-00-31"
 OPERATOR_KEY = "ssh-ed25519 AAAAOPERATORKEY operator@xenon"
 CONTROL_KEY = "ssh-ed25519 AAAACONTROLKEY+/= jason@benzene"
 SUSE_BOOTSTRAP = ["openssh", "sudo", "curl", "ca-certificates"]
-TW_AGENT_LIBS = ["libnng1", "libmbedtls21", "libmbedcrypto16", "libmbedx509-7",
-                 "libcjson1", "libsqlite3-0"]
+TW_AGENT_LIBS = ["libsqlite3-0"]    # nng/mbedTLS/cJSON are static in the agent
 DEB_BOOTSTRAP = ["openssh-server", "sudo", "curl", "ca-certificates", "python3"]
 NS = {"a": "http://www.suse.com/1.0/yast2ns"}
 MARKER = "/etc/ansible/facts.d/solari_prov.fact"
@@ -208,7 +207,8 @@ class InstallProfiles(unittest.TestCase):
         self.assertIn(MARKER, scripts)
         self.assertIn("if [ -n '4242' ]", scripts)
         self.assertIn('printf \'{"run_id": 4242}\\n\'', scripts)
-        self.assertIn("zypper --non-interactive install --no-recommends python3", scripts)
+        # zypper in the chroot loses to YaST's libzypp lock; prov-finish installs python3.
+        self.assertNotIn("zypper --non-interactive", scripts)
         self.assertEqual(self.profile_env()["run_id"], "4242")
         self.assertIn("node-31.lab.example", text)
 
@@ -268,11 +268,11 @@ class InstallProfiles(unittest.TestCase):
         for lib in TW_AGENT_LIBS:
             self.assertIn(lib, pkgs)
         scripts = "\n".join(s.text or "" for s in root.iter("{%s}source" % NS["a"]))
-        self.assertNotIn("libnng1", scripts)
+        self.assertNotIn("libsqlite3-0", scripts)
 
-    def test_leap_has_no_agent_libraries(self):
-        # Leap 15 ships mbedTLS 2.x: no soname set exists, so none is guessed
-        # (an unresolvable <package> stops the install) and staging says so.
+    def test_leap_gets_agent_library_and_glibc_warning(self):
+        # The static agent needs only SQLite on Leap too; its glibc floor is
+        # not checked against Leap, so staging warns.
         d = os.path.join(self.http, "installers", "opensuse", "15.6", "x86_64")
         os.makedirs(d)
         with open(os.path.join(d, "solari-image.json"), "w") as fh:
@@ -286,8 +286,8 @@ class InstallProfiles(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         root = ET.fromstring(self.read("configs", f"{MACH}.xml"))
         pkgs = [e.text for e in root.findall("./a:software/a:packages/a:package", NS)]
-        self.assertEqual(pkgs, SUSE_BOOTSTRAP)
-        self.assertIn("no agent library set for openSUSE 15.6", p.stdout + p.stderr)
+        self.assertEqual(pkgs, SUSE_BOOTSTRAP + TW_AGENT_LIBS)
+        self.assertIn("openSUSE 15.6: solariClient needs glibc >= 2.38", p.stdout + p.stderr)
 
     def test_firstboot_installs_unit_when_chrooted(self):
         # Every installer runs solari-firstboot.sh chrooted into the target,
@@ -301,6 +301,22 @@ class InstallProfiles(unittest.TestCase):
         self.assertNotIn("/run/systemd/system", guard)
         self.assertIn("/usr/lib/systemd/system", guard)
         self.assertRegex(src, r'if \[ -d /run/systemd/system \]; then systemctl daemon-reload')
+
+    def test_firstboot_unit_matches_fleet_agent(self):
+        # The agent must loop (one-shot exits after a single report) and use the
+        # fleet unit name shared with remote-deploy.sh and the Ansible role, so
+        # a later stack apply never starts a second agent.
+        path = os.path.join(ROOT, "deploy", "fleet", "netboot", "installers",
+                            "solari-firstboot.sh")
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("UNIT_PATH=/etc/systemd/system/solarinet-client.service", src)
+        self.assertRegex(src, r"ExecStart=\$\{BIN_PATH\} --config \$\{CONF_DIR\}/client.conf --loop\n")
+        self.assertNotRegex(src, r"systemctl (enable|start) solari-client")
+        self.assertIn('chown root:solari "${CONF_DIR}"', src)
+        self.assertIn("useradd --system --user-group", src)
+        # A re-run on an older install retires the legacy unit name.
+        self.assertIn("systemctl disable --now solari-client.service", src)
 
     def test_release_agent_beats_stale_dist_tree(self):
         # SOLARI_DIST_DIR may hold an old cross-build; for the host arch the
