@@ -20,7 +20,7 @@
 --   030_provisioning_cdc sha256=ef9686d459c230ae7a05aa704ca59debef5f6c36204b35b46e684ba92a52ec6f
 --   031_provisioning_arch_refresh sha256=bc46d8210e86b02268bc44a634115d7bcd4a55f7f9a883a151e152c59a58ce6e
 --   032_node_os_hinfo sha256=117ac174184b5dbf5e0067aaf953a64da21674b575bdd9edd1e35923e9e4138c
---   033_inventory_catalog sha256=7be577c15ca47fc6f35b192ae74d61a143d291fe927a9c99e381c514d02771da
+--   033_inventory_catalog sha256=f6110a624bc833f3200e148e5530047fac9030f54e57635d53d3de93e042cda5
 
 /*M!999999\- enable the sandbox mode */
 
@@ -1142,7 +1142,10 @@ DELIMITER ;;
 /*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_units_installed_target_upd` BEFORE UPDATE ON `hardware_units`
 FOR EACH ROW
 BEGIN
-  IF NEW.`product_type_id` IS NULL THEN
+
+  IF NEW.`product_type_id` IS NULL
+     OR (NOT (NEW.`model_id` <=> OLD.`model_id`)
+         AND NEW.`product_type_id` <=> OLD.`product_type_id`) THEN
     SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
   END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN

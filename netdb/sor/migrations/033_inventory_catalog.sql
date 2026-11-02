@@ -211,7 +211,10 @@ END//
 CREATE TRIGGER `trg_hw_units_installed_target_upd` BEFORE UPDATE ON `hardware_units`
 FOR EACH ROW
 BEGIN
-  IF NEW.`product_type_id` IS NULL THEN
+  -- A model change without an explicit catalog change follows the new model.
+  IF NEW.`product_type_id` IS NULL
+     OR (NOT (NEW.`model_id` <=> OLD.`model_id`)
+         AND NEW.`product_type_id` <=> OLD.`product_type_id`) THEN
     SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
   END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN

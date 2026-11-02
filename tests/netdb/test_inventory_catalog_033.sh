@@ -135,6 +135,12 @@ eq "legacy unit insert inherits its model's product type" \
 q "UPDATE hardware_units SET product_type_id=NULL WHERE id=$LEG_UNIT"
 eq "unit update cannot leave the product type unset" \
   "SELECT product_type_id=$LEG_PT FROM hardware_units WHERE id=$LEG_UNIT" 1
+q "UPDATE hardware_units SET model_id=50003 WHERE id=$LEG_UNIT"
+eq "legacy model change refreshes the unit's product type" \
+  "SELECT product_type_id FROM hardware_units WHERE id=$LEG_UNIT" 50003
+q "UPDATE hardware_units SET model_id=$LEG_MODEL, product_type_id=50000 WHERE id=$LEG_UNIT"
+eq "explicit product type survives a simultaneous model change" \
+  "SELECT product_type_id FROM hardware_units WHERE id=$LEG_UNIT" 50000
 q "DELETE FROM hardware_units WHERE id=$LEG_UNIT"
 q "DELETE FROM hardware_models WHERE id=$LEG_MODEL"
 q "DELETE FROM product_types WHERE id=$LEG_PT"
