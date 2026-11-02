@@ -1259,6 +1259,65 @@ class StackApply(Base):
         self.assertEqual((run["status"], run["detail"]), ("failed", "apply pass failed"))
         self.assertEqual(len(self.calls("ansible-playbook")), 2)
 
+    def reimaged(self, record=True, **rec):
+        n1 = ent("p3h-node1")
+        image = img(TW)
+        admin("INSERT INTO prov_runs (mode, entity_id, image_id, stack_slugs, requested_by, status, "
+              f"started_at, finished_at, source_id) VALUES ('reimage', {n1}, {image}, '[\"core\"]', "
+              f"'someone', 'succeeded', NOW(), NOW(), {SRC})")
+        rid = int(runs(n1, "reimage")[-1]["id"])
+        if record:
+            body = {"run_id": rid, "entity_id": int(n1), "fqdn": "p3h-node1.akoria.net",
+                    "admin_user": "solari-admin"} | rec
+            os.makedirs(os.path.join(self.prov_root, "runs"), exist_ok=True)
+            with open(os.path.join(self.prov_root, "runs", f"reimage-{rid}.json"), "w") as fh:
+                json.dump(body, fh)
+        return rid
+
+    def test_reimaged_host_uses_its_admin_login(self):
+        rid = self.reimaged()
+        p = self.apply()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"login: solari-admin (reimage run {rid})", p.stdout)
+        self.assertEqual(self.calls("ansible")[0]["argv"][:5],
+                         ["all", "-i", "p3h-node1.akoria.net,", "-u", "solari-admin"])
+        for c in self.calls("ansible-playbook"):
+            self.assertEqual(c["argv"][:4], ["-i", "p3h-node1.akoria.net,", "-u", "solari-admin"])
+
+    def test_reimage_without_record_keeps_default_login(self):
+        self.reimaged(record=False)
+        p = self.apply()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("-u", self.calls("ansible")[0]["argv"])
+        run = self.last_apply()
+        self.assertEqual([c["argv"] for c in self.calls("ansible-playbook")],
+                         [self.expected_pb(run["id"], True), self.expected_pb(run["id"], False)])
+
+    def test_mismatched_reimage_record_refused(self):
+        for bad in ({"entity_id": 999999}, {"admin_user": "bad user"},
+                    {"fqdn": "p3h-old-name.akoria.net"}):
+            with self.subTest(bad=bad):
+                self.reimaged(**bad)
+                before = len(runs(ent("p3h-node1"), "apply"))
+                p = self.apply()
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("record is malformed or does not match", p.stdout + p.stderr)
+                self.assertEqual(self.calls("ansible"), [])
+                self.assertEqual(len(runs(ent("p3h-node1"), "apply")), before)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads the unreadable record")
+    def test_unreadable_reimage_record_refused(self):
+        rid = self.reimaged()
+        path = os.path.join(self.prov_root, "runs", f"reimage-{rid}.json")
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        before = len(runs(ent("p3h-node1"), "apply"))
+        p = self.apply()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"cannot read {path}", p.stdout + p.stderr)
+        self.assertEqual(self.calls("ansible"), [])
+        self.assertEqual(len(runs(ent("p3h-node1"), "apply")), before)
+
     def hold_lock(self, name):
         """A separate SoR session holding named lock `name`; .release() frees it."""
         def used():

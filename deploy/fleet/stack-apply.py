@@ -11,7 +11,9 @@ Flow:
      live entity (name must be a hostname label) and confirm every stack slug
      is a live prov_stacks row; refuse — without opening a run — while another
      apply run for the entity is queued/running (serialised by a named lock);
-  2. probe the target's facts with ansible on the provisioning host
+  2. log in as the admin user of the entity's last successful reimage (its run
+     record on the provisioning host), else the default login; probe the
+     target's facts with ansible on the provisioning host
      (`<PROV_ROOT>/ansible`): ansible_os_family / ansible_architecture, mapped
      with the SAME tables as roles/stack-items/defaults/main.yml (unmapped →
      refuse);
@@ -46,6 +48,7 @@ from provlib import ProvError  # noqa: E402
 HOST_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 DEFAULT_DOMAIN = "akoria.net"
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 # Mirror of deploy/fleet/ansible/roles/stack-items/defaults/main.yml
 # (solari_stack_family_map / solari_stack_arch_map). tests/deploy/
@@ -92,6 +95,42 @@ def active_apply_run(cur, entity_id: int) -> int | None:
                 " AND status IN ('queued','running') ORDER BY id LIMIT 1", (entity_id,))
     row = cur.fetchone()
     return int(row["id"]) if row else None
+
+
+def last_reimage_run(cur, entity_id: int) -> int | None:
+    cur.execute("SELECT id FROM prov_runs WHERE entity_id=%s AND mode='reimage'"
+                " AND status='succeeded' AND dry_run=0 ORDER BY id DESC LIMIT 1", (entity_id,))
+    row = cur.fetchone()
+    return int(row["id"]) if row else None
+
+
+def admin_login(prov_root: str, entity_id: int, fqdn: str, run_id: int | None) -> str | None:
+    """The admin user a reimage created, from its run record; None = default login.
+
+    A host this system installed has only that account (the controller's own
+    login is not on it). Hosts never reimaged here, or whose record is gone,
+    keep the default login. A record that exists but does not match (run, entity
+    or the target's current FQDN, e.g. after a rename) is refused rather than
+    guessed around."""
+    if run_id is None:
+        return None
+    path = f"{prov_root}/runs/reimage-{run_id}.json"
+    proc = provlib.remote_run(["sh", "-c", 'test -f "$1" || exit 3; cat "$1"', "sh", path],
+                              check=False, timeout=60)
+    if proc.returncode == 3:
+        log(f"reimage run {run_id} has no record; using the default login")
+        return None
+    if proc.returncode != 0:
+        raise ProvError(f"cannot read {path}: {_err_tail(proc)}")
+    try:
+        rec = json.loads(_out(proc))
+    except ValueError:
+        rec = None
+    if not (isinstance(rec, dict) and rec.get("run_id") == run_id
+            and rec.get("entity_id") == entity_id and rec.get("fqdn") == fqdn
+            and isinstance(rec.get("admin_user"), str) and USER_RE.match(rec["admin_user"])):
+        raise ProvError(f"reimage run {run_id} record is malformed or does not match the entity")
+    return rec["admin_user"]
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +214,7 @@ def probe_facts(ansible_dir: str, fqdn: str, *, user: str | None = None,
     # (it sets callback_result_format=yaml; the `json` callback left
     # ansible-core for ansible.posix, so it is not assumed). user/extra_env
     # (KEY=VALUE) let prov-finish.py log in as the fresh host's admin with a
-    # pinned known_hosts file; STACK_APPLY passes neither.
+    # pinned known_hosts file; STACK_APPLY passes only the user (admin_login).
     argv = ["env", "-C", ansible_dir, *extra_env, "ANSIBLE_LOAD_CALLBACK_PLUGINS=0",
             "ANSIBLE_CALLBACK_RESULT_FORMAT=json",
             "ansible", "all", "-i", f"{fqdn},", *_login(user), "-m", "ansible.builtin.setup",
@@ -292,11 +331,15 @@ def main(argv: list[str] | None = None) -> int:
                 with conn.cursor() as cur:
                     entity = load_entity(cur, entity_id)
                     check_stacks(cur, slugs)
+                    reimage = last_reimage_run(cur, entity_id)
                 conn.commit()
                 fqdn = f"{entity['name']}.{domain}"
                 log(f"entity {entity_id} {fqdn}; stacks {','.join(slugs)}"
                     + (" (dry-run)" if dry_run else ""))
-                os_family, architecture = probe_facts(ansible_dir, fqdn)
+                user = admin_login(prov_root, entity_id, fqdn, reimage)
+                if user:
+                    log(f"login: {user} (reimage run {reimage})")
+                os_family, architecture = probe_facts(ansible_dir, fqdn, user=user)
                 family, arch = map_facts(os_family, architecture)
                 log(f"facts: {os_family}/{architecture} -> {family}/{arch}")
                 vars_local = os.path.join(tmp, "stack.json")
@@ -321,14 +364,14 @@ def main(argv: list[str] | None = None) -> int:
                     provlib.remote_write(vars_remote, fh.read(), "0644")
                 log(f"vars uploaded to {vars_remote}")
 
-                if not playbook(ansible_dir, fqdn, vars_remote, check=True):
+                if not playbook(ansible_dir, fqdn, vars_remote, check=True, user=user):
                     raise ProvError("check pass failed")
                 if dry_run:
                     provlib.advance_run(conn, run_id, "succeeded", "dry-run: check+diff only")
                     log(f"run {run_id} succeeded (dry-run)")
                     return 0
                 _set_running_detail(conn, run_id, "apply pass")
-                if not playbook(ansible_dir, fqdn, vars_remote, check=False):
+                if not playbook(ansible_dir, fqdn, vars_remote, check=False, user=user):
                     raise ProvError("apply pass failed")
                 provlib.advance_run(conn, run_id, "succeeded", "applied")
                 log(f"run {run_id} succeeded")
