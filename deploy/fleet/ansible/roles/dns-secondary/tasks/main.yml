@@ -43,6 +43,15 @@
     creates: /etc/bind/rndc.key
   when: ansible_os_family == 'Debian'
 
+# SUSE's named.prep only writes /etc/rndc.key when named.service starts, but the
+# named.conf template below is validated (it includes rndc-access.conf, which
+# includes the key) before the service has ever run on a fresh host.
+- name: Ensure SUSE rndc key exists
+  ansible.builtin.command: /usr/sbin/rndc-confgen -a -c /etc/rndc.key -u named
+  args:
+    creates: /etc/rndc.key
+  when: ansible_os_family == 'Suse'
+
 - name: Create secondary configuration and data directories
   ansible.builtin.file:
     path: "{{ item.path }}"

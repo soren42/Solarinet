@@ -25,23 +25,27 @@ manage recursion, RPZ, DHCP, or the nameserver set. Xenon remains primary at
    ```
 
 4. Apply the target SoR stack to steel through `prov-finish` / `STACK_APPLY`
-   (Apply-stacks-only), with `dns_secondary_address: 10.0.0.11`,
-   `dns_secondary_admin_user: solari-admin`, and
-   `dns_secondary_manage_sudoers: true`. Then enable the prepared sorsync
-   section and resume `sor-apply-dns`.
+   (Apply-stacks-only). The defaults fit steel: `dns_secondary_address` is the
+   default-route IPv4 (`10.0.0.11`), and the provisioning baseline already gives
+   `solari-admin` NOPASSWD sudo. Set `dns_secondary_admin_user: solari-admin`
+   and `dns_secondary_manage_sudoers: true` only where the baseline grant is
+   removed. Then enable the prepared sorsync section and resume `sor-apply-dns`.
 
 ## Validate
 
-On Xenon, verify transfer over TCP and compare current SOA serials:
+Steel serves no transfers of its own (`allow-transfer { none; }`), so an AXFR
+query *to* steel is refused by design. Verify that the primary allows steel to
+transfer (run from steel), that steel loaded the zones, and that SOA serials match:
 
 ```sh
-dig +tcp @10.0.0.11 akoria.net AXFR
+ssh solari-admin@steel.akoria.net 'dig +tcp @10.0.0.20 akoria.net AXFR | tail -1'
+ssh solari-admin@steel.akoria.net 'sudo -n /usr/bin/named-checkconf /etc/named.conf; sudo -n systemctl is-active named.service; sudo -n ls /var/lib/named/solari-secondary'
 dig @10.0.0.11 akoria.net SOA +noall +answer
 dig @10.0.0.20 akoria.net SOA +noall +answer
-ssh solari-admin@steel.akoria.net 'sudo -n /usr/bin/named-checkconf /etc/named.conf; sudo -n systemctl is-active named.service'
 ```
 
-The AXFR must complete, and the SOA serials must match. Then send a DNS change
+The AXFR from the primary must complete (its last line reports the XFR size),
+steel must hold a db file per zone, and the SOA serials must match. Then send a DNS change
 through SoR and confirm the applier logs steel's secondary refresh and records
 SOA parity before acknowledging the event. Steel must not be added to NS until
 a separate change explicitly authorizes it.
