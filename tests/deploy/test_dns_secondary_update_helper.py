@@ -99,6 +99,13 @@ class RoleTaskOrderTest(unittest.TestCase):
         self.assertIn("restorecon -RFv", self.tasks)
         self.assertIn("/etc/rndc.key", self.tasks)
 
+    def test_check_pass_on_fresh_host_skips_service_start(self):
+        start = self.pos("Ensure authoritative secondary is enabled and running")
+        block = self.tasks[start:self.tasks.find("- name:", start + 1)]
+        self.assertIn("when: not (ansible_check_mode and dns_secondary_install is changed)", block)
+        install = self.tasks[self.pos("Install BIND"):self.pos("Ensure Debian rndc key exists")]
+        self.assertIn("register: dns_secondary_install", install)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,7 @@
   ansible.builtin.package:
     name: "{{ dns_secondary_package }}"
     state: present
+  register: dns_secondary_install
 
 - name: Ensure Debian rndc key exists
   ansible.builtin.command: /usr/sbin/rndc-confgen -a -c /etc/bind/rndc.key
@@ -132,6 +133,8 @@
     name: "{{ dns_secondary_service }}.service"
     enabled: true
     state: started
+  # A check pass on a host without BIND yet has no unit to inspect.
+  when: not (ansible_check_mode and dns_secondary_install is changed)
 
 - name: Read service facts for firewall decision
   ansible.builtin.service_facts:
