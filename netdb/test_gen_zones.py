@@ -60,7 +60,9 @@ class ZoneGenerationTest(unittest.TestCase):
                         reverse = pathlib.Path(folder, "db.0.7.10.in-addr.arpa").read_text()
                         config = pathlib.Path(folder, "named.conf.akoria").read_text()
                         self.assertIn("@ IN NS chlorine.akoria.net.", reverse)
-                        self.assertIn("allow-transfer { 10.7.0.10; }", config)
+                        self.assertIn("allow-transfer { 10.1.0.10; 10.7.0.10; 10.0.0.11; }", config)
+                        self.assertIn("allow-transfer { 10.7.0.10; 10.0.0.11; }", config)
+                        self.assertNotIn("@ IN NS steel.akoria.net.", pathlib.Path(folder, "db.akoria.net").read_text())
             finally:
                 gen_zones.OUT = previous_out
 

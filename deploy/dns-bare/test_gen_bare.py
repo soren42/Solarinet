@@ -12,7 +12,7 @@ SCRIPT = pathlib.Path(__file__).with_name("gen-bare.py")
 
 
 class BareZoneGeneratorTest(unittest.TestCase):
-    def test_default_authorizes_only_the_active_khadas_secondary(self):
+    def test_default_authorizes_khadas_and_steel_secondaries(self):
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)
             source = root / "db.akoria.net"
@@ -22,11 +22,10 @@ class BareZoneGeneratorTest(unittest.TestCase):
                            check=True, capture_output=True, text=True)
             config = (output / "named.conf.bare").read_text(encoding="utf-8")
             self.assertIn(
-                "allow-transfer { 10.7.0.10; }; "
-                "also-notify { 10.7.0.10; }; notify yes;",
+                "allow-transfer { 10.0.0.11; 10.7.0.10; }; "
+                "also-notify { 10.0.0.11; 10.7.0.10; }; notify yes;",
                 config,
             )
-        self.assertNotIn("10.0.0.11", config)
 
     def test_secondary_acl_and_unchanged_serial_are_preserved(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -69,8 +69,10 @@ address = 10.7.0.10
 ssh_host = jason@chlorine
 update_helper = /usr/local/sbin/solari-bind9-update-zones
 
-# Add a named secondary section only after that host is provisioned, reachable,
-# serving zones, and configured for AXFR/NOTIFY from xenon. Steel is not active.
+#[dns.secondary.steel]
+#address = 10.0.0.11
+#ssh_host = solari-admin@steel.akoria.net
+#update_helper = /usr/local/sbin/solari-bind9-update-zones
 
 [discovery]
 # sor_reconcile_discovery: fold detected hosts/services into the SoR.

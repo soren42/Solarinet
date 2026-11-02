@@ -244,6 +244,13 @@ class ItemOrderAndTypes(unittest.TestCase):
         self.assertEqual((repo["suite"], repo["components"], repo["fingerprint"]), ("bookworm", ["main"], FPR))
         self.assertEqual(got["solari_stack_packages"], ["git", "make", "p"])
 
+    def test_dns_secondary_role_renders_for_stack_apply(self):
+        d = doc_with({"slug": "dns", "items": [other("DNS secondary", "role",
+                                                          ansible_role="dns-secondary")]})
+        got = render_doc(d, ["dns"], "suse")
+        self.assertEqual(got["solari_stack_roles"], ["dns-secondary"])
+        self.assertEqual(got["solari_stack_steps"][-1], {"type": "role", "index": 0})
+
     def test_explicit_item_order(self):
         d = self.mixed()
         d["stacks"][1]["items"][1]["item_order"] = 650  # script after role

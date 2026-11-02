@@ -1,0 +1,9 @@
+{% if ansible_os_family == 'Suse' %}
+include "/etc/named.d/rndc-access.conf";
+include "{{ dns_secondary_conf_dir }}/options.conf";
+include "{{ dns_secondary_conf_dir }}/zones.conf";
+{% else %}
+include "/etc/bind/rndc.key";
+include "{{ dns_secondary_conf_dir }}/options.conf";
+include "{{ dns_secondary_conf_dir }}/zones.conf";
+{% endif %}

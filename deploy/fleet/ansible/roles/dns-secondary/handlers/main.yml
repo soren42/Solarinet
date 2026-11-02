@@ -1,0 +1,9 @@
+---
+- name: Validate secondary BIND configuration
+  ansible.builtin.command: "{{ dns_secondary_checkconf }} {{ dns_secondary_main_conf }}"
+  changed_when: false
+
+- name: Reload secondary BIND
+  ansible.builtin.service:
+    name: "{{ dns_secondary_service }}.service"
+    state: reloaded
