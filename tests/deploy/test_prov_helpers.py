@@ -1267,7 +1267,8 @@ class StackApply(Base):
               f"'someone', 'succeeded', NOW(), NOW(), {SRC})")
         rid = int(runs(n1, "reimage")[-1]["id"])
         if record:
-            body = {"run_id": rid, "entity_id": int(n1), "admin_user": "solari-admin"} | rec
+            body = {"run_id": rid, "entity_id": int(n1), "fqdn": "p3h-node1.akoria.net",
+                    "admin_user": "solari-admin"} | rec
             os.makedirs(os.path.join(self.prov_root, "runs"), exist_ok=True)
             with open(os.path.join(self.prov_root, "runs", f"reimage-{rid}.json"), "w") as fh:
                 json.dump(body, fh)
@@ -1293,7 +1294,8 @@ class StackApply(Base):
                          [self.expected_pb(run["id"], True), self.expected_pb(run["id"], False)])
 
     def test_mismatched_reimage_record_refused(self):
-        for bad in ({"entity_id": 999999}, {"admin_user": "bad user"}):
+        for bad in ({"entity_id": 999999}, {"admin_user": "bad user"},
+                    {"fqdn": "p3h-old-name.akoria.net"}):
             with self.subTest(bad=bad):
                 self.reimaged(**bad)
                 before = len(runs(ent("p3h-node1"), "apply"))
@@ -1302,6 +1304,19 @@ class StackApply(Base):
                 self.assertIn("record is malformed or does not match", p.stdout + p.stderr)
                 self.assertEqual(self.calls("ansible"), [])
                 self.assertEqual(len(runs(ent("p3h-node1"), "apply")), before)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads the unreadable record")
+    def test_unreadable_reimage_record_refused(self):
+        rid = self.reimaged()
+        path = os.path.join(self.prov_root, "runs", f"reimage-{rid}.json")
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        before = len(runs(ent("p3h-node1"), "apply"))
+        p = self.apply()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"cannot read {path}", p.stdout + p.stderr)
+        self.assertEqual(self.calls("ansible"), [])
+        self.assertEqual(len(runs(ent("p3h-node1"), "apply")), before)
 
     def hold_lock(self, name):
         """A separate SoR session holding named lock `name`; .release() frees it."""

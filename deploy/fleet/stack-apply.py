@@ -104,13 +104,14 @@ def last_reimage_run(cur, entity_id: int) -> int | None:
     return int(row["id"]) if row else None
 
 
-def admin_login(prov_root: str, entity_id: int, run_id: int | None) -> str | None:
+def admin_login(prov_root: str, entity_id: int, fqdn: str, run_id: int | None) -> str | None:
     """The admin user a reimage created, from its run record; None = default login.
 
     A host this system installed has only that account (the controller's own
     login is not on it). Hosts never reimaged here, or whose record is gone,
-    keep the default login. A record that exists but does not match is refused
-    rather than guessed around."""
+    keep the default login. A record that exists but does not match (run, entity
+    or the target's current FQDN, e.g. after a rename) is refused rather than
+    guessed around."""
     if run_id is None:
         return None
     path = f"{prov_root}/runs/reimage-{run_id}.json"
@@ -126,7 +127,7 @@ def admin_login(prov_root: str, entity_id: int, run_id: int | None) -> str | Non
     except ValueError:
         rec = None
     if not (isinstance(rec, dict) and rec.get("run_id") == run_id
-            and rec.get("entity_id") == entity_id
+            and rec.get("entity_id") == entity_id and rec.get("fqdn") == fqdn
             and isinstance(rec.get("admin_user"), str) and USER_RE.match(rec["admin_user"])):
         raise ProvError(f"reimage run {run_id} record is malformed or does not match the entity")
     return rec["admin_user"]
@@ -335,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
                 fqdn = f"{entity['name']}.{domain}"
                 log(f"entity {entity_id} {fqdn}; stacks {','.join(slugs)}"
                     + (" (dry-run)" if dry_run else ""))
-                user = admin_login(prov_root, entity_id, reimage)
+                user = admin_login(prov_root, entity_id, fqdn, reimage)
                 if user:
                     log(f"login: {user} (reimage run {reimage})")
                 os_family, architecture = probe_facts(ansible_dir, fqdn, user=user)
