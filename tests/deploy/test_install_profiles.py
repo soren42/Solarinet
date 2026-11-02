@@ -289,6 +289,19 @@ class InstallProfiles(unittest.TestCase):
         self.assertEqual(pkgs, SUSE_BOOTSTRAP)
         self.assertIn("no agent library set for openSUSE 15.6", p.stdout + p.stderr)
 
+    def test_firstboot_installs_unit_when_chrooted(self):
+        # Every installer runs solari-firstboot.sh chrooted into the target,
+        # where systemd is installed but not running: the unit install must not
+        # hinge on /run/systemd/system (that skipped it on every path).
+        path = os.path.join(ROOT, "deploy", "fleet", "netboot", "installers",
+                            "solari-firstboot.sh")
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        guard = src[src.index("if command -v systemctl"):src.index('log "installing systemd unit')]
+        self.assertNotIn("/run/systemd/system", guard)
+        self.assertIn("/usr/lib/systemd/system", guard)
+        self.assertRegex(src, r'if \[ -d /run/systemd/system \]; then systemctl daemon-reload')
+
     def test_release_agent_beats_stale_dist_tree(self):
         # SOLARI_DIST_DIR may hold an old cross-build; for the host arch the
         # release's own client is what gets published.
