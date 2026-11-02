@@ -103,16 +103,18 @@ class ZoneGenerationTest(unittest.TestCase):
                 result[path.name] = int(match.group(1))
         return result
 
-    def test_hinfo_requires_both_os_and_arch(self):
+    def test_hinfo_partial_facts_use_unknown(self):
         rendered = gen_zones.forward("akoria.net", {
             "os-only": {"ip": "10.0.0.1", "osName": "Linux"},
             "arch-only": {"ip": "10.0.0.2", "arch": "arm64"},
             "known": {"ip": "10.0.0.3", "osName": "Debian", "arch": "arm64"},
+            "none": {"ip": "10.0.0.4"},
         }, {}, {})
-        self.assertIn('known          IN HINFO "arm64" "Debian"', rendered)
-        self.assertNotIn("os-only", rendered.split("; ---- host information ----", 1)[1])
-        self.assertNotIn("arch-only", rendered.split("; ---- host information ----", 1)[1])
-
+        info = rendered.split("; ---- host information ----", 1)[1]
+        self.assertIn('known          IN HINFO "arm64" "Debian"', info)
+        self.assertIn('os-only        IN HINFO "unknown" "Linux"', info)
+        self.assertIn('arch-only      IN HINFO "arm64" "unknown"', info)
+        self.assertNotIn("none", info.split("; ---- extra interfaces ----")[0])
 
 if __name__ == "__main__":
     unittest.main()

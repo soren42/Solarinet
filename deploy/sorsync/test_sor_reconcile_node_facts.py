@@ -16,6 +16,8 @@ class Cursor:
         self.lastrowid = 41
         self.rowcount = 0
         self.existing_os_id = None
+        self.os_row = None
+        self.node_arch = "arm64"
 
     def execute(self, query, params=None):
         self.sql.append((query, params))
@@ -23,9 +25,11 @@ class Cursor:
         if query.startswith("SELECT discId"):
             self.rows = []
         elif query.startswith("SELECT hostFqdn"):
-            self.rows = [{"hostFqdn": "alpha.akoria.net", "osName": "Debian 13", "arch": "arm64"}]
+            self.rows = [{"hostFqdn": "alpha.akoria.net", "osName": "Debian 13", "arch": self.node_arch}]
         elif query.startswith("SELECT id FROM sources"):
             self.rows = [{"id": 7}]
+        elif query.startswith("SELECT id FROM operating_systems"):
+            self.rows = [self.os_row] if self.os_row else []
         elif query.startswith("SELECT e.id"):
             self.rows = [{"id": 99, "os_id": self.existing_os_id}]
         else:
@@ -97,6 +101,25 @@ class NodeFactsReconciliationTest(unittest.TestCase):
         statements = [sql for sql, _ in self.sor_cursor.sql]
         self.assertFalse(any(sql.startswith("UPDATE entities SET os_id") for sql in statements))
         self.assertTrue(any(sql.startswith("UPDATE entities SET asserted_at") for sql in statements))
+
+    def test_existing_os_row_is_reused_not_duplicated(self):
+        self.sor_cursor.os_row = {"id": 5}
+        self.sor_cursor.existing_os_id = 5
+        self.invoke()
+        statements = [sql for sql, _ in self.sor_cursor.sql]
+        self.assertFalse(any(sql.startswith("INSERT INTO operating_systems") for sql in statements))
+        self.assertFalse(any(sql.startswith("UPDATE entities SET os_id") for sql in statements))
+
+    def test_new_os_row_gets_linux_family(self):
+        self.invoke()
+        insert = [p for sql, p in self.sor_cursor.sql if sql.startswith("INSERT INTO operating_systems")]
+        self.assertEqual("linux", insert[0][0])
+
+    def test_uname_arch_is_normalized(self):
+        self.sor_cursor.node_arch = "aarch64"
+        self.invoke()
+        params = [p for sql, p in self.sor_cursor.sql if sql.startswith("UPDATE hardware_models")]
+        self.assertEqual("arm64", params[0][0])
 
 
 if __name__ == "__main__":

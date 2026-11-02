@@ -182,6 +182,13 @@ static void test_node_lifecycle(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbNodeCertMatches(g_db, ITEST_NODE, "itest-cn-reissued", &matches));
     TEST_ASSERT_TRUE(matches);
+    /* report-driven facts: change, no-op repeat, and empty values kept */
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbSetNodeFacts(g_db, ITEST_NODE, "Debian GNU/Linux 13", "aarch64"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbSetNodeFacts(g_db, ITEST_NODE, "Debian GNU/Linux 13", "aarch64"));
+    TEST_ASSERT_EQUAL_INT(SOLARI_OK,
+        serverDbSetNodeFacts(g_db, ITEST_NODE, "", NULL));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverDbTouchNode(g_db, ITEST_NODE, 1700000000000ULL));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,

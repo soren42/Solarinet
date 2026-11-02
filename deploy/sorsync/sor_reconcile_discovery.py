@@ -62,6 +62,27 @@ def connect_sor(config):
         cursorclass=pymysql.cursors.DictCursor)
 
 
+# uname -m spellings -> hardware_models.arch enum values.
+ARCH_ALIASES = {"aarch64": "arm64", "armv7l": "armhf", "armv6l": "armhf",
+                "amd64": "x86_64", "i686": "i386", "i586": "i386"}
+
+_LINUX_WORDS = ("linux", "debian", "ubuntu", "fedora", "rocky", "alma", "raspbian",
+                "opensuse", "centos", "red hat", "arch", "alpine", "zimaos", "casaos")
+
+
+def os_family(os_name):
+    low = os_name.lower()
+    if any(w in low for w in _LINUX_WORDS):
+        return "linux"
+    if "bsd" in low:
+        return "bsd"
+    if "mac" in low or "darwin" in low:
+        return "macos"
+    if "windows" in low:
+        return "windows"
+    return "other"
+
+
 def reconcile(cfg, dry_run):
     mon = pymysql.connect(
         host=cfg.get("discovery", "mon_host", fallback="127.0.0.1"),
@@ -88,7 +109,8 @@ def reconcile(cfg, dry_run):
             for fact in node_facts:
                 name = (fact["hostFqdn"] or "").split(".")[0].lower()
                 os_name = (fact["osName"] or "").strip()
-                arch = (fact["arch"] or "").strip()
+                arch = ARCH_ALIASES.get((fact["arch"] or "").strip().lower(),
+                                        (fact["arch"] or "").strip().lower())
                 if not name or not os_name and not arch:
                     continue
                 if dry_run:
@@ -103,12 +125,18 @@ def reconcile(cfg, dry_run):
                 os_id = entity["os_id"]
                 changed = False
                 if os_name:
-                    sc.execute("INSERT INTO operating_systems (family,name,version,source_id,asserted_kind) "
-                               "VALUES ('other',%s,'',%s,'machine') "
-                               "ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), "
-                               "asserted_at=IF(source_id=VALUES(source_id),UTC_TIMESTAMP(),asserted_at)",
-                               (os_name, src))
-                    os_id = sc.lastrowid
+                    # operating_systems has no unique key (migration 001), so
+                    # look up before inserting or every pass would add a row.
+                    sc.execute("SELECT id FROM operating_systems WHERE name=%s AND version='' "
+                               "AND deleted_at IS NULL ORDER BY id LIMIT 1", (os_name,))
+                    found = sc.fetchone()
+                    if found:
+                        os_id = found["id"]
+                    else:
+                        sc.execute("INSERT INTO operating_systems (family,name,version,source_id,asserted_kind) "
+                                   "VALUES (%s,%s,'',%s,'machine')",
+                                   (os_family(os_name), os_name, src))
+                        os_id = sc.lastrowid
                     if os_id != entity["os_id"]:
                         sc.execute("UPDATE entities SET os_id=%s, asserted_at=UTC_TIMESTAMP() "
                                    "WHERE id=%s", (os_id, entity["id"]))

@@ -91,8 +91,9 @@ def forward(domain, hosts, ifaces, cnames):
     L.append("; ---- host information ----")
     for n in sorted(hosts):
         os_name, arch = hosts[n].get("osName"), hosts[n].get("arch")
-        if os_name and arch:
-            L.append(f"{n:<14} IN HINFO {_dns_quote(arch)} {_dns_quote(os_name)}")
+        if os_name or arch:
+            L.append(f"{n:<14} IN HINFO {_dns_quote(arch or 'unknown')} "
+                     f"{_dns_quote(os_name or 'unknown')}")
     L += ["", "; ---- extra interfaces ----"]
     for n in sorted(ifaces):
         L.append(f"{n:<14} IN A     {ifaces[n]}")
