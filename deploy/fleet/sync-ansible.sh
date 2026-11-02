@@ -82,6 +82,11 @@ if ! tar -C "$new" -xf - || [ ! -f "$new/ansible.cfg" ]; then
 fi
 if [ -d "$dst/inventory" ]; then cp -a "$dst/inventory" "$new/"; fi
 printf "%s\n" "$rev" > "$new/.release"
+# An ansible.prev left as a real directory by the old two-rename scheme would
+# block the symlink below; file it with the other trees (pruned normally).
+if [ -d "$dst.prev" ] && [ ! -L "$dst.prev" ]; then
+  mv -T "$dst.prev" "$rels/$(date -u +%Y%m%dT%H%M%SZ)-oldprev"
+fi
 rm -f "$dst.swap"; ln -s "$new" "$dst.swap"
 if [ -d "$dst" ] && [ ! -L "$dst" ]; then
   if pgrep -f '[a]nsible-playbook' >/dev/null 2>&1; then

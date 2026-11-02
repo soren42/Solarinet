@@ -82,6 +82,15 @@ class SyncAnsibleTest(unittest.TestCase):
         with open(os.path.join(self.dst, "inventory", "hosts.yml")) as fh:
             self.assertEqual(fh.read(), "site-local inventory\n")
 
+    def test_legacy_prev_directory_is_filed_away(self):
+        self.seed_remote()
+        os.makedirs(os.path.join(self.prov, "ansible.prev", "roles"))
+        p = self.run_sync()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(os.path.islink(self.prov + "/ansible.prev"))
+        with open(os.path.join(self.prov, "ansible.prev", "ansible.cfg")) as fh:
+            self.assertEqual(fh.read(), "old\n")
+
     def test_running_playbook_keeps_its_tree(self):
         self.run_sync()
         started_in = os.path.realpath(self.dst)   # what `env -C` resolves to
