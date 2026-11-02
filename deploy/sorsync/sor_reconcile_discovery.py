@@ -70,15 +70,63 @@ def reconcile(cfg, dry_run):
         database=cfg.get("discovery", "mon_name", fallback="solarinet"),
         autocommit=True, connect_timeout=10, cursorclass=pymysql.cursors.DictCursor)
     sor = connect_sor(cfg)
-    added = skipped = 0
+    added = skipped = enriched = 0
     try:
         with mon.cursor() as mc:
             mc.execute("SELECT discId, ip, host, mdnsName, deviceRole "
                        "FROM discovered WHERE status='adopted' AND ip IS NOT NULL")
             rows = mc.fetchall()
+            mc.execute("SELECT hostFqdn, osName, arch FROM node "
+                       "WHERE state <> 'retired' AND hostFqdn IS NOT NULL")
+            node_facts = mc.fetchall()
         with sor.cursor() as sc:
             sc.execute("SELECT id FROM sources WHERE slug='solarinet_monitor'")
             src = sc.fetchone()["id"]
+            # Reconcile enrolled monitoring facts by canonical short host name.
+            # OS names reflect the running node and refresh on every pass;
+            # hardware_models.arch is filled only when it has no known value.
+            for fact in node_facts:
+                name = (fact["hostFqdn"] or "").split(".")[0].lower()
+                os_name = (fact["osName"] or "").strip()
+                arch = (fact["arch"] or "").strip()
+                if not name or not os_name and not arch:
+                    continue
+                if dry_run:
+                    log(f"WOULD enrich {name} (OS={bool(os_name)}, arch={bool(arch)})")
+                    enriched += 1
+                    continue
+                sc.execute("SELECT e.id, e.os_id FROM entities e "
+                           "WHERE LOWER(e.name)=%s AND e.deleted_at IS NULL LIMIT 1", (name,))
+                entity = sc.fetchone()
+                if not entity:
+                    continue
+                os_id = entity["os_id"]
+                changed = False
+                if os_name:
+                    sc.execute("INSERT INTO operating_systems (family,name,version,source_id,asserted_kind) "
+                               "VALUES ('other',%s,'',%s,'machine') "
+                               "ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), "
+                               "asserted_at=IF(source_id=VALUES(source_id),UTC_TIMESTAMP(),asserted_at)",
+                               (os_name, src))
+                    os_id = sc.lastrowid
+                    if os_id != entity["os_id"]:
+                        sc.execute("UPDATE entities SET os_id=%s, asserted_at=UTC_TIMESTAMP() "
+                                   "WHERE id=%s", (os_id, entity["id"]))
+                        changed = True
+                if arch in {"x86_64", "arm64", "armhf", "riscv64", "i386"}:
+                    sc.execute("UPDATE hardware_models hm JOIN hardware_units hu "
+                               "ON hu.model_id=hm.id JOIN entities e "
+                               "ON e.hardware_unit_id=hu.id "
+                               "SET hm.arch=%s WHERE e.id=%s AND hm.arch IS NULL",
+                               (arch, entity["id"]))
+                    changed = changed or bool(sc.rowcount)
+                # hardware_models has no CDC trigger. Touch its entity once when
+                # model arch first becomes known so the existing SoR outbox
+                # wakes the DNS renderer; subsequent passes stay quiet.
+                if changed and os_id == entity["os_id"]:
+                    sc.execute("UPDATE entities SET asserted_at=UTC_TIMESTAMP() WHERE id=%s",
+                               (entity["id"],))
+                enriched += 1
             for r in rows:
                 name = short_name(r["host"], r["mdnsName"], r["ip"])
                 if not name:
@@ -105,7 +153,7 @@ def reconcile(cfg, dry_run):
             sor.commit()
     finally:
         mon.close(); sor.close()
-    log(f"reconcile complete: {added} {'would-add' if dry_run else 'added'}, {skipped} already present")
+    log(f"reconcile complete: {added} {'would-add' if dry_run else 'added'}, {skipped} already present, {enriched} node facts reconciled")
     return added
 
 

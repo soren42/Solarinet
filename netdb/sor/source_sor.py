@@ -35,8 +35,14 @@ def load_source():
             c.execute("SELECT name FROM dns_zones WHERE kind='forward' "
                       "AND authority='sor_rendered' AND deleted_at IS NULL LIMIT 1")
             domain = c.fetchone()[0]
-            c.execute("SELECT host, ip, role FROM v_dns_hosts")
-            hosts = {h: {"ip": ip, "role": role} for h, ip, role in c.fetchall()}
+            c.execute("SELECT h.host, h.ip, h.role, os.name AS osName, hm.arch "
+                      "FROM v_dns_hosts h "
+                      "LEFT JOIN entities e ON e.name=h.host AND e.deleted_at IS NULL "
+                      "LEFT JOIN operating_systems os ON os.id=e.os_id AND os.deleted_at IS NULL "
+                      "LEFT JOIN hardware_units hu ON hu.id=e.hardware_unit_id "
+                      "LEFT JOIN hardware_models hm ON hm.id=hu.model_id")
+            hosts = {h: {"ip": ip, "role": role, "osName": os_name, "arch": arch}
+                     for h, ip, role, os_name, arch in c.fetchall()}
             c.execute("SELECT label, ip FROM v_dns_ifaces")
             ifaces = dict(c.fetchall())
             c.execute("SELECT alias, target_host FROM v_dns_cnames "

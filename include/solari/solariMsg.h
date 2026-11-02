@@ -151,6 +151,8 @@ typedef struct {
     solariRole role;
     char       agentVersion[SOLARI_AGENTVER_MAX];
     char       hostFqdn[SOLARI_FQDN_MAX];
+    char       osName[SOLARI_OSNAME_MAX];
+    char       arch[SOLARI_ARCH_MAX];
     uint64_t   configEpoch;
 } solariHello;
 

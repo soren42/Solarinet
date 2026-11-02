@@ -294,7 +294,7 @@ CREATE TABLE `dns_records` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
   `zone_id` int(10) unsigned NOT NULL COMMENT 'FK: owning zone',
   `name` varchar(255) NOT NULL COMMENT 'owner name relative to zone origin; @ for apex',
-  `rrtype` enum('A','AAAA','CNAME','PTR','SRV','TXT','MX','NS','SOA','CAA','DS','DNSKEY') NOT NULL COMMENT 'record type',
+  `rrtype` enum('A','AAAA','CNAME','PTR','SRV','TXT','MX','NS','SOA','CAA','DS','DNSKEY','HINFO') NOT NULL COMMENT 'record type',
   `rdata` varchar(1024) NOT NULL COMMENT 'record data as zone-file text (address, target FQDN, TXT string, SRV fields...)',
   `ttl` int(10) unsigned DEFAULT NULL COMMENT 'per-record TTL; NULL = zone default',
   `priority` smallint(5) unsigned DEFAULT NULL COMMENT 'MX preference / SRV priority when applicable',

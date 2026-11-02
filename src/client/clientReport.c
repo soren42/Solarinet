@@ -83,6 +83,8 @@ solariStatus clientSendHello(clientContext *ctx)
         strncpy(hi.hostFqdn, ctx->cfg->hostFqdn, sizeof hi.hostFqdn - 1);
     else
         platHostFqdn(hi.hostFqdn, sizeof hi.hostFqdn);
+    platOsName(hi.osName, sizeof hi.osName);
+    platArch(hi.arch, sizeof hi.arch);
     hi.configEpoch = ctx->cfg->configEpoch;
 
     rc = solariMsgBuildHello(&hi, payload, sizeof payload, &plen, &tc);

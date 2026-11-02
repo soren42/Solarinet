@@ -393,6 +393,8 @@ solariStatus solariMsgBuildHello(const solariHello *h,
     if ((st = solariTlvAppendStr(&w, TLV_AGENT_VERSION, h->agentVersion))    != SOLARI_OK) return st;
     if ((st = solariTlvAppendStr(&w, TLV_HOST_FQDN,     h->hostFqdn))        != SOLARI_OK) return st;
     if ((st = solariTlvAppendU64(&w, TLV_CONFIG_EPOCH,  h->configEpoch))     != SOLARI_OK) return st;
+    if ((st = solariTlvAppendStr(&w, TLV_OS_NAME,       h->osName))          != SOLARI_OK) return st;
+    if ((st = solariTlvAppendStr(&w, TLV_ARCH,          h->arch))            != SOLARI_OK) return st;
     if (outLen)   *outLen = w.len;
     if (tlvCount) *tlvCount = w.count;
     return SOLARI_OK;
@@ -413,6 +415,8 @@ solariStatus solariMsgParseHello(const uint8_t *payload, size_t len, solariHello
         case TLV_AGENT_VERSION: copyBounded(h->agentVersion, sizeof h->agentVersion, val, vlen); break;
         case TLV_HOST_FQDN:     copyBounded(h->hostFqdn, sizeof h->hostFqdn, val, vlen); break;
         case TLV_CONFIG_EPOCH:  solariTlvReadU64(val, vlen, &h->configEpoch); break;
+        case TLV_OS_NAME:       copyBounded(h->osName, sizeof h->osName, val, vlen); break;
+        case TLV_ARCH:          copyBounded(h->arch, sizeof h->arch, val, vlen); break;
         default: break;
         }
     }

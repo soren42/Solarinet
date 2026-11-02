@@ -12,6 +12,19 @@ SCRIPT = pathlib.Path(__file__).with_name("gen-bare.py")
 
 
 class BareZoneGeneratorTest(unittest.TestCase):
+    def test_hinfo_is_copied_to_each_bare_host_zone(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            source, output = root / "db.akoria.net", root / "output"
+            source.write_text('alpha IN A 10.0.0.21\nalpha IN HINFO "x86_64" "Debian GNU/Linux 13"\n'
+                              'beta IN A 10.0.0.22\n', encoding="utf-8")
+            subprocess.run([sys.executable, str(SCRIPT), str(source), str(output)],
+                           check=True, capture_output=True, text=True)
+            alpha = (output / "db.bare-alpha").read_text(encoding="utf-8")
+            beta = (output / "db.bare-beta").read_text(encoding="utf-8")
+            self.assertIn('@ IN HINFO "x86_64" "Debian GNU/Linux 13"', alpha)
+            self.assertNotIn("HINFO", beta)
+
     def test_default_authorizes_khadas_and_steel_secondaries(self):
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)

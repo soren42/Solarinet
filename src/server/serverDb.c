@@ -576,7 +576,8 @@ solariStatus serverDbUpsertNode(serverDb *db, uint64_t nodeId, solariRole role,
         "VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), ?) "
         "ON DUPLICATE KEY UPDATE "
         "  role=VALUES(role), hostFqdn=VALUES(hostFqdn), certCn=VALUES(certCn), "
-        "  osName=VALUES(osName), arch=VALUES(arch), "
+        "  osName=COALESCE(VALUES(osName), osName), "
+        "  arch=COALESCE(VALUES(arch), arch), "
         "  state=IF(state='retired','unknown',state), "
         "  lastSeenAt=UTC_TIMESTAMP(), configEpoch=VALUES(configEpoch)";
     MYSQL      *conn = dbConn(db);
