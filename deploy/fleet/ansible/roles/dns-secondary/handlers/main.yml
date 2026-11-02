@@ -7,3 +7,5 @@
   ansible.builtin.service:
     name: "{{ dns_secondary_service }}.service"
     state: reloaded
+  # Same as the start task: a check pass before BIND exists has no unit.
+  when: not (ansible_check_mode and dns_secondary_install is changed)

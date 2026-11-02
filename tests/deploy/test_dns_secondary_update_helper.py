@@ -105,6 +105,9 @@ class RoleTaskOrderTest(unittest.TestCase):
         self.assertIn("when: not (ansible_check_mode and dns_secondary_install is changed)", block)
         install = self.tasks[self.pos("Install BIND"):self.pos("Ensure Debian rndc key exists")]
         self.assertIn("register: dns_secondary_install", install)
+        handlers = (ROOT / "deploy/fleet/ansible/roles/dns-secondary/handlers/main.yml").read_text()
+        reload = handlers[handlers.find("- name: Reload secondary BIND"):]
+        self.assertIn("when: not (ansible_check_mode and dns_secondary_install is changed)", reload)
 
 
 if __name__ == "__main__":
