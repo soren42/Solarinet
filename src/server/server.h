@@ -660,10 +660,13 @@ bool serverIngestHelloMatchesIdentity(solariRole role, const char *hostFqdn,
  *   TOPOLOGY_REPORT   -> serverTopology
  *   SURVEY_RESP       -> reconcile (master)
  *   CONTROL_RESULT    -> convergence tracker (control)
+ * peerCertCn is the validated TLS peer CN (NULL if none); HELLO needs it to
+ * match the enrollment identity.
  * Returns the handler's status; ERR_UNKNOWN_MSG for an unhandled type. */
 solariStatus serverIngestDispatch(serverContext *ctx,
                                   const solariFrameHeader *hdr,
-                                  const uint8_t *payload, size_t len);
+                                  const uint8_t *payload, size_t len,
+                                  const char *peerCertCn);
 
 /* ===================================================================== */
 /* serverLease.c - primary/standby failover lease (§9.2)                  */

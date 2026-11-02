@@ -34,7 +34,7 @@ make core      # build libsolari core + tests (zero external deps)
 make test      # build and run the full Unity / ctest suite
 make clean     # remove all build trees
 
-# Full components (require the development libraries described below):
+# Full components (initialize the pinned dependency submodules first):
 make client    # solariClient   (all OS targets)
 make monitor   # solariMonitor  (Linux, all arch)
 make server    # solariServer   (x86_64 / arm64)
@@ -54,12 +54,18 @@ ctest --test-dir build --output-on-failure
 On a fresh Linux host (e.g. a dedicated build/deploy server), one script installs the toolchain + all dependencies (mbedTLS, nng, SQLite, cJSON, MariaDB Connector/C), then configures, builds, and runs the suites including the SQLite spool and the nng transport loopback:
 
 ```
-./deploy/bootstrap-xenon.sh            # system packages where available
-./deploy/bootstrap-xenon.sh --source-deps   # build nng + mbedTLS from pinned source
+git submodule update --init --recursive
+./deploy/bootstrap-xenon.sh            # installs system libraries for fallback builds
 ./deploy/bootstrap-xenon.sh --help
 ```
 
-Build options: `-DSOLARI_WITH_SQLITE=ON` adds the store-and-forward spool, `-DSOLARI_WITH_IO=ON` adds the nng/mbedTLS transport, `-DSOLARI_WITH_JSON=ON` enables the cJSON config overlay. The bare core needs none of them.
+With the submodules present, `SOLARI_VENDORED_DEPS` defaults to `ON` and links
+static nng (with Mbed TLS 3.6 TLS), Mbed TLS, and cJSON. If they are absent,
+CMake reports the system-library fallback; set `-DSOLARI_VENDORED_DEPS=OFF` to
+select it explicitly. Build options: `-DSOLARI_WITH_SQLITE=ON` adds the
+store-and-forward spool, `-DSOLARI_WITH_IO=ON` adds the transport, and
+`-DSOLARI_WITH_JSON=ON` enables the config overlay. The bare core needs none.
+Pinned revisions are listed in [third_party/README.md](third_party/README.md).
 
 ## Repository layout
 

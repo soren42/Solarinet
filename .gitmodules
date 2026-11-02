@@ -1,3 +1,12 @@
 [submodule "dashboard/public/rackwire"]
 	path = dashboard/public/rackwire
 	url = ../RackWire.git
+[submodule "third_party/mbedtls"]
+	path = third_party/mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls.git
+[submodule "third_party/nng"]
+	path = third_party/nng
+	url = https://github.com/nanomsg/nng.git
+[submodule "third_party/cJSON"]
+	path = third_party/cJSON
+	url = https://github.com/DaveGamble/cJSON.git

@@ -827,7 +827,7 @@ static void test_certificate_crl_acknowledgement(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverIngestValidate(&ctx, &header, "client.crl-ack.itest"));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        serverIngestDispatch(&ctx, &header, payload, payloadLen));
+        serverIngestDispatch(&ctx, &header, payload, payloadLen, NULL));
     TEST_ASSERT_EQUAL_UINT64(1, liveCount(
         "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
         "AND crlNumber=20 AND crlFp='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"));
@@ -856,7 +856,7 @@ static void test_certificate_crl_acknowledgement(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverIngestValidate(&ctx, &header, "client.crl-ack.itest"));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        serverIngestDispatch(&ctx, &header, payload, payloadLen));
+        serverIngestDispatch(&ctx, &header, payload, payloadLen, NULL));
     TEST_ASSERT_EQUAL_UINT64(1, liveCount(
         "SELECT COUNT(*) FROM certificateCrlAcknowledgement WHERE nodeId=0x7e57c0de0099 "
         "AND crlNumber=20 AND crlFp='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"));
@@ -892,7 +892,7 @@ static void test_certificate_crl_acknowledgement(void)
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
         serverIngestValidate(&ctx, &header, "client.crl-ack.itest"));
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
-        serverIngestDispatch(&ctx, &header, payload, payloadLen));
+        serverIngestDispatch(&ctx, &header, payload, payloadLen, NULL));
     TEST_ASSERT_EQUAL_INT(ERR_REJECTED,
         serverDbCertificateCrlAcknowledge(g_db, nodeId, issuer, 21, fp2));
     TEST_ASSERT_EQUAL_UINT64(1, liveCount(
