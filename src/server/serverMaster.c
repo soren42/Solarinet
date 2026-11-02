@@ -228,13 +228,12 @@ solariStatus serverMasterAcceptHello(serverContext *ctx,
     fqdn   = hello->hostFqdn;
     certCn = peerCertCn;
 
-    /* Upsert the node from the HELLO. HELLO does not carry os/arch (only client
-     * reports do), so we pass NULL for them - the upsert leaves the existing
-     * columns untouched on a duplicate and stores NULL on first insert until a
-     * later CLIENT_REPORT fills them in. The node is recorded at the epoch it
-     * declared so convergence tracking can see drift against the assigned epoch. */
+    /* HELLO carries the slowly-changing identity fields so first enrollment,
+     * re-enrollment, and every reconnect refresh them even before the first
+     * full sample report. */
     rc = serverDbUpsertNode(ctx->db, nodeId, hello->role,
-                            fqdn, certCn, NULL, NULL, hello->configEpoch);
+                            fqdn, certCn, hello->osName, hello->arch,
+                            hello->configEpoch);
     if (rc != SOLARI_OK) {
         solariLogf(SOLARI_LOG_ERROR,
                    "master: HELLO upsert node=0x%llx (%s) failed: %s",

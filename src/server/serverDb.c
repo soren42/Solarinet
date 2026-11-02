@@ -576,7 +576,8 @@ solariStatus serverDbUpsertNode(serverDb *db, uint64_t nodeId, solariRole role,
         "VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), ?) "
         "ON DUPLICATE KEY UPDATE "
         "  role=VALUES(role), hostFqdn=VALUES(hostFqdn), certCn=VALUES(certCn), "
-        "  osName=VALUES(osName), arch=VALUES(arch), "
+        "  osName=COALESCE(VALUES(osName), osName), "
+        "  arch=COALESCE(VALUES(arch), arch), "
         "  state=IF(state='retired','unknown',state), "
         "  lastSeenAt=UTC_TIMESTAMP(), configEpoch=VALUES(configEpoch)";
     MYSQL      *conn = dbConn(db);
@@ -644,6 +645,38 @@ solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *sta
     dbBindStr(&b[0], state, &sLen);
     dbBindU64(&b[1], &vNode);
     rc = dbStmtRunWrite(st, b, 2);
+    mysql_stmt_close(st);
+    return rc;
+}
+
+solariStatus serverDbSetNodeFacts(serverDb *db, uint64_t nodeId,
+                                  const char *osName, const char *arch)
+{
+    /* Writes only when a value actually changes, so the per-report call is a
+     * no-op row match in steady state. */
+    static const char *SQL =
+        "UPDATE node SET osName = COALESCE(?, osName), arch = COALESCE(?, arch) "
+        "WHERE nodeId = ? AND NOT (osName <=> COALESCE(?, osName) "
+        "                      AND arch <=> COALESCE(?, arch))";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[5];
+    unsigned long long vNode = nodeId;
+    unsigned long len[4];
+    const char *os = (osName && osName[0]) ? osName : NULL;
+    const char *ar = (arch && arch[0]) ? arch : NULL;
+    solariStatus rc;
+
+    if (!conn) return ERR_INVALID_ARG;
+    if (!os && !ar) return SOLARI_OK;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], os, &len[0]);
+    dbBindStr(&b[1], ar, &len[1]);
+    dbBindU64(&b[2], &vNode);
+    dbBindStr(&b[3], os, &len[2]);
+    dbBindStr(&b[4], ar, &len[3]);
+    rc = dbStmtRunWrite(st, b, 5);
     mysql_stmt_close(st);
     return rc;
 }

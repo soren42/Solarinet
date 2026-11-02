@@ -60,6 +60,21 @@ def _soa(origin):
             "            300 )      ; minimum", ""]
 
 
+def _dns_quote(value):
+    """Quote one RFC 1035 character-string, escaping unsafe octets."""
+    escaped = []
+    for byte in str(value).encode("utf-8"):
+        if byte == 0x22:
+            escaped.append('\\"')
+        elif byte == 0x5c:
+            escaped.append('\\\\')
+        elif 0x20 <= byte <= 0x7e:
+            escaped.append(chr(byte))
+        else:
+            escaped.append(f"\\{byte:03d}")
+    return '"' + "".join(escaped) + '"'
+
+
 def forward(domain, hosts, ifaces, cnames):
     L = _soa(domain)
     for h in NS_HOSTS:
@@ -72,6 +87,13 @@ def forward(domain, hosts, ifaces, cnames):
     L.append("; ---- hosts (identity) ----")
     for n in sorted(hosts):
         L.append(f"{n:<14} IN A     {hosts[n]['ip']}")
+    L.append("")
+    L.append("; ---- host information ----")
+    for n in sorted(hosts):
+        os_name, arch = hosts[n].get("osName"), hosts[n].get("arch")
+        if os_name or arch:
+            L.append(f"{n:<14} IN HINFO {_dns_quote(arch or 'unknown')} "
+                     f"{_dns_quote(os_name or 'unknown')}")
     L += ["", "; ---- extra interfaces ----"]
     for n in sorted(ifaces):
         L.append(f"{n:<14} IN A     {ifaces[n]}")

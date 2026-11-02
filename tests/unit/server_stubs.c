@@ -42,6 +42,9 @@ WEAK solariStatus serverDbTouchNode(serverDb *db, uint64_t n, uint64_t w)
 { (void)db;(void)n;(void)w; return ERR_DB; }
 WEAK solariStatus serverDbSetNodeState(serverDb *db, uint64_t n, const char *s)
 { (void)db;(void)n;(void)s; return ERR_DB; }
+WEAK solariStatus serverDbSetNodeFacts(serverDb *db, uint64_t n,
+    const char *o, const char *a)
+{ (void)db;(void)n;(void)o;(void)a; return ERR_DB; }
 WEAK solariStatus serverDbDecommissionIssue(serverDb *db, uint64_t n,
     uint32_t scope, const char *op, const char hash[65], uint64_t issued,
     uint64_t expires, uint64_t *generation)

@@ -19,7 +19,7 @@ from zone_serial import SERIAL_TOKEN, atomicWrite, stampZone
 
 def renderNames(source):
     """Resolve local A/CNAME chains; reject cycles instead of dropping records."""
-    addresses, aliases = {}, {}
+    addresses, aliases, hinfo = {}, {}, {}
     for line in pathlib.Path(source).read_text(encoding="utf-8").splitlines():
         match = re.match(r"^(\S+)\s+IN\s+A\s+(\S+)", line)
         if match:
@@ -27,6 +27,9 @@ def renderNames(source):
         match = re.match(r"^(\S+)\s+IN\s+CNAME\s+(\S+)", line)
         if match:
             aliases[match[1].lower()] = match[2].rstrip(".").split(".")[0].lower()
+        match = re.match(r'^([^\s]+)\s+IN\s+HINFO\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"', line)
+        if match:
+            hinfo[match[1].lower()] = (match[2], match[3])
 
     def resolve(name, visited):
         if name in addresses:
@@ -43,7 +46,7 @@ def renderNames(source):
             continue
         address = resolve(name, set())
         if address is not None:
-            result[name] = address
+            result[name] = {"ip": address, "hinfo": hinfo.get(name)}
     return result
 
 
@@ -67,12 +70,16 @@ def main():
     previous = pathlib.Path(args.previous or args.output)
     output = pathlib.Path(args.output)
     zones, stanzas = {}, []
-    for name, address in names.items():
+    for name, details in names.items():
+        address = details["ip"]
         template = (f"$ORIGIN {name}.\n$TTL 300\n"
                     "@ IN SOA xenon.akoria.net. hostmaster.akoria.net. (\n"
                     f"  {SERIAL_TOKEN} ; serial\n"
                     "  3600 600 604800 300 )\n"
                     f"@ IN NS xenon.akoria.net.\n@ IN A {address}\n")
+        if details["hinfo"]:
+            cpu, os_name = details["hinfo"]
+            template += f'@ IN HINFO "{cpu}" "{os_name}"\n'
         filename = f"db.bare-{name}"
         zones[filename] = stampZone(template, previous / filename)
         policy = (f" allow-transfer {{ {transfer}; }}; also-notify {{ {transfer}; }}; notify yes;"

@@ -167,6 +167,8 @@ static void test_hello_roundTrip(void)
     in.role = ROLE_MONITOR;
     strcpy(in.agentVersion, "1.0.0");
     strcpy(in.hostFqdn, "vantage1.akoria.net");
+    strcpy(in.osName, "Debian GNU/Linux 13");
+    strcpy(in.arch, "x86_64");
     in.configEpoch = 42;
 
     TEST_ASSERT_EQUAL_INT(SOLARI_OK,
@@ -175,6 +177,8 @@ static void test_hello_roundTrip(void)
     TEST_ASSERT_EQUAL_INT(ROLE_MONITOR, out.role);
     TEST_ASSERT_EQUAL_STRING("1.0.0", out.agentVersion);
     TEST_ASSERT_EQUAL_STRING("vantage1.akoria.net", out.hostFqdn);
+    TEST_ASSERT_EQUAL_STRING("Debian GNU/Linux 13", out.osName);
+    TEST_ASSERT_EQUAL_STRING("x86_64", out.arch);
     TEST_ASSERT_EQUAL_UINT64(42, out.configEpoch);
 }
 

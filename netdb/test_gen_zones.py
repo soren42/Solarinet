@@ -31,7 +31,7 @@ class ZoneGenerationTest(unittest.TestCase):
             "xenon": {"ip": "10.0.0.20"},
             "radium": {"ip": "10.1.0.10"},
             "chlorine": {"ip": "10.7.0.10"},
-            "alpha": {"ip": "10.7.0.21"},
+            "alpha": {"ip": "10.7.0.21", "osName": 'Linux "edge"', "arch": "x86_64"},
         }
         with tempfile.TemporaryDirectory() as folder:
             previous_out = gen_zones.OUT
@@ -63,6 +63,8 @@ class ZoneGenerationTest(unittest.TestCase):
                         self.assertIn("allow-transfer { 10.1.0.10; 10.7.0.10; 10.0.0.11; }", config)
                         self.assertIn("allow-transfer { 10.7.0.10; 10.0.0.11; }", config)
                         self.assertNotIn("@ IN NS steel.akoria.net.", pathlib.Path(folder, "db.akoria.net").read_text())
+                        self.assertIn('alpha          IN HINFO "x86_64" "Linux \\\"edge\\\""',
+                                      pathlib.Path(folder, "db.akoria.net").read_text())
             finally:
                 gen_zones.OUT = previous_out
 
@@ -101,6 +103,18 @@ class ZoneGenerationTest(unittest.TestCase):
                 result[path.name] = int(match.group(1))
         return result
 
+    def test_hinfo_partial_facts_use_unknown(self):
+        rendered = gen_zones.forward("akoria.net", {
+            "os-only": {"ip": "10.0.0.1", "osName": "Linux"},
+            "arch-only": {"ip": "10.0.0.2", "arch": "arm64"},
+            "known": {"ip": "10.0.0.3", "osName": "Debian", "arch": "arm64"},
+            "none": {"ip": "10.0.0.4"},
+        }, {}, {})
+        info = rendered.split("; ---- host information ----", 1)[1]
+        self.assertIn('known          IN HINFO "arm64" "Debian"', info)
+        self.assertIn('os-only        IN HINFO "unknown" "Linux"', info)
+        self.assertIn('arch-only      IN HINFO "arm64" "unknown"', info)
+        self.assertNotIn("none", info.split("; ---- extra interfaces ----")[0])
 
 if __name__ == "__main__":
     unittest.main()
