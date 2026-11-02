@@ -82,6 +82,8 @@ DROP PROCEDURE `_solarinet_rollback_m033_assert_reversible`;
 DROP TRIGGER IF EXISTS `trg_hw_units_installed_target_ins`;
 DROP TRIGGER IF EXISTS `trg_hw_units_installed_target_upd`;
 DROP TRIGGER IF EXISTS `trg_product_types_no_software_install_target`;
+DROP TRIGGER IF EXISTS `trg_hw_models_catalog_ins`;
+DROP TRIGGER IF EXISTS `trg_hw_models_catalog_upd`;
 
 ALTER TABLE `hardware_units`
   DROP FOREIGN KEY IF EXISTS `fk_hw_units_installed_on_unit`,

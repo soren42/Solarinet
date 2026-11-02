@@ -113,6 +113,32 @@ q "UPDATE hardware_units SET installed_on_unit_id=NULL WHERE id=$SOFT_UNIT"
 q "DELETE FROM hardware_units WHERE id=$SOFT_UNIT"
 q "DELETE FROM product_types WHERE id=$SOFT"
 
+# Compatibility window: legacy writers set only hardware_models fields and
+# hardware_units.model_id; triggers keep the catalog link populated.
+LEG_MODEL="$(q "INSERT INTO hardware_models(make,model,hw_type,notes,source_id) VALUES('Inventory033','Legacy Scanner','scanner','legacy',$SRC); SELECT LAST_INSERT_ID()")"
+LEG_PT="$(q "SELECT product_type_id FROM hardware_models WHERE id=$LEG_MODEL")"
+eq "legacy model insert creates and links its catalog row" \
+  "SELECT CONCAT(kind,':',name,':',brand,':',lookup_source) FROM product_types WHERE id=$LEG_PT" \
+  "peripheral:Legacy Scanner:Inventory033:legacy:hardware_models"
+q "UPDATE hardware_models SET model='Legacy Scanner II', hw_type='router' WHERE id=$LEG_MODEL"
+eq "legacy model edit mirrors onto its catalog row" \
+  "SELECT CONCAT(kind,':',name,':',model) FROM product_types WHERE id=$LEG_PT" \
+  "hardware:Legacy Scanner II:Legacy Scanner II"
+q "UPDATE hardware_models SET notes='edited' WHERE id=50003"
+eq "legacy edit mirrors onto a migrated catalog row" \
+  "SELECT notes FROM product_types WHERE id=50003" "edited"
+q "UPDATE hardware_models SET notes=NULL WHERE id=50003"
+q "UPDATE product_types SET updated_at=created_at, asserted_at=created_at WHERE id=50003"
+LEG_UNIT="$(q "INSERT INTO hardware_units(model_id,serial,source_id) VALUES($LEG_MODEL,'unit-legacy',$SRC); SELECT LAST_INSERT_ID()")"
+eq "legacy unit insert inherits its model's product type" \
+  "SELECT product_type_id=$LEG_PT FROM hardware_units WHERE id=$LEG_UNIT" 1
+q "UPDATE hardware_units SET product_type_id=NULL WHERE id=$LEG_UNIT"
+eq "unit update cannot leave the product type unset" \
+  "SELECT product_type_id=$LEG_PT FROM hardware_units WHERE id=$LEG_UNIT" 1
+q "DELETE FROM hardware_units WHERE id=$LEG_UNIT"
+q "DELETE FROM hardware_models WHERE id=$LEG_MODEL"
+q "DELETE FROM product_types WHERE id=$LEG_PT"
+
 # Refusal must leave all migration DDL intact. The test adds then removes one
 # post-migration product barcode inside this scratch DB only.
 q "INSERT INTO product_barcodes(product_type_id,code,code_type,source_id,asserted_kind) VALUES(50000,'033-ROLLBACK-REFUSAL','sku',$SRC,'human')"

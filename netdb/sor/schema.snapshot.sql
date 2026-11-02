@@ -19,7 +19,8 @@
 --   029_provisioning_images_stacks sha256=9a728c89089100963c81ce7cff7f4c6b611c74921b6d7cdde5d10859cc48001f
 --   030_provisioning_cdc sha256=ef9686d459c230ae7a05aa704ca59debef5f6c36204b35b46e684ba92a52ec6f
 --   031_provisioning_arch_refresh sha256=bc46d8210e86b02268bc44a634115d7bcd4a55f7f9a883a151e152c59a58ce6e
---   033_inventory_catalog sha256=91168c4a9b156cdea1505c890202ab03268d78338c9293b9a94711f49b061e1b
+--   032_node_os_hinfo sha256=117ac174184b5dbf5e0067aaf953a64da21674b575bdd9edd1e35923e9e4138c
+--   033_inventory_catalog sha256=7be577c15ca47fc6f35b192ae74d61a143d291fe927a9c99e381c514d02771da
 
 /*M!999999\- enable the sandbox mode */
 
@@ -988,6 +989,70 @@ CREATE TABLE `hardware_models` (
   CONSTRAINT `fk_hw_models_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Catalog of hardware products (make+model); one row per product, not per unit';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_models_catalog_ins` BEFORE INSERT ON `hardware_models`
+FOR EACH ROW
+BEGIN
+  IF NEW.`product_type_id` IS NULL THEN
+    INSERT INTO `product_types`
+      (`kind`,`name`,`brand`,`model`,`notes`,`lookup_source`,`source_id`,`asserted_kind`,`deleted_at`)
+    VALUES (CASE NEW.`hw_type`
+              WHEN 'printer' THEN 'peripheral'
+              WHEN 'scanner' THEN 'peripheral'
+              WHEN 'other' THEN 'other'
+              ELSE 'hardware'
+            END,
+            NEW.`model`, NEW.`make`, NEW.`model`, NEW.`notes`, 'legacy:hardware_models',
+            NEW.`source_id`, NEW.`asserted_kind`, NEW.`deleted_at`);
+    SET NEW.`product_type_id` = LAST_INSERT_ID();
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_models_catalog_upd` AFTER UPDATE ON `hardware_models`
+FOR EACH ROW
+BEGIN
+  IF NOT (NEW.`make` <=> OLD.`make`) OR NOT (NEW.`model` <=> OLD.`model`)
+     OR NOT (NEW.`hw_type` <=> OLD.`hw_type`) OR NOT (NEW.`notes` <=> OLD.`notes`)
+     OR NOT (NEW.`deleted_at` <=> OLD.`deleted_at`) THEN
+    UPDATE `product_types`
+       SET `kind` = CASE NEW.`hw_type`
+                      WHEN 'printer' THEN 'peripheral'
+                      WHEN 'scanner' THEN 'peripheral'
+                      WHEN 'other' THEN 'other'
+                      ELSE 'hardware'
+                    END,
+           `name`=NEW.`model`, `brand`=NEW.`make`, `model`=NEW.`model`,
+           `notes`=NEW.`notes`, `deleted_at`=NEW.`deleted_at`
+     WHERE `id`=NEW.`product_type_id`
+       AND `lookup_source` IN ('migration:033','legacy:hardware_models');
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `hardware_units`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -1042,6 +1107,10 @@ DELIMITER ;;
 /*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_units_installed_target_ins` BEFORE INSERT ON `hardware_units`
 FOR EACH ROW
 BEGIN
+
+  IF NEW.`product_type_id` IS NULL THEN
+    SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+  END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN
     IF NEW.`id`=NEW.`installed_on_unit_id` THEN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id cannot reference the same unit';
@@ -1073,6 +1142,9 @@ DELIMITER ;;
 /*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_units_installed_target_upd` BEFORE UPDATE ON `hardware_units`
 FOR EACH ROW
 BEGIN
+  IF NEW.`product_type_id` IS NULL THEN
+    SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+  END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN
     IF NEW.`id`=NEW.`installed_on_unit_id` THEN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id cannot reference the same unit';

@@ -184,10 +184,16 @@ PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;
 DROP TRIGGER IF EXISTS `trg_hw_units_installed_target_ins`;
 DROP TRIGGER IF EXISTS `trg_hw_units_installed_target_upd`;
 DROP TRIGGER IF EXISTS `trg_product_types_no_software_install_target`;
+DROP TRIGGER IF EXISTS `trg_hw_models_catalog_ins`;
+DROP TRIGGER IF EXISTS `trg_hw_models_catalog_upd`;
 DELIMITER //
 CREATE TRIGGER `trg_hw_units_installed_target_ins` BEFORE INSERT ON `hardware_units`
 FOR EACH ROW
 BEGIN
+  -- Compatibility window: legacy writers set only model_id.
+  IF NEW.`product_type_id` IS NULL THEN
+    SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+  END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN
     IF NEW.`id`=NEW.`installed_on_unit_id` THEN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id cannot reference the same unit';
@@ -205,6 +211,9 @@ END//
 CREATE TRIGGER `trg_hw_units_installed_target_upd` BEFORE UPDATE ON `hardware_units`
 FOR EACH ROW
 BEGIN
+  IF NEW.`product_type_id` IS NULL THEN
+    SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+  END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN
     IF NEW.`id`=NEW.`installed_on_unit_id` THEN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='installed_on_unit_id cannot reference the same unit';
@@ -230,6 +239,45 @@ BEGIN
   ) THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT='product type cannot become software while installed units target it';
+  END IF;
+END//
+-- Compatibility window: the legacy model API still writes hardware_models
+-- directly. Give each new model its catalog row, and mirror legacy edits onto
+-- catalog rows that only the migration or this trigger created.
+CREATE TRIGGER `trg_hw_models_catalog_ins` BEFORE INSERT ON `hardware_models`
+FOR EACH ROW
+BEGIN
+  IF NEW.`product_type_id` IS NULL THEN
+    INSERT INTO `product_types`
+      (`kind`,`name`,`brand`,`model`,`notes`,`lookup_source`,`source_id`,`asserted_kind`,`deleted_at`)
+    VALUES (CASE NEW.`hw_type`
+              WHEN 'printer' THEN 'peripheral'
+              WHEN 'scanner' THEN 'peripheral'
+              WHEN 'other' THEN 'other'
+              ELSE 'hardware'
+            END,
+            NEW.`model`, NEW.`make`, NEW.`model`, NEW.`notes`, 'legacy:hardware_models',
+            NEW.`source_id`, NEW.`asserted_kind`, NEW.`deleted_at`);
+    SET NEW.`product_type_id` = LAST_INSERT_ID();
+  END IF;
+END//
+CREATE TRIGGER `trg_hw_models_catalog_upd` AFTER UPDATE ON `hardware_models`
+FOR EACH ROW
+BEGIN
+  IF NOT (NEW.`make` <=> OLD.`make`) OR NOT (NEW.`model` <=> OLD.`model`)
+     OR NOT (NEW.`hw_type` <=> OLD.`hw_type`) OR NOT (NEW.`notes` <=> OLD.`notes`)
+     OR NOT (NEW.`deleted_at` <=> OLD.`deleted_at`) THEN
+    UPDATE `product_types`
+       SET `kind` = CASE NEW.`hw_type`
+                      WHEN 'printer' THEN 'peripheral'
+                      WHEN 'scanner' THEN 'peripheral'
+                      WHEN 'other' THEN 'other'
+                      ELSE 'hardware'
+                    END,
+           `name`=NEW.`model`, `brand`=NEW.`make`, `model`=NEW.`model`,
+           `notes`=NEW.`notes`, `deleted_at`=NEW.`deleted_at`
+     WHERE `id`=NEW.`product_type_id`
+       AND `lookup_source` IN ('migration:033','legacy:hardware_models');
   END IF;
 END//
 DELIMITER ;
