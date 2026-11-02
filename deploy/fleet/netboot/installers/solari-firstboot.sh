@@ -141,7 +141,11 @@ chmod 0644 "${CONF_DIR}/client.conf"
 # start) it here: without certificates the client cannot connect, so it would
 # crash-loop. It starts cleanly after the enrollment hook installs certs and the
 # marker is cleared. systemd will bring it up on the next boot regardless.
-if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+# Every installer runs this script chrooted into the target, where systemd is
+# installed but not running (no /run/systemd/system): `systemctl enable` works
+# offline there, so gate on systemd being installed, not on it running.
+if command -v systemctl >/dev/null 2>&1 \
+   && { [ -d /usr/lib/systemd/system ] || [ -d /lib/systemd/system ]; }; then
   log "installing systemd unit ${UNIT_PATH}"
   cat > "${UNIT_PATH}" <<EOF
 [Unit]
@@ -175,7 +179,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload 2>/dev/null || true
+  if [ -d /run/systemd/system ]; then systemctl daemon-reload 2>/dev/null || true; fi
   systemctl enable solari-client.service 2>/dev/null \
     || warn "could not enable solari-client.service"
 else

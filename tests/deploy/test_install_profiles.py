@@ -39,6 +39,8 @@ MACH = "02-00-5e-00-00-31"
 OPERATOR_KEY = "ssh-ed25519 AAAAOPERATORKEY operator@xenon"
 CONTROL_KEY = "ssh-ed25519 AAAACONTROLKEY+/= jason@benzene"
 SUSE_BOOTSTRAP = ["openssh", "sudo", "curl", "ca-certificates"]
+TW_AGENT_LIBS = ["libnng1", "libmbedtls21", "libmbedcrypto16", "libmbedx509-7",
+                 "libcjson1", "libsqlite3-0"]
 DEB_BOOTSTRAP = ["openssh-server", "sudo", "curl", "ca-certificates", "python3"]
 NS = {"a": "http://www.suse.com/1.0/yast2ns"}
 MARKER = "/etc/ansible/facts.d/solari_prov.fact"
@@ -192,7 +194,7 @@ class InstallProfiles(unittest.TestCase):
     def test_tumbleweed_autoyast_one_package_per_name(self):
         text, root = self.autoyast("--run-id", "4242")
         pkgs = [e.text for e in root.findall("./a:software/a:packages/a:package", NS)]
-        self.assertEqual(pkgs, SUSE_BOOTSTRAP)
+        self.assertEqual(pkgs, SUSE_BOOTSTRAP + TW_AGENT_LIBS)
         for name in pkgs:
             self.assertRegex(name, r"^[a-z0-9][a-z0-9.+_-]*$")       # one name, no spaces
         self.assertNotIn("openssh-server", pkgs)                       # Debian name
@@ -257,13 +259,48 @@ class InstallProfiles(unittest.TestCase):
 
     def test_agent_binary_published_with_its_libraries(self):
         # firstboot installs installers/solariClient.<arch>; staging publishes it
-        # and the chroot script installs its shared libraries (non-fatally).
+        # and the profile's <packages> carry its shared libraries. A zypper call
+        # from the chroot script loses to YaST's libzypp lock, so none remains.
         _text, root = self.autoyast("--run-id", "4242")
         with open(os.path.join(self.http, "installers", "solariClient.x86_64"), "rb") as fh:
             self.assertEqual(fh.read(), b"\x7fELF fake agent\n")
+        pkgs = [e.text for e in root.findall("./a:software/a:packages/a:package", NS)]
+        for lib in TW_AGENT_LIBS:
+            self.assertIn(lib, pkgs)
         scripts = "\n".join(s.text or "" for s in root.iter("{%s}source" % NS["a"]))
-        self.assertIn("libnng1 libmbedtls21 libmbedcrypto16 libmbedx509-7", scripts)
-        self.assertIn("|| echo 'solari: agent libraries not all installed", scripts)
+        self.assertNotIn("libnng1", scripts)
+
+    def test_leap_has_no_agent_libraries(self):
+        # Leap 15 ships mbedTLS 2.x: no soname set exists, so none is guessed
+        # (an unresolvable <package> stops the install) and staging says so.
+        d = os.path.join(self.http, "installers", "opensuse", "15.6", "x86_64")
+        os.makedirs(d)
+        with open(os.path.join(d, "solari-image.json"), "w") as fh:
+            json.dump({"distro": "opensuse", "release_name": "15.6", "release_label": None,
+                       "arch": "x86_64", "version": "t1",
+                       "source_url": "https://download.opensuse.org/distribution/leap/15.6/"
+                                     "repo/oss/boot/x86_64/loader/",
+                       "manifest_sha256": "a" * 64,
+                       "fetched_at": "2026-10-31 10:00:00"}, fh)
+        p = self.provision("opensuse", "--release", "15.6", "--run-id", "4242")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        root = ET.fromstring(self.read("configs", f"{MACH}.xml"))
+        pkgs = [e.text for e in root.findall("./a:software/a:packages/a:package", NS)]
+        self.assertEqual(pkgs, SUSE_BOOTSTRAP)
+        self.assertIn("no agent library set for openSUSE 15.6", p.stdout + p.stderr)
+
+    def test_firstboot_installs_unit_when_chrooted(self):
+        # Every installer runs solari-firstboot.sh chrooted into the target,
+        # where systemd is installed but not running: the unit install must not
+        # hinge on /run/systemd/system (that skipped it on every path).
+        path = os.path.join(ROOT, "deploy", "fleet", "netboot", "installers",
+                            "solari-firstboot.sh")
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        guard = src[src.index("if command -v systemctl"):src.index('log "installing systemd unit')]
+        self.assertNotIn("/run/systemd/system", guard)
+        self.assertIn("/usr/lib/systemd/system", guard)
+        self.assertRegex(src, r'if \[ -d /run/systemd/system \]; then systemctl daemon-reload')
 
     def test_release_agent_beats_stale_dist_tree(self):
         # SOLARI_DIST_DIR may hold an old cross-build; for the host arch the
@@ -301,7 +338,7 @@ class InstallProfiles(unittest.TestCase):
         scripts = "\n".join(s.text or "" for s in root.iter("{%s}source" % NS["a"]))
         self.assertIn("if [ -n '' ]", scripts)                         # marker block is inert
         pkgs = [e.text for e in root.findall("./a:software/a:packages/a:package", NS)]
-        self.assertEqual(pkgs, SUSE_BOOTSTRAP)
+        self.assertEqual(pkgs, SUSE_BOOTSTRAP + TW_AGENT_LIBS)
         self.assertEqual(self.profile_env()["run_id"], "")
 
     # -- Debian --------------------------------------------------------------

@@ -231,13 +231,8 @@ command -v python3 >/dev/null 2>&1 \
   || zypper --non-interactive install --no-recommends python3 \
   || echo 'solari: python3 not installed here; prov-finish.py will install it' >&2
 
-# solariClient's shared libraries (the release build links nng, mbedTLS 3.x,
-# cJSON and SQLite). Soname package names differ between Tumbleweed and Leap,
-# so they are not AutoYaST <package>s (an unresolvable name stops the install);
-# a miss here leaves the agent unable to start, not the install broken.
-zypper --non-interactive install --no-recommends \
-    libnng1 libmbedtls21 libmbedcrypto16 libmbedx509-7 libcjson1 libsqlite3-0 \
-  || echo 'solari: agent libraries not all installed; solariClient will not start' >&2
+# solariClient's shared libraries arrive as profile <package>s
+# (FLEET_AGENT_LIBS_TUMBLEWEED): zypper here would lose to YaST's libzypp lock.
 
 # fetch + run the SolariNet first-boot installer
 curl --fail --silent --show-error --location \
