@@ -188,6 +188,21 @@ try {
     check(httpRequest($base.'/api/inventory/product-barcodes/'.$ids['catalogBarcode'],'DELETE',[],$cookie,$csrf)['status']===200,'product barcode soft-delete failed');
     check(httpRequest($base.$catPath,'DELETE',[],$cookie,$csrf)['status']===200,'in-use product type soft-delete failed');
     check((int)$db->query('SELECT COUNT(*) FROM product_types WHERE id='.$ids['catalogType'])->fetchColumn()===1,'product type soft-delete removed a referenced row');
+    $reuse=httpRequest($base.'/api/inventory/product-types','POST',['name'=>'Reuse probe '.$suffix],$cookie,$csrf);check($reuse['status']===201,'reuse probe create failed');$reuseId=(int)$reuse['body']['data']['id'];
+    $db->prepare("INSERT INTO product_barcodes(product_type_id,code,code_type,source_id,asserted_kind) VALUES(?,?,'other',?,'human')")->execute([$reuseId,'RETIRE-'.$suffix,$manual]);
+    check(httpRequest($base.'/api/inventory/product-types/'.$reuseId,'DELETE',[],$cookie,$csrf)['status']===200,'reuse probe delete failed');
+    $again=httpRequest($base.'/api/inventory/product-barcodes','POST',['product_type_id'=>$reuseId,'code'=>'RETIRE-'.$suffix],$cookie,$csrf);check($again['status']===404,'barcode POST to a retired type was not refused');
+    check((int)$db->query("SELECT COUNT(*) FROM product_barcodes WHERE code=".$db->quote('RETIRE-'.$suffix)." AND deleted_at IS NULL")->fetchColumn()===0,'retiring a product type left its barcode live (code could never be reused)');
+    $db->prepare("DELETE FROM audit_log WHERE (table_name='product_types' AND row_id=?) OR (table_name='product_barcodes' AND row_id IN (SELECT id FROM product_barcodes WHERE product_type_id=?))")->execute([$reuseId,$reuseId]);$db->prepare('DELETE FROM product_barcodes WHERE product_type_id=?')->execute([$reuseId]);$db->prepare('DELETE FROM product_types WHERE id=?')->execute([$reuseId]);
+    check(httpRequest($base.'/api/inventory/product-types','POST',['name'=>'Bad url','image_url'=>'javascript:alert(1)'],$cookie,$csrf)['status']===400,'catalog accepted a non-http image_url');
+    // A legacy-projected type: the 033 trigger rewrites name from the model, so an unrelated PUT must not revert an earlier rename.
+    $legacyType=(int)$db->query('SELECT product_type_id FROM hardware_models WHERE id='.(int)$ids['model'])->fetchColumn();
+    $db->prepare("UPDATE product_types SET lookup_source='legacy:hardware_models' WHERE id=?")->execute([$legacyType]);
+    $legacyPath='/api/inventory/product-types/'.$legacyType;
+    check(httpRequest($base.$legacyPath,'PUT',['name'=>'Friendly '.$suffix,'kind'=>'component'],$cookie,$csrf)['status']===200,'legacy type rename failed');
+    $notesOnly=httpRequest($base.$legacyPath,'PUT',['notes'=>'notes '.$suffix],$cookie,$csrf);
+    check($notesOnly['status']===200&&($notesOnly['body']['data']['name']??'')==='Friendly '.$suffix&&($notesOnly['body']['data']['kind']??'')==='component','notes-only PUT reverted an earlier name/kind edit on a legacy-projected type: '.json_encode($notesOnly['body']['data']??null));
+    $db->prepare("DELETE FROM audit_log WHERE table_name='product_types' AND row_id=?")->execute([$legacyType]);
     $overflow=$db->prepare("INSERT INTO receipts(vendor,currency) VALUES(?,'USD')");for($i=0;$i<501;$i++)$overflow->execute([$vendor]);$tooBig=httpRequest($base.'/api/inventory','GET',null,$cookie);check($tooBig['status']===413&&($tooBig['body']['error']['code']??null)==='inventory_page_required','501 receipts did not require paginated inventory');
     echo "inventory HTTP transactions, entity linking, paging, aggregate bound, RackWire profile, barcode lookup, product catalog policy/validation/uniqueness/soft-delete, and retired-route assertions passed\n";
 } catch(Throwable $e){fwrite(STDERR,'Inventory HTTP test failed: '.$e->getMessage()."\n");$failure=$e;} finally {if(is_resource($server)){proc_terminate($server);proc_close($server);} $cleanup();if(is_dir($work)){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($work,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);foreach($it as $p)$p->isDir()?rmdir($p->getPathname()):unlink($p->getPathname());rmdir($work);}}

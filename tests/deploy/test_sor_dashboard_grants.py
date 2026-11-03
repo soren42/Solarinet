@@ -235,7 +235,9 @@ def main():
                 db.begin()
                 try:
                     cur.execute(f"INSERT INTO `{table}` (id) VALUES (NULL)")
-                except pymysql.err.OperationalError as exc:
+                # Only a privilege denial matters; a bare row may also trip
+                # NOT NULL or a catalogue trigger (IntegrityError).
+                except pymysql.err.MySQLError as exc:
                     assert exc.args[0] != 1142, f"INSERT privilege denied on {table}: {exc!r}"
                 finally:
                     db.rollback()

@@ -39,7 +39,13 @@ return static function (Router $router): void {
         $row=Inv::row('SELECT id,kind,name,brand,model,category FROM product_types WHERE id=:id AND deleted_at IS NULL',[':id'=>$id]);
         if($row===null)Response::error('not_found',"No product type $id",404);
         $source=Sor::dashboardSourceId(); $db->beginTransaction();
-        try{$db->prepare("UPDATE product_types SET deleted_at=NOW(),source_id=:source,asserted_kind='human',asserted_at=NOW() WHERE id=:id AND deleted_at IS NULL")->execute([':source'=>$source,':id'=>$id]);catalog_audit($db,'product_types',$id,'soft_delete',$row,['deleted_at'=>'now'],$source);$db->commit();Response::ok(['id'=>$id,'status'=>'deleted']);}
+        try{
+            // D5: in-use types may be retired; existing items keep their reference.
+            $db->prepare("UPDATE product_types SET deleted_at=NOW(),source_id=:source,asserted_kind='human',asserted_at=NOW() WHERE id=:id AND deleted_at IS NULL")->execute([':source'=>$source,':id'=>$id]);catalog_audit($db,'product_types',$id,'soft_delete',$row,['deleted_at'=>'now'],$source);
+            // Free the type's codes for reuse; a dead type's barcode must not block a live one.
+            $codes=$db->prepare('SELECT id,product_type_id,code,code_type FROM product_barcodes WHERE product_type_id=:id AND deleted_at IS NULL');$codes->execute([':id'=>$id]);
+            foreach($codes->fetchAll(PDO::FETCH_ASSOC) as $code){$db->prepare("UPDATE product_barcodes SET deleted_at=NOW(),source_id=:source,asserted_kind='human',asserted_at=NOW() WHERE id=:id")->execute([':source'=>$source,':id'=>(int)$code['id']]);catalog_audit($db,'product_barcodes',(int)$code['id'],'soft_delete',$code,['deleted_at'=>'now'],$source);}
+            $db->commit();Response::ok(['id'=>$id,'status'=>'deleted']);}
         catch(Throwable $e){if($db->inTransaction())$db->rollBack();throw $e;}
     }, $operator);
 
@@ -66,17 +72,20 @@ return static function (Router $router): void {
     $router->add('PUT', '/api/inventory/product-types/{id}', static function (array $p): void {
         $id = Inv::idParam($p['id']); $db = Sor::db(); $body = solari_json_body();
         if ($body === []) Response::error('bad_request', 'At least one field is required.', 400);
-        $current = Inv::row('SELECT id,kind,name,brand,model,category,specs,notes,image_url,updated_at FROM product_types WHERE id=:id AND deleted_at IS NULL', [':id'=>$id]);
-        if ($current === null) Response::error('not_found', "No product type $id", 404);
-        if (isset($body['updated_at']) && $body['updated_at'] !== $current['updated_at']) Response::error('conflict', 'Product type changed since it was read.', 409);
+        $expected = $body['updated_at'] ?? null;
         unset($body['updated_at']); $v = catalog_validate_type($body, true);
         $sets=[]; $params=[':id'=>$id, ':source'=>Sor::dashboardSourceId()];
         $old=[]; $new=[];
-        foreach ($v as $key=>$value) { $column=substr($key,1); $sets[]="$column=$key"; $params[$key]=$value; $old[$column]=$current[$column] ?? null; $new[$column]=$value; }
+        foreach ($v as $key=>$value) { $column=substr($key,1); $sets[]="$column=$key"; $params[$key]=$value; $new[$column]=$value; }
         if (!$sets) Response::error('bad_request', 'No supported fields supplied.', 400);
         $sets[]="source_id=:source"; $sets[]="asserted_kind='human'"; $sets[]='asserted_at=NOW()';
         $db->beginTransaction();
         try {
+            $lock = $db->prepare('SELECT id,kind,name,brand,model,category,specs,notes,image_url,updated_at FROM product_types WHERE id=:id AND deleted_at IS NULL FOR UPDATE'); $lock->execute([':id'=>$id]);
+            $current = $lock->fetch(PDO::FETCH_ASSOC);
+            if (!is_array($current)) { $db->rollBack(); Response::error('not_found', "No product type $id", 404); }
+            if ($expected !== null && $expected !== $current['updated_at']) { $db->rollBack(); Response::error('conflict', 'Product type changed since it was read.', 409); }
+            foreach (array_keys($new) as $column) $old[$column] = $current[$column] ?? null;
             $db->prepare('UPDATE product_types SET '.implode(',',$sets).' WHERE id=:id AND deleted_at IS NULL')->execute($params);
             $fresh = catalog_get_type($id);
             // Preserve the legacy provisioning/RackWire projection when a linked legacy model exists.
@@ -88,9 +97,11 @@ return static function (Router $router): void {
                     ->execute([':brand'=>$fresh['brand'], ':model'=>$fresh['model'] ?? $fresh['name'], ':notes'=>$fresh['notes'], ':hw_type'=>catalog_legacy_hw_type($fresh['kind'], (string)$legacyRow['hw_type']), ':source'=>$params[':source'], ':legacy_id'=>(int)$legacyRow['id']]);
                 $legacyNew = Inv::row('SELECT make,model,hw_type,notes FROM hardware_models WHERE id=:id', [':id'=>(int)$legacyRow['id']]);
                 catalog_audit($db, 'hardware_models', (int)$legacyRow['id'], 'update', $legacyOld, $legacyNew, (int)$params[':source']);
-                // The 033 legacy sync trigger can coarsen the catalog kind/name. Reapply the operator's
-                // authoritative catalog fields after updating its compatibility projection.
-                $db->prepare('UPDATE product_types SET '.implode(',',$sets).' WHERE id=:id AND deleted_at IS NULL')->execute($params);
+                // The 033 legacy sync trigger rewrites kind/name/brand/model/notes from the projection.
+                // Restore the whole authoritative row, not just this request's fields, or an earlier
+                // operator edit (e.g. name != model) would be reverted by an unrelated PUT.
+                $db->prepare('UPDATE product_types SET kind=:kind,name=:name,brand=:brand,model=:model,notes=:notes WHERE id=:id')
+                    ->execute([':kind'=>$fresh['kind'], ':name'=>$fresh['name'], ':brand'=>$fresh['brand'], ':model'=>$fresh['model'], ':notes'=>$fresh['notes'], ':id'=>$id]);
             }
             $fresh = catalog_get_type($id);
             catalog_audit($db, 'product_types', $id, 'update', $old, $new, (int)$params[':source']);
@@ -99,6 +110,8 @@ return static function (Router $router): void {
             if ($db->inTransaction()) $db->rollBack();
             if (($e->errorInfo[1] ?? null) === 1062) Response::error('conflict', 'Product type conflicts with another live record.', 409);
             error_log('product type update failed: '.$e->getMessage()); Response::error('service_unavailable', 'Inventory storage is unavailable.', 503);
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack(); throw $e;
         }
     }, $operator);
 
@@ -137,7 +150,7 @@ function catalog_validate_type(array $body, bool $partial): array {
     $out=[];$lengths=['name'=>160,'brand'=>128,'model'=>128,'category'=>128,'notes'=>65535,'image_url'=>1024];
     if(!$partial||array_key_exists('name',$body)){if(!is_string($body['name']??null)||trim($body['name'])==='')Response::error('bad_request','name is required.',400);$out[':name']=trim($body['name']);}
     if(!$partial||array_key_exists('kind',$body)){$kind=$body['kind']??'hardware';if(!is_string($kind)||!in_array($kind,['hardware','peripheral','component','software','accessory','consumable','other'],true))Response::error('bad_request','kind is invalid.',400);$out[':kind']=$kind;}
-    foreach(['brand','model','category','notes','image_url'] as $field)if(!$partial||array_key_exists($field,$body)){$v=$body[$field]??null;if($v!==null&&!is_string($v))Response::error('bad_request',"$field must be a string or null.",400);$v=is_string($v)?trim($v):null;if($v===''||$v===null)$v=null;if($v!==null&&strlen($v)>$lengths[$field])Response::error('bad_request',"$field is too long.",400);$out[":$field"]=$v;}
+    foreach(['brand','model','category','notes','image_url'] as $field)if(!$partial||array_key_exists($field,$body)){$v=$body[$field]??null;if($v!==null&&!is_string($v))Response::error('bad_request',"$field must be a string or null.",400);$v=is_string($v)?trim($v):null;if($v===''||$v===null)$v=null;if($v!==null&&strlen($v)>$lengths[$field])Response::error('bad_request',"$field is too long.",400);if($field==='image_url'&&$v!==null&&!preg_match('#\Ahttps?://[^\s]+\z#i',$v))Response::error('bad_request','image_url must be an http(s) URL.',400);$out[":$field"]=$v;}
     if(!$partial||array_key_exists('specs',$body)){$spec=$body['specs']??null;if($spec!==null&&!is_array($spec))Response::error('bad_request','specs must be a JSON object or null.',400);if(is_array($spec)&&array_is_list($spec)&&$spec!==[])Response::error('bad_request','specs must be a JSON object.',400);if(catalog_has_secret_key($spec))Response::error('bad_request','Secret-like licence fields are not accepted.',400);$out[':specs']=$spec===null?null:json_encode($spec===[]?(object)[]:$spec,JSON_THROW_ON_ERROR|JSON_UNESCAPED_SLASHES);}
     return $out;
 }
