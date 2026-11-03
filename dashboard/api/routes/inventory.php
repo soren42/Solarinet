@@ -564,71 +564,113 @@ return static function (Router $router): void {
 
     $router->post('/api/inventory/locations', static function (): void {
         Operator::requireOperator();
-        $b = solari_json_body();
-
+        $b    = solari_json_body();
         $name = inv_str_required($b, 'name', 128);
         if (!isset($b['loc_type']) || $b['loc_type'] === '') {
             Response::error('bad_request', 'loc_type is required.', 400);
         }
-        $locType  = Inv::requireEnum('locations', 'loc_type', $b['loc_type'], 'loc_type');
-        $parentId = inv_optional_fk('locations', $b['parent_id'] ?? null, 'parent_id');
+        $type      = Inv::requireEnum('locations', 'loc_type', $b['loc_type'], 'loc_type');
+        $parent    = loc_optional_id($b['parent_id'] ?? null, 'parent_id');
+        $container = inv_location_container_type($b['container_type_id'] ?? null, $type);
+        $project   = inv_location_project($b['assigned_project_id'] ?? null, $type);
+        $code      = inv_str($b, 'code', 32);
+        $notes     = inv_str($b, 'notes');
+        $source    = Sor::dashboardSourceId();
 
-        Inv::exec(
-            "INSERT INTO locations (parent_id, name, loc_type, code, notes, source_id, asserted_kind, asserted_at)
-             VALUES (:pid, :name, :lt, :code, :notes, :src, 'human', NOW())",
-            [
-                ':pid'   => $parentId,
-                ':name'  => $name,
-                ':lt'    => $locType,
-                ':code'  => inv_str($b, 'code', 32),
-                ':notes' => inv_str($b, 'notes'),
-                ':src'   => Sor::dashboardSourceId(),
-            ]
-        );
-        $id = (int) Inv::lastInsertId();
+        $id = loc_transaction(static function (PDO $db) use ($name, $type, $parent, $container, $project, $code, $notes, $source): int {
+            loc_check_transition($db, $parent, $type);
+            loc_sibling_available($db, $name, $parent, null);
+            $db->prepare(
+                "INSERT INTO locations (parent_id, name, loc_type, code, notes, container_type_id, assigned_project_id, source_id, asserted_kind, asserted_at)
+                 VALUES (:parent, :name, :type, :code, :notes, :container, :project, :source, 'human', NOW())"
+            )->execute([
+                ':parent' => $parent, ':name' => $name, ':type' => $type, ':code' => $code, ':notes' => $notes,
+                ':container' => $container, ':project' => $project, ':source' => $source,
+            ]);
+            $id = (int) $db->lastInsertId();
+            loc_audit($db, 'locations', $id, 'insert', null, [
+                'parent_id' => $parent, 'name' => $name, 'loc_type' => $type, 'code' => $code, 'notes' => $notes,
+                'container_type_id' => $container, 'assigned_project_id' => $project,
+            ], 'Location create', $source);
+            return $id;
+        });
         Response::ok(inv_location_row(Inv::row(inv_location_sql() . ' WHERE id = :i', [':i' => $id])), 201);
     });
 
+    // Field edit with optimistic lock on updated_at. Re-parenting is a move
+    // (POST /locations/{id}/move), never a PUT.
     $router->add('PUT', '/api/inventory/locations/{id}', static function (array $p): void {
         Operator::requireOperator();
         $id = Inv::idParam($p['id']);
-        if (Inv::row('SELECT id FROM locations WHERE id = :i AND deleted_at IS NULL', [':i' => $id]) === null) {
-            Response::error('not_found', "No location $id", 404);
-        }
-        $b = solari_json_body();
-
-        $sets   = [];
-        $params = [':id' => $id];
-
-        if (array_key_exists('name', $b)) {
-            $name = inv_str($b, 'name', 128);
-            if ($name === null) {
-                Response::error('bad_request', 'name cannot be cleared.', 400);
-            }
-            $sets[] = 'name = :name'; $params[':name'] = $name;
-        }
-        if (array_key_exists('loc_type', $b)) {
-            $sets[] = 'loc_type = :lt';
-            $params[':lt'] = Inv::requireEnum('locations', 'loc_type', $b['loc_type'], 'loc_type');
-        }
-        if (array_key_exists('code', $b)) {
-            $sets[] = 'code = :code'; $params[':code'] = inv_str($b, 'code', 32);
-        }
-        if (array_key_exists('notes', $b)) {
-            $sets[] = 'notes = :notes'; $params[':notes'] = inv_str($b, 'notes');
-        }
+        $b  = solari_json_body();
         if (array_key_exists('parent_id', $b)) {
-            $pid = inv_optional_fk('locations', $b['parent_id'], 'parent_id');
-            if ($pid === $id) {
-                Response::error('bad_request', 'A location cannot be its own parent.', 400);
-            }
-            $sets[] = 'parent_id = :pid'; $params[':pid'] = $pid;
+            Response::error('bad_request', 'parent_id cannot be changed here; use POST /api/inventory/locations/{id}/move.', 400);
         }
-        if ($sets === []) {
+        if (!is_string($b['updated_at'] ?? null)) {
+            Response::error('bad_request', 'updated_at is required.', 400);
+        }
+        $fields = ['name', 'loc_type', 'code', 'notes', 'container_type_id', 'assigned_project_id'];
+        if (!array_intersect($fields, array_keys($b))) {
             Response::error('bad_request', 'No updatable fields supplied.', 400);
         }
+        $source = Sor::dashboardSourceId();
 
-        Inv::exec('UPDATE locations SET ' . implode(', ', $sets) . ' WHERE id = :id', $params);
+        loc_transaction(static function (PDO $db) use ($id, $b, $source): void {
+            $current = loc_lock($db, $id);
+            if ($current === null || $current['deleted_at'] !== null) {
+                loc_error('not_found', "No location $id", 404);
+            }
+            if (!loc_same_timestamp((string) $current['updated_at'], $b['updated_at'])) {
+                loc_error('conflict', 'Location changed since it was read.', 409);
+            }
+
+            $type = array_key_exists('loc_type', $b)
+                ? Inv::requireEnum('locations', 'loc_type', $b['loc_type'], 'loc_type')
+                : (string) $current['loc_type'];
+            $name = array_key_exists('name', $b) ? inv_str($b, 'name', 128) : (string) $current['name'];
+            if ($name === null) {
+                loc_error('bad_request', 'name cannot be cleared.', 400);
+            }
+            $code      = array_key_exists('code', $b) ? inv_str($b, 'code', 32) : $current['code'];
+            $notes     = array_key_exists('notes', $b) ? inv_str($b, 'notes') : $current['notes'];
+            $container = array_key_exists('container_type_id', $b)
+                ? inv_location_container_type($b['container_type_id'], $type)
+                : loc_nullable_int($current['container_type_id']);
+            $project   = array_key_exists('assigned_project_id', $b)
+                ? inv_location_project($b['assigned_project_id'], $type)
+                : loc_nullable_int($current['assigned_project_id']);
+            if ($type !== 'storage_unit' && ($container !== null || $project !== null)) {
+                loc_error('bad_request', 'Container metadata requires a storage_unit.', 400);
+            }
+            $oldProject = loc_nullable_int($current['assigned_project_id']);
+            if ($oldProject !== null && $project === null) {
+                loc_assert_container_empty($db, $id);
+            }
+
+            $parent = loc_nullable_int($current['parent_id']);
+            loc_check_transition($db, $parent, $type);
+            loc_check_children($db, $id, $type);
+            if ($name !== $current['name']) {
+                loc_sibling_available($db, $name, $parent, $id);
+            }
+
+            $db->prepare(
+                "UPDATE locations SET name = :name, loc_type = :type, code = :code, notes = :notes,
+                        container_type_id = :container, assigned_project_id = :project,
+                        asserted_kind = 'human', asserted_at = NOW()
+                  WHERE id = :id"
+            )->execute([
+                ':name' => $name, ':type' => $type, ':code' => $code, ':notes' => $notes,
+                ':container' => $container, ':project' => $project, ':id' => $id,
+            ]);
+            loc_audit($db, 'locations', $id, 'update', [
+                'name' => $current['name'], 'loc_type' => $current['loc_type'], 'code' => $current['code'], 'notes' => $current['notes'],
+                'container_type_id' => loc_nullable_int($current['container_type_id']), 'assigned_project_id' => $oldProject,
+            ], [
+                'name' => $name, 'loc_type' => $type, 'code' => $code, 'notes' => $notes,
+                'container_type_id' => $container, 'assigned_project_id' => $project,
+            ], 'Location update', $source);
+        });
         Response::ok(inv_location_row(Inv::row(inv_location_sql() . ' WHERE id = :i', [':i' => $id])));
     });
 
@@ -1468,7 +1510,7 @@ function inv_model_row(array $r): array
 
 function inv_location_sql(): string
 {
-    return 'SELECT id, parent_id, name, code, loc_type, notes, source_id, created_at, updated_at FROM locations';
+    return 'SELECT id, parent_id, name, code, loc_type, notes, container_type_id, assigned_project_id, source_id, created_at, updated_at FROM locations';
 }
 
 function inv_location_row(array $r): array
@@ -1479,6 +1521,8 @@ function inv_location_row(array $r): array
         'name'      => $r['name'],
         'code'      => $r['code'] ?? null,
         'locType'   => $r['loc_type'],
+        'containerTypeId' => Coerce::int($r['container_type_id'] ?? null),
+        'assignedProjectId' => Coerce::int($r['assigned_project_id'] ?? null),
         'notes'     => $r['notes'] ?? null,
         'sourceId'  => Coerce::int($r['source_id']),
         'createdAt' => Coerce::iso($r['created_at'] ?? null),

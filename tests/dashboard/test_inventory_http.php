@@ -17,6 +17,7 @@ if (!in_array($host, ['127.0.0.1', 'localhost'], true)
 
 function check(bool $condition, string $message): void
 {
+    $GLOBALS['inventory_http_assertions'] = ($GLOBALS['inventory_http_assertions'] ?? 0) + 1;
     if (!$condition) throw new RuntimeException($message);
 }
 
@@ -72,9 +73,27 @@ $db = new PDO("mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4", getenv
 $suffix = bin2hex(random_bytes(6)); $make = 'HTTP fixture '.$suffix; $model = 'RackWire '.$suffix;
 $tag = 'HTTP-'.$suffix; $serial = 'SER-'.$suffix; $loc = 'HTTP location '.$suffix; $vendor = 'HTTP receipt '.$suffix; $user = 'inventory-http-test';
 $receiveCode = 'F22-' . $suffix; $receiveFailTrigger = 'f22_receive_fail_' . $suffix;
+$wp4Prefix = 'WP4-' . $suffix;
 $ids = ['location'=>null,'model'=>null,'unit'=>null,'barcode'=>null,'receipt'=>null,'entity'=>null,'conflict'=>null,'receivedUnit'=>null,'catalogType'=>null,'catalogBarcode'=>null,'catalogUnit'=>null];
 $work = sys_get_temp_dir().'/solarinet-inventory-http-'.bin2hex(random_bytes(8)); $sessions=$work.'/sessions'; $server=null; $failure=null;
-$cleanup = static function () use ($db,&$ids,$tag,$receiveCode,$receiveFailTrigger,$vendor,$make,$model,$loc): void {
+$cleanup = static function () use ($db,&$ids,$tag,$receiveCode,$receiveFailTrigger,$vendor,$make,$model,$loc,$wp4Prefix): void {
+    try { $db->exec('DROP TABLE IF EXISTS wp4_unknown_location_refs'); } catch (Throwable $e) {}
+    try {
+        $like=$db->quote($wp4Prefix.'%');
+        $db->exec("DELETE FROM barcode_scans WHERE subject_table='locations' AND subject_id IN (SELECT id FROM locations WHERE name LIKE $like)");
+        $db->exec("DELETE FROM external_refs WHERE subject_table='locations' AND subject_id IN (SELECT id FROM locations WHERE name LIKE $like)");
+        $db->exec("DELETE FROM barcodes WHERE subject_table='locations' AND subject_id IN (SELECT id FROM locations WHERE name LIKE $like)");
+        $db->exec("DELETE FROM audit_log WHERE (table_name='locations' AND row_id IN (SELECT id FROM locations WHERE name LIKE $like)) OR (table_name='container_types' AND row_id IN (SELECT id FROM container_types WHERE name LIKE $like))");
+        $db->exec("UPDATE locations SET container_type_id=NULL WHERE name LIKE $like");
+        $db->exec("DELETE FROM entities WHERE name LIKE $like");
+        $db->exec("DELETE FROM power_circuits WHERE name LIKE $like");
+        $leaf=$db->prepare('SELECT l.id FROM locations l WHERE l.name LIKE ? AND NOT EXISTS (SELECT 1 FROM locations c WHERE c.parent_id=l.id) ORDER BY l.id DESC');
+        $remove=$db->prepare('DELETE FROM locations WHERE id=?');
+        do { $leaf->execute([$wp4Prefix.'%']);$leafIds=$leaf->fetchAll(PDO::FETCH_COLUMN);foreach($leafIds as $leafId)$remove->execute([(int)$leafId]); } while($leafIds!==[]);
+        $db->exec("DELETE FROM container_types WHERE name LIKE $like");
+        $db->exec("DELETE FROM projects WHERE name LIKE $like");
+        $db->exec("DELETE FROM hardware_units WHERE serial LIKE $like");
+    } catch (Throwable $e) {}
     try { $db->exec("DROP TRIGGER IF EXISTS `$receiveFailTrigger`"); } catch (Throwable $e) {}
     foreach (['barcode_scans'=>"code IN (".$db->quote($tag).','.$db->quote($receiveCode).')','receipts'=>"vendor=".$db->quote($vendor)] as $table=>$where) { try {$db->exec("DELETE FROM $table WHERE $where");} catch (Throwable $e) {} }
     if ($ids['receivedUnit']) { try {$db->prepare('DELETE FROM barcodes WHERE subject_table=\'hardware_units\' AND subject_id=?')->execute([$ids['receivedUnit']]);$db->prepare('DELETE FROM hardware_units WHERE id=?')->execute([$ids['receivedUnit']]);} catch (Throwable $e) {} }
@@ -203,7 +222,99 @@ try {
     $notesOnly=httpRequest($base.$legacyPath,'PUT',['notes'=>'notes '.$suffix],$cookie,$csrf);
     check($notesOnly['status']===200&&($notesOnly['body']['data']['name']??'')==='Friendly '.$suffix&&($notesOnly['body']['data']['kind']??'')==='component','notes-only PUT reverted an earlier name/kind edit on a legacy-projected type: '.json_encode($notesOnly['body']['data']??null));
     $db->prepare("DELETE FROM audit_log WHERE table_name='product_types' AND row_id=?")->execute([$legacyType]);
+
+    // WP4 location hierarchy, move/merge, batch, assignment, and container APIs.
+    $wp4Loc='/api/inventory/locations';
+    $createLoc=static function(array $body)use($base,$cookie,$csrf,$wp4Loc):array{return httpRequest($base.$wp4Loc,'POST',$body,$cookie,$csrf);};
+    $rootName=$wp4Prefix.' root';
+    $root=$createLoc(['name'=>$rootName,'loc_type'=>'property']);check($root['status']===201,'WP4 property create failed');$wp4Root=(int)$root['body']['data']['id'];
+    $dupRoot=$createLoc(['name'=>$rootName,'loc_type'=>'property']);check($dupRoot['status']===409&&($dupRoot['body']['error']['code']??'')==='duplicate_location','duplicate root sibling was not rejected');
+    $badRoot=$createLoc(['name'=>$wp4Prefix.' invalid root','loc_type'=>'room']);check($badRoot['status']===400&&($badRoot['body']['error']['code']??'')==='bad_request','invalid root level was not rejected');
+    $floor=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' floor','loc_type'=>'floor']);check($floor['status']===201,'WP4 floor create failed');$wp4Floor=(int)$floor['body']['data']['id'];
+    $dupChild=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' floor','loc_type'=>'floor']);check($dupChild['status']===409&&($dupChild['body']['error']['code']??'')==='duplicate_location','duplicate child sibling was not rejected');
+    $badChild=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' bad child','loc_type'=>'room']);check($badChild['status']===400,'invalid child level was not rejected');
+    $rootUpdated=$db->query('SELECT updated_at FROM locations WHERE id='.$wp4Root)->fetchColumn();
+    check(httpRequest($base.$wp4Loc.'/'.$wp4Root,'PUT',['name'=>$wp4Prefix.' renamed','updated_at'=>'2000-01-01 00:00:00'],$cookie,$csrf)['status']===409,'stale location updated_at did not conflict');
+    $patched=httpRequest($base.$wp4Loc.'/'.$wp4Root,'PUT',['notes'=>'WP4 updated','updated_at'=>$root['body']['data']['updatedAt']],$cookie,$csrf);check($patched['status']===200&&($patched['body']['data']['notes']??null)==='WP4 updated','location PUT did not accept its returned updatedAt value');
+    check(httpRequest($base.$wp4Loc.'/'.$wp4Root,'PUT',['loc_type'=>'room','updated_at'=>$rootUpdated],$cookie,$csrf)['status']===400,'location type change invalidating its child was accepted');
+    $cycle=httpRequest($base.$wp4Loc.'/'.$wp4Root.'/move','POST',['parent_id'=>$wp4Floor],$cookie,$csrf);check($cycle['status']===409&&($cycle['body']['error']['code']??'')==='location_cycle','move into descendant did not return location_cycle');
+    $otherRoot=$createLoc(['name'=>$wp4Prefix.' other property','loc_type'=>'property']);$otherFloor=$createLoc(['parent_id'=>(int)$otherRoot['body']['data']['id'],'name'=>$wp4Prefix.' floor','loc_type'=>'floor']);
+    $moveDup=httpRequest($base.$wp4Loc.'/'.(int)$otherFloor['body']['data']['id'].'/move','POST',['parent_id'=>$wp4Root],$cookie,$csrf);check($moveDup['status']===409&&($moveDup['body']['error']['code']??'')==='duplicate_location','move sibling duplicate did not return duplicate_location');
+    $bulkOne=httpRequest($base.$wp4Loc.'/bulk-storage-units','POST',['parent_id'=>$wp4Root,'count'=>1,'prefix'=>$wp4Prefix.' one-','start'=>1],$cookie,$csrf);check($bulkOne['status']===201&&($bulkOne['body']['data']['count']??0)===1,'bulk count=1 failed');
+    $bulkMany=httpRequest($base.$wp4Loc.'/bulk-storage-units','POST',['parent_id'=>$wp4Root,'count'=>500,'prefix'=>$wp4Prefix.' batch-','start'=>1],$cookie,$csrf);check($bulkMany['status']===201&&($bulkMany['body']['data']['count']??0)===500,'bulk count=500 failed: '.json_encode($bulkMany['body']));
+    check(httpRequest($base.$wp4Loc.'/bulk-storage-units','POST',['parent_id'=>$wp4Root,'count'=>501,'prefix'=>$wp4Prefix.' too-many-','start'=>1],$cookie,$csrf)['status']===400,'bulk count=501 was accepted');
+    $atomic=httpRequest($base.$wp4Loc.'/bulk-storage-units','POST',['parent_id'=>$wp4Root,'count'=>2,'names'=>[$wp4Prefix.' atomic',$wp4Prefix.' atomic']],$cookie,$csrf);check($atomic['status']===409&&($atomic['body']['error']['code']??'')==='duplicate_location','bulk duplicate names were not rejected');
+    check((int)$db->query("SELECT COUNT(*) FROM locations WHERE name=".$db->quote($wp4Prefix.' atomic')." AND deleted_at IS NULL")->fetchColumn()===0,'bulk validation failure partially inserted rows');
+
+    $projA=httpRequest($base.'/api/inventory/projects','POST',['name'=>$wp4Prefix.' project A'],$cookie,$csrf);$projB=httpRequest($base.'/api/inventory/projects','POST',['name'=>$wp4Prefix.' project B'],$cookie,$csrf);check($projA['status']===201&&$projB['status']===201,'WP4 test projects failed to create');$wp4ProjectA=(int)$projA['body']['data']['id'];$wp4ProjectB=(int)$projB['body']['data']['id'];
+    $empty=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' empty','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectA]);check($empty['status']===201,'empty assigned storage unit create failed');$emptyId=(int)$empty['body']['data']['id'];
+    $emptyRead=httpRequest($base.$wp4Loc.'/'.$emptyId,'GET',null,$cookie);check($emptyRead['status']===200&&array_key_exists('containerTypeId',$emptyRead['body']['data']??[])&&($emptyRead['body']['data']['assignedProjectId']??null)===$wp4ProjectA,'location GET omitted container/project metadata');
+    $release=httpRequest($base.$wp4Loc.'/'.$emptyId.'/project','PUT',['project_id'=>null],$cookie,$csrf);check($release['status']===200&&array_key_exists('project_id',$release['body']['data']??[])&&$release['body']['data']['project_id']===null,'empty container release failed: '.json_encode($release['body']));
+    check(httpRequest($base.$wp4Loc.'/'.$emptyId.'/project','PUT',['project_id'=>$wp4ProjectA],$cookie,$csrf)['status']===200,'container reassignment failed');
+    $liveChild=$createLoc(['parent_id'=>$emptyId,'name'=>$wp4Prefix.' nested','loc_type'=>'storage_unit']);check($liveChild['status']===201,'nested storage unit create failed');
+    $nonemptyRelease=httpRequest($base.$wp4Loc.'/'.$emptyId.'/project','PUT',['project_id'=>null],$cookie,$csrf);check($nonemptyRelease['status']===409&&($nonemptyRelease['body']['error']['code']??'')==='container_not_empty','non-empty child container release was accepted');
+    $emptyUpdated=$db->query('SELECT updated_at FROM locations WHERE id='.$emptyId)->fetchColumn();$putRelease=httpRequest($base.$wp4Loc.'/'.$emptyId,'PUT',['assigned_project_id'=>null,'updated_at'=>$emptyUpdated],$cookie,$csrf);check($putRelease['status']===409&&($putRelease['body']['error']['code']??'')==='container_not_empty','location PUT bypassed the container release check');
+
+    $typeCreate=httpRequest($base.'/api/inventory/container-types','POST',['name'=>$wp4Prefix.' type'],$cookie,$csrf);check($typeCreate['status']===201,'container type create failed');$wp4Type=(int)$typeCreate['body']['data']['id'];
+    $typedLoc=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' typed','loc_type'=>'storage_unit','container_type_id'=>$wp4Type]);check($typedLoc['status']===201,'storage unit with container type failed');
+    $typeRow=$db->query('SELECT updated_at FROM container_types WHERE id='.$wp4Type)->fetch();
+    $renamedType=httpRequest($base.'/api/inventory/container-types/'.$wp4Type,'PUT',['name'=>$wp4Prefix.' renamed type','updated_at'=>$typeRow['updated_at']],$cookie,$csrf);check($renamedType['status']===200,'in-use container type rename failed');
+    check(httpRequest($base.'/api/inventory/container-types/'.$wp4Type,'PUT',['name'=>$wp4Prefix.' stale type','updated_at'=>'2000-01-01 00:00:00'],$cookie,$csrf)['status']===409,'stale container type rename did not conflict');
+    check(httpRequest($base.'/api/inventory/container-types/'.$wp4Type,'DELETE',[],$cookie,$csrf)['status']===200,'in-use container type retirement failed');
+    check(httpRequest($base.'/api/inventory/container-types?include_deleted=1','GET',null,$cookie)['status']===200,'container type include_deleted list failed');
+    $liveTypes=httpRequest($base.'/api/inventory/container-types','GET',null,$cookie);check($liveTypes['status']===200&&!in_array($wp4Type,array_map(static fn($r)=>(int)$r['id'],$liveTypes['body']['data']??[]),true),'retired container type remained in the default list');
+
+    $notEmptyUnit=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' with-unit','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectA]);check($notEmptyUnit['status']===201,'storage unit for hardware release refusal failed');$notEmptyId=(int)$notEmptyUnit['body']['data']['id'];
+    $db->prepare("INSERT INTO hardware_units(model_id,serial,location_id,source_id,asserted_kind,asserted_at) VALUES(?,?,?,?,'human',NOW())")->execute([$ids['model'],$wp4Prefix.' hardware',$notEmptyId,$manual]);
+    $unitRelease=httpRequest($base.$wp4Loc.'/'.$notEmptyId.'/project','PUT',['project_id'=>null],$cookie,$csrf);check($unitRelease['status']===409&&($unitRelease['body']['error']['code']??'')==='container_not_empty','container with hardware was released');
+
+    $source=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' merge source','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectA]);
+    $target=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' merge target','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectA]);check($source['status']===201&&$target['status']===201,'merge source/target fixture failed');$sourceId=(int)$source['body']['data']['id'];$targetId=(int)$target['body']['data']['id'];
+    $mergeChild=$createLoc(['parent_id'=>$sourceId,'name'=>$wp4Prefix.' merge child','loc_type'=>'storage_unit']);check($mergeChild['status']===201,'merge child fixture failed');$mergeChildId=(int)$mergeChild['body']['data']['id'];
+    $db->prepare("INSERT INTO hardware_units(model_id,serial,location_id,source_id,asserted_kind,asserted_at) VALUES(?,?,?,?,'human',NOW())")->execute([$ids['model'],$wp4Prefix.' merge hardware',$sourceId,$manual]);
+    $db->prepare("INSERT INTO entities(name,entity_type,location_id,source_id,asserted_kind,asserted_at) VALUES(?,'other',?,?,'human',NOW())")->execute([$wp4Prefix.' entity',$sourceId,$manual]);
+    $db->prepare("INSERT INTO power_circuits(name,location_id,source_id,asserted_kind,asserted_at) VALUES(?,?,?,'human',NOW())")->execute([$wp4Prefix.' circuit',$sourceId,$manual]);
+    $traySet=httpRequest($base.'/api/inventory/projects/'.$wp4ProjectA,'PUT',['tray_location_id'=>$sourceId],$cookie,$csrf);check($traySet['status']===200,'unable to set project tray-location fixture');
+    $mergeCode='WP4BC-'.$suffix;
+    $db->prepare("INSERT INTO barcodes(code,code_type,symbology,subject_table,subject_id,source_id,asserted_kind,asserted_at) VALUES(?,'location','qr','locations',?,?,'human',NOW())")->execute([$mergeCode,$sourceId,$manual]);$mergeBarcodeId=(int)$db->lastInsertId();
+    $db->prepare("INSERT INTO barcode_scans(code,barcode_id,subject_table,subject_id,action,operator,source_id) VALUES(?,?,'locations',?,'lookup',?,?)")->execute([$mergeCode,$mergeBarcodeId,$sourceId,'inventory-http-test',$manual]);
+    $db->prepare("INSERT INTO external_refs(source_id,subject_table,subject_id,external_id) VALUES(?,'locations',?,?)")->execute([$manual,$sourceId,$wp4Prefix.' external']);
+    $previewPath=$base.$wp4Loc.'/'.$sourceId.'/merge-preview?target_id='.$targetId;
+    $preview=httpRequest($previewPath,'GET',null,$cookie);check($preview['status']===200&&is_string($preview['body']['data']['fingerprint']??null),'merge preview fingerprint missing');$staleFingerprint=$preview['body']['data']['fingerprint'];
+    $db->prepare("INSERT INTO external_refs(source_id,subject_table,subject_id,external_id) VALUES(?,'locations',?,?)")->execute([$manual,$sourceId,$wp4Prefix.' stale ref']);
+    $stale=httpRequest($base.$wp4Loc.'/'.$sourceId.'/merge','POST',['target_id'=>$targetId,'fingerprint'=>$staleFingerprint],$cookie,$csrf);check($stale['status']===409&&($stale['body']['error']['code']??'')==='merge_conflict','stale merge fingerprint was not rejected');
+
+    // Dynamic unknown-FK guard: preview remains available, merge is explicitly refused.
+    $db->exec('CREATE TABLE wp4_unknown_location_refs (id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, location_id INT UNSIGNED NOT NULL, CONSTRAINT fk_wp4_unknown_location FOREIGN KEY(location_id) REFERENCES locations(id)) ENGINE=InnoDB');
+    $db->prepare('INSERT INTO wp4_unknown_location_refs(location_id) VALUES(?)')->execute([$sourceId]);
+    $fresh=httpRequest($previewPath,'GET',null,$cookie);$unknown=httpRequest($base.$wp4Loc.'/'.$sourceId.'/merge','POST',['target_id'=>$targetId,'fingerprint'=>$fresh['body']['data']['fingerprint']],$cookie,$csrf);check($unknown['status']===409&&($unknown['body']['error']['code']??'')==='merge_conflict','unknown hard FK did not block merge');
+    $db->exec('DROP TABLE wp4_unknown_location_refs');
+    $fresh=httpRequest($previewPath,'GET',null,$cookie);$success=httpRequest($base.$wp4Loc.'/'.$sourceId.'/merge','POST',['target_id'=>$targetId,'fingerprint'=>$fresh['body']['data']['fingerprint']],$cookie,$csrf);check($success['status']===200&&($success['body']['data']['merged']??false)===true,'valid merge failed: '.json_encode($success['body']));
+    check((int)$db->query('SELECT location_id FROM hardware_units WHERE serial='.$db->quote($wp4Prefix.' merge hardware'))->fetchColumn()===$targetId,'merge did not rewrite hardware FK');
+    check((int)$db->query('SELECT location_id FROM entities WHERE name='.$db->quote($wp4Prefix.' entity'))->fetchColumn()===$targetId,'merge did not rewrite entity location FK');
+    check((int)$db->query('SELECT location_id FROM power_circuits WHERE name='.$db->quote($wp4Prefix.' circuit'))->fetchColumn()===$targetId,'merge did not rewrite power circuit location FK');
+    check((int)$db->query('SELECT tray_location_id FROM projects WHERE id='.$wp4ProjectA)->fetchColumn()===$targetId,'merge did not rewrite project tray-location FK');
+    check((int)$db->query('SELECT parent_id FROM locations WHERE id='.$mergeChildId)->fetchColumn()===$targetId,'merge did not move child locations');
+    check((int)$db->query('SELECT subject_id FROM barcodes WHERE id='.$mergeBarcodeId)->fetchColumn()===$targetId,'merge did not retarget live location barcode');
+    check((int)$db->query("SELECT COUNT(*) FROM barcode_scans WHERE subject_id=$sourceId AND code=".$db->quote($mergeCode))->fetchColumn()===1,'merge changed barcode scan history');
+    check((int)$db->query("SELECT COUNT(*) FROM external_refs WHERE subject_table='locations' AND subject_id=$sourceId")->fetchColumn()===2,'merge changed external reference history');
+    $mergeAudit=$db->query("SELECT new_values FROM audit_log WHERE table_name='locations' AND row_id=$sourceId AND action='soft_delete' ORDER BY id DESC LIMIT 1")->fetchColumn();check(is_string($mergeAudit)&&((json_decode($mergeAudit,true)['merge_target_id']??0)===$targetId),'merge target missing from source audit');
+    $repeat=httpRequest($base.$wp4Loc.'/'.$sourceId.'/merge','POST',['target_id'=>$targetId,'fingerprint'=>$fresh['body']['data']['fingerprint']],$cookie,$csrf);check($repeat['status']===200&&($repeat['body']['data']['idempotent']??false)===true,'repeated completed merge was not deterministic');
+    // Lead-review regressions: merged source cannot move; PUT refuses re-parenting; releasing an unassigned non-empty container is a no-op.
+    $deadMove=httpRequest($base.$wp4Loc.'/'.$sourceId.'/move','POST',['parent_id'=>$wp4Root],$cookie,$csrf);check($deadMove['status']===404,'move of a soft-deleted location was accepted: '.json_encode($deadMove['body']));
+    $targetRow=httpRequest($base.$wp4Loc.'/'.$targetId,'GET',null,$cookie);$reparent=httpRequest($base.$wp4Loc.'/'.$targetId,'PUT',['parent_id'=>null,'name'=>$wp4Prefix.' reparent','updated_at'=>(string)($targetRow['body']['data']['updatedAt']??'')],$cookie,$csrf);check($reparent['status']===400&&str_contains((string)($reparent['body']['error']['message']??''),'/move'),'PUT parent_id was not refused with a move hint');
+    $plain=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' unassigned box','loc_type'=>'storage_unit']);$plainId=(int)$plain['body']['data']['id'];check($createLoc(['parent_id'=>$plainId,'name'=>$wp4Prefix.' unassigned inner','loc_type'=>'storage_unit'])['status']===201,'unassigned container child fixture failed');$noopRelease=httpRequest($base.$wp4Loc.'/'.$plainId.'/project','PUT',['project_id'=>null],$cookie,$csrf);check($noopRelease['status']===200,'release of an unassigned non-empty container returned '.$noopRelease['status']);
+    $deepSource=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' deep source','loc_type'=>'storage_unit']);$deepTarget=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' deep target','loc_type'=>'storage_unit']);$dsid=(int)$deepSource['body']['data']['id'];$dtid=(int)$deepTarget['body']['data']['id'];$deepChild=$createLoc(['parent_id'=>$dsid,'name'=>$wp4Prefix.' deep child','loc_type'=>'storage_unit']);$deepGrand=$createLoc(['parent_id'=>(int)$deepChild['body']['data']['id'],'name'=>$wp4Prefix.' deep grandchild','loc_type'=>'storage_unit']);check($deepGrand['status']===201,'deep merge fixture failed');$dp=httpRequest($base.$wp4Loc.'/'.$dsid.'/merge-preview?target_id='.$dtid,'GET',null,$cookie);$dm=httpRequest($base.$wp4Loc.'/'.$dsid.'/merge','POST',['target_id'=>$dtid,'fingerprint'=>$dp['body']['data']['fingerprint']],$cookie,$csrf);check($dm['status']===200&&(int)$db->query('SELECT parent_id FROM locations WHERE id='.(int)$deepChild['body']['data']['id'])->fetchColumn()===$dtid,'merge of a source with grandchildren failed: '.json_encode($dm['body']));
+    $longBulk=httpRequest($base.$wp4Loc.'/bulk-storage-units','POST',['parent_id'=>$wp4Root,'count'=>2,'prefix'=>str_repeat('x',100).str_repeat('y',27),'start'=>10],$cookie,$csrf);check($longBulk['status']===400,'over-length bulk prefix returned '.$longBulk['status']);
+
+    $different=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' other level','loc_type'=>'floor']);$diffId=(int)$different['body']['data']['id'];$diffPreview=httpRequest($base.$wp4Loc.'/'.$emptyId.'/merge-preview?target_id='.$diffId,'GET',null,$cookie);$diffMerge=httpRequest($base.$wp4Loc.'/'.$emptyId.'/merge','POST',['target_id'=>$diffId,'fingerprint'=>$diffPreview['body']['data']['fingerprint']],$cookie,$csrf);check($diffMerge['status']===409&&($diffMerge['body']['error']['code']??'')==='merge_conflict','different-level merge was not refused');
+    $collideSource=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' collision source','loc_type'=>'storage_unit']);$collideTarget=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' collision target','loc_type'=>'storage_unit']);
+    $createLoc(['parent_id'=>(int)$collideSource['body']['data']['id'],'name'=>$wp4Prefix.' same child','loc_type'=>'storage_unit']);$createLoc(['parent_id'=>(int)$collideTarget['body']['data']['id'],'name'=>$wp4Prefix.' same child','loc_type'=>'storage_unit']);
+    $csid=(int)$collideSource['body']['data']['id'];$ctid=(int)$collideTarget['body']['data']['id'];$cp=httpRequest($base.$wp4Loc.'/'.$csid.'/merge-preview?target_id='.$ctid,'GET',null,$cookie);$cm=httpRequest($base.$wp4Loc.'/'.$csid.'/merge','POST',['target_id'=>$ctid,'fingerprint'=>$cp['body']['data']['fingerprint']],$cookie,$csrf);check($cm['status']===409&&($cm['body']['error']['code']??'')==='merge_conflict','child name collision merge was accepted: '.json_encode($cm['body']));
+    $cycleSource=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' cycle source','loc_type'=>'storage_unit']);$cycleSourceId=(int)$cycleSource['body']['data']['id'];$cycleTarget=$createLoc(['parent_id'=>$cycleSourceId,'name'=>$wp4Prefix.' cycle target','loc_type'=>'storage_unit']);$cycleTargetId=(int)$cycleTarget['body']['data']['id'];$cyclePreview=httpRequest($base.$wp4Loc.'/'.$cycleSourceId.'/merge-preview?target_id='.$cycleTargetId,'GET',null,$cookie);$cycleMerge=httpRequest($base.$wp4Loc.'/'.$cycleSourceId.'/merge','POST',['target_id'=>$cycleTargetId,'fingerprint'=>$cyclePreview['body']['data']['fingerprint']],$cookie,$csrf);check($cycleMerge['status']===409&&($cycleMerge['body']['error']['code']??'')==='location_cycle','cycle-producing merge did not return location_cycle');
+    $projectSource=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' project source','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectA]);$projectTarget=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' project target','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectB]);$psid=(int)$projectSource['body']['data']['id'];$ptid=(int)$projectTarget['body']['data']['id'];$pp=httpRequest($base.$wp4Loc.'/'.$psid.'/merge-preview?target_id='.$ptid,'GET',null,$cookie);$pm=httpRequest($base.$wp4Loc.'/'.$psid.'/merge','POST',['target_id'=>$ptid,'fingerprint'=>$pp['body']['data']['fingerprint']],$cookie,$csrf);check($pm['status']===409&&($pm['body']['error']['code']??'')==='merge_conflict','different-project merge was accepted');
+
     $overflow=$db->prepare("INSERT INTO receipts(vendor,currency) VALUES(?,'USD')");for($i=0;$i<501;$i++)$overflow->execute([$vendor]);$tooBig=httpRequest($base.'/api/inventory','GET',null,$cookie);check($tooBig['status']===413&&($tooBig['body']['error']['code']??null)==='inventory_page_required','501 receipts did not require paginated inventory');
-    echo "inventory HTTP transactions, entity linking, paging, aggregate bound, RackWire profile, barcode lookup, product catalog policy/validation/uniqueness/soft-delete, and retired-route assertions passed\n";
+    echo "inventory HTTP baseline and WP4 location assertions passed (".($GLOBALS['inventory_http_assertions']??0)." checks)\n";
 } catch(Throwable $e){fwrite(STDERR,'Inventory HTTP test failed: '.$e->getMessage()."\n");$failure=$e;} finally {if(is_resource($server)){proc_terminate($server);proc_close($server);} $cleanup();if(is_dir($work)){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($work,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);foreach($it as $p)$p->isDir()?rmdir($p->getPathname()):unlink($p->getPathname());rmdir($work);}}
 if($failure!==null)exit(1);
