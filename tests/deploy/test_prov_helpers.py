@@ -808,14 +808,19 @@ class ProvFinish(StageMixin, Base):
 
     def test_marker_match_applies_and_unstages(self):
         rid = self.staged()
+        prov_sql = ("SELECT CONCAT(source_id,'/',asserted_kind) FROM entities "
+                    "WHERE name='p3h-node1' AND deleted_at IS NULL")
+        admin("UPDATE entities SET asserted_kind='machine' WHERE name='p3h-node1'")
+        provenance = admin(prov_sql)
         p = self.finish(rid, FAKE_MARKER=f'{{"run_id": {rid}}}')
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
+        # Row provenance belongs to whoever asserted the entity, not the run.
+        self.assertEqual(admin(prov_sql), provenance)
         self.assertTrue(runs(ent("p3h-node1"))[-1]["finished"])
         entity_id = ent("p3h-node1")
         self.assertEqual(admin(
-            f"SELECT e.os_id=i.os_id AND e.source_id=(SELECT id FROM sources WHERE slug='provisioner') "
-            f"AND e.asserted_kind=r.asserted_kind FROM entities e JOIN prov_runs r ON r.entity_id=e.id "
+            f"SELECT e.os_id=i.os_id FROM entities e JOIN prov_runs r ON r.entity_id=e.id "
             f"JOIN prov_images i ON i.id=r.image_id WHERE r.id={rid}"), "1")
         self.assertEqual(admin(
             f"SELECT COUNT(*) FROM audit_log WHERE table_name='entities' AND row_id={entity_id} "

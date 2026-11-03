@@ -338,9 +338,10 @@ def advance_run(conn, run_id: int, status: str, detail: str | None = None) -> No
                 source = cur.fetchone()
                 if not source:
                     raise ProvError("provisioner provenance source is missing")
-                cur.execute("UPDATE entities SET os_id=%s, source_id=%s, asserted_kind=%s,"
-                            " asserted_at=CURRENT_TIMESTAMP WHERE id=%s",
-                            (os_id, source["id"], row["asserted_kind"], row["entity_id"]))
+                # Row provenance stays with whoever asserted the entity; the
+                # audit row below records that the provisioner set os_id.
+                cur.execute("UPDATE entities SET os_id=%s, asserted_at=CURRENT_TIMESTAMP"
+                            " WHERE id=%s", (os_id, row["entity_id"]))
                 cur.execute(
                     "INSERT INTO audit_log (table_name,row_id,action,actor_label,source_id,"
                     "asserted_kind,old_values,new_values,note) "

@@ -41,16 +41,20 @@ CREATE TEMPORARY TABLE `_m034_image_os` (
 INSERT INTO `_m034_image_os` (`image_id`,`os_name`,`os_version`)
 SELECT i.`id`,
        CASE i.`distro`
-         WHEN 'opensuse' THEN 'openSUSE'
+         WHEN 'opensuse' THEN IF(i.`release_name`='tumbleweed','openSUSE','openSUSE Leap')
          WHEN 'debian' THEN 'Debian'
          WHEN 'ubuntu' THEN 'Ubuntu'
          WHEN 'raspios' THEN 'Raspberry Pi OS'
          WHEN 'fedora' THEN 'Fedora'
          ELSE CONCAT('!unknown:', i.`distro`)
        END,
+       -- Versions use the os-release VERSION_ID vocabulary (Pi OS bookworm
+       -- reports 12), so catalogue rows match what hosts observe.
        CASE
          WHEN i.`distro`='opensuse' AND i.`release_label`='Tumbleweed'
            AND i.`release_name`='tumbleweed' THEN 'Tumbleweed'
+         WHEN i.`distro`='raspios' AND i.`release_name`='bookworm' THEN '12'
+         WHEN i.`distro`='raspios' AND i.`release_name`='trixie' THEN '13'
          ELSE i.`release_name`
        END
   FROM `prov_images` i;
@@ -125,5 +129,10 @@ END//
 DELIMITER ;
 CALL `_solarinet_m034_assert_complete`();
 DROP PROCEDURE `_solarinet_m034_assert_complete`;
+
+-- Every image now has a catalogue identity; keep it that way so a
+-- successful reimage can always record what was installed.
+ALTER TABLE `prov_images` MODIFY COLUMN `os_id` INT UNSIGNED NOT NULL
+  COMMENT 'canonical operating_systems identity; distro/release_name remain pipeline handles';
 
 DROP TEMPORARY TABLE IF EXISTS `_m034_image_os`;
