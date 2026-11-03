@@ -1113,6 +1113,60 @@
       "pattern": "/api/inventory/product-barcodes/{id}",
       "csrf": "origin+session-token",
       "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/locations/{id}/move",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/locations/{id}/merge-preview",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/locations/{id}/merge",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/locations/bulk-storage-units",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/inventory/locations/{id}/project",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/container-types",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/container-types",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/inventory/container-types/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/container-types/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
     }
   ],
   "ctlVerbs": [
