@@ -7,7 +7,12 @@ SOR="$ROOT/netdb/sor"
 DB="sor_test_inventory033"
 M033="$SOR/migrations/033_inventory_catalog.sql"
 D033="$SOR/rollback/033-down.sql"
-ADMIN=(sudo -n mariadb)
+if [[ "${SOLARI_TEST_SOR_DB:-}" == "1" ]]; then
+  [[ "${MYSQL_HOST:-}" == "127.0.0.1" ]] || { echo "refusing: CI mode needs MYSQL_HOST=127.0.0.1" >&2; exit 2; }
+  ADMIN=(mariadb --protocol=TCP --host=127.0.0.1 --port="${MYSQL_PORT:-3306}" --user="${MYSQL_USER:-root}")  # password: MYSQL_PWD env
+else
+  ADMIN=(sudo -n mariadb)
+fi
 ERR="$(mktemp)"
 created=0
 

@@ -4,7 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SOR="$ROOT/netdb/sor"; DB="solarinet_wp3_locations_036"
 M="$SOR/migrations/036_inventory_locations.sql"; D="$SOR/rollback/036-down.sql"
-ADMIN=(sudo -n mariadb); ERR="$(mktemp)"; created=0
+if [[ "${SOLARI_TEST_SOR_DB:-}" == "1" ]]; then
+  [[ "${MYSQL_HOST:-}" == "127.0.0.1" ]] || { echo "refusing: CI mode needs MYSQL_HOST=127.0.0.1" >&2; exit 2; }
+  ADMIN=(mariadb --protocol=TCP --host=127.0.0.1 --port="${MYSQL_PORT:-3306}" --user="${MYSQL_USER:-root}")  # password: MYSQL_PWD env
+else
+  ADMIN=(sudo -n mariadb)
+fi
+ERR="$(mktemp)"; created=0
 case "$DB" in sor|solarinet|solarinet_stage|sor_probe) echo "refusing live DB name $DB" >&2; exit 2 ;; esac
 if "${ADMIN[@]}" -N -B -e "SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$DB'" | /usr/bin/grep -q .; then echo "refusing to run: scratch database '$DB' already exists" >&2; exit 2; fi
 cleanup() { if [[ "$created" == 1 ]]; then "${ADMIN[@]}" -e "DROP DATABASE IF EXISTS \`$DB\`" >/dev/null; fi; rm -f "$ERR"; }

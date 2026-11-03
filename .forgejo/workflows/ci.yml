@@ -256,6 +256,38 @@ jobs:
           STACKGEN_TEST_PYTHON: /tmp/sorsync-ci/bin/python
           STACKGEN_TEST_USER_HOST: '%'
         run: bash tests/netdb/test_prov_arch_refresh_031.sh
+      - name: Inventory I1 033 catalog migration + rollback (scratch)
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+        run: bash tests/netdb/test_inventory_catalog_033.sh
+      - name: 034 prov_images OS FK migration + rollback (scratch)
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+        run: bash tests/netdb/test_prov_images_os_034.sh
+      - name: Inventory I1 035 catalog display names + rollback (scratch)
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+        run: bash tests/netdb/test_catalog_display_names_035.sh
+      - name: Inventory I1 036 location levels + rollback (scratch)
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+        run: bash tests/netdb/test_inventory_locations_036.sh
       - name: IMAGE_REFRESH helper, fetch-images.sh and boot-menu render (local fixtures, no internet)
         env:
           SOLARI_TEST_SOR_DB: '1'
@@ -943,7 +975,11 @@ jobs:
             tests/deploy/test_fleet_provisioning_gate.sh \
             tests/netdb/test_prov_images_stacks.sh \
             tests/netdb/test_prov_cdc_030.sh \
-            tests/netdb/test_prov_arch_refresh_031.sh
+            tests/netdb/test_prov_arch_refresh_031.sh \
+            tests/netdb/test_inventory_catalog_033.sh \
+            tests/netdb/test_prov_images_os_034.sh \
+            tests/netdb/test_catalog_display_names_035.sh \
+            tests/netdb/test_inventory_locations_036.sh
       - name: F-07 fleet provisioning fails closed
         run: bash tests/deploy/test_fleet_provisioning_gate.sh
       - name: F-07 signed release manifest contract
