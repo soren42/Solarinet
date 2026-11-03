@@ -41,7 +41,7 @@
 <tr><td><code>/api/inventory/allocations</code></td><td><code>project_id</code>, <code>allocation</code></td><td>Live allocations belonging to live projects.</td></tr>
 <tr><td><code>/api/inventory/locations?flat=1</code></td><td>Pagination parameters</td><td>Flat location rows with parent IDs; use the ordinary path for the nested tree.</td></tr>
 </tbody></table>
-<p>Add <code>limit</code> and/or <code>offset</code> to request a page. The page size must be 1–5000; the offset must be 0–2147483647. If only one parameter is supplied, the other defaults to <code>limit=500</code> or <code>offset=0</code>. Results have a deterministic order within each list.</p>
+<p>Add <code>limit</code> and/or <code>offset</code> to request a page. The page size must be 1–5000 (1–500 for <code>/api/inventory/product-types</code>); the offset must be 0–2147483647. If only one parameter is supplied, the other defaults to <code>limit=500</code> or <code>offset=0</code>. Results have a deterministic order within each list.</p>
 <pre>GET /api/inventory/models?hw_type=server&amp;limit=100&amp;offset=200</pre>
 <p>A paginated response places rows in <code>data.items</code> and returns:</p>
 <pre>{

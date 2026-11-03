@@ -8,7 +8,12 @@ SOR="$ROOT/netdb/sor"
 DB="sor_test_catalog_names035"
 M035="$SOR/migrations/035_catalog_display_names.sql"
 D035="$SOR/rollback/035-down.sql"
-ADMIN=(sudo -n mariadb)
+if [[ "${SOLARI_TEST_SOR_DB:-}" == "1" ]]; then
+  [[ "${MYSQL_HOST:-}" == "127.0.0.1" ]] || { echo "refusing: CI mode needs MYSQL_HOST=127.0.0.1" >&2; exit 2; }
+  ADMIN=(mariadb --protocol=TCP --host=127.0.0.1 --port="${MYSQL_PORT:-3306}" --user="${MYSQL_USER:-root}")  # password: MYSQL_PWD env
+else
+  ADMIN=(sudo -n mariadb)
+fi
 created=0
 
 case "$DB" in sor|solarinet|solarinet_stage|sor_probe) echo "refusing live DB name $DB" >&2; exit 2 ;; esac
