@@ -22,6 +22,7 @@
 --   032_node_os_hinfo sha256=117ac174184b5dbf5e0067aaf953a64da21674b575bdd9edd1e35923e9e4138c
 --   033_inventory_catalog sha256=f6110a624bc833f3200e148e5530047fac9030f54e57635d53d3de93e042cda5
 --   034_prov_images_os sha256=c1a56526a09b5895dde1cac3cb1aba67fa0e53454dba63dbaffdadaf59c83ed7
+--   035_catalog_display_names sha256=52bbaf178068de119d2618786d10eaf9a1f0fa473da189e154dd6b1934e7c38e
 
 /*M!999999\- enable the sandbox mode */
 
@@ -1011,7 +1012,13 @@ BEGIN
               WHEN 'other' THEN 'other'
               ELSE 'hardware'
             END,
-            NEW.`model`, NEW.`make`, NEW.`model`, NEW.`notes`, 'legacy:hardware_models',
+            LEFT(CASE
+              WHEN NEW.`make` IS NULL OR NEW.`make` = '' THEN NEW.`model`
+              WHEN BINARY LEFT(NEW.`model`, CHAR_LENGTH(NEW.`make`)) = BINARY NEW.`make` THEN NEW.`model`
+              WHEN BINARY RIGHT(NEW.`make`, CHAR_LENGTH(NEW.`model`)) = BINARY NEW.`model` THEN NEW.`make`
+              ELSE CONCAT(NEW.`make`, ' ', NEW.`model`)
+            END, 160),
+            NEW.`make`, NEW.`model`, NEW.`notes`, 'legacy:hardware_models',
             NEW.`source_id`, NEW.`asserted_kind`, NEW.`deleted_at`);
     SET NEW.`product_type_id` = LAST_INSERT_ID();
   END IF;
@@ -1033,18 +1040,36 @@ DELIMITER ;;
 /*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_models_catalog_upd` AFTER UPDATE ON `hardware_models`
 FOR EACH ROW
 BEGIN
+  DECLARE old_kind, new_kind VARCHAR(16);
+  DECLARE old_name, new_name VARCHAR(160);
   IF NOT (NEW.`make` <=> OLD.`make`) OR NOT (NEW.`model` <=> OLD.`model`)
      OR NOT (NEW.`hw_type` <=> OLD.`hw_type`) OR NOT (NEW.`notes` <=> OLD.`notes`)
      OR NOT (NEW.`deleted_at` <=> OLD.`deleted_at`) THEN
+    SET old_kind = CASE OLD.`hw_type` WHEN 'printer' THEN 'peripheral' WHEN 'scanner' THEN 'peripheral'
+                                      WHEN 'other' THEN 'other' ELSE 'hardware' END;
+    SET new_kind = CASE NEW.`hw_type` WHEN 'printer' THEN 'peripheral' WHEN 'scanner' THEN 'peripheral'
+                                      WHEN 'other' THEN 'other' ELSE 'hardware' END;
+    SET old_name = LEFT(CASE
+          WHEN OLD.`make` IS NULL OR OLD.`make` = '' THEN OLD.`model`
+          WHEN BINARY LEFT(OLD.`model`, CHAR_LENGTH(OLD.`make`)) = BINARY OLD.`make` THEN OLD.`model`
+          WHEN BINARY RIGHT(OLD.`make`, CHAR_LENGTH(OLD.`model`)) = BINARY OLD.`model` THEN OLD.`make`
+          ELSE CONCAT(OLD.`make`, ' ', OLD.`model`)
+        END, 160);
+    SET new_name = LEFT(CASE
+          WHEN NEW.`make` IS NULL OR NEW.`make` = '' THEN NEW.`model`
+          WHEN BINARY LEFT(NEW.`model`, CHAR_LENGTH(NEW.`make`)) = BINARY NEW.`make` THEN NEW.`model`
+          WHEN BINARY RIGHT(NEW.`make`, CHAR_LENGTH(NEW.`model`)) = BINARY NEW.`model` THEN NEW.`make`
+          ELSE CONCAT(NEW.`make`, ' ', NEW.`model`)
+        END, 160);
+
+
     UPDATE `product_types`
-       SET `kind` = CASE NEW.`hw_type`
-                      WHEN 'printer' THEN 'peripheral'
-                      WHEN 'scanner' THEN 'peripheral'
-                      WHEN 'other' THEN 'other'
-                      ELSE 'hardware'
-                    END,
-           `name`=NEW.`model`, `brand`=NEW.`make`, `model`=NEW.`model`,
-           `notes`=NEW.`notes`, `deleted_at`=NEW.`deleted_at`
+       SET `kind`  = IF(BINARY `kind` <=> BINARY old_kind, new_kind, `kind`),
+           `name`  = IF(BINARY `name` <=> BINARY old_name OR BINARY `name` <=> BINARY OLD.`model`, new_name, `name`),
+           `brand` = IF(BINARY `brand` <=> BINARY OLD.`make`, NEW.`make`, `brand`),
+           `model` = IF(BINARY `model` <=> BINARY OLD.`model`, NEW.`model`, `model`),
+           `notes` = IF(BINARY `notes` <=> BINARY OLD.`notes`, NEW.`notes`, `notes`),
+           `deleted_at` = NEW.`deleted_at`
      WHERE `id`=NEW.`product_type_id`
        AND `lookup_source` IN ('migration:033','legacy:hardware_models');
   END IF;
