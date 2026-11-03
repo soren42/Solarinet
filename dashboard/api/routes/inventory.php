@@ -144,8 +144,11 @@ return static function (Router $router): void {
             $params[':mid']    = (int) $_GET['model_id'];
         }
         if (isset($_GET['q']) && is_string($_GET['q']) && trim($_GET['q']) !== '') {
-            $where[]          = '(hu.serial LIKE :q OR hu.asset_tag LIKE :q OR hm.make LIKE :q OR hm.model LIKE :q)';
-            $params[':q']     = '%' . trim($_GET['q']) . '%';
+            $where[]          = '(hu.serial LIKE :q1 OR hu.asset_tag LIKE :q2 OR hm.make LIKE :q3 OR hm.model LIKE :q4)';
+            $like = '%' . trim($_GET['q']) . '%';  // native prepares: each placeholder bound once
+            for ($qi = 1; $qi <= 4; $qi++) {
+                $params[':q' . $qi] = $like;
+            }
         }
 
         $page = inv_page_request();
@@ -437,8 +440,11 @@ return static function (Router $router): void {
             $params[':t']   = Inv::requireEnum('hardware_models', 'hw_type', $_GET['hw_type'], 'hw_type');
         }
         if (isset($_GET['q']) && is_string($_GET['q']) && trim($_GET['q']) !== '') {
-            $where[]        = '(make LIKE :q OR model LIKE :q)';
-            $params[':q']   = '%' . trim($_GET['q']) . '%';
+            $where[]        = '(make LIKE :q1 OR model LIKE :q2)';
+            $like = '%' . trim($_GET['q']) . '%';  // native prepares: each placeholder bound once
+            for ($qi = 1; $qi <= 2; $qi++) {
+                $params[':q' . $qi] = $like;
+            }
         }
         $page = inv_page_request();
         $sql = inv_model_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY make, model, id';
@@ -686,8 +692,11 @@ return static function (Router $router): void {
             $params[':v']   = '%' . trim($_GET['vendor']) . '%';
         }
         if (isset($_GET['q']) && is_string($_GET['q']) && trim($_GET['q']) !== '') {
-            $where[]        = '(vendor LIKE :q OR order_ref LIKE :q OR notes LIKE :q)';
-            $params[':q']   = '%' . trim($_GET['q']) . '%';
+            $where[]        = '(vendor LIKE :q1 OR order_ref LIKE :q2 OR notes LIKE :q3)';
+            $like = '%' . trim($_GET['q']) . '%';  // native prepares: each placeholder bound once
+            for ($qi = 1; $qi <= 3; $qi++) {
+                $params[':q' . $qi] = $like;
+            }
         }
         $page = inv_page_request();
         $sql = inv_receipt_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY purchased_on DESC, id DESC';
@@ -837,8 +846,11 @@ return static function (Router $router): void {
             $params[':s']   = Inv::requireEnum('projects', 'status', $_GET['status'], 'status');
         }
         if (isset($_GET['q']) && is_string($_GET['q']) && trim($_GET['q']) !== '') {
-            $where[]        = '(name LIKE :q OR code LIKE :q)';
-            $params[':q']   = '%' . trim($_GET['q']) . '%';
+            $where[]        = '(name LIKE :q1 OR code LIKE :q2)';
+            $like = '%' . trim($_GET['q']) . '%';  // native prepares: each placeholder bound once
+            for ($qi = 1; $qi <= 2; $qi++) {
+                $params[':q' . $qi] = $like;
+            }
         }
         $page = inv_page_request();
         $sql = inv_project_sql() . ' WHERE ' . implode(' AND ', $where) . ' ORDER BY id DESC';

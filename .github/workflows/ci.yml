@@ -672,6 +672,8 @@ jobs:
           node tests/dashboard/test_ca_crl_ui.js
           node tests/dashboard/test_layout.js
           node tests/dashboard/test_inventory_rackwire_ui.js
+          node tests/dashboard/test_inventory_locations_ui.js
+          node tests/dashboard/test_inventory_catalog_ui.js
           node tests/dashboard/test_capability_maturity.js
       - name: Dashboard cold/warm JSX cache profile
         env:

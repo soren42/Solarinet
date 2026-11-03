@@ -162,6 +162,8 @@ try {
     check((int)$db->query('SELECT COUNT(*) FROM barcodes WHERE code='.$db->quote($receiveCode))->fetchColumn()===1,'receive retry did not create exactly one scanned barcode');
     check((int)$db->query('SELECT COUNT(*) FROM barcode_scans WHERE code='.$db->quote($receiveCode).' AND action=\'receive\'')->fetchColumn()===1,'receive retry did not create exactly one scan audit row');
     foreach(['/api/inventory/models','/api/inventory/components','/api/inventory/receipts','/api/inventory/projects','/api/inventory/locations','/api/inventory/allocations'] as $p){$r=httpRequest($base.$p.($p==='/api/inventory/locations'?'?flat=1&':'?').'limit=1&offset=0','GET',null,$cookie);check($r['status']===200&&is_array($r['body']['data']['items']??null)&&isset($r['body']['data']['page']['total']),"paged endpoint failed: $p");}
+    // Native prepares reject a reused named placeholder (HY093); every ?q= search must bind each once.
+    foreach(['/api/inventory/models','/api/inventory/components','/api/inventory/receipts','/api/inventory/projects','/api/inventory/product-types'] as $p){foreach(['','&limit=5&offset=0'] as $pg){$r=httpRequest($base.$p.'?q=zz-no-match'.$pg,'GET',null,$cookie);check($r['status']===200,"q search failed ($r[status]): $p$pg");}}
     check(httpRequest($base.'/api/inventory/models?limit=0','GET',null,$cookie)['status']===400,'limit=0 was accepted');
     $aggregate=httpRequest($base.'/api/inventory','GET',null,$cookie);$d=$aggregate['body']['data']??[];check($aggregate['status']===200&&is_array($d['models']??null)&&is_array($d['units']??null)&&!isset($d['page']),'combined inventory shape changed');
     // 031: operator edit of hardware_models.arch (provisioning's first arch source).
