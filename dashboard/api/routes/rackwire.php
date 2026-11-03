@@ -731,7 +731,8 @@ return static function (Router $router): void {
 
             $db->beginTransaction();
             try {
-                // ---- racks -> locations (loc_type='rack') -------------------
+                // ---- racks -> storage units within a property ---------------
+                $rackParentId = null;
                 foreach ($racks as $r) {
                     if (!is_array($r) || !isset($r['name']) || trim((string) $r['name']) === '') {
                         $skipped[] = 'rack: missing name';
@@ -740,10 +741,23 @@ return static function (Router $router): void {
                     $name  = trim((string) $r['name']);
                     $units = isset($r['units']) && is_numeric($r['units']) ? (int) $r['units'] : null;
 
+                    if ($rackParentId === null) {
+                        $rackParent = rw_row(
+                            "SELECT id FROM locations WHERE parent_id IS NULL AND loc_type='property' AND deleted_at IS NULL ORDER BY id LIMIT 1",
+                            []
+                        );
+                        if ($rackParent === null) {
+                            rw_exec("INSERT INTO locations (parent_id, name, loc_type, source_id, asserted_kind, asserted_at) VALUES (NULL, 'Rackwire', 'property', :src, 'human', NOW())", [':src' => $srcId]);
+                            $rackParentId = (int) $db->lastInsertId();
+                        } else {
+                            $rackParentId = (int) $rackParent['id'];
+                        }
+                    }
+
                     $existing = rw_row(
                         'SELECT id, source_id FROM locations
-                          WHERE parent_id IS NULL AND name = :n AND loc_type = \'rack\' AND deleted_at IS NULL',
-                        [':n' => $name]
+                          WHERE parent_id = :parent AND name = :n AND loc_type = \'storage_unit\' AND deleted_at IS NULL',
+                        [':parent' => $rackParentId, ':n' => $name]
                     );
                     if ($existing !== null) {
                         if ((int) $existing['source_id'] !== $srcId) {
@@ -763,8 +777,8 @@ return static function (Router $router): void {
                         if (!$dryRun) {
                             rw_exec(
                                 'INSERT INTO locations (parent_id, name, loc_type, rack_units, source_id, asserted_kind, asserted_at)
-                                 VALUES (NULL, :n, \'rack\', :ru, :src, \'human\', NOW())',
-                                [':n' => $name, ':ru' => $units, ':src' => $srcId]
+                                 VALUES (:parent, :n, \'storage_unit\', :ru, :src, \'human\', NOW())',
+                                [':parent' => $rackParentId, ':n' => $name, ':ru' => $units, ':src' => $srcId]
                             );
                         }
                         $created++;

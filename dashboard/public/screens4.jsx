@@ -39,8 +39,8 @@
   // hardware_models.arch (031) — the CPU arch provisioning matches images against.
   const HW_ARCHES = ["x86_64", "arm64", "armhf", "riscv64", "i386"];
   const HW_TYPES = ["server", "workstation", "sbc", "nas", "router", "switch", "ap", "printer", "scanner", "iot", "appliance", "console", "media", "vehicle", "tablet", "phone", "kvm", "sensor", "camera", "ups", "moca", "other"];
-  const LOC_TYPES = ["site", "building", "floor", "room", "rack", "shelf", "position", "zone", "cabinet", "drawer", "tray", "bin", "container"];
-  const LOC_ICON = { room: "location", rack: "server", shelf: "arch", cabinet: "box", drawer: "box", tray: "inventory", bin: "box", container: "box" };
+  const LOC_TYPES = ["property", "floor", "room", "section", "storage_unit"];
+  const LOC_ICON = { property: "location", floor: "location", room: "location", section: "location", storage_unit: "box" };
   const PROJ_STATUS = ["planning", "active", "staged", "on_hold", "complete", "archived"];
   const STOCK_STATES = ["in_stock", "allocated", "deployed", "consumed", "retired"];
 
@@ -844,7 +844,7 @@
   function LocationModal({ inv, h, act, onClose }) {
     const [name, setName] = useState("");
     const [code, setCode] = useState("");
-    const [locType, setLocType] = useState("drawer");
+    const [locType, setLocType] = useState("property");
     const [parent, setParent] = useState("");
     function submit() {
       if (!name.trim()) { toast("Name is required", "close"); return; }
@@ -1209,7 +1209,7 @@
     const [owner, setOwner] = useState("");
     const [target, setTarget] = useState("");
     const [desc, setDesc] = useState("");
-    const trays = inv.locations.filter(function (l) { return l.loc_type === "tray"; });
+    const trays = inv.locations.filter(function (l) { return l.loc_type === "storage_unit"; });
     function submit() {
       if (!name.trim()) { toast("Project name is required", "close"); return; }
       act.saveProject({

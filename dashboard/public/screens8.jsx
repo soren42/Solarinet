@@ -50,8 +50,8 @@
   const PROJ_TONE = { planning: "var(--ink-dim)", active: "var(--ok)", staged: "var(--violet)", on_hold: "var(--warn)", complete: "var(--teal)", archived: "var(--ink-faint)" };
   const ACTION_TONE = { lookup: "var(--ink-dim)", create: "var(--teal)", receive: "var(--ok)", move: "var(--violet)", associate: "var(--violet)", allocate: "var(--teal)", print: "var(--warn)", delete: "var(--crit)" };
   const SUBJ_LABEL = { hardware_units: "unit", locations: "loc", projects: "project", interfaces: "port" };
-  const TAG_LOC_TYPES = ["bin", "drawer", "shelf", "tray", "container", "cabinet"];
-  const LOC_ICON = { room: "location", rack: "server", shelf: "arch", cabinet: "box", drawer: "box", tray: "inventory", bin: "box", container: "box" };
+  const TAG_LOC_TYPES = ["storage_unit"];
+  const LOC_ICON = { property: "location", floor: "location", room: "location", section: "location", storage_unit: "box" };
   const PROFILES = [["default", "50×25 EP53"], ["makeid_small", "40×12 E1"], ["nemonic", "80×40 Nemonic"]];
   const RECEIVE_TYPES = ["serial", "upc", "custom"];
   const BURST_MS = 300;   // scanner inter-key gap is < ~35 ms; > this is a stale partial
