@@ -117,7 +117,7 @@ def synchronize(primary_config: pathlib.Path, primary: str, secondary: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--primary-config", default="/etc/bind/named.conf.akoria")
+    parser.add_argument("--primary-config", default="/etc/bind/solarinet-current/named.conf.managed")
     parser.add_argument("--additional-config", action="append", default=[],
                         help="additional primary-zone fragments (repeatable)")
     parser.add_argument("--primary", default="10.0.0.20")
