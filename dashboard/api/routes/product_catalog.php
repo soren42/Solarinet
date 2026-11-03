@@ -51,7 +51,7 @@ return static function (Router $router): void {
             $codes=$db->prepare('SELECT id,product_type_id,code,code_type FROM product_barcodes WHERE product_type_id=:id AND deleted_at IS NULL');$codes->execute([':id'=>$id]);
             foreach($codes->fetchAll(PDO::FETCH_ASSOC) as $code){$db->prepare("UPDATE product_barcodes SET deleted_at=NOW(),source_id=:source,asserted_kind='human',asserted_at=NOW() WHERE id=:id")->execute([':source'=>$source,':id'=>(int)$code['id']]);catalog_audit($db,'product_barcodes',(int)$code['id'],'soft_delete',$code,['deleted_at'=>'now'],$source);}
             $db->commit();Response::ok(['id'=>$id,'status'=>'deleted']);}
-        catch(Throwable $e){if($db->inTransaction())$db->rollBack();throw $e;}
+        catch(Throwable $e){if($db->inTransaction())$db->rollBack();inv_retryable_conflict($e);throw $e;}
     }, $operator);
 
     $router->post('/api/inventory/product-types', static function (): void {
@@ -67,6 +67,7 @@ return static function (Router $router): void {
             Response::ok(catalog_get_type($id), 201);
         } catch (PDOException $e) {
             if ($db->inTransaction()) $db->rollBack();
+            inv_retryable_conflict($e);
             if (($e->errorInfo[1] ?? null) === 1062) Response::error('duplicate_barcode', 'That barcode is already attached to a live product type.', 409);
             error_log('product type create failed: '.$e->getMessage()); Response::error('service_unavailable', 'Inventory storage is unavailable.', 503);
         } catch (Throwable $e) {
@@ -77,7 +78,9 @@ return static function (Router $router): void {
     $router->add('PUT', '/api/inventory/product-types/{id}', static function (array $p): void {
         $id = Inv::idParam($p['id']); $db = Sor::db(); $body = solari_json_body();
         if ($body === []) Response::error('bad_request', 'At least one field is required.', 400);
+        // Optimistic lock (037): the exact DATETIME(6) token from the last read.
         $expected = $body['updated_at'] ?? null;
+        if (!is_string($expected) || $expected === '') Response::error('bad_request', 'updated_at is required.', 400);
         unset($body['updated_at']); $v = catalog_validate_type($body, true);
         $sets=[]; $params=[':id'=>$id, ':source'=>Sor::dashboardSourceId()];
         $old=[]; $new=[];
@@ -89,7 +92,7 @@ return static function (Router $router): void {
             $lock = $db->prepare('SELECT id,kind,name,brand,model,category,specs,notes,image_url,updated_at FROM product_types WHERE id=:id AND deleted_at IS NULL FOR UPDATE'); $lock->execute([':id'=>$id]);
             $current = $lock->fetch(PDO::FETCH_ASSOC);
             if (!is_array($current)) { $db->rollBack(); Response::error('not_found', "No product type $id", 404); }
-            if ($expected !== null && $expected !== $current['updated_at']) { $db->rollBack(); Response::error('conflict', 'Product type changed since it was read.', 409); }
+            if ($expected !== $current['updated_at']) { $db->rollBack(); Response::error('conflict', 'Product type changed since it was read.', 409); }
             foreach (array_keys($new) as $column) $old[$column] = $current[$column] ?? null;
             $db->prepare('UPDATE product_types SET '.implode(',',$sets).' WHERE id=:id AND deleted_at IS NULL')->execute($params);
             $fresh = catalog_get_type($id);
@@ -113,6 +116,7 @@ return static function (Router $router): void {
             $db->commit(); Response::ok($fresh);
         } catch (PDOException $e) {
             if ($db->inTransaction()) $db->rollBack();
+            inv_retryable_conflict($e);
             if (($e->errorInfo[1] ?? null) === 1062) Response::error('conflict', 'Product type conflicts with another live record.', 409);
             error_log('product type update failed: '.$e->getMessage()); Response::error('service_unavailable', 'Inventory storage is unavailable.', 503);
         } catch (Throwable $e) {
@@ -135,7 +139,7 @@ return static function (Router $router): void {
         if ($type==='gtin' && !catalog_valid_gtin($code)) Response::error('bad_request','GTIN must have a supported length and valid check digit.',400);
         $db=Sor::db(); if (Inv::row('SELECT id FROM product_types WHERE id=:id AND deleted_at IS NULL',[':id'=>$typeId])===null) Response::error('not_found',"No product type $typeId",404);
         try { $db->beginTransaction(); $source=Sor::dashboardSourceId(); $id=catalog_insert_barcode($db,['code'=>$code,'code_type'=>$type],$typeId,$source); $db->commit(); Response::ok(['id'=>$id,'product_type_id'=>$typeId,'code'=>$code,'code_type'=>$type],201); }
-        catch(PDOException $e){if($db->inTransaction())$db->rollBack(); if(($e->errorInfo[1]??null)===1062)Response::error('duplicate_barcode','That barcode is already attached to a live product type.',409);error_log('product barcode create failed: '.$e->getMessage());Response::error('service_unavailable','Inventory storage is unavailable.',503);}
+        catch(PDOException $e){if($db->inTransaction())$db->rollBack();inv_retryable_conflict($e); if(($e->errorInfo[1]??null)===1062)Response::error('duplicate_barcode','That barcode is already attached to a live product type.',409);error_log('product barcode create failed: '.$e->getMessage());Response::error('service_unavailable','Inventory storage is unavailable.',503);}
     }, $operator);
 
     $router->add('DELETE','/api/inventory/product-barcodes/{id}',static function(array $p):void {
@@ -143,7 +147,7 @@ return static function (Router $router): void {
         if($row===null)Response::error('not_found',"No product barcode $id",404);
         $source=Sor::dashboardSourceId(); $db->beginTransaction();
         try{$db->prepare("UPDATE product_barcodes SET deleted_at=NOW(),source_id=:source,asserted_kind='human',asserted_at=NOW() WHERE id=:id AND deleted_at IS NULL")->execute([':source'=>$source,':id'=>$id]);catalog_audit($db,'product_barcodes',$id,'soft_delete',$row,['deleted_at'=>'now'],$source);$db->commit();Response::ok(['id'=>$id,'status'=>'deleted']);}
-        catch(Throwable $e){if($db->inTransaction())$db->rollBack();throw $e;}
+        catch(Throwable $e){if($db->inTransaction())$db->rollBack();inv_retryable_conflict($e);throw $e;}
     },$operator);
 };
 

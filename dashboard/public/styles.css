@@ -1318,6 +1318,14 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
 .inv-cat-spec input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .inv-cat-spec .inv-cat-spec__json { font-family: var(--mono); font-size: 16px; }
 .inv-cat-spec__drop { width: var(--tap); height: var(--tap); }
+/* Items on product types (037): searchable single-choice field, licence summary. */
+.inv-pickfield { margin-top: 12px; min-width: 0; }
+.inv-pickfield__label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-dim); }
+.inv-pickfield__chosen { margin: 5px 0 8px; font: 600 14px/1.35 var(--sans); overflow-wrap: anywhere; }
+.inv-pickfield .inv-pick-list { max-height: 32vh; max-height: 32dvh; }
+.inv-licence { margin-top: 18px; }
+.inv-unit__licence { margin-top: 2px; font-size: 11px; overflow-wrap: anywhere; }
+.inv-unit__addmodel { flex: 0 0 auto; align-self: flex-end; min-width: var(--tap); min-height: var(--tap); }
 .inv-cat-spec__note { grid-column: 1 / -1; margin-top: -4px; font-size: 12px; }
 
 /* single column (phone, narrow iPad split view): tree OR detail, back crumb */

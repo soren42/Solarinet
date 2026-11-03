@@ -94,6 +94,11 @@ require_once __DIR__ . '/../lib/Sor.php';
 require_once __DIR__ . '/../lib/Operator.php';
 require_once __DIR__ . '/../lib/Coerce.php';
 
+/** Licence/installation columns that only software items may carry (033). */
+const INV_COMPONENT_LICENCE_FIELDS = ['licence_seats', 'licence_expires_on', 'licence_reference', 'installed_on_unit_id'];
+/** Most items one "Add items" request may create. */
+const INV_COMPONENT_BATCH_MAX = 50;
+
 return static function (Router $router): void {
 
     // Combined read used by the dashboard bootstrap and Inventory screen.
@@ -101,7 +106,7 @@ return static function (Router $router): void {
     // larger inventories must use the paginated collection endpoints.
     $router->get('/api/inventory', static function (): void {
         $models = inv_legacy_rows(inv_model_sql() . ' WHERE deleted_at IS NULL ORDER BY make, model, id', 'models');
-        $units = inv_legacy_rows(inv_component_sql() . ' WHERE hu.deleted_at IS NULL AND hm.deleted_at IS NULL ORDER BY hu.id DESC', 'components');
+        $units = inv_legacy_rows(inv_component_sql() . ' WHERE hu.deleted_at IS NULL AND (hm.id IS NULL OR hm.deleted_at IS NULL) ORDER BY hu.id DESC', 'components');
         $locationRows = inv_legacy_rows(inv_location_sql() . ' WHERE deleted_at IS NULL ORDER BY name, id', 'locations');
         $receipts = inv_legacy_rows(inv_receipt_sql() . ' WHERE deleted_at IS NULL ORDER BY purchased_on DESC, id DESC', 'receipts');
         $projects = inv_legacy_rows(inv_project_sql() . ' WHERE deleted_at IS NULL ORDER BY id DESC', 'projects');
@@ -122,7 +127,8 @@ return static function (Router $router): void {
     // ==================================================================
 
     $router->get('/api/inventory/components', static function (): void {
-        $where  = ['hu.deleted_at IS NULL', 'hm.deleted_at IS NULL'];
+        // Catalog-only items (037) have no legacy model row.
+        $where  = ['hu.deleted_at IS NULL', '(hm.id IS NULL OR hm.deleted_at IS NULL)'];
         $params = [];
 
         if (isset($_GET['stock_status']) && $_GET['stock_status'] !== '') {
@@ -143,10 +149,18 @@ return static function (Router $router): void {
             $where[]           = 'hu.model_id = :mid';
             $params[':mid']    = (int) $_GET['model_id'];
         }
+        if (isset($_GET['product_type_id']) && $_GET['product_type_id'] !== '') {
+            if (!ctype_digit((string) $_GET['product_type_id'])) {
+                Response::error('bad_request', 'product_type_id must be an integer.', 400);
+            }
+            $where[]           = 'hu.product_type_id = :ptid';
+            $params[':ptid']   = (int) $_GET['product_type_id'];
+        }
         if (isset($_GET['q']) && is_string($_GET['q']) && trim($_GET['q']) !== '') {
-            $where[]          = '(hu.serial LIKE :q1 OR hu.asset_tag LIKE :q2 OR hm.make LIKE :q3 OR hm.model LIKE :q4)';
+            $where[]          = '(hu.serial LIKE :q1 OR hu.asset_tag LIKE :q2 OR hm.make LIKE :q3 OR hm.model LIKE :q4'
+                              . ' OR pt.name LIKE :q5 OR pt.brand LIKE :q6)';
             $like = '%' . trim($_GET['q']) . '%';  // native prepares: each placeholder bound once
-            for ($qi = 1; $qi <= 4; $qi++) {
+            for ($qi = 1; $qi <= 6; $qi++) {
                 $params[':q' . $qi] = $like;
             }
         }
@@ -161,7 +175,8 @@ return static function (Router $router): void {
         $items = array_map('inv_component_row', $rows);
         if ($page !== null) {
             $total = (int) Inv::scalar(
-                'SELECT COUNT(*) FROM hardware_units hu JOIN hardware_models hm ON hm.id=hu.model_id WHERE ' . implode(' AND ', $where),
+                'SELECT COUNT(*) FROM hardware_units hu LEFT JOIN hardware_models hm ON hm.id=hu.model_id'
+                . ' LEFT JOIN product_types pt ON pt.id=hu.product_type_id WHERE ' . implode(' AND ', $where),
                 $params
             );
             Response::ok(inv_page_result($items, $total, $page));
@@ -328,46 +343,82 @@ return static function (Router $router): void {
         Response::ok(['unitId' => $id, 'entityId' => $entityId, 'unchanged' => false]);
     });
 
+    // Create one item, or `count` identical items all-or-none, of a catalog
+    // product type. product_type_id is preferred; a legacy model_id alone
+    // still works and derives the product type (037 trigger).
     $router->post('/api/inventory/components', static function (): void {
         Operator::requireOperator();
         $b = solari_json_body();
 
-        $modelId = inv_optional_fk('hardware_models', $b['model_id'] ?? null, 'model_id');
-        if ($modelId === null) {
-            Response::error('bad_request', 'model_id is required.', 400);
+        $identity = inv_component_identity($b, null);
+        $licence  = inv_component_licence($b, null, $identity['kind'], null);
+        $count    = 1;
+        if (array_key_exists('count', $b)) {
+            if (!is_int($b['count']) || $b['count'] < 1 || $b['count'] > INV_COMPONENT_BATCH_MAX) {
+                Response::error('bad_request', 'count must be an integer from 1 to ' . INV_COMPONENT_BATCH_MAX . '.', 400);
+            }
+            $count = $b['count'];
         }
-
-        Inv::exec(
-            'INSERT INTO hardware_units
-                (model_id, serial, asset_tag, location_id, acquired_on, quantity, unit_cost_cents,
-                 stock_status, receipt_id, notes, source_id, asserted_kind, asserted_at)
-             VALUES
-                (:model_id, :serial, :asset_tag, :location_id, :acquired_on, :quantity, :unit_cost_cents,
-                 :stock_status, :receipt_id, :notes, :source_id, \'human\', NOW())',
-            [
-                ':model_id'        => $modelId,
-                ':serial'          => inv_str($b, 'serial', 128),
-                ':asset_tag'       => inv_str($b, 'asset_tag', 64),
-                ':location_id'     => inv_optional_fk('locations', $b['location_id'] ?? null, 'location_id'),
-                ':acquired_on'     => inv_date($b['acquired_on'] ?? null),
-                ':quantity'        => inv_quantity($b),
-                ':unit_cost_cents' => inv_cents($b, 'unit_cost_cents'),
-                ':stock_status'    => isset($b['stock_status']) && $b['stock_status'] !== ''
-                                        ? Inv::requireEnum('hardware_units', 'stock_status', $b['stock_status'], 'stock_status')
-                                        : 'in_stock',
-                ':receipt_id'      => inv_optional_fk('receipts', $b['receipt_id'] ?? null, 'receipt_id'),
-                ':notes'           => inv_str($b, 'notes'),
-                ':source_id'       => Sor::dashboardSourceId(),
-            ]
+        $serial   = inv_str($b, 'serial', 128);
+        $assetTag = inv_str($b, 'asset_tag', 64);
+        if ($count > 1 && ($serial !== null || $assetTag !== null)) {
+            Response::error('bad_request', 'serial and asset_tag apply to a single item; use count 1.', 400);
+        }
+        $params = [
+            ':model_id'        => $identity['model_id'],
+            ':product_type_id' => $identity['product_type_id'],
+            ':serial'          => $serial,
+            ':asset_tag'       => $assetTag,
+            ':location_id'     => inv_optional_fk('locations', $b['location_id'] ?? null, 'location_id'),
+            ':acquired_on'     => inv_date($b['acquired_on'] ?? null),
+            ':quantity'        => inv_quantity($b),
+            ':unit_cost_cents' => inv_cents($b, 'unit_cost_cents'),
+            ':stock_status'    => isset($b['stock_status']) && $b['stock_status'] !== ''
+                                    ? Inv::requireEnum('hardware_units', 'stock_status', $b['stock_status'], 'stock_status')
+                                    : 'in_stock',
+            ':receipt_id'      => inv_optional_fk('receipts', $b['receipt_id'] ?? null, 'receipt_id'),
+            ':notes'           => inv_str($b, 'notes'),
+            ':licence_seats'   => $licence['licence_seats'],
+            ':licence_expires_on'   => $licence['licence_expires_on'],
+            ':licence_reference'    => $licence['licence_reference'],
+            ':installed_on_unit_id' => $licence['installed_on_unit_id'],
+            ':source_id'       => Sor::dashboardSourceId(),
+        ];
+        $ids = inv_component_transaction(static function (PDO $db) use ($params, $count): array {
+            $st = $db->prepare(
+                'INSERT INTO hardware_units
+                    (model_id, product_type_id, serial, asset_tag, location_id, acquired_on, quantity, unit_cost_cents,
+                     stock_status, receipt_id, notes, licence_seats, licence_expires_on, licence_reference,
+                     installed_on_unit_id, source_id, asserted_kind, asserted_at)
+                 VALUES
+                    (:model_id, :product_type_id, :serial, :asset_tag, :location_id, :acquired_on, :quantity, :unit_cost_cents,
+                     :stock_status, :receipt_id, :notes, :licence_seats, :licence_expires_on, :licence_reference,
+                     :installed_on_unit_id, :source_id, \'human\', NOW())'
+            );
+            $ids = [];
+            for ($i = 0; $i < $count; $i++) {
+                $st->execute($params);
+                $ids[] = (int) $db->lastInsertId();
+            }
+            return $ids;
+        });
+        $rows = array_map(
+            static fn(int $id): array => inv_component_row(Inv::row(inv_component_sql() . ' WHERE hu.id = :i', [':i' => $id])),
+            $ids
         );
-        $id = (int) Inv::lastInsertId();
-        Response::ok(inv_component_row(Inv::row(inv_component_sql() . ' WHERE hu.id = :i', [':i' => $id])), 201);
+        // Without `count` the response stays the single legacy row.
+        Response::ok(array_key_exists('count', $b) ? ['items' => $rows, 'count' => count($rows)] : $rows[0], 201);
     });
 
     $router->add('PUT', '/api/inventory/components/{id}', static function (array $p): void {
         Operator::requireOperator();
         $id = Inv::idParam($p['id']);
-        if (Inv::row('SELECT id FROM hardware_units WHERE id = :i AND deleted_at IS NULL', [':i' => $id]) === null) {
+        $current = Inv::row(
+            'SELECT id, model_id, product_type_id, licence_seats, licence_expires_on, licence_reference, installed_on_unit_id
+               FROM hardware_units WHERE id = :i AND deleted_at IS NULL',
+            [':i' => $id]
+        );
+        if ($current === null) {
             Response::error('not_found', "No component $id", 404);
         }
         $b = solari_json_body();
@@ -375,12 +426,18 @@ return static function (Router $router): void {
         $sets   = [];
         $params = [':id' => $id];
 
-        if (array_key_exists('model_id', $b)) {
-            $mid = inv_optional_fk('hardware_models', $b['model_id'], 'model_id');
-            if ($mid === null) {
-                Response::error('bad_request', 'model_id cannot be cleared.', 400);
+        $identity = inv_component_identity($b, $current);
+        if ($identity['set_product_type']) {
+            $sets[] = 'product_type_id = :ptid'; $params[':ptid'] = $identity['product_type_id'];
+        }
+        if ($identity['set_model']) {
+            $sets[] = 'model_id = :mid'; $params[':mid'] = $identity['model_id'];
+        }
+        $licence = inv_component_licence($b, $current, $identity['kind'], $id);
+        foreach (INV_COMPONENT_LICENCE_FIELDS as $field) {
+            if (array_key_exists($field, $b)) {
+                $sets[] = "$field = :$field"; $params[":$field"] = $licence[$field];
             }
-            $sets[] = 'model_id = :mid'; $params[':mid'] = $mid;
         }
         if (array_key_exists('serial', $b)) {
             $sets[] = 'serial = :serial'; $params[':serial'] = inv_str($b, 'serial', 128);
@@ -414,7 +471,9 @@ return static function (Router $router): void {
             Response::error('bad_request', 'No updatable fields supplied.', 400);
         }
 
-        Inv::exec('UPDATE hardware_units SET ' . implode(', ', $sets) . ' WHERE id = :id', $params);
+        inv_component_transaction(static function (PDO $db) use ($sets, $params): void {
+            $db->prepare('UPDATE hardware_units SET ' . implode(', ', $sets) . ' WHERE id = :id')->execute($params);
+        });
         Response::ok(inv_component_row(Inv::row(inv_component_sql() . ' WHERE hu.id = :i', [':i' => $id])));
     });
 
@@ -1164,6 +1223,7 @@ final class Inv
             if ($db->inTransaction()) {
                 $db->rollBack();
             }
+            inv_retryable_conflict($e);
             throw $e;
         }
     }
@@ -1211,6 +1271,7 @@ final class Inv
             $st->execute($params);
             return $st->rowCount();
         } catch (\PDOException $e) {
+            inv_retryable_conflict($e);
             $state = (string) $e->getCode();
             if ($state === '45000') {
                 Response::error('conflict', (string) ($e->errorInfo[2] ?? $e->getMessage()), 409);
@@ -1446,14 +1507,24 @@ function inv_unit_xor_model(array $b, bool $required): array
 
 function inv_component_sql(): string
 {
-    return "SELECT hu.id, hu.model_id, hu.serial, hu.asset_tag, hu.location_id, hu.acquired_on,
+    // The legacy model is optional (037): catalog-only items have no
+    // hardware_models row, so make/model/hw_type are NULL and the product
+    // type names the item.
+    return "SELECT hu.id, hu.model_id, hu.product_type_id, hu.serial, hu.asset_tag, hu.location_id, hu.acquired_on,
                    hu.quantity, hu.unit_cost_cents, hu.stock_status, hu.receipt_id, hu.notes,
+                   hu.licence_seats, hu.licence_expires_on, hu.licence_reference, hu.installed_on_unit_id,
                    hu.source_id, hu.created_at, hu.updated_at,
                    hm.make, hm.model, hm.hw_type,
+                   pt.name AS product_type_name, pt.kind AS product_type_kind, pt.brand AS product_type_brand,
+                   pt.deleted_at AS product_type_deleted_at,
+                   ipt.name AS installed_on_name, iu.asset_tag AS installed_on_asset_tag,
                    l.name AS location_name, l.code AS location_code, l.loc_type AS location_type,
                    e.id AS entity_id, e.name AS entity_name, e.entity_type AS entity_type
               FROM hardware_units hu
-              JOIN hardware_models hm ON hm.id = hu.model_id
+              LEFT JOIN hardware_models hm ON hm.id = hu.model_id
+              LEFT JOIN product_types pt ON pt.id = hu.product_type_id
+              LEFT JOIN hardware_units iu ON iu.id = hu.installed_on_unit_id AND iu.deleted_at IS NULL
+              LEFT JOIN product_types ipt ON ipt.id = iu.product_type_id
               LEFT JOIN locations l ON l.id = hu.location_id AND l.deleted_at IS NULL
               LEFT JOIN entity_hardware_unit_links lnk ON lnk.hardware_unit_id = hu.id
               LEFT JOIN entities e ON e.id = lnk.entity_id AND e.deleted_at IS NULL";
@@ -1463,7 +1534,12 @@ function inv_component_row(array $r): array
 {
     return [
         'id'            => (int) $r['id'],
-        'modelId'       => (int) $r['model_id'],
+        'modelId'       => Coerce::int($r['model_id']),
+        'productTypeId' => Coerce::int($r['product_type_id'] ?? null),
+        'productTypeName'    => $r['product_type_name'] ?? null,
+        'productTypeKind'    => $r['product_type_kind'] ?? null,
+        'productTypeBrand'   => $r['product_type_brand'] ?? null,
+        'productTypeRetired' => ($r['product_type_deleted_at'] ?? null) !== null,
         'make'          => $r['make'] ?? null,
         'model'         => $r['model'] ?? null,
         'hwType'        => $r['hw_type'] ?? null,
@@ -1481,10 +1557,203 @@ function inv_component_row(array $r): array
         'stockStatus'   => $r['stock_status'],
         'receiptId'     => Coerce::int($r['receipt_id']),
         'notes'         => $r['notes'],
+        'licenceSeats'      => Coerce::int($r['licence_seats'] ?? null),
+        'licenceExpiresOn'  => $r['licence_expires_on'] ?? null,
+        'licenceReference'  => $r['licence_reference'] ?? null,
+        'installedOnUnitId' => Coerce::int($r['installed_on_unit_id'] ?? null),
+        'installedOnName'   => $r['installed_on_name'] ?? null,
+        'installedOnAssetTag' => $r['installed_on_asset_tag'] ?? null,
         'sourceId'      => Coerce::int($r['source_id']),
         'createdAt'     => Coerce::iso($r['created_at'] ?? null),
         'updatedAt'     => Coerce::iso($r['updated_at'] ?? null),
     ];
+}
+
+/**
+ * InnoDB deadlock (1213) or lock-wait timeout (1205): the work was rolled
+ * back and is safe to repeat, so answer 409 rather than a 500.
+ */
+function inv_retryable_conflict(Throwable $e): void
+{
+    if ($e instanceof PDOException && in_array((int) ($e->errorInfo[1] ?? 0), [1205, 1213], true)) {
+        Response::error('conflict', 'Another change was in progress; try again.', 409);
+    }
+}
+
+/**
+ * Run a component write. The 037 unit triggers SIGNAL 45000 for an invalid
+ * identity or installation target; those are request errors (400), not
+ * conflicts. A duplicate serial within a product type is 409.
+ */
+function inv_component_transaction(callable $work)
+{
+    try {
+        return Inv::transaction($work);
+    } catch (PDOException $e) {
+        $state = (string) $e->getCode();
+        if ($state === '45000') {
+            Response::error('bad_request', (string) ($e->errorInfo[2] ?? 'The item is invalid.'), 400);
+        }
+        if ((int) ($e->errorInfo[1] ?? 0) === 1062) {
+            Response::error('conflict', 'An item with that serial already exists for this product type.', 409);
+        }
+        if ($state === '23000') {
+            Response::error('conflict', 'Duplicate or constraint violation.', 409);
+        }
+        throw $e;
+    }
+}
+
+/**
+ * Resolve an item's catalog identity. product_type_id is preferred; a legacy
+ * model_id derives it; both given must agree. A newly chosen product type
+ * must be live (an item may keep a type retired after it was created).
+ *
+ * @param array<string,mixed>      $b
+ * @param array<string,mixed>|null $current existing unit on update
+ * @return array{model_id:?int,product_type_id:int,kind:string,set_model:bool,set_product_type:bool}
+ */
+function inv_component_identity(array $b, ?array $current): array
+{
+    $hasType  = array_key_exists('product_type_id', $b) && $b['product_type_id'] !== null && $b['product_type_id'] !== '';
+    $hasModel = array_key_exists('model_id', $b);
+    if ($current !== null && array_key_exists('product_type_id', $b) && !$hasType) {
+        Response::error('bad_request', 'product_type_id cannot be cleared.', 400);
+    }
+    $modelId = $hasModel ? inv_optional_fk('hardware_models', $b['model_id'], 'model_id') : null;
+    if ($current === null && !$hasType && $modelId === null) {
+        Response::error('bad_request', 'product_type_id is required.', 400);
+    }
+    $currentType = $current === null ? null : Coerce::int($current['product_type_id']);
+    $typeId = null;
+    if ($hasType) {
+        if (!ctype_digit((string) $b['product_type_id'])) {
+            Response::error('bad_request', 'product_type_id must be an integer.', 400);
+        }
+        $typeId = (int) $b['product_type_id'];
+    }
+    if ($modelId !== null) {
+        $modelType = Coerce::int(Inv::scalar('SELECT product_type_id FROM hardware_models WHERE id = :i', [':i' => $modelId]));
+        if ($typeId !== null && $typeId !== $modelType) {
+            Response::error('bad_request', 'model_id and product_type_id disagree.', 400);
+        }
+        $typeId = $modelType;
+    }
+    // An update that touches neither, or only clears the legacy model.
+    $typeId ??= $currentType;
+    $type = $typeId === null ? null : Inv::row('SELECT id, kind, deleted_at FROM product_types WHERE id = :i', [':i' => $typeId]);
+    if ($type === null) {
+        Response::error('bad_request', 'No product type ' . ($typeId ?? '(none)'), 400);
+    }
+    if ($type['deleted_at'] !== null && $typeId !== $currentType) {
+        Response::error('bad_request', "Product type $typeId is retired; choose a live product type.", 400);
+    }
+    return [
+        'model_id'         => $modelId,
+        'product_type_id'  => $typeId,
+        'kind'             => (string) $type['kind'],
+        'set_model'        => $hasModel,
+        'set_product_type' => $hasType || $modelId !== null,
+    ];
+}
+
+/**
+ * Licence and installation fields: software items only. licence_reference
+ * says where the licence is kept (vault item, order number, URL), never the
+ * licence itself.
+ *
+ * @param array<string,mixed>      $b
+ * @param array<string,mixed>|null $current existing unit on update
+ * @return array<string,mixed> the effective value of every licence field
+ */
+function inv_component_licence(array $b, ?array $current, string $kind, ?int $selfId): array
+{
+    $out = [];
+    foreach (INV_COMPONENT_LICENCE_FIELDS as $field) {
+        $out[$field] = $current[$field] ?? null;
+    }
+    if (array_key_exists('licence_seats', $b)) {
+        $v = $b['licence_seats'];
+        if ($v === null || $v === '') {
+            $out['licence_seats'] = null;
+        } elseif (!ctype_digit((string) $v) || (int) $v < 1 || (int) $v > 4294967295) {
+            Response::error('bad_request', 'licence_seats must be a positive integer.', 400);
+        } else {
+            $out['licence_seats'] = (int) $v;
+        }
+    }
+    if (array_key_exists('licence_expires_on', $b)) {
+        $date = inv_date($b['licence_expires_on']);
+        if ($date !== null && DateTimeImmutable::createFromFormat('!Y-m-d', $date)?->format('Y-m-d') !== $date) {
+            Response::error('bad_request', 'licence_expires_on must be a real YYYY-MM-DD date.', 400);
+        }
+        $out['licence_expires_on'] = $date;
+    }
+    if (array_key_exists('licence_reference', $b)) {
+        $ref = inv_str($b, 'licence_reference');
+        if ($ref !== null && strlen($ref) > 1024) {
+            Response::error('bad_request', 'licence_reference is too long.', 400);
+        }
+        if ($ref !== null && inv_licence_reference_secret_like($ref)) {
+            Response::error('bad_request', 'licence_reference must say where the licence is kept, not contain a key, password or token.', 400);
+        }
+        $out['licence_reference'] = $ref;
+    }
+    if (array_key_exists('installed_on_unit_id', $b)) {
+        $target = $b['installed_on_unit_id'];
+        if ($target === null || $target === '') {
+            $out['installed_on_unit_id'] = null;
+        } else {
+            if (!ctype_digit((string) $target)) {
+                Response::error('bad_request', 'installed_on_unit_id must be an integer.', 400);
+            }
+            $target = (int) $target;
+            $ok = $target !== $selfId && Inv::row(
+                "SELECT hu.id FROM hardware_units hu JOIN product_types pt ON pt.id = hu.product_type_id
+                  WHERE hu.id = :i AND hu.deleted_at IS NULL AND pt.kind <> 'software'",
+                [':i' => $target]
+            ) !== null;
+            if (!$ok) {
+                Response::error('bad_request', 'installed_on_unit_id must reference another live, non-software item.', 400);
+            }
+            $out['installed_on_unit_id'] = $target;
+        }
+    }
+    if ($kind !== 'software') {
+        foreach (INV_COMPONENT_LICENCE_FIELDS as $field) {
+            if ($out[$field] !== null) {
+                Response::error('bad_request', 'Licence and installation fields apply only to software items.', 400);
+            }
+        }
+    }
+    return $out;
+}
+
+/**
+ * A licence reference that looks like the secret itself: a secret-like word
+ * (the product_catalog key rule; the "1Password" vault name is allowed), a
+ * product-key shape (four or more dash-separated groups of 4–6 characters),
+ * or a long unbroken letters-and-digits token. UUIDs and URLs pass.
+ */
+function inv_licence_reference_secret_like(string $v): bool
+{
+    $words = preg_replace('/\b1password\b/i', '', $v) ?? $v;
+    if (preg_match('/(?:secret|password|passwd|token|api.?key|license.?key|licence.?key|credential|private.?key)/i', $words) === 1) {
+        return true;
+    }
+    if (preg_match('/(?<![A-Za-z0-9])[A-Za-z0-9]{4,6}(?:-[A-Za-z0-9]{4,6}){3,}(?![A-Za-z0-9])/', $v) === 1) {
+        return true;
+    }
+    foreach (preg_split('/\s+/', $v) ?: [] as $word) {
+        if (preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i', $word) === 1) {
+            continue;
+        }
+        if (strlen($word) >= 24 && preg_match('/\A[A-Za-z0-9+\/=_-]+\z/', $word) === 1
+            && preg_match('/\d/', $word) === 1 && preg_match('/[A-Za-z]/', $word) === 1) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function inv_model_sql(): string
@@ -1538,7 +1807,8 @@ function inv_location_row(array $r): array
         'notes'     => $r['notes'] ?? null,
         'sourceId'  => Coerce::int($r['source_id']),
         'createdAt' => Coerce::iso($r['created_at'] ?? null),
-        'updatedAt' => Coerce::iso($r['updated_at'] ?? null),
+        // Optimistic-lock token: microseconds must round-trip (037).
+        'updatedAt' => Coerce::isoMicro($r['updated_at'] ?? null),
     ];
 }
 

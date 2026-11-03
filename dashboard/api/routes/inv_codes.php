@@ -1015,7 +1015,13 @@ function inv_code_label_lines(array $codeRow): array
             $u = Inv::row(inv_component_sql() . ' WHERE hu.id = :i', [':i' => $id]);
             if ($u !== null) {
                 $line1 = trim(((string) ($u['make'] ?? '')) . ' ' . ((string) ($u['model'] ?? '')));
-                $line2 = $u['serial'] !== null && $u['serial'] !== '' ? (string) $u['serial'] : (string) ($u['hw_type'] ?? '');
+                if ($line1 === '') {
+                    // Catalog-only item (037): no legacy model, so name it by its product type.
+                    $line1 = trim(((string) ($u['product_type_brand'] ?? '')) . ' ' . ((string) ($u['product_type_name'] ?? '')));
+                }
+                $line2 = $u['serial'] !== null && $u['serial'] !== ''
+                    ? (string) $u['serial']
+                    : (string) ($u['hw_type'] ?? $u['product_type_kind'] ?? '');
             }
             break;
         case 'locations':

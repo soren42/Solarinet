@@ -31,6 +31,34 @@ final class Coerce
         return $dt->format('Y-m-d\TH:i:s\Z');
     }
 
+    /**
+     * iso() that keeps microseconds ("Y-m-d\TH:i:s.uuuuuu\Z"). Optimistic-lock
+     * tokens use this so a DATETIME(6) value round-trips exactly; whole-second
+     * values gain ".000000".
+     */
+    public static function isoMicro(?string $datetime): ?string
+    {
+        if ($datetime === null || $datetime === '' || strncmp($datetime, '0000-00-00 00:00:00', 19) === 0) {
+            return null;
+        }
+        $fraction = substr($datetime, 19);
+        if ($fraction === '') {
+            $fraction = '.000000';
+        }
+        if (preg_match('/\A\.\d{1,6}\z/', $fraction) !== 1) {
+            return null;
+        }
+        $dt = DateTimeImmutable::createFromFormat(
+            'Y-m-d H:i:s.u',
+            substr($datetime, 0, 19) . str_pad($fraction, 7, '0'),
+            new DateTimeZone('UTC')
+        );
+        if ($dt === false) {
+            return null;
+        }
+        return $dt->format('Y-m-d\TH:i:s.u\Z');
+    }
+
     /** Decode a JSON-typed column to a structure; null/invalid -> null. */
     public static function json(?string $raw)
     {

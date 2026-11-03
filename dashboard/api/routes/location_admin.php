@@ -271,7 +271,8 @@ return static function (Router $router): void {
                 loc_sibling_available($db, $name, $parent, null);
             }
             $seenCodes = [];
-            $codeLookup = $db->prepare('SELECT id FROM locations WHERE code = :code LIMIT 1 FOR UPDATE');
+            // Live codes are globally unique (037); a retired location releases its code.
+            $codeLookup = $db->prepare('SELECT id FROM locations WHERE code = :code AND deleted_at IS NULL LIMIT 1 FOR UPDATE');
             foreach ($codes as $code) {
                 if ($code === null) {
                     continue;
@@ -283,7 +284,7 @@ return static function (Router $router): void {
                 $seenCodes[$key] = true;
                 $codeLookup->execute([':code' => $code]);
                 if ($codeLookup->fetchColumn() !== false) {
-                    loc_error('duplicate_location', "Location code $code already exists.", 409);
+                    loc_error('duplicate_location', "Location code $code is already used by another location.", 409);
                 }
             }
 
@@ -435,7 +436,11 @@ function loc_map_exception(PDOException $e): never
     $state   = (string) $e->getCode();
     $errno   = (int) ($e->errorInfo[1] ?? 0);
     $message = (string) ($e->errorInfo[2] ?? $e->getMessage());
+    inv_retryable_conflict($e);
     if ($errno === 1062) {
+        if (str_contains($message, 'uq_locations_live_code')) {
+            loc_error('duplicate_location', 'That location code is already used by another location.', 409);
+        }
         loc_error('duplicate_location', 'A location or container type with that name already exists.', 409);
     }
     if ($state === '23000') {
@@ -515,10 +520,19 @@ function loc_nullable_int(mixed $v): ?int
     return $v === null ? null : (int) $v;
 }
 
-/** Optimistic-lock compare: accept the raw DB value or its Coerce::iso form. */
+/**
+ * Optimistic-lock compare: accept the raw DB value or its Coerce::isoMicro
+ * form. A whole-second Coerce::iso token (issued before 037) still matches,
+ * but only when the stored value has no sub-second part, so a stale token
+ * cannot pass for a newer edit in the same second.
+ */
 function loc_same_timestamp(string $current, string $expected): bool
 {
-    return $current === $expected || Coerce::iso($current) === $expected;
+    if ($current === $expected || Coerce::isoMicro($current) === $expected) {
+        return true;
+    }
+    $micro = Coerce::isoMicro($current);
+    return $micro !== null && substr($micro, 19, 7) === '.000000' && Coerce::iso($current) === $expected;
 }
 
 // ======================================================================

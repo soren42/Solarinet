@@ -4,7 +4,7 @@
 
    Reads/writes the inventory subsystem: hardware_units (components),
    hardware_models (legacy models), product_types + product_barcodes (catalog,
-   I1 WP2 API), locations (property → floor → room → section,
+   I1 WP2 API; items are created on a product type, migration 037), locations (property → floor → room → section,
    storage units anywhere — I1 WP4 API: move/merge/bulk/project/container types),
    receipts (purchase record + scan), projects + project_allocations
    (reserve owned units — no double-commit — and list needed-to-buy items).
@@ -191,6 +191,18 @@
     function locLabel(id) { const l = locById[id]; return l ? (l.name + (l.code ? " (" + l.code + ")" : "")) : "—"; }
     function locPath(id) { const parts = []; let l = locById[id], g = 0; while (l && g++ < 16) { parts.unshift(l.name + (l.code ? " " + l.code : "")); l = l.parent_id ? locById[l.parent_id] : null; } return parts.join(" › "); }
     function modelLabel(id) { const m = modelById[id]; return m ? catalogName(m.make, m.model) : "—"; }
+    // Items are identified by product type (037); model_id is legacy and may be null.
+    function unitLabel(u) {
+      if (!u) return "—";
+      const name = String(u.product_type_name || "").trim();
+      return name || modelLabel(u.model_id);
+    }
+    function unitKind(u) {
+      if (!u) return "";
+      if (u.product_type_kind) return CAT_KIND_LABEL[u.product_type_kind] || u.product_type_kind;
+      const m = modelById[u.model_id];
+      return m ? m.hw_type : "";
+    }
     function unitCommitment(unitId) { return inv.allocations.find(function (a) { return a.hardware_unit_id === unitId && (a.allocation === "committed" || a.allocation === "installed") && !a.deleted; }); }
 
     // ----- mutations (optimistic local + best-effort live persist) -----
@@ -323,7 +335,7 @@
       if (!isOffline() && a && a.updateAllocation) a.updateAllocation(allocId, { deleted: true }).then(refresh).catch(function () {});
     }
 
-    const helpers = { locById, modelById, receiptById, projectById, locLabel, locPath, modelLabel, unitCommitment };
+    const helpers = { locById, modelById, receiptById, projectById, locLabel, locPath, modelLabel, unitLabel, unitKind, unitCommitment };
     const actions = { saveUnit, saveModel, saveReceipt, saveProject, commitUnit, addNeeded, setAllocation, removeAllocation };
 
     const TABS = [
@@ -353,7 +365,7 @@
         {loadError && <div role="alert" className="empty" style={{ marginBottom: 16 }}>Inventory refresh failed: {loadError} Current screen contents are retained and may be stale.</div>}
 
         {tab === "components" && <ComponentsTab inv={inv} h={helpers} act={actions} onViewReceipt={setViewer} onInventoryChanged={function () { return loadInventory(true); }} showRackWireProfiles={showRackWireProfiles} onToggleRackWireProfiles={function () { setShowRackWireProfiles(function (value) { return !value; }); }} onNavigate={onNavigate} />}
-        {tab === "catalog" && <CatalogTab onChanged={function () { return loadInventory(true); }} />}
+        {tab === "catalog" && <CatalogTab inv={inv} h={helpers} onChanged={function () { return loadInventory(true); }} />}
         {tab === "locations" && <LocationsTab inv={inv} h={helpers} onChanged={function () { return loadInventory(true); }} />}
         {tab === "receipts" && <ReceiptsTab inv={inv} h={helpers} act={actions} onView={setViewer} />}
         {tab === "projects" && <ProjectsTab inv={inv} h={helpers} act={actions} />}
@@ -381,12 +393,12 @@
     let rows = inv.units.filter(function (u) {
       if (stockFilter !== "all" && u.stock_status !== stockFilter) return false;
       if (!ql) return true;
-      const hay = [h.modelLabel(u.model_id), u.serial, u.asset_tag, h.locLabel(u.location_id)].join(" ").toLowerCase();
+      const hay = [h.unitLabel(u), u.serial, u.asset_tag, h.locLabel(u.location_id), u.licence_reference].join(" ").toLowerCase();
       return hay.indexOf(ql) >= 0;
     });
     function keyOf(u) {
       switch (sort.key) {
-        case "model": return h.modelLabel(u.model_id).toLowerCase();
+        case "model": return h.unitLabel(u).toLowerCase();
         case "serial": return (u.serial || "").toLowerCase();
         case "asset": return (u.asset_tag || "").toLowerCase();
         case "location": return h.locLabel(u.location_id).toLowerCase();
@@ -424,7 +436,7 @@
             </button>;
           })}
           <div className="search" style={{ marginLeft: "auto", maxWidth: 240, height: 36 }}><Icon name="search" size={15} /><input value={q} onChange={function (e) { setQ(e.target.value); setPage(0); }} placeholder="Find component…" /></div>
-          <button className="btn-primary" onClick={function () { setEdit({ unit: null }); }}><Icon name="plus" size={14} />New component</button>
+          <button className="btn-primary" onClick={function () { setEdit({ unit: null }); }}><Icon name="plus" size={14} />New item</button>
           <button className="btn-ghost" aria-expanded={!!showRackWireProfiles} onClick={onToggleRackWireProfiles}>RackWire device profiles</button>
         </div>
 
@@ -434,15 +446,16 @@
         {rows.length > 0 && (
           <div className="tablewrap"><table className="grid">
             <thead><tr>
-              {th("model", "Model")}{th("serial", "Serial")}{th("asset", "Asset tag")}{th("location", "Location")}{th("qty", "Qty", true)}{th("stock", "Stock")}{th("cost", "Cost", true)}<th>SoR entity</th><th>Receipt</th>
+              {th("model", "Item")}{th("serial", "Serial")}{th("asset", "Asset tag")}{th("location", "Location")}{th("qty", "Qty", true)}{th("stock", "Stock")}{th("cost", "Cost", true)}<th>SoR entity</th><th>Receipt</th>
             </tr></thead>
             <tbody>
               {visibleRows.map(function (u) {
-                const m = h.modelById[u.model_id];
+                const kindLabel = h.unitKind(u);
+                const licence = licenceSummary(u);
                 const r = u.receipt_id ? h.receiptById[u.receipt_id] : null;
                 return (
                   <tr key={u.id} style={{ cursor: "pointer" }} onClick={function () { setEdit({ unit: u }); }}>
-                    <td><div style={{ fontWeight: 600 }}>{h.modelLabel(u.model_id)}</div>{m && <div className="td-mono muted" style={{ fontSize: 10.5 }}>{m.hw_type}</div>}</td>
+                    <td><div style={{ fontWeight: 600 }}>{h.unitLabel(u)}</div>{kindLabel && <div className="td-mono muted" style={{ fontSize: 10.5 }}>{kindLabel}</div>}{licence && <div className="muted inv-unit__licence">{licence}</div>}</td>
                     <td className="td-mono">{u.serial || "—"}</td>
                     <td className="td-mono muted">{u.asset_tag || "—"}</td>
                     <td title={h.locPath(u.location_id)}>{h.locLabel(u.location_id)}</td>
@@ -472,7 +485,7 @@
 
         <InventoryPager currentPage={activePage} pageSize={pageSize} count={rows.length} label="components" onPage={setPage} />
 
-        {edit && <UnitModal unit={edit.unit} inv={inv} h={h} act={act} onClose={function () { setEdit(null); }} />}
+        {edit && <UnitModal unit={edit.unit} inv={inv} h={h} act={act} onChanged={onInventoryChanged} onClose={function () { setEdit(null); }} />}
       </div>
     );
   }
@@ -522,7 +535,7 @@
       </div>
       <div className="inv-entity-link__bridge" aria-label="Physical inventory unit links to a canonical SoR entity">
         <div className="inv-entity-link__node"><span className="inv-entity-link__eyebrow">PHYSICAL UNIT</span>
-          <strong>{h.modelLabel(unit.model_id)}</strong>
+          <strong>{h.unitLabel(unit)}</strong>
           <span className="td-mono">{unit.asset_tag || "No asset tag"}</span>
           {unit.serial && <span className="td-mono muted">Serial {unit.serial}</span>}
         </div>
@@ -693,92 +706,238 @@
     </section>;
   }
 
-  function UnitModal({ unit, inv, h, act, onClose }) {
+  /* ---- items on product types (migration 037) ---- */
+  const ITEM_BATCH_MAX = 50;   // mirrors INV_COMPONENT_BATCH_MAX
+  const PICK_CAP = 200;
+  // Mirrors the obvious cases of inv_licence_reference_secret_like(); the API
+  // stays the authority. "1Password" names a vault, not a secret.
+  const PRODUCT_KEY = /(?:^|[^A-Za-z0-9])[A-Za-z0-9]{4,6}(?:-[A-Za-z0-9]{4,6}){3,}(?![A-Za-z0-9])/;
+  function referenceLooksSecret(ref) {
+    const r = String(ref || "").replace(/1Password/gi, "");
+    return SECRET_KEY.test(r) || PRODUCT_KEY.test(r);
+  }
+  function itemErrorText(e, fallback) {
+    const msg = String((e && e.message) || "");
+    return msg || fallback || "The request failed.";
+  }
+  function byLabel(a, b) { return a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }); }
+  function locationOptions(inv, h) {
+    return inv.locations.map(function (l) { return { id: Number(l.id), label: h.locPath(l.id), tag: LOC_LABEL[l.loc_type] || "" }; }).sort(byLabel);
+  }
+  // Software is installed on another live item that is not itself software.
+  function installedOnOptions(inv, h, selfId) {
+    return inv.units.filter(function (u) {
+      return Number(u.id) !== Number(selfId) && (u.product_type_kind ? u.product_type_kind !== "software" : true);
+    }).map(function (u) {
+      return { id: Number(u.id), label: h.unitLabel(u), sub: [u.asset_tag || u.serial, u.location_id != null ? h.locLabel(u.location_id) : ""].filter(Boolean).join(" · "), tag: h.unitKind(u) };
+    }).sort(byLabel);
+  }
+  function licenceState(u) {
+    return {
+      seats: u && u.licence_seats != null ? String(u.licence_seats) : "",
+      expires: (u && u.licence_expires_on) || "",
+      reference: (u && u.licence_reference) || "",
+      installedOn: u && u.installed_on_unit_id != null ? Number(u.installed_on_unit_id) : null,
+    };
+  }
+  // API licence fields: values for software, nulls otherwise (the API refuses
+  // them on other kinds, so a retype away from software clears them).
+  function licenceBody(v, software) {
+    if (!software) return { body: { licence_seats: null, licence_expires_on: null, licence_reference: null, installed_on_unit_id: null } };
+    const seats = String(v.seats || "").trim();
+    if (seats && (!/^[1-9]\d{0,9}$/.test(seats) || Number(seats) > 4294967295)) return { error: "Seats must be a whole number from 1 to 4294967295." };
+    const expires = String(v.expires || "").trim();
+    if (expires && !/^\d{4}-\d{2}-\d{2}$/.test(expires)) return { error: "The expiry must be a date." };
+    const ref = String(v.reference || "").trim();
+    if (ref.length > 1024) return { error: "The licence reference must be 1024 characters or fewer." };
+    if (ref && referenceLooksSecret(ref)) return { error: "The licence reference should say where the licence is kept — a vault entry or an order number — never the key, password or token itself." };
+    return { body: { licence_seats: seats ? Number(seats) : null, licence_expires_on: expires || null, licence_reference: ref || null, installed_on_unit_id: v.installedOn != null ? Number(v.installedOn) : null } };
+  }
+  function licenceSummary(u) {
+    if (!u || u.product_type_kind !== "software") return "";
+    const parts = [];
+    if (u.licence_seats != null) parts.push(u.licence_seats + (Number(u.licence_seats) === 1 ? " seat" : " seats"));
+    if (u.licence_expires_on) parts.push("expires " + u.licence_expires_on);
+    if (u.installed_on_unit_id != null) parts.push("on " + (u.installed_on_name || ("item #" + u.installed_on_unit_id)));
+    if (u.licence_reference) parts.push(u.licence_reference);
+    return parts.join(" · ");
+  }
+  // Every live (non-retired) product type, a page at a time.
+  function loadLiveProductTypes(a) {
+    const out = [];
+    function next(offset) {
+      return a.productTypes({ limit: 500, offset: offset }).then(function (res) {
+        const items = res && Array.isArray(res.items) ? res.items : [];
+        items.forEach(function (t) { out.push(t); });
+        const page = (res && res.page) || {};
+        if (page.hasMore && page.nextOffset != null && items.length && out.length < 10000) return next(Number(page.nextOffset));
+        return out;
+      });
+    }
+    return next(0);
+  }
+
+  // Searchable single choice — a tap list instead of a long <select>, which is
+  // unusable on iPad with hundreds of locations or product types.
+  function PickList({ label, options, value, onChange, noneLabel, placeholder, emptyText }) {
+    const [q, setQ] = useState("");
+    const needle = q.trim().toLowerCase();
+    const matches = needle ? options.filter(function (o) { return (o.label + " " + (o.sub || "") + " " + (o.tag || "")).toLowerCase().indexOf(needle) >= 0; }) : options;
+    const shown = matches.slice(0, PICK_CAP);
+    const chosen = value == null ? null : options.filter(function (o) { return String(o.id) === String(value); })[0];
+    return <div className="inv-pickfield">
+      <span className="inv-pickfield__label">{label}</span>
+      <div className="inv-pickfield__chosen" aria-live="polite">{chosen ? chosen.label + (chosen.sub ? " · " + chosen.sub : "") : (noneLabel || "Nothing chosen")}</div>
+      {options.length > 6 && <div className="search inv-loc-search inv-sheet__search"><Icon name="search" size={15} /><input type="search" aria-label={"Filter " + label.toLowerCase()} value={q} onChange={function (e) { setQ(e.target.value); }} onKeyDown={holdEnter} placeholder={placeholder || "Filter…"} /></div>}
+      <div className="inv-pick-list" role="radiogroup" aria-label={label}>
+        {noneLabel && !needle && <button type="button" role="radio" aria-checked={value == null} className={"inv-pick" + (value == null ? " on" : "")} onClick={function () { onChange(null); }}><span className="inv-pick__text">{noneLabel}</span></button>}
+        {shown.length === 0 && <div className="inv-loc__none">{emptyText || "Nothing matches."}</div>}
+        {shown.map(function (o) {
+          const on = String(o.id) === String(value);
+          return <button type="button" key={o.id} role="radio" aria-checked={on} className={"inv-pick" + (on ? " on" : "")} onClick={function () { onChange(o.id); }}>
+            <span className="inv-pick__text">{o.label}{o.sub ? <span className="muted"> · {o.sub}</span> : null}</span>
+            {o.tag ? <span className="tag">{o.tag}</span> : null}
+          </button>;
+        })}
+        {matches.length > shown.length && <div className="inv-loc__none">Showing {shown.length} of {matches.length} — filter to narrow.</div>}
+      </div>
+    </div>;
+  }
+
+  function LicenceFields({ value, onChange, options }) {
+    function set(patch) { onChange(Object.assign({}, value, patch)); }
+    return <fieldset className="inv-cat-specs inv-licence">
+      <legend>Licence</legend>
+      <div className="inv-form__row">
+        <label className="inv-field"><span>Seats</span><input type="number" inputMode="numeric" min="1" step="1" value={value.seats} onChange={function (e) { set({ seats: e.target.value }); }} placeholder="—" /></label>
+        <label className="inv-field"><span>Expires on</span><input type="date" value={value.expires} onChange={function (e) { set({ expires: e.target.value }); }} /></label>
+      </div>
+      <label className="inv-field"><span>Licence reference</span><input value={value.reference} maxLength={1024} autoComplete="off" spellCheck={false} onKeyDown={holdEnter} onChange={function (e) { set({ reference: e.target.value }); }} placeholder="Vault entry or order number" /></label>
+      <div className="muted inv-cat__hint">Say where the licence is kept. Keys, passwords and tokens are refused.</div>
+      <PickList label="Installed on" options={options} value={value.installedOn} onChange={function (id) { set({ installedOn: id }); }} noneLabel="Not installed" placeholder="Filter items…" emptyText="No hardware item matches." />
+    </fieldset>;
+  }
+
+  // Create or edit one item. Live, the item is identified by its product type
+  // (retired types are not offered); offline, the fixture still uses models.
+  function UnitModal({ unit, inv, h, act, onChanged, onClose }) {
     const editing = !!unit;
+    const a = api();
+    const live = !isOffline() && !!a && !!a.productTypes && !!a.createUnit;
+    const [types, setTypes] = useState(null);   // live product types, or { error }
+    const [typeId, setTypeId] = useState(unit && unit.product_type_id != null ? Number(unit.product_type_id) : null);
     const [modelId, setModelId] = useState(unit ? unit.model_id : (inv.models[0] ? inv.models[0].id : 0));
     const [serial, setSerial] = useState(unit ? (unit.serial || "") : "");
     const [assetTag, setAssetTag] = useState(unit ? (unit.asset_tag || "") : "");
-    const [locId, setLocId] = useState(unit ? (unit.location_id || "") : "");
+    const [locId, setLocId] = useState(unit && unit.location_id != null ? Number(unit.location_id) : null);
     const [acquired, setAcquired] = useState(unit ? (unit.acquired_on || "") : "");
-    const [qty, setQty] = useState(unit ? (unit.quantity || 1) : 1);
+    const [qty, setQty] = useState(unit ? String(unit.quantity || 1) : "1");
     const [cost, setCost] = useState(unit && unit.unit_cost_cents != null ? (unit.unit_cost_cents / 100).toFixed(2) : "");
     const [stock, setStock] = useState(unit ? unit.stock_status : "in_stock");
     const [receiptId, setReceiptId] = useState(unit ? (unit.receipt_id || "") : "");
     const [notes, setNotes] = useState(unit ? (unit.notes || "") : "");
+    const [lic, setLic] = useState(function () { return licenceState(unit); });
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
     const [addModel, setAddModel] = useState(false);
 
-    function submit() {
-      if (!modelId) { toast("Pick a model", "close"); return; }
-      const draft = {
-        id: unit ? unit.id : undefined,
-        model_id: Number(modelId), serial: serial.trim() || null, asset_tag: assetTag.trim() || null,
-        location_id: locId ? Number(locId) : null, acquired_on: acquired || null,
-        quantity: Number(qty) || 1, unit_cost_cents: cost === "" ? null : Math.round(parseFloat(cost) * 100),
-        stock_status: stock, receipt_id: receiptId ? Number(receiptId) : null, notes: notes.trim() || "",
+    useEffect(function () {
+      if (!live) return;
+      loadLiveProductTypes(a).then(function (list) { setTypes(list); })
+        .catch(function (e) { setTypes({ error: itemErrorText(e, "Product types could not be loaded.") }); });
+    }, []);
+
+    const typeList = Array.isArray(types) ? types : [];
+    const current = unit && unit.product_type_id != null
+      ? { id: Number(unit.product_type_id), name: unit.product_type_name, kind: unit.product_type_kind, retired: !!unit.product_type_retired }
+      : null;
+    const typeOptions = typeList.map(function (t) { return { id: Number(t.id), label: typeTitle(t), sub: typeByline(t), tag: CAT_KIND_LABEL[t.kind] || t.kind }; });
+    if (current && !typeOptions.some(function (o) { return o.id === current.id; })) {
+      typeOptions.unshift({ id: current.id, label: current.name || ("Product type #" + current.id), sub: "", tag: current.retired ? "retired" : (CAT_KIND_LABEL[current.kind] || "") });
+    }
+    const listed = typeId == null ? null : typeList.filter(function (t) { return Number(t.id) === Number(typeId); })[0];
+    const chosenType = listed || (current && current.id === Number(typeId) ? current : null);
+    const software = live ? !!chosenType && chosenType.kind === "software" : false;
+    const keepsRetired = !!current && current.retired && Number(typeId) === current.id;
+
+    function submit(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      const qtyText = String(qty).trim();
+      if (!/^\d+$/.test(qtyText) || Number(qtyText) < 1) { setErr("Quantity must be a whole number of 1 or more."); return; }
+      const costText = String(cost).trim();
+      if (costText !== "" && !(parseFloat(costText) >= 0)) { setErr("The unit cost must be a number."); return; }
+      const fields = {
+        serial: serial.trim() || null, asset_tag: assetTag.trim() || null,
+        location_id: locId != null ? Number(locId) : null, acquired_on: acquired || null,
+        quantity: Number(qtyText), unit_cost_cents: costText === "" ? null : Math.round(parseFloat(costText) * 100),
+        stock_status: stock, receipt_id: receiptId ? Number(receiptId) : null, notes: notes.trim() || null,
       };
-      act.saveUnit(draft, editing);
-      onClose();
+      if (!live) {
+        if (!modelId) { setErr("Pick a model."); return; }
+        act.saveUnit(Object.assign({ id: unit ? unit.id : undefined, model_id: Number(modelId) }, fields, { notes: fields.notes || "" }), editing);
+        onClose();
+        return;
+      }
+      if (!chosenType) { setErr(types === null ? "Product types are still loading." : "Choose what this item is — pick a product type."); return; }
+      const lb = licenceBody(lic, software);
+      if (lb.error) { setErr(lb.error); return; }
+      const body = Object.assign({}, fields, lb.body);
+      if (!editing || Number(typeId) !== Number(unit.product_type_id)) body.product_type_id = Number(typeId);
+      setBusy(true); setErr("");
+      (editing ? a.updateUnit(unit.id, body) : a.createUnit(body)).then(function () {
+        toast(editing ? "Item updated" : "Item added", "check");
+        if (onChanged) Promise.resolve(onChanged()).catch(function () {});
+        onClose();
+      }).catch(function (error) { setBusy(false); setErr(itemErrorText(error, "Save failed.")); });
     }
 
     return (
-      <Modal title={editing ? "Edit component" : "New component"} icon="box" wide
-        sub={editing ? h.modelLabel(unit.model_id) + (unit.serial ? " · " + unit.serial : "") : "Add a hardware unit to inventory"}
+      <Sheet title={editing ? "Edit item" : "New item"} icon="box" wide
+        sub={editing ? h.unitLabel(unit) + (unit.serial ? " · " + unit.serial : "") : "Record one item of a catalog product type"}
         onClose={onClose}
-        footer={<>
-          <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit}><Icon name="check" size={14} />{editing ? "Save changes" : "Add component"}</button>
-        </>}>
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 2 }}>
-            <label style={LBL}>Model</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <select style={FLD} value={String(modelId)} onChange={function (e) { setModelId(e.target.value); }}>
-                {inv.models.map(function (m) { return <option key={m.id} value={String(m.id)}>{catalogName(m.make, m.model)} · {m.hw_type}</option>; })}
-              </select>
-              <button className="btn-ghost" style={{ marginTop: 4, flex: "0 0 auto" }} onClick={function () { setAddModel(true); }} title="Add a new model"><Icon name="plus" size={13} /></button>
-            </div>
+        footer={<><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button type="button" className="btn-primary" disabled={busy} onClick={submit}><Icon name="check" size={14} />{busy ? "Saving…" : (editing ? "Save changes" : "Add item")}</button></>}>
+        <form className="inv-form" onSubmit={submit}>
+          <SheetError text={err} />
+          {live
+            ? (types === null
+                ? <div className="inv-loc__none" role="status">Loading product types…</div>
+                : types.error
+                  ? <div className="inv-loc-note inv-loc-note--err" role="alert">{types.error}</div>
+                  : <PickList label="Product type" options={typeOptions} value={typeId} onChange={setTypeId} placeholder="Filter product types…" emptyText="No live product type matches. Add one in Catalog." />)
+            : <div className="inv-form__row">
+                <label className="inv-field inv-field--grow"><span>Model</span>
+                  <select value={String(modelId)} onChange={function (e) { setModelId(e.target.value); }}>
+                    {inv.models.map(function (m) { return <option key={m.id} value={String(m.id)}>{catalogName(m.make, m.model)} · {m.hw_type}</option>; })}
+                  </select></label>
+                <button type="button" className="btn-ghost inv-unit__addmodel" onClick={function () { setAddModel(true); }} aria-label="Add a new model"><Icon name="plus" size={13} /></button>
+              </div>}
+          {keepsRetired && <div className="inv-loc-note inv-loc-note--warn" role="note">{(current.name || "This product type") + " is retired. The item keeps it unless you choose a live type."}</div>}
+          <div className="inv-form__row">
+            <label className="inv-field"><span>Stock status</span>
+              <select value={stock} onChange={function (e) { setStock(e.target.value); }}>
+                {STOCK_STATES.map(function (st) { return <option key={st} value={st}>{STOCK_LABEL[st]}</option>; })}
+              </select></label>
+            <label className="inv-field"><span>Quantity</span><input type="number" inputMode="numeric" min="1" step="1" value={qty} onChange={function (e) { setQty(e.target.value); }} /></label>
           </div>
-          <div style={{ flex: 1 }}>
-            <label style={LBL}>Stock status</label>
-            <select style={FLD} value={stock} onChange={function (e) { setStock(e.target.value); }}>
-              {STOCK_STATES.map(function (s) { return <option key={s} value={s}>{STOCK_LABEL[s]}</option>; })}
-            </select>
+          <div className="inv-form__row">
+            <label className="inv-field"><span>Serial</span><input value={serial} maxLength={128} autoComplete="off" spellCheck={false} onKeyDown={holdEnter} onChange={function (e) { setSerial(e.target.value); }} placeholder="Manufacturer serial" /></label>
+            <label className="inv-field"><span>Asset tag</span><input value={assetTag} maxLength={64} autoComplete="off" spellCheck={false} onKeyDown={holdEnter} onChange={function (e) { setAssetTag(e.target.value); }} placeholder="Internal tag" /></label>
           </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}><label style={LBL}>Serial</label><input style={FLD} value={serial} onChange={function (e) { setSerial(e.target.value); }} placeholder="manufacturer serial" /></div>
-          <div style={{ flex: 1 }}><label style={LBL}>Asset tag</label><input style={FLD} value={assetTag} onChange={function (e) { setAssetTag(e.target.value); }} placeholder="internal tag" /></div>
-        </div>
-
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 2 }}>
-            <label style={LBL}>Location</label>
-            <select style={FLD} value={String(locId)} onChange={function (e) { setLocId(e.target.value); }}>
-              <option value="">— unassigned —</option>
-              {inv.locations.map(function (l) { return <option key={l.id} value={String(l.id)}>{h.locPath(l.id)}</option>; })}
-            </select>
+          <PickList label="Location" options={locationOptions(inv, h)} value={locId} onChange={setLocId} noneLabel="Unassigned" placeholder="Filter locations…" />
+          {software && <LicenceFields value={lic} onChange={setLic} options={installedOnOptions(inv, h, unit ? unit.id : null)} />}
+          <div className="inv-form__row">
+            <label className="inv-field"><span>Acquired on</span><input type="date" value={acquired || ""} onChange={function (e) { setAcquired(e.target.value); }} /></label>
+            <label className="inv-field"><span>Unit cost (USD)</span><input type="number" inputMode="decimal" min="0" step="0.01" value={cost} onChange={function (e) { setCost(e.target.value); }} placeholder="0.00" /></label>
+            <label className="inv-field"><span>Receipt</span>
+              <select value={String(receiptId)} onChange={function (e) { setReceiptId(e.target.value); }}>
+                <option value="">— none —</option>
+                {inv.receipts.map(function (r) { return <option key={r.id} value={String(r.id)}>{(r.vendor || ("#" + r.id)) + (r.purchased_on ? " · " + r.purchased_on : "")}</option>; })}
+              </select></label>
           </div>
-          <div style={{ flex: 1 }}><label style={LBL}>Quantity</label><input type="number" min="1" style={FLD} value={qty} onChange={function (e) { setQty(e.target.value); }} /></div>
-        </div>
-
-        <div style={{ display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}><label style={LBL}>Acquired on</label><input type="date" style={FLD} value={acquired || ""} onChange={function (e) { setAcquired(e.target.value); }} /></div>
-          <div style={{ flex: 1 }}><label style={LBL}>Unit cost (USD)</label><input type="number" min="0" step="0.01" style={FLD} value={cost} onChange={function (e) { setCost(e.target.value); }} placeholder="0.00" /></div>
-          <div style={{ flex: 1 }}>
-            <label style={LBL}>Receipt</label>
-            <select style={FLD} value={String(receiptId)} onChange={function (e) { setReceiptId(e.target.value); }}>
-              <option value="">— none —</option>
-              {inv.receipts.map(function (r) { return <option key={r.id} value={String(r.id)}>{(r.vendor || ("#" + r.id)) + (r.purchased_on ? " · " + r.purchased_on : "")}</option>; })}
-            </select>
-          </div>
-        </div>
-
-        <label style={LBL}>Notes</label>
-        <input style={FLD} value={notes} onChange={function (e) { setNotes(e.target.value); }} placeholder="warranty, condition…" />
-
+          <label className="inv-field"><span>Notes</span><input value={notes} onChange={function (e) { setNotes(e.target.value); }} placeholder="Warranty, condition…" /></label>
+        </form>
         {addModel && <ModelModal act={act} onClose={function () { setAddModel(false); }} onCreated={function (id) { setModelId(id); setAddModel(false); }} />}
-      </Modal>
+      </Sheet>
     );
   }
 
@@ -1053,7 +1212,7 @@
         {units.length > 0 && <>
           <h3 className="inv-loc__sub">Components here</h3>
           <ul className="inv-loc__units">
-            {units.slice(0, 25).map(function (u) { return <li key={u.id}><span>{h.modelLabel(u.model_id)}</span>{(u.asset_tag || u.serial) && <span className="td-mono muted">{u.asset_tag || u.serial}</span>}</li>; })}
+            {units.slice(0, 25).map(function (u) { return <li key={u.id}><span>{h.unitLabel(u)}</span>{(u.asset_tag || u.serial) && <span className="td-mono muted">{u.asset_tag || u.serial}</span>}</li>; })}
             {units.length > 25 && <li className="muted">…and {units.length - 25} more (see Components).</li>}
           </ul>
         </>}
@@ -1677,7 +1836,7 @@
   function holdEnter(e) { if (e && e.key === "Enter" && e.preventDefault) e.preventDefault(); }
   function specDisplay(v) { return v === null || v === "" ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v); }
 
-  function CatalogTab({ onChanged }) {
+  function CatalogTab({ inv, h, onChanged }) {
     const [q, setQ] = useState("");
     const [kind, setKind] = useState("");
     const [list, setList] = useState({ items: [], total: 0, hasMore: false, nextOffset: 0, loaded: false, q: "", kind: "" });
@@ -1920,6 +2079,7 @@
               {specKeys.map(function (k) { return <div key={k}><dt>{k}</dt><dd>{specDisplay(specs[k])}</dd></div>; })}
             </dl>}
         {sel.kind === "software" && <div className="inv-loc-note inv-cat__note" role="note">Licence seats, expiry and the licence reference are recorded on each item. Licence keys are never stored here.</div>}
+        {inv && <TypeItems inv={inv} h={h} typeId={sel.id} />}
 
         <h3 className="inv-loc__sub">Barcodes</h3>
         {codes.length === 0 && <div className="inv-loc__none">No codes attached. Scanning one of this product’s barcodes will then find it.</div>}
@@ -1959,7 +2119,8 @@
                     </div>
                   </div>
                 : <>
-                    <button type="button" className="btn-primary" onClick={function () { setSheet({ kind: "edit", type: sel }); }}><Icon name="edit" size={14} />Edit</button>
+                    <button type="button" className="btn-primary" onClick={function () { setSheet({ kind: "items", type: sel }); }}><Icon name="plus" size={14} />Add item(s)</button>
+                    <button type="button" className="btn-ghost" onClick={function () { setSheet({ kind: "edit", type: sel }); }}><Icon name="edit" size={14} />Edit</button>
                     <button type="button" className="btn-ghost inv-btn-danger" onClick={function () { setRetiring(true); setRemoving(null); }}><Icon name="trash" size={14} />Retire…</button>
                   </>}
             </div>}
@@ -2001,7 +2162,83 @@
 
         {sheet && sheet.kind === "create" && <ProductTypeSheet prefillCode={sheet.code} onClose={function () { setSheet(null); }} onDone={done} />}
         {sheet && sheet.kind === "edit" && <ProductTypeSheet type={sheet.type} onClose={function () { setSheet(null); }} onDone={done} />}
+        {sheet && sheet.kind === "items" && inv && <AddItemsSheet type={sheet.type} inv={inv} h={h} onClose={function () { setSheet(null); }} onDone={done} />}
       </div>
+    );
+  }
+
+  // Items already recorded on a product type (from the inventory snapshot).
+  function TypeItems({ inv, h, typeId }) {
+    const items = inv.units.filter(function (u) { return Number(u.product_type_id) === Number(typeId); });
+    return <>
+      <h3 className="inv-loc__sub">Items ({items.length})</h3>
+      {items.length === 0
+        ? <div className="inv-loc__none">No items recorded yet. Use “Add item(s)” to record what you have.</div>
+        : <ul className="inv-loc__units" aria-label="Items of this product type">
+            {items.slice(0, 25).map(function (u) {
+              const lic = licenceSummary(u);
+              return <li key={u.id}><span>{u.asset_tag || u.serial || ("Item #" + u.id)}{(u.quantity || 1) > 1 ? " × " + u.quantity : ""}{lic ? " · " + lic : ""}</span><span className="td-mono muted">{h.locLabel(u.location_id)}</span></li>;
+            })}
+            {items.length > 25 && <li className="muted">…and {items.length - 25} more in Components</li>}
+          </ul>}
+    </>;
+  }
+
+  // Record items of one product type (037): N identical items in one call, or
+  // for consumables one item that carries the quantity. Serial and asset tag
+  // belong to a single item, so they are offered only when adding one.
+  function AddItemsSheet({ type, inv, h, onClose, onDone }) {
+    const consumable = type.kind === "consumable";
+    const software = type.kind === "software";
+    const [qty, setQty] = useState("1");
+    const [locId, setLocId] = useState(null);
+    const [serial, setSerial] = useState("");
+    const [assetTag, setAssetTag] = useState("");
+    const [notes, setNotes] = useState("");
+    const [lic, setLic] = useState(function () { return licenceState(null); });
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const title = typeTitle(type);
+    const qtyText = String(qty).trim();
+    const validN = /^\d+$/.test(qtyText) && Number(qtyText) >= 1;
+    const n = validN ? Number(qtyText) : 0;
+    const single = consumable || n <= 1;
+
+    function submit(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      if (!validN) { setErr("Quantity must be a whole number of 1 or more."); return; }
+      if (!consumable && n > ITEM_BATCH_MAX) { setErr("Add up to " + ITEM_BATCH_MAX + " items at a time."); return; }
+      const lb = licenceBody(lic, software);
+      if (lb.error) { setErr(lb.error); return; }
+      const body = Object.assign({ product_type_id: Number(type.id), location_id: locId != null ? Number(locId) : null, notes: notes.trim() || null }, software ? lb.body : {});
+      if (consumable) { body.count = 1; body.quantity = n; } else body.count = n;
+      if (single) { body.serial = serial.trim() || null; body.asset_tag = assetTag.trim() || null; }
+      setBusy(true); setErr("");
+      api().createUnit(body).then(function (res) {
+        const made = res && res.count != null ? Number(res.count) : 1;
+        onDone("Added " + (consumable ? n + " × " + title : made === 1 ? "1 item of " + title : made + " items of " + title), type.id, true);
+      }).catch(function (error) { setBusy(false); setErr(itemErrorText(error, "Nothing was added.")); });
+    }
+
+    const addLabel = !consumable && n > 1 ? "Add " + n + " items" : "Add item";
+    return (
+      <Sheet title={"Add " + title} icon="box" wide sub={(CAT_KIND_LABEL[type.kind] || type.kind) + " · items appear in Components"} onClose={onClose}
+        footer={<><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button type="button" className="btn-primary" disabled={busy} onClick={submit}><Icon name="check" size={14} />{busy ? "Adding…" : addLabel}</button></>}>
+        <form className="inv-form" onSubmit={submit}>
+          <SheetError text={err} />
+          <label className="inv-field"><span>{consumable ? "Quantity" : "How many items"}</span><input type="number" inputMode="numeric" min="1" max={consumable ? undefined : ITEM_BATCH_MAX} step="1" value={qty} onChange={function (e) { setQty(e.target.value); }} /></label>
+          {consumable
+            ? <div className="muted inv-cat__hint">Consumables are counted on one item.</div>
+            : n > 1 && <div className="muted inv-cat__hint">Adds {n} separate items. Serial numbers and asset tags are recorded one item at a time — edit each one in Components.</div>}
+          {single && <div className="inv-form__row">
+            <label className="inv-field"><span>Serial (optional)</span><input value={serial} maxLength={128} autoComplete="off" spellCheck={false} onKeyDown={holdEnter} onChange={function (e) { setSerial(e.target.value); }} placeholder="Manufacturer serial" /></label>
+            <label className="inv-field"><span>Asset tag (optional)</span><input value={assetTag} maxLength={64} autoComplete="off" spellCheck={false} onKeyDown={holdEnter} onChange={function (e) { setAssetTag(e.target.value); }} placeholder="Internal tag" /></label>
+          </div>}
+          <PickList label="Location" options={locationOptions(inv, h)} value={locId} onChange={setLocId} noneLabel="Unassigned" placeholder="Filter locations…" />
+          {software && <LicenceFields value={lic} onChange={setLic} options={installedOnOptions(inv, h, null)} />}
+          <label className="inv-field"><span>Notes (optional)</span><textarea rows={2} value={notes} onChange={function (e) { setNotes(e.target.value); }} /></label>
+        </form>
+      </Sheet>
     );
   }
 
@@ -2258,7 +2495,7 @@
         {items.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No components reference this receipt.</div>}
         {items.map(function (u) {
           return <div key={u.id} className="inv-tree-row" style={{ paddingLeft: 10 }}>
-            <Icon name="box" size={14} style={{ color: "var(--teal)" }} /><span style={{ fontWeight: 600 }}>{h.modelLabel(u.model_id)}</span>
+            <Icon name="box" size={14} style={{ color: "var(--teal)" }} /><span style={{ fontWeight: 600 }}>{h.unitLabel(u)}</span>
             <span className="td-mono muted" style={{ fontSize: 11 }}>{u.serial || ""}</span><span style={{ flex: 1 }} />
             <span className="td-mono">{fmt.usd(u.unit_cost_cents)}</span>
           </div>;
@@ -2329,7 +2566,7 @@
 
     function AllocCard({ a }) {
       const unit = a.hardware_unit_id ? inv.units.find(function (u) { return u.id === a.hardware_unit_id; }) : null;
-      const label = unit ? h.modelLabel(unit.model_id) : (a.hardware_model_id ? h.modelLabel(a.hardware_model_id) : "—");
+      const label = unit ? h.unitLabel(unit) : (a.hardware_model_id ? h.modelLabel(a.hardware_model_id) : "—");
       return (
         <div className="inv-alloc">
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2430,7 +2667,7 @@
           {options.map(function (o) {
             const other = o.committedTo && o.committedTo !== project.id ? h.projectById[o.committedTo] : null;
             return <option key={o.u.id} value={String(o.u.id)}>
-              {h.modelLabel(o.u.model_id)}{o.u.serial ? " · " + o.u.serial : ""}{other ? "  (committed: " + other.name + ")" : ""}
+              {h.unitLabel(o.u)}{o.u.serial ? " · " + o.u.serial : ""}{other ? "  (committed: " + other.name + ")" : ""}
             </option>;
           })}
         </select>

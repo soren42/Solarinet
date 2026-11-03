@@ -280,6 +280,14 @@ jobs:
           MYSQL_USER: root
           MYSQL_PWD: sorsync_fixture
         run: bash tests/netdb/test_inventory_locations_036.sh
+      - name: Inventory I1 037 items on product types + live location codes + rollback (scratch)
+        env:
+          SOLARI_TEST_SOR_DB: '1'
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: root
+          MYSQL_PWD: sorsync_fixture
+        run: bash tests/netdb/test_inventory_items_037.sh
       - name: IMAGE_REFRESH helper, fetch-images.sh and boot-menu render (local fixtures, no internet)
         env:
           SOLARI_TEST_SOR_DB: '1'
@@ -692,6 +700,7 @@ jobs:
           php tests/dashboard/test_authz_routes.php
           php tests/dashboard/test_authz_manifest.php
           php tests/dashboard/test_pdo_placeholders.php
+          php tests/dashboard/test_inventory_retryable_conflict.php
           php tests/dashboard/test_authz_negative.php
       - name: RackWire API route tests
         run: php tests/dashboard/test_rackwire_api.php
@@ -707,6 +716,7 @@ jobs:
           node tests/dashboard/test_inventory_rackwire_ui.js
           node tests/dashboard/test_inventory_locations_ui.js
           node tests/dashboard/test_inventory_catalog_ui.js
+          node tests/dashboard/test_inventory_items_ui.js
           node tests/dashboard/test_capability_maturity.js
       - name: Dashboard cold/warm JSX cache profile
         env:
@@ -912,10 +922,12 @@ jobs:
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --verify-live
           echo 'ledger-gate: SoR ledger and schema verification passed'
           monitoring_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read monitoring migration count' >&2; exit 1; }
-          test "$monitoring_migration_count" = 38 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 38" >&2; exit 1; }
+          expected_monitoring="$(python3 -c 'import sys; sys.path.insert(0, "tools"); import migrate; print(len(migrate.migrationFiles("monitoring")))')"
+          test "$monitoring_migration_count" = "$expected_monitoring" || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != $expected_monitoring" >&2; exit 1; }
           echo "ledger-gate: monitoring applied-migration count is $monitoring_migration_count"
           sor_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read SoR migration count' >&2; exit 1; }
-          test "$sor_migration_count" = 16 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 16" >&2; exit 1; }
+          expected_sor="$(python3 -c 'import sys; sys.path.insert(0, "tools"); import migrate; print(len(migrate.migrationFiles("sor")))')"
+          test "$sor_migration_count" = "$expected_sor" || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != $expected_sor" >&2; exit 1; }
           echo "ledger-gate: SoR applied-migration count is $sor_migration_count"
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output "$ledger_tmp/monitoring-schema.sql"
           echo 'ledger-gate: monitoring schema exported'
@@ -961,7 +973,8 @@ jobs:
             tests/netdb/test_inventory_catalog_033.sh \
             tests/netdb/test_prov_images_os_034.sh \
             tests/netdb/test_catalog_display_names_035.sh \
-            tests/netdb/test_inventory_locations_036.sh
+            tests/netdb/test_inventory_locations_036.sh \
+            tests/netdb/test_inventory_items_037.sh
       - name: F-07 fleet provisioning fails closed
         run: bash tests/deploy/test_fleet_provisioning_gate.sh
       - name: F-07 signed release manifest contract

@@ -24,6 +24,7 @@
 --   034_prov_images_os sha256=c1a56526a09b5895dde1cac3cb1aba67fa0e53454dba63dbaffdadaf59c83ed7
 --   035_catalog_display_names sha256=52bbaf178068de119d2618786d10eaf9a1f0fa473da189e154dd6b1934e7c38e
 --   036_inventory_locations sha256=6befce1891cf2b2276ad3ecab037cc83a1b78e9eaae9886d33722f6580b37916
+--   037_inventory_items_closeout sha256=abac15de7d56e2d361c8df744d8f1d1b6bf6ec00339995b28ebeb6681f17d984
 
 /*M!999999\- enable the sandbox mode */
 
@@ -242,7 +243,7 @@ CREATE TABLE `container_types` (
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human',
   `asserted_at` datetime NOT NULL DEFAULT current_timestamp(),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime(6) NOT NULL DEFAULT current_timestamp(6) ON UPDATE current_timestamp(6),
   `deleted_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_container_types_live_name` (`name_key`),
@@ -1120,7 +1121,7 @@ DROP TABLE IF EXISTS `hardware_units`;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `hardware_units` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
-  `model_id` int(10) unsigned NOT NULL COMMENT 'FK: which product this unit is',
+  `model_id` int(10) unsigned DEFAULT NULL COMMENT 'FK: legacy hardware model; NULL for catalog-only product types',
   `product_type_id` int(10) unsigned DEFAULT NULL COMMENT 'broader product catalog link; legacy model_id remains during transition',
   `serial` varchar(128) DEFAULT NULL COMMENT 'manufacturer serial number (unique per model when known)',
   `asset_tag` varchar(64) DEFAULT NULL COMMENT 'internal inventory tag, if labeled',
@@ -1143,6 +1144,7 @@ CREATE TABLE `hardware_units` (
   `installed_on_unit_id` int(10) unsigned DEFAULT NULL COMMENT 'software installation target hardware unit; never a person',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_hw_units_model_serial` (`model_id`,`serial`),
+  UNIQUE KEY `uq_hw_units_type_serial` (`product_type_id`,`serial`),
   KEY `ix_hw_units_location` (`location_id`),
   KEY `fk_hw_units_source` (`source_id`),
   KEY `fk_hwunit_receipt` (`receipt_id`),
@@ -1169,9 +1171,20 @@ DELIMITER ;;
 /*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_units_installed_target_ins` BEFORE INSERT ON `hardware_units`
 FOR EACH ROW
 BEGIN
-
+  DECLARE model_type INT UNSIGNED DEFAULT NULL;
+  IF NEW.`model_id` IS NOT NULL THEN
+    SET model_type = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+    IF NEW.`product_type_id` IS NULL THEN
+      SET NEW.`product_type_id` = model_type;
+    ELSEIF NOT (NEW.`product_type_id` <=> model_type) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='model_id and product_type_id disagree';
+    END IF;
+  ELSEIF NEW.`product_type_id` IS NOT NULL THEN
+    SET NEW.`model_id` = (SELECT `id` FROM `hardware_models`
+                           WHERE `product_type_id`=NEW.`product_type_id` AND `deleted_at` IS NULL LIMIT 1);
+  END IF;
   IF NEW.`product_type_id` IS NULL THEN
-    SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='hardware unit product_type_id is required';
   END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN
     IF NEW.`id`=NEW.`installed_on_unit_id` THEN
@@ -1204,11 +1217,28 @@ DELIMITER ;;
 /*!50003 CREATE*/ /*!50003 TRIGGER `trg_hw_units_installed_target_upd` BEFORE UPDATE ON `hardware_units`
 FOR EACH ROW
 BEGIN
+  DECLARE model_type INT UNSIGNED DEFAULT NULL;
+  IF NEW.`product_type_id` IS NOT NULL
+     AND NOT (NEW.`product_type_id` <=> OLD.`product_type_id`)
+     AND NEW.`model_id` <=> OLD.`model_id` THEN
 
-  IF NEW.`product_type_id` IS NULL
-     OR (NOT (NEW.`model_id` <=> OLD.`model_id`)
-         AND NEW.`product_type_id` <=> OLD.`product_type_id`) THEN
+    SET NEW.`model_id` = (SELECT `id` FROM `hardware_models`
+                           WHERE `product_type_id`=NEW.`product_type_id` AND `deleted_at` IS NULL LIMIT 1);
+  ELSEIF NEW.`model_id` IS NOT NULL
+     AND (NEW.`product_type_id` IS NULL
+          OR (NOT (NEW.`model_id` <=> OLD.`model_id`)
+              AND NEW.`product_type_id` <=> OLD.`product_type_id`)) THEN
+
     SET NEW.`product_type_id` = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+  END IF;
+  IF NEW.`product_type_id` IS NULL THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='hardware unit product_type_id is required';
+  END IF;
+  IF NEW.`model_id` IS NOT NULL THEN
+    SET model_type = (SELECT `product_type_id` FROM `hardware_models` WHERE `id`=NEW.`model_id`);
+    IF NOT (NEW.`product_type_id` <=> model_type) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='model_id and product_type_id disagree';
+    END IF;
   END IF;
   IF NEW.`installed_on_unit_id` IS NOT NULL THEN
     IF NEW.`id`=NEW.`installed_on_unit_id` THEN
@@ -1466,14 +1496,16 @@ CREATE TABLE `locations` (
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human' COMMENT 'provenance: human- or machine-asserted',
   `asserted_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'provenance: when the source last asserted this',
   `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
+  `updated_at` datetime(6) NOT NULL DEFAULT current_timestamp(6) ON UPDATE current_timestamp(6) COMMENT 'last row modification',
   `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
   `parent_key` int(10) unsigned GENERATED ALWAYS AS (ifnull(`parent_id`,0)) STORED,
   `location_name_key` varchar(128) GENERATED ALWAYS AS (if(`deleted_at` is null,`name`,NULL)) STORED,
   `container_type_id` int(10) unsigned DEFAULT NULL,
   `assigned_project_id` int(10) unsigned DEFAULT NULL,
+  `location_code_key` varchar(32) GENERATED ALWAYS AS (if(`deleted_at` is null,nullif(`code`,''),NULL)) STORED,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_locations_live_sibling` (`parent_key`,`location_name_key`),
+  UNIQUE KEY `uq_locations_live_code` (`location_code_key`),
   KEY `ix_locations_type` (`loc_type`),
   KEY `fk_locations_source` (`source_id`),
   KEY `ix_locations_parent` (`parent_id`),
@@ -1774,7 +1806,7 @@ CREATE TABLE `product_types` (
   `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human',
   `asserted_at` datetime NOT NULL DEFAULT current_timestamp(),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime(6) NOT NULL DEFAULT current_timestamp(6) ON UPDATE current_timestamp(6),
   `deleted_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `ix_product_types_kind` (`kind`,`deleted_at`),
