@@ -1,4 +1,4 @@
-"""Node OS/architecture reconciliation is isolated from production databases."""
+"""Node architecture reconciliation is isolated from production databases."""
 import configparser
 import pathlib
 import sys
@@ -15,23 +15,20 @@ class Cursor:
         self.sql = []
         self.lastrowid = 41
         self.rowcount = 0
-        self.existing_os_id = None
-        self.os_row = None
+        self.arch_known = False
         self.node_arch = "arm64"
 
     def execute(self, query, params=None):
         self.sql.append((query, params))
-        self.rowcount = 1 if query.startswith("UPDATE hardware_models") else 0
+        self.rowcount = int(query.startswith("UPDATE hardware_models") and not self.arch_known)
         if query.startswith("SELECT discId"):
             self.rows = []
         elif query.startswith("SELECT hostFqdn"):
-            self.rows = [{"hostFqdn": "alpha.akoria.net", "osName": "Debian 13", "arch": self.node_arch}]
+            self.rows = [{"hostFqdn": "alpha.akoria.net", "arch": self.node_arch}]
         elif query.startswith("SELECT id FROM sources"):
             self.rows = [{"id": 7}]
-        elif query.startswith("SELECT id FROM operating_systems"):
-            self.rows = [self.os_row] if self.os_row else []
         elif query.startswith("SELECT e.id"):
-            self.rows = [{"id": 99, "os_id": self.existing_os_id}]
+            self.rows = [{"id": 99}]
         else:
             self.rows = []
 
@@ -80,43 +77,44 @@ class NodeFactsReconciliationTest(unittest.TestCase):
              mock.patch.object(reconcile_module, "log"):
             reconcile_module.reconcile(self.config, dry_run)
 
-    def test_enrolled_node_facts_update_os_and_null_model_arch(self):
+    def statements(self):
+        return [sql for sql, _ in self.sor_cursor.sql]
+
+    def test_kernel_os_string_never_written_to_sor(self):
         self.invoke()
-        statements = [sql for sql, _ in self.sor_cursor.sql]
-        self.assertTrue(any(sql.startswith("INSERT INTO operating_systems") for sql in statements))
-        self.assertTrue(any(sql.startswith("UPDATE entities SET os_id") for sql in statements))
-        self.assertTrue(any("SET hm.arch=%s WHERE e.id=%s AND hm.arch IS NULL" in sql
-                            for sql in statements))
+        for sql in self.statements():
+            self.assertNotIn("operating_systems", sql)
+            self.assertFalse(sql.startswith("UPDATE entities SET os_id"))
         self.assertEqual(1, self.sor.commits)
+
+    def test_null_model_arch_is_filled(self):
+        self.invoke()
+        self.assertTrue(any("SET hm.arch=%s WHERE e.id=%s AND hm.arch IS NULL" in sql
+                            for sql in self.statements()))
 
     def test_dry_run_does_not_write_or_commit(self):
         self.invoke(dry_run=True)
-        self.assertFalse(any(sql.startswith(("INSERT", "UPDATE")) for sql, _ in self.sor_cursor.sql))
+        self.assertFalse(any(sql.startswith(("INSERT", "UPDATE")) for sql in self.statements()))
         self.assertEqual(0, self.sor.commits)
         self.assertEqual(1, self.sor.rollbacks)
 
-    def test_arch_only_change_emits_one_entity_cdc_update(self):
-        self.sor_cursor.existing_os_id = 41
+    def test_arch_fill_emits_one_entity_cdc_update(self):
         self.invoke()
-        statements = [sql for sql, _ in self.sor_cursor.sql]
-        self.assertFalse(any(sql.startswith("UPDATE entities SET os_id") for sql in statements))
-        self.assertTrue(any(sql.startswith("UPDATE entities SET asserted_at") for sql in statements))
+        self.assertTrue(any(sql.startswith("UPDATE entities SET asserted_at")
+                            for sql in self.statements()))
 
-    def test_existing_os_row_is_reused_not_duplicated(self):
-        self.sor_cursor.os_row = {"id": 5}
-        self.sor_cursor.existing_os_id = 5
+    def test_known_arch_stays_quiet(self):
+        self.sor_cursor.arch_known = True
         self.invoke()
-        statements = [sql for sql, _ in self.sor_cursor.sql]
-        self.assertFalse(any(sql.startswith("INSERT INTO operating_systems") for sql in statements))
-        self.assertFalse(any(sql.startswith("UPDATE entities SET os_id") for sql in statements))
+        self.assertFalse(any(sql.startswith("UPDATE entities") for sql in self.statements()))
 
-    def test_new_os_row_gets_linux_family(self):
+    def test_unrecognised_arch_is_ignored(self):
+        self.mon_cursor.node_arch = "sparc64"
         self.invoke()
-        insert = [p for sql, p in self.sor_cursor.sql if sql.startswith("INSERT INTO operating_systems")]
-        self.assertEqual("linux", insert[0][0])
+        self.assertFalse(any(sql.startswith("UPDATE") for sql in self.statements()))
 
     def test_uname_arch_is_normalized(self):
-        self.sor_cursor.node_arch = "aarch64"
+        self.mon_cursor.node_arch = "aarch64"
         self.invoke()
         params = [p for sql, p in self.sor_cursor.sql if sql.startswith("UPDATE hardware_models")]
         self.assertEqual("arm64", params[0][0])

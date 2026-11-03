@@ -35,7 +35,8 @@ def load_source():
             c.execute("SELECT name FROM dns_zones WHERE kind='forward' "
                       "AND authority='sor_rendered' AND deleted_at IS NULL LIMIT 1")
             domain = c.fetchone()[0]
-            c.execute("SELECT h.host, h.ip, h.role, os.name AS osName, hm.arch "
+            c.execute("SELECT h.host, h.ip, h.role, "
+                      "CONCAT_WS(' ', os.name, NULLIF(os.version, '')) AS osName, hm.arch "
                       "FROM v_dns_hosts h "
                       "LEFT JOIN entities e ON e.name=h.host AND e.deleted_at IS NULL "
                       "LEFT JOIN operating_systems os ON os.id=e.os_id AND os.deleted_at IS NULL "
