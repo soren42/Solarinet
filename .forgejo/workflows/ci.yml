@@ -940,10 +940,12 @@ jobs:
           python3 tools/migrate.py --database sor --db-name sor_migration_ci --host 127.0.0.1 --port 3306 --user root --verify-live
           echo 'ledger-gate: SoR ledger and schema verification passed'
           monitoring_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM monitoring_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read monitoring migration count' >&2; exit 1; }
-          test "$monitoring_migration_count" = 38 || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != 38" >&2; exit 1; }
+          expected_monitoring="$(python3 -c 'import sys; sys.path.insert(0, "tools"); import migrate; print(len(migrate.migrationFiles("monitoring")))')"
+          test "$monitoring_migration_count" = "$expected_monitoring" || { echo "ledger-gate: FAIL monitoring applied-migration count $monitoring_migration_count != $expected_monitoring" >&2; exit 1; }
           echo "ledger-gate: monitoring applied-migration count is $monitoring_migration_count"
           sor_migration_count="$(mariadb -h127.0.0.1 -P3306 -uroot -N -e "SELECT COUNT(*) FROM sor_migration_ci.solari_migration_ledger WHERE state='applied'")" || { echo 'ledger-gate: FAIL unable to read SoR migration count' >&2; exit 1; }
-          test "$sor_migration_count" = 16 || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != 16" >&2; exit 1; }
+          expected_sor="$(python3 -c 'import sys; sys.path.insert(0, "tools"); import migrate; print(len(migrate.migrationFiles("sor")))')"
+          test "$sor_migration_count" = "$expected_sor" || { echo "ledger-gate: FAIL SoR applied-migration count $sor_migration_count != $expected_sor" >&2; exit 1; }
           echo "ledger-gate: SoR applied-migration count is $sor_migration_count"
           python3 tools/export_schema.py --database monitoring --user root --host 127.0.0.1 --port 3306 --output "$ledger_tmp/monitoring-schema.sql"
           echo 'ledger-gate: monitoring schema exported'
