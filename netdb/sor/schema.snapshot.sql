@@ -21,6 +21,7 @@
 --   031_provisioning_arch_refresh sha256=bc46d8210e86b02268bc44a634115d7bcd4a55f7f9a883a151e152c59a58ce6e
 --   032_node_os_hinfo sha256=117ac174184b5dbf5e0067aaf953a64da21674b575bdd9edd1e35923e9e4138c
 --   033_inventory_catalog sha256=f6110a624bc833f3200e148e5530047fac9030f54e57635d53d3de93e042cda5
+--   034_prov_images_os sha256=c1a56526a09b5895dde1cac3cb1aba67fa0e53454dba63dbaffdadaf59c83ed7
 
 /*M!999999\- enable the sandbox mode */
 
@@ -1536,7 +1537,7 @@ CREATE TABLE `operating_systems` (
   KEY `fk_os_source` (`source_id`),
   KEY `idx_os_name_version` (`name`,`version`),
   CONSTRAINT `fk_os_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Operating system catalog; entities reference a (name,version) row';
+) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Operating system catalog; entities reference a (name,version) row';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `power_circuits`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -1781,6 +1782,7 @@ DROP TABLE IF EXISTS `prov_images`;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `prov_images` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'surrogate PK',
+  `os_id` int(10) unsigned NOT NULL COMMENT 'canonical operating_systems identity; distro/release_name remain pipeline handles',
   `distro` varchar(32) NOT NULL COMMENT 'distro handle as used by fetch-images.sh: opensuse, debian, ubuntu, fedora, raspios',
   `family` enum('suse','debian','fedora') NOT NULL COMMENT 'package family; selects prov_software.name_<family>',
   `release_name` varchar(48) NOT NULL COMMENT 'release handle, e.g. 12, 13, tumbleweed, 15.6, 24.04, bookworm',
@@ -1807,6 +1809,8 @@ CREATE TABLE `prov_images` (
   UNIQUE KEY `uq_prov_images_live` (`distro`,`release_name`,`arch`,`live_flag`),
   KEY `ix_prov_images_family_arch` (`family`,`arch`),
   KEY `ix_prov_images_source` (`source_id`),
+  KEY `ix_prov_images_os` (`os_id`),
+  CONSTRAINT `fk_prov_images_os` FOREIGN KEY (`os_id`) REFERENCES `operating_systems` (`id`),
   CONSTRAINT `fk_prov_images_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`),
   CONSTRAINT `ck_prov_images_verified` CHECK (`netboot_verified` in (0,1)),
   CONSTRAINT `ck_prov_images_sha256` CHECK (`sha256` is null or `sha256` regexp '(?-i)^[0-9a-f]{64}\\z'),
@@ -2828,7 +2832,7 @@ CREATE TABLE `sor_outbox` (
   `action` enum('insert','update','delete') NOT NULL,
   `changed_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `sor_sync_state`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
