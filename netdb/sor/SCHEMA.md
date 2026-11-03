@@ -136,6 +136,19 @@ Locations use `property`, `floor`, `room`, `section`, and `storage_unit`. Roots 
 
 Live sibling names are unique, including at the root. Soft-deleted rows do not claim a name. `container_types` is an editable, provenance-tracked soft-delete catalog; `locations.container_type_id` is optional and retained when a type is retired. `assigned_project_id` is an optional project assignment cleared when its project is hard-deleted.
 
+Live location codes are unique across the whole tree (037, `uq_locations_live_code` on the generated `location_code_key`). Codes compare under the table collation, so they are case-insensitive. Empty and NULL codes repeat freely, and a soft-deleted location releases its code. `locations.updated_at`, `product_types.updated_at` and `container_types.updated_at` are `DATETIME(6)` optimistic-lock tokens, so two edits within the same second still conflict.
+
+### Items on product types
+
+Since 037, a `hardware_units` row is any owned item of a `product_types` entry. That includes hardware, software licences and consumables. `product_type_id` is required. `model_id` is the optional legacy hardware model, and it is NULL for catalog-only product types. The unit insert/update triggers keep the two consistent:
+
+- `model_id` derives `product_type_id`.
+- A `product_type_id` alone fills `model_id` from that type's live legacy model, if one exists.
+- If both are given, they must agree.
+- If neither is given, the write is rejected.
+
+Serials are unique per product type (`uq_hw_units_type_serial`), as well as per legacy model. Hardware-only readers (provisioning arch, RackWire unit counts, discovery reconcile and DNS arch) join `hardware_models` and therefore ignore model-less items.
+
 ## 2. Provenance & audit strategy
 
 **Provenance is a column set, present on every table** (except the append-only
@@ -238,7 +251,7 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 | 1 | `sources` | Registry of systems allowed to assert facts (provenance targets); pre-seeded |
 | 2 | `locations` | Physical hierarchy property/floor/room/section/storage_unit (self-referencing tree) |
 | 3 | `hardware_models` | Product catalog: make + model + device class + CPU `arch` (031; NULL = unknown) |
-| 4 | `hardware_units` | Individual serial-numbered units of a model, placed at a location |
+| 4 | `hardware_units` | Individual owned items of a product type (optional legacy hardware model; 037), placed at a location |
 | 5 | `operating_systems` | OS catalog (family, name, version, EOL) |
 | 6 | `entities` | **Supertype hub**: every server/device/appliance/app/service |
 | 7 | `applications` | 1:1 subtype: deployed software (vendor/version/install kind) |
@@ -531,6 +544,17 @@ product barcodes or system barcodes for product types exist, when model/unit
 links have changed, or when licence/installation fields are populated. It is
 for a controlled maintenance window after catalog writers are disabled; DDL
 autocommits. No product types are seeded from UI mockups.
+
+Migration 037 (`migrations/037_inventory_items_closeout.sql`, compensating rollback [`rollback/037-down.sql`](rollback/037-down.sql)) makes `hardware_units.model_id` nullable. It replaces the 033 unit triggers with the product-type rules above, adds the live location-code key and the product-type serial key, and widens the three lock columns to microseconds.
+
+The preflight refuses on any of these:
+
+- a unit without a derivable product type
+- a unit whose model and product type disagree
+- duplicate live non-empty location codes
+- duplicate serials within a product type
+
+The rollback refuses while any unit has a NULL `model_id`, and it never deletes items. It restores the 033 triggers, drops both keys and truncates lock columns to whole seconds.
 
 The seed is inserted once and never resurrected; a soft-deleted seed row stays
 deleted on re-run:
