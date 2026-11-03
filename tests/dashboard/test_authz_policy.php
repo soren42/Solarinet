@@ -55,6 +55,9 @@ assert_true(Policy::resolveAuth('POST', ['auth' => 'session']) === 'session',
     'explicit session on a write is honored (e.g. /api/auth/logout)');
 assert_true(Policy::resolveAuth('GET', ['auth' => 'admin']) === 'admin',
     'explicit admin on a read is honored');
+assert_true(Policy::resolveAuth('GET', Policy::INVENTORY_CATALOG_READ) === 'session'
+    && Policy::resolveAuth('POST', Policy::INVENTORY_CATALOG_WRITE) === 'operator',
+    'inventory catalog policies preserve session reads and operator writes');
 // An empty/whitespace declaration is treated as absent (falls back to default).
 assert_true(Policy::resolveAuth('POST', ['auth' => '']) === 'operator',
     'empty auth declaration falls back to the write default');

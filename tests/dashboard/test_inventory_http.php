@@ -72,12 +72,14 @@ $db = new PDO("mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4", getenv
 $suffix = bin2hex(random_bytes(6)); $make = 'HTTP fixture '.$suffix; $model = 'RackWire '.$suffix;
 $tag = 'HTTP-'.$suffix; $serial = 'SER-'.$suffix; $loc = 'HTTP location '.$suffix; $vendor = 'HTTP receipt '.$suffix; $user = 'inventory-http-test';
 $receiveCode = 'F22-' . $suffix; $receiveFailTrigger = 'f22_receive_fail_' . $suffix;
-$ids = ['location'=>null,'model'=>null,'unit'=>null,'barcode'=>null,'receipt'=>null,'entity'=>null,'conflict'=>null,'receivedUnit'=>null];
+$ids = ['location'=>null,'model'=>null,'unit'=>null,'barcode'=>null,'receipt'=>null,'entity'=>null,'conflict'=>null,'receivedUnit'=>null,'catalogType'=>null,'catalogBarcode'=>null,'catalogUnit'=>null];
 $work = sys_get_temp_dir().'/solarinet-inventory-http-'.bin2hex(random_bytes(8)); $sessions=$work.'/sessions'; $server=null; $failure=null;
 $cleanup = static function () use ($db,&$ids,$tag,$receiveCode,$receiveFailTrigger,$vendor,$make,$model,$loc): void {
     try { $db->exec("DROP TRIGGER IF EXISTS `$receiveFailTrigger`"); } catch (Throwable $e) {}
     foreach (['barcode_scans'=>"code IN (".$db->quote($tag).','.$db->quote($receiveCode).')','receipts'=>"vendor=".$db->quote($vendor)] as $table=>$where) { try {$db->exec("DELETE FROM $table WHERE $where");} catch (Throwable $e) {} }
     if ($ids['receivedUnit']) { try {$db->prepare('DELETE FROM barcodes WHERE subject_table=\'hardware_units\' AND subject_id=?')->execute([$ids['receivedUnit']]);$db->prepare('DELETE FROM hardware_units WHERE id=?')->execute([$ids['receivedUnit']]);} catch (Throwable $e) {} }
+    if ($ids['catalogUnit']) { try {$db->prepare('DELETE FROM hardware_units WHERE id=?')->execute([$ids['catalogUnit']]);} catch(Throwable $e){} }
+    foreach (['catalogBarcode'=>'product_barcodes','catalogType'=>'product_types'] as $key=>$table) if ($ids[$key]) { try {$db->prepare('DELETE FROM audit_log WHERE table_name=? AND row_id=?')->execute([$table,$ids[$key]]);$db->prepare("DELETE FROM $table WHERE id=?")->execute([$ids[$key]]);} catch(Throwable $e){} }
     foreach ([['entity_hardware_unit_links','hardware_unit_id',$ids['unit']], ['entities','id',$ids['entity']], ['entities','id',$ids['conflict']], ['barcodes','id',$ids['barcode']], ['hardware_units','id',$ids['unit']], ['hardware_models','id',$ids['model']], ['locations','id',$ids['location']]] as [$table,$column,$id]) { if ($id) { try {$q=$db->prepare("DELETE FROM $table WHERE $column=?");$q->execute([$id]);}catch(Throwable $e){} } }
     try { if ($ids['model']) $db->prepare('DELETE FROM rw_model_groups WHERE hardware_model_id=?')->execute([$ids['model']]); if ($ids['unit']) $db->prepare("DELETE FROM audit_log WHERE (table_name='hardware_units' AND row_id=?) OR (table_name='hardware_models' AND row_id=?) OR (table_name='entities' AND row_id IN (?,?))")->execute([$ids['unit'],$ids['model'],$ids['entity'] ?: 0,$ids['conflict'] ?: 0]); $db->prepare('DELETE FROM receipts WHERE vendor=?')->execute([$vendor]);$db->prepare('DELETE FROM hardware_units WHERE asset_tag=?')->execute([$tag]);$db->prepare('DELETE FROM hardware_models WHERE make=? AND model=?')->execute([$make,$model]);$db->prepare('DELETE FROM locations WHERE name=?')->execute([$loc]);}catch(Throwable $e){}
 };
@@ -164,7 +166,29 @@ try {
     $clr=httpRequest($base.$mpath,'PUT',['arch'=>''],$cookie,$csrf);
     check($clr['status']===200&&array_key_exists('arch',$clr['body']['data']??[])&&$clr['body']['data']['arch']===null,"model PUT arch='' did not clear to NULL");
     $archStmt->execute([$ids['model']]); check($archStmt->fetchColumn()===null,"model PUT arch='' did not store NULL");
+    // Product catalog contract: policy, validation, exact lookup, uniqueness, audit, and soft deletes.
+    check(httpRequest($base.'/api/inventory/product-types','GET')['status']===401,'catalog read allowed an unauthenticated request');
+    foreach ([[$viewerCookie,$viewerCsrf],[$cookie,null]] as [$c,$t]) check(httpRequest($base.'/api/inventory/product-types','POST',['name'=>'Forbidden'], $c,$t)['status']===403,'catalog write did not enforce operator/CSRF policy');
+    check(httpRequest($base.'/api/inventory/product-types','POST',['name'=>'Bad','specs'=>['license_key'=>'must-not-store']],$cookie,$csrf)['status']===400,'catalog accepted secret-like specs');
+    check(httpRequest($base.'/api/inventory/product-types','POST',['kind'=>'nope','name'=>'Bad'],$cookie,$csrf)['status']===400,'catalog accepted invalid kind');
+    $newType=httpRequest($base.'/api/inventory/product-types','POST',['kind'=>'software','name'=>'HTTP catalog '.$suffix,'brand'=>'Example','specs'=>['seats'=>4]],$cookie,$csrf);
+    check($newType['status']===201,'product type create failed: '.json_encode($newType['body'])); $ids['catalogType']=(int)$newType['body']['data']['id'];
+    check(httpRequest($base.'/api/inventory/product-types/999999999','GET',null,$cookie)['status']===404,'missing product type did not return 404');
+    $catPath='/api/inventory/product-types/'.$ids['catalogType'];
+    $updated=httpRequest($base.$catPath,'PUT',['name'=>'Renamed catalog '.$suffix],$cookie,$csrf);check($updated['status']===200&&($updated['body']['data']['name']??'')==='Renamed catalog '.$suffix,'product type rename failed');
+    check(httpRequest($base.$catPath,'PUT',['name'=>'stale','updated_at'=>'2000-01-01 00:00:00'],$cookie,$csrf)['status']===409,'stale product type update did not return conflict');
+    $typesBeforeLookup=(int)$db->query('SELECT COUNT(*) FROM product_types')->fetchColumn();
+    $missingLookup=httpRequest($base.'/api/inventory/product-barcodes?code=NO-MATCH-'.$suffix,'GET',null,$cookie);check($missingLookup['status']===200&&($missingLookup['body']['data']['found']??true)===false,'unknown product barcode lookup did not return no match');
+    check((int)$db->query('SELECT COUNT(*) FROM product_types')->fetchColumn()===$typesBeforeLookup,'lookup unexpectedly created a product type');
+    $code='sku-'.$suffix;
+    $catBarcode=httpRequest($base.'/api/inventory/product-barcodes','POST',['product_type_id'=>$ids['catalogType'],'code'=>$code,'code_type'=>'sku'],$cookie,$csrf);check($catBarcode['status']===201,'product barcode create failed: '.json_encode($catBarcode['body']));$ids['catalogBarcode']=(int)$catBarcode['body']['data']['id'];
+    $dup=httpRequest($base.'/api/inventory/product-barcodes','POST',['product_type_id'=>$ids['catalogType'],'code'=>strtoupper($code),'code_type'=>'sku'],$cookie,$csrf);check($dup['status']===409&&($dup['body']['error']['code']??'')==='duplicate_barcode','duplicate product barcode did not return 409');
+    $foundCat=httpRequest($base.'/api/inventory/product-barcodes?code='.rawurlencode(strtoupper($code)),'GET',null,$cookie);check($foundCat['status']===200&&($foundCat['body']['data']['found']??false)===true&&($foundCat['body']['data']['productType']['id']??0)===$ids['catalogType'],'exact product barcode lookup failed');
+    $db->prepare("INSERT INTO hardware_units(model_id,product_type_id,source_id,asserted_kind,asserted_at) VALUES(?,?,?,'human',NOW())")->execute([$ids['model'],$ids['catalogType'],$manual]); $ids['catalogUnit']=(int)$db->lastInsertId();
+    check(httpRequest($base.'/api/inventory/product-barcodes/'.$ids['catalogBarcode'],'DELETE',[],$cookie,$csrf)['status']===200,'product barcode soft-delete failed');
+    check(httpRequest($base.$catPath,'DELETE',[],$cookie,$csrf)['status']===200,'in-use product type soft-delete failed');
+    check((int)$db->query('SELECT COUNT(*) FROM product_types WHERE id='.$ids['catalogType'])->fetchColumn()===1,'product type soft-delete removed a referenced row');
     $overflow=$db->prepare("INSERT INTO receipts(vendor,currency) VALUES(?,'USD')");for($i=0;$i<501;$i++)$overflow->execute([$vendor]);$tooBig=httpRequest($base.'/api/inventory','GET',null,$cookie);check($tooBig['status']===413&&($tooBig['body']['error']['code']??null)==='inventory_page_required','501 receipts did not require paginated inventory');
-    echo "inventory HTTP transactions, entity linking, paging, aggregate bound, RackWire profile, barcode lookup, and retired-route assertions passed\n";
+    echo "inventory HTTP transactions, entity linking, paging, aggregate bound, RackWire profile, barcode lookup, product catalog policy/validation/uniqueness/soft-delete, and retired-route assertions passed\n";
 } catch(Throwable $e){fwrite(STDERR,'Inventory HTTP test failed: '.$e->getMessage()."\n");$failure=$e;} finally {if(is_resource($server)){proc_terminate($server);proc_close($server);} $cleanup();if(is_dir($work)){$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($work,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);foreach($it as $p)$p->isDir()?rmdir($p->getPathname()):unlink($p->getPathname());rmdir($work);}}
 if($failure!==null)exit(1);

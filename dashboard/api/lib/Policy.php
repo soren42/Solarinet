@@ -52,6 +52,10 @@ require_once __DIR__ . '/Operator.php';
  */
 final class Policy
 {
+    /** Shared declarations for the I1 catalog routes; Router applies these at dispatch. */
+    public const INVENTORY_CATALOG_READ = ['auth' => 'session'];
+    public const INVENTORY_CATALOG_WRITE = ['auth' => 'operator'];
+
     /** Methods that change server state and therefore need write authz + CSRF. */
     private const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 

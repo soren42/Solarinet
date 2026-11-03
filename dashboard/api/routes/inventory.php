@@ -470,19 +470,28 @@ return static function (Router $router): void {
             ? Inv::requireEnum('hardware_models', 'hw_type', $b['hw_type'], 'hw_type')
             : 'other';
 
-        Inv::exec(
-            "INSERT INTO hardware_models (make, model, hw_type, arch, notes, source_id, asserted_kind, asserted_at)
-             VALUES (:make, :model, :hw_type, :arch, :notes, :src, 'human', NOW())",
-            [
-                ':make'    => $make,
-                ':model'   => $model,
-                ':hw_type' => $hwType,
-                ':arch'    => inv_model_arch($b),
-                ':notes'   => inv_str($b, 'notes'),
-                ':src'     => Sor::dashboardSourceId(),
-            ]
-        );
-        $id = (int) Inv::lastInsertId();
+        $db = Sor::db();
+        $source = Sor::dashboardSourceId();
+        $notes = inv_str($b, 'notes');
+        $kind = in_array($hwType, ['printer', 'scanner'], true) ? 'peripheral' : ($hwType === 'other' ? 'other' : 'hardware');
+        $db->beginTransaction();
+        try {
+            // The broad catalog is authoritative; hardware_models remains its provisioning/RackWire projection.
+            $db->prepare("INSERT INTO product_types(kind,name,brand,model,notes,source_id,asserted_kind,asserted_at) VALUES(:kind,:name,:brand,:model,:notes,:source,'human',NOW())")
+                ->execute([':kind'=>$kind, ':name'=>$model, ':brand'=>$make, ':model'=>$model, ':notes'=>$notes, ':source'=>$source]);
+            $productTypeId = (int)$db->lastInsertId();
+            $db->prepare("INSERT INTO hardware_models(make,model,hw_type,arch,notes,product_type_id,source_id,asserted_kind,asserted_at) VALUES(:make,:model,:hw_type,:arch,:notes,:product_type_id,:source,'human',NOW())")
+                ->execute([':make'=>$make, ':model'=>$model, ':hw_type'=>$hwType, ':arch'=>inv_model_arch($b), ':notes'=>$notes, ':product_type_id'=>$productTypeId, ':source'=>$source]);
+            $id = (int)$db->lastInsertId();
+            $audit = $db->prepare("INSERT INTO audit_log(table_name,row_id,action,actor_label,source_id,asserted_kind,old_values,new_values,note) VALUES('product_types',:id,'insert',:actor,:source,'human',NULL,:new,'Inventory model compatibility API')");
+            $audit->execute([':id'=>$productTypeId, ':actor'=>'dashboard:'.Operator::name(), ':source'=>$source, ':new'=>json_encode(['id'=>$productTypeId,'kind'=>$kind,'name'=>$model,'brand'=>$make,'model'=>$model,'notes'=>$notes], JSON_THROW_ON_ERROR)]);
+            $modelAudit = $db->prepare("INSERT INTO audit_log(table_name,row_id,action,actor_label,source_id,asserted_kind,old_values,new_values,note) VALUES('hardware_models',:id,'insert',:actor,:source,'human',NULL,:new,'Catalog compatibility projection')");
+            $modelAudit->execute([':id'=>$id, ':actor'=>'dashboard:'.Operator::name(), ':source'=>$source, ':new'=>json_encode(['id'=>$id,'product_type_id'=>$productTypeId,'make'=>$make,'model'=>$model,'hw_type'=>$hwType,'notes'=>$notes], JSON_THROW_ON_ERROR)]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
         Response::ok(inv_model_row(Inv::row(inv_model_sql() . ' WHERE id = :i', [':i' => $id])), 201);
     });
 
