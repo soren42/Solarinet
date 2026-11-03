@@ -11,7 +11,8 @@ return static function (Router $router): void {
         if (isset($_GET['q'])) {
             if (!is_string($_GET['q'])) Response::error('bad_request', 'q must be a string.', 400);
             $q = trim($_GET['q']);
-            if ($q !== '') { $where[] = '(pt.name LIKE :q OR pt.brand LIKE :q OR pt.model LIKE :q OR pt.category LIKE :q)'; $params[':q'] = '%'.$q.'%'; }
+            // Distinct placeholders: Sor disables emulated prepares, so a repeated :q is HY093.
+            if ($q !== '') { $where[] = '(pt.name LIKE :q1 OR pt.brand LIKE :q2 OR pt.model LIKE :q3 OR pt.category LIKE :q4)'; foreach ([':q1',':q2',':q3',':q4'] as $k) $params[$k] = '%'.$q.'%'; }
         }
         if (isset($_GET['kind']) && $_GET['kind'] !== '') {
             $kind = $_GET['kind'];
@@ -31,7 +32,11 @@ return static function (Router $router): void {
         $id = Inv::idParam($p['id']);
         $row = Inv::row('SELECT id,kind,name,brand,model,category,specs,notes,image_url,lookup_source,lookup_ref,created_at,updated_at FROM product_types WHERE id=:id AND deleted_at IS NULL', [':id'=>$id]);
         if ($row === null) Response::error('not_found', "No product type $id", 404);
-        Response::ok(catalog_type_row($row));
+        $row = catalog_type_row($row);
+        // Live codes for this type, so the UI can list and remove them (no separate list route).
+        $row['barcodes'] = array_map(static fn(array $b): array => ['id'=>(int)$b['id'],'code'=>$b['code'],'code_type'=>$b['code_type']],
+            Inv::rows('SELECT id,code,code_type FROM product_barcodes WHERE product_type_id=:id AND deleted_at IS NULL ORDER BY id', [':id'=>$id]));
+        Response::ok($row);
     }, $session);
 
     $router->add('DELETE', '/api/inventory/product-types/{id}', static function (array $p): void {

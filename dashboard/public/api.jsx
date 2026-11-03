@@ -350,6 +350,10 @@
     invBulkStorage: "/api/inventory/locations/bulk-storage-units", // POST all-or-none batch
     invContainerTypes: "/api/inventory/container-types",  // GET (?include_deleted=1) / POST create
     invContainerType: function (id) { return "/api/inventory/container-types/" + encodeURIComponent(id); }, // PUT rename / DELETE retire
+    invProductTypes: "/api/inventory/product-types",     // GET ?q=&kind=&limit=&offset= / POST create
+    invProductType: function (id) { return "/api/inventory/product-types/" + encodeURIComponent(id); }, // GET (+barcodes) / PUT / DELETE retire
+    invProductBarcodes: "/api/inventory/product-barcodes", // GET ?code= exact lookup / POST attach
+    invProductBarcode: function (id) { return "/api/inventory/product-barcodes/" + encodeURIComponent(id); }, // DELETE
     invReceipts:  "/api/inventory/receipts", // GET list / POST create (multipart scan upload)
     invProjects:  "/api/inventory/projects", // GET list / POST create
     invProject:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id); },
@@ -1282,6 +1286,25 @@
     createContainerType: function (name) { return post(EP.invContainerTypes, { name: name }); },
     renameContainerType: function (id, name, updatedAt) { return getJSON(EP.invContainerType(id), { method: "PUT", body: { name: name, updated_at: updatedAt } }); },
     retireContainerType: function (id) { return getJSON(EP.invContainerType(id), { method: "DELETE" }); },
+    // product catalog (product_types + product_barcodes). PUT is partial; pass
+    // updated_at for the optimistic lock (409 "conflict" when stale). Retire is a
+    // soft delete allowed while in use (D5); lookups never create rows (D3).
+    productTypes:     function (opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.q) qs.push("q=" + encodeURIComponent(opts.q));
+      if (opts.kind) qs.push("kind=" + encodeURIComponent(opts.kind));
+      if (opts.limit != null) qs.push("limit=" + encodeURIComponent(opts.limit));
+      if (opts.offset) qs.push("offset=" + encodeURIComponent(opts.offset));
+      return getJSON(EP.invProductTypes + (qs.length ? "?" + qs.join("&") : ""));
+    },
+    getProductType:   function (id) { return getJSON(EP.invProductType(id)); },
+    createProductType: function (body) { return post(EP.invProductTypes, body || {}); },
+    updateProductType: function (id, body) { return getJSON(EP.invProductType(id), { method: "PUT", body: body || {} }); },
+    retireProductType: function (id) { return getJSON(EP.invProductType(id), { method: "DELETE" }); },
+    lookupProductBarcode: function (code) { return getJSON(EP.invProductBarcodes + "?code=" + encodeURIComponent(code)); },
+    addProductBarcode: function (typeId, code, codeType) { return post(EP.invProductBarcodes, { product_type_id: Number(typeId), code: code, code_type: codeType || "other" }); },
+    removeProductBarcode: function (id) { return getJSON(EP.invProductBarcode(id), { method: "DELETE" }); },
     // receipts — scan upload is multipart (FormData); pass a FormData for the file.
     createReceipt:    function (body) { return post(EP.invReceipts, body || {}); },
     uploadReceipt:    function (form) {

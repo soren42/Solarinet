@@ -1,9 +1,10 @@
 /* ============================================================
    SolariNet — screens4: Inventory management
-   Components · Locations · Receipts · Projects  (SoR migration 014)
+   Components · Catalog · Locations · Receipts · Projects  (SoR migration 014)
 
    Reads/writes the inventory subsystem: hardware_units (components),
-   hardware_models (catalog), locations (property → floor → room → section,
+   hardware_models (legacy models), product_types + product_barcodes (catalog,
+   I1 WP2 API), locations (property → floor → room → section,
    storage units anywhere — I1 WP4 API: move/merge/bulk/project/container types),
    receipts (purchase record + scan), projects + project_allocations
    (reserve owned units — no double-commit — and list needed-to-buy items).
@@ -327,6 +328,7 @@
 
     const TABS = [
       ["components", "Components", "box"],
+      ["catalog", "Catalog", "tag2"],
       ["locations", "Locations", "location"],
       ["receipts", "Receipts", "receipt"],
       ["projects", "Projects", "project"],
@@ -351,6 +353,7 @@
         {loadError && <div role="alert" className="empty" style={{ marginBottom: 16 }}>Inventory refresh failed: {loadError} Current screen contents are retained and may be stale.</div>}
 
         {tab === "components" && <ComponentsTab inv={inv} h={helpers} act={actions} onViewReceipt={setViewer} onInventoryChanged={function () { return loadInventory(true); }} showRackWireProfiles={showRackWireProfiles} onToggleRackWireProfiles={function () { setShowRackWireProfiles(function (value) { return !value; }); }} onNavigate={onNavigate} />}
+        {tab === "catalog" && <CatalogTab onChanged={function () { return loadInventory(true); }} />}
         {tab === "locations" && <LocationsTab inv={inv} h={helpers} onChanged={function () { return loadInventory(true); }} />}
         {tab === "receipts" && <ReceiptsTab inv={inv} h={helpers} act={actions} onView={setViewer} />}
         {tab === "projects" && <ProjectsTab inv={inv} h={helpers} act={actions} />}
@@ -1575,6 +1578,564 @@
           })}
         </ul>
       </div>
+    );
+  }
+
+  /* ===================== CATALOG TAB (I1 WP5) ===================== */
+  // Product types (what a thing is) and their barcodes, over the WP2 catalog API.
+  // Lookups only ever prefill (D3); retiring is a soft delete allowed while in use (D5).
+  const CAT_KINDS = ["hardware", "peripheral", "component", "software", "accessory", "consumable", "other"];
+  const CAT_KIND_LABEL = { hardware: "Hardware", peripheral: "Peripheral", component: "Component", software: "Software", accessory: "Accessory", consumable: "Consumable", other: "Other" };
+  const CODE_TYPES = ["gtin", "sku", "other"];
+  const CODE_TYPE_LABEL = { gtin: "GTIN / UPC / EAN", sku: "SKU", other: "Other" };
+  const CAT_PAGE = 50;
+  // Mirrors catalog_has_secret_key(): licence data is a reference on the item, never a key.
+  const SECRET_KEY = /(?:secret|password|passwd|token|api.?key|license.?key|licence.?key|credential|private.?key)/i;
+
+  function catErrorText(e, fallback) {
+    const code = String((e && e.code) || "");
+    const msg = String((e && e.message) || "");
+    switch (code) {
+      case "conflict": return "This product type was changed elsewhere since you opened it. The latest version has been loaded — check it and save again.";
+      case "duplicate_barcode": return "That code is already attached to another product type.";
+      case "not_found": return "It no longer exists — it may have been retired elsewhere.";
+      case "bad_request": return msg || "The server rejected this request.";
+      case "DATA_STALE": return msg;
+      default: return msg || fallback || "The request failed.";
+    }
+  }
+  // Server-side normalization (catalog_normalize_code): whitespace removed, upper-cased.
+  function normCode(code) { return String(code || "").replace(/\s+/g, "").toUpperCase(); }
+  function gtinValid(code) {
+    if (!/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(code)) return false;
+    const digits = code.split("").map(Number); const check = digits.pop();
+    let sum = 0, weight = 3;
+    for (let i = digits.length - 1; i >= 0; i--) { sum += digits[i] * weight; weight = weight === 3 ? 1 : 3; }
+    return (10 - sum % 10) % 10 === check;
+  }
+  function guessCodeType(code) { return gtinValid(code) ? "gtin" : "other"; }
+  function codeError(code, codeType) {
+    if (!code) return "Enter or scan a code.";
+    if (code.length > 128) return "Codes must be 128 characters or fewer.";
+    if (codeType === "gtin" && !gtinValid(code)) return "That isn’t a valid GTIN — it needs 8, 12, 13 or 14 digits with a correct check digit. Choose SKU or Other for shop codes.";
+    return "";
+  }
+  // Display name (migration 035 already stores it). A type saved with a bare model
+  // ("400") still reads with its brand.
+  function typeTitle(t) {
+    const name = String((t && t.name) || "").trim(), model = String((t && t.model) || "").trim();
+    if (!name || name === model) return catalogName(t && t.brand, model) || name || "Untitled";
+    return name;
+  }
+  function typeByline(t) { return [t.brand, t.model, t.category].filter(function (x) { return x != null && String(x).trim() !== ""; }).join(" · "); }
+  function isLegacyLinked(t) { const s = String((t && t.lookup_source) || ""); return s === "migration:033" || s.indexOf("legacy:") === 0; }
+  function hasSecretKey(value) {
+    if (!value || typeof value !== "object") return false;
+    return Object.keys(value).some(function (k) { return SECRET_KEY.test(k) || hasSecretKey(value[k]); });
+  }
+  function specObject(specs) {
+    if (!specs || typeof specs !== "object") return {};
+    if (Array.isArray(specs)) { const o = {}; specs.forEach(function (v, i) { o[String(i)] = v; }); return o; }   // PHP decodes "{}" as []
+    return specs;
+  }
+  function specText(v) { return v === null ? "null" : typeof v === "object" ? JSON.stringify(v) : String(v); }
+  function stable(v) {
+    if (Array.isArray(v)) return "[" + v.map(stable).join(",") + "]";
+    if (v && typeof v === "object") return "{" + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ":" + stable(v[k]); }).join(",") + "}";
+    return JSON.stringify(v === undefined ? null : v);
+  }
+  // Spec rows remember the value they started from so an untouched number,
+  // boolean or nested value round-trips with its JSON type intact.
+  function specRows(specs) {
+    const o = specObject(specs);
+    return Object.keys(o).map(function (k, i) {
+      const v = o[k];
+      return { rid: i + 1, key: k, text: specText(v), orig: v, origText: specText(v), has: true, nested: v !== null && typeof v === "object" };
+    });
+  }
+  function specsFromRows(rows) {
+    const out = {}; const seen = {};
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]; const key = r.key.trim(); const text = r.text;
+      if (!key && !text.trim()) continue;
+      if (!key) return { error: "Spec " + (i + 1) + " needs a name." };
+      if (seen[key]) return { error: "“" + key + "” is listed twice. Each spec name can appear once." };
+      seen[key] = true;
+      let v;
+      if (r.has && text === r.origText) v = r.orig;
+      else if (r.nested) {
+        try { v = JSON.parse(text); } catch (e) { return { error: "“" + key + "” holds structured data; keep it valid JSON (or replace it with plain text)." }; }
+      } else if (r.has && typeof r.orig === "number" && /^-?\d+(?:\.\d+)?$/.test(text.trim())) v = Number(text.trim());
+      else if (r.has && typeof r.orig === "boolean" && /^(?:true|false)$/i.test(text.trim())) v = text.trim().toLowerCase() === "true";
+      else v = text.trim();
+      out[key] = v;
+    }
+    if (hasSecretKey(out)) return { error: "Spec names like “licence key”, “password” or “token” look like secrets, and secrets are never stored. Record a licence reference on the item instead." };
+    return { specs: Object.keys(out).length ? out : null };
+  }
+  // A wedge scanner ends with Enter; in a field that feeds a write, that must not submit (D3).
+  function holdEnter(e) { if (e && e.key === "Enter" && e.preventDefault) e.preventDefault(); }
+  function specDisplay(v) { return v === null || v === "" ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v); }
+
+  function CatalogTab({ onChanged }) {
+    const [q, setQ] = useState("");
+    const [kind, setKind] = useState("");
+    const [list, setList] = useState({ items: [], total: 0, hasMore: false, nextOffset: 0, loaded: false, q: "", kind: "" });
+    const [loading, setLoading] = useState(false);
+    const [listErr, setListErr] = useState("");
+    const [selected, setSelected] = useState(null);
+    const [detail, setDetail] = useState(null);
+    const [detailErr, setDetailErr] = useState("");
+    const [sheet, setSheet] = useState(null);
+    const [notice, setNotice] = useState("");
+    const [scan, setScan] = useState("");
+    const [lookup, setLookup] = useState(null);      // { code, found, name? } | { error }
+    const [retiring, setRetiring] = useState(false);
+    const [removing, setRemoving] = useState(null);  // barcode id awaiting confirmation
+    const [attach, setAttach] = useState({ code: "", code_type: "other" });
+    const [busy, setBusy] = useState(false);
+    const [actErr, setActErr] = useState("");
+    const [ctl] = useState(function () { return { seq: 0, dseq: 0, timer: null }; });
+    const a = api();
+    const offline = isOffline() || !a || !a.productTypes;
+
+    function load(next, append) {
+      if (offline) return Promise.resolve();
+      const qq = (next && next.q != null ? next.q : q).trim();
+      const kk = next && next.kind != null ? next.kind : kind;
+      const offset = append ? list.nextOffset : 0;
+      const seq = ++ctl.seq;
+      setLoading(true);
+      return a.productTypes({ q: qq, kind: kk, limit: CAT_PAGE, offset: offset }).then(function (res) {
+        if (seq !== ctl.seq) return;
+        const items = (res && Array.isArray(res.items)) ? res.items : [];
+        const page = (res && res.page) || {};
+        setList(function (prev) {
+          return {
+            items: append ? prev.items.concat(items) : items,
+            total: page.total != null ? Number(page.total) : offset + items.length,
+            hasMore: !!page.hasMore,
+            nextOffset: page.nextOffset != null ? Number(page.nextOffset) : offset + items.length,
+            loaded: true, q: qq, kind: kk,
+          };
+        });
+        setLoading(false); setListErr("");
+      }).catch(function (e) {
+        if (seq !== ctl.seq) return;
+        setLoading(false); setListErr(catErrorText(e, "The catalog could not be loaded."));
+      });
+    }
+    useEffect(function () {
+      load();
+      return function () { if (ctl.timer) window.clearTimeout(ctl.timer); };
+    }, []);
+
+    function searchNow(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      if (ctl.timer) { window.clearTimeout(ctl.timer); ctl.timer = null; }
+      load({ q: q });
+    }
+    function onSearch(value) {
+      setQ(value);
+      if (ctl.timer) window.clearTimeout(ctl.timer);
+      ctl.timer = window.setTimeout(function () { ctl.timer = null; load({ q: value }); }, 250);
+    }
+    function pickKind(k) { setKind(k); load({ kind: k }); }
+
+    function openType(id, prefillCode) {
+      setSelected(id); setRetiring(false); setRemoving(null); setActErr("");
+      setAttach(prefillCode ? { code: prefillCode, code_type: guessCodeType(prefillCode) } : { code: "", code_type: "other" });
+      const seq = ++ctl.dseq;
+      if (id == null) { setDetail(null); setDetailErr(""); return Promise.resolve(); }
+      setDetailErr("");
+      setDetail(function (prev) { return prev && prev.id === id ? prev : null; });
+      return a.getProductType(id).then(function (row) {
+        if (seq === ctl.dseq) setDetail(row || null);
+      }).catch(function (e) {
+        if (seq === ctl.dseq) { setDetail(null); setDetailErr(catErrorText(e, "This product type could not be loaded.")); }
+      });
+    }
+    function done(message, selectId, inventoryChanged) {
+      setSheet(null); setNotice(message); toast(message, "check");
+      if (inventoryChanged && onChanged) Promise.resolve(onChanged()).catch(function () {});
+      load();
+      if (selectId !== undefined) return openType(selectId);
+      return Promise.resolve();
+    }
+
+    // Keyboard-wedge scanners type the code and press Enter, which submits this form.
+    function runLookup(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      const code = normCode(scan);
+      if (!code) return;
+      setLookup(null); setNotice("");
+      a.lookupProductBarcode(code).then(function (res) {
+        if (res && res.found && res.productType) {
+          setScan("");
+          setLookup({ code: code, found: true, name: typeTitle(res.productType) });
+          openType(Number(res.productType.id));
+        } else {
+          setLookup({ code: code, found: false });
+        }
+      }).catch(function (err) { setLookup({ code: code, error: catErrorText(err, "Lookup failed.") }); });
+    }
+
+    function retire() {
+      const t = detail; if (!t) return;
+      setBusy(true); setActErr("");
+      a.retireProductType(t.id).then(function () {
+        setBusy(false); setRetiring(false);
+        return done("Retired " + typeTitle(t), null, true);
+      }).catch(function (e) {
+        setBusy(false); setActErr(catErrorText(e, "Retire failed."));
+        if (e && e.code === "not_found") { openType(null); load(); }
+      });
+    }
+    function attachCode(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      const t = detail; if (!t) return;
+      const code = normCode(attach.code);
+      const bad = codeError(code, attach.code_type);
+      if (bad) { setActErr(bad); return; }
+      setBusy(true); setActErr("");
+      a.addProductBarcode(t.id, code, attach.code_type).then(function () {
+        setBusy(false); setNotice("Attached " + code + " to " + typeTitle(t)); toast("Code attached", "check");
+        if (lookup && lookup.code === code) setLookup(null);
+        return openType(t.id);
+      }).catch(function (err) {
+        setBusy(false); setActErr(catErrorText(err, "Attach failed."));
+        if (err && err.code === "duplicate_barcode" && a.lookupProductBarcode) {
+          a.lookupProductBarcode(code).then(function (res) {
+            if (res && res.found && res.productType) setActErr(code + " is already attached to “" + typeTitle(res.productType) + "”. Remove it there first if it belongs here.");
+          }).catch(function () {});
+        }
+      });
+    }
+    function removeCode(b) {
+      const t = detail; if (!t) return;
+      setBusy(true); setActErr("");
+      a.removeProductBarcode(b.id).then(function () {
+        setBusy(false); setRemoving(null); setNotice("Removed " + b.code + " from " + typeTitle(t)); toast("Code removed", "check");
+        return openType(t.id);
+      }).catch(function (err) {
+        setBusy(false); setActErr(catErrorText(err, "Remove failed."));
+        if (err && err.code === "not_found") openType(t.id);
+      });
+    }
+
+    const filtered = !!(list.q || list.kind);
+    const sel = selected != null ? detail : null;
+
+    function renderLookup() {
+      if (!lookup) return null;
+      if (lookup.error) return <div className="inv-loc-note inv-loc-note--err" role="alert">{lookup.error}</div>;
+      if (lookup.found) return <div className="inv-loc-note inv-loc-note--ok" role="status"><span className="inv-code">{lookup.code}</span> is {lookup.name}.</div>;
+      return <div className="inv-loc-note inv-loc-note--warn inv-cat-miss" role="status">
+        <span>No product type has the code <span className="inv-code">{lookup.code}</span>. Nothing has been saved.</span>
+        {!offline && <div className="inv-cat-miss__acts">
+          <button type="button" className="btn-primary" onClick={function () { setSheet({ kind: "create", code: lookup.code }); }}><Icon name="plus" size={14} />New product type with this code</button>
+          {sel && <button type="button" className="btn-ghost" onClick={function () { setAttach({ code: lookup.code, code_type: guessCodeType(lookup.code) }); setActErr(""); }}>Use for {typeTitle(sel)}</button>}
+          <button type="button" className="btn-ghost" onClick={function () { setLookup(null); }}>Dismiss</button>
+        </div>}
+      </div>;
+    }
+
+    function renderList() {
+      if (offline) return <div className="inv-loc__none">The catalog needs a live connection.</div>;
+      if (!list.loaded && !listErr) return <div className="inv-loc__none" role="status">Loading the catalog…</div>;
+      if (list.loaded && list.items.length === 0) {
+        return <div className="inv-loc__none">{filtered
+          ? "No product types match" + (list.q ? " “" + list.q + "”" : "") + (list.kind ? " in " + CAT_KIND_LABEL[list.kind] : "") + "."
+          : "No product types yet."}</div>;
+      }
+      return <>
+        {list.items.map(function (t) {
+          const on = selected === t.id;
+          const by = typeByline(t);
+          return <button type="button" key={t.id} className={"inv-loc-pick inv-cat-row" + (on ? " on" : "")} aria-current={on ? "true" : undefined} onClick={function () { openType(t.id); }}>
+            <span className="inv-loc-hit__text">
+              <span className="inv-loc-pick__name">{typeTitle(t)}</span>
+              {by && <span className="muted">{by}</span>}
+            </span>
+            <span className="tag">{CAT_KIND_LABEL[t.kind] || t.kind}</span>
+          </button>;
+        })}
+        {list.hasMore && <button type="button" className="btn-ghost inv-cat-more" disabled={loading} onClick={function () { load(null, true); }}>{loading ? "Loading…" : "Show more (" + list.items.length + " of " + list.total + ")"}</button>}
+      </>;
+    }
+
+    function renderDetail() {
+      if (selected == null) {
+        const empty = list.loaded && !filtered && list.total === 0;
+        return <div className="inv-loc__empty">
+          <Icon name="tag2" size={28} style={{ color: "var(--teal)" }} />
+          <h3>{offline ? "Catalog unavailable" : empty ? "No product types yet" : "Choose a product type"}</h3>
+          <p className="muted">{offline
+            ? "Product types and barcodes load from the live system of record. This view returns when the dashboard reconnects."
+            : empty
+              ? "A product type says what something is — a make and model, a software title, a consumable. Add one, or scan a barcode to start from its code."
+              : "Select a product type to see its specifications and barcodes, or scan a code to jump straight to it."}</p>
+          {!offline && <button type="button" className="btn-primary" onClick={function () { setSheet({ kind: "create" }); }}><Icon name="plus" size={14} />New product type</button>}
+        </div>;
+      }
+      const back = <nav className="inv-crumbs" aria-label="Catalog"><button type="button" className="inv-crumb inv-crumb--back" onClick={function () { openType(null); }}>‹ All product types</button></nav>;
+      if (!sel) {
+        return <section className="inv-loc__card inv-cat__card" aria-label="Product type">
+          {back}
+          {detailErr ? <div className="inv-loc-note inv-loc-note--err" role="alert">{detailErr}</div> : <div className="inv-loc__none" role="status">Loading…</div>}
+        </section>;
+      }
+      const title = typeTitle(sel);
+      const by = [sel.brand, sel.model].filter(function (x) { return x != null && String(x).trim() !== ""; }).join(" · ");
+      const specs = specObject(sel.specs);
+      const specKeys = Object.keys(specs);
+      const codes = Array.isArray(sel.barcodes) ? sel.barcodes : [];
+      return <section className="inv-loc__card inv-cat__card" aria-label={"Product type " + title}>
+        {back}
+        <div className="inv-loc__head">
+          <Icon name="tag2" size={24} style={{ color: "var(--teal)", flex: "0 0 auto" }} />
+          <div style={{ minWidth: 0 }}>
+            <h2>{title}</h2>
+            {by && <div className="inv-cat__byline">{by}</div>}
+            <div className="inv-loc__meta">
+              <span className="tag">{CAT_KIND_LABEL[sel.kind] || sel.kind}</span>
+              {sel.category && <span className="tag">{sel.category}</span>}
+            </div>
+          </div>
+        </div>
+        {sel.notes && <p className="inv-loc__notes">{sel.notes}</p>}
+        <dl className="inv-loc__facts">
+          <div><dt>Brand</dt><dd>{sel.brand || "—"}</dd></div>
+          <div><dt>Model</dt><dd>{sel.model || "—"}</dd></div>
+          <div><dt>Category</dt><dd>{sel.category || "—"}</dd></div>
+          <div><dt>Codes</dt><dd>{codes.length}</dd></div>
+        </dl>
+        {sel.image_url && <a className="inv-cat__link" href={sel.image_url} target="_blank" rel="noopener noreferrer">Open product image ↗</a>}
+        {isLegacyLinked(sel) && <div className="inv-loc-note inv-cat__note" role="note">Linked to a component model. Brand, model, notes and kind changes also update that model in Components, provisioning and RackWire.</div>}
+
+        <h3 className="inv-loc__sub">Specifications</h3>
+        {specKeys.length === 0
+          ? <div className="inv-loc__none">No specifications recorded.</div>
+          : <dl className="inv-cat__specs">
+              {specKeys.map(function (k) { return <div key={k}><dt>{k}</dt><dd>{specDisplay(specs[k])}</dd></div>; })}
+            </dl>}
+        {sel.kind === "software" && <div className="inv-loc-note inv-cat__note" role="note">Licence seats, expiry and the licence reference are recorded on each item. Licence keys are never stored here.</div>}
+
+        <h3 className="inv-loc__sub">Barcodes</h3>
+        {codes.length === 0 && <div className="inv-loc__none">No codes attached. Scanning one of this product’s barcodes will then find it.</div>}
+        {codes.length > 0 && <ul className="inv-cat-codes" aria-label={"Codes for " + title}>
+          {codes.map(function (b) {
+            return <li key={b.id}>
+              <span className="inv-cat-codes__code"><span className="inv-code">{b.code}</span><span className="tag">{CODE_TYPE_LABEL[b.code_type] || b.code_type}</span></span>
+              {!offline && (removing === b.id
+                ? <span className="inv-ctype__confirm" role="group" aria-label={"Confirm removing " + b.code}>
+                    <span>Remove this code?</span>
+                    <button type="button" className="btn-ghost inv-btn-danger" disabled={busy} onClick={function () { removeCode(b); }}>Remove</button>
+                    <button type="button" className="btn-ghost" onClick={function () { setRemoving(null); }}>Keep</button>
+                  </span>
+                : <button type="button" className="btn-ghost" aria-label={"Remove code " + b.code} onClick={function () { setRemoving(b.id); setRetiring(false); }}>Remove</button>)}
+            </li>;
+          })}
+        </ul>}
+        {actErr && <div className="inv-loc-note inv-loc-note--err inv-cat__err" role="alert">{actErr}</div>}
+        {!offline && <form className="inv-cat-attach" onSubmit={attachCode}>
+          <label className="inv-field inv-field--grow"><span>Attach a code</span><input value={attach.code} maxLength={128} autoComplete="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="done" onKeyDown={holdEnter} onChange={function (e) { setAttach({ code: e.target.value, code_type: attach.code_type }); }} placeholder="Scan or type" /></label>
+          <label className="inv-field"><span>Code type</span>
+            <select value={attach.code_type} onChange={function (e) { setAttach({ code: attach.code, code_type: e.target.value }); }}>
+              {CODE_TYPES.map(function (c) { return <option key={c} value={c}>{CODE_TYPE_LABEL[c]}</option>; })}
+            </select></label>
+          <button type="submit" className="btn-ghost" disabled={busy}><Icon name="plus" size={14} />Attach</button>
+        </form>}
+
+        {offline
+          ? <div className="inv-loc-note" role="note">Changes need a live connection. This view is read-only until the dashboard reconnects.</div>
+          : <div className="inv-loc__actions" role="toolbar" aria-label={"Actions for " + title}>
+              {retiring
+                ? <div className="inv-cat-retire" role="group" aria-label={"Confirm retiring " + title}>
+                    <p>Retire {title}? Items already recorded keep this type; it leaves pick lists{codes.length ? " and its " + codes.length + " code" + (codes.length === 1 ? " is" : "s are") + " released for reuse" : ""}.</p>
+                    <div className="inv-cat-retire__acts">
+                      <button type="button" className="btn-ghost inv-btn-danger" disabled={busy} onClick={retire}>{busy ? "Retiring…" : "Retire product type"}</button>
+                      <button type="button" className="btn-ghost" onClick={function () { setRetiring(false); }}>Keep it</button>
+                    </div>
+                  </div>
+                : <>
+                    <button type="button" className="btn-primary" onClick={function () { setSheet({ kind: "edit", type: sel }); }}><Icon name="edit" size={14} />Edit</button>
+                    <button type="button" className="btn-ghost inv-btn-danger" onClick={function () { setRetiring(true); setRemoving(null); }}><Icon name="trash" size={14} />Retire…</button>
+                  </>}
+            </div>}
+      </section>;
+    }
+
+    return (
+      <div className="inv-locs inv-cat">
+        <div className="filters inv-loc-bar inv-cat-bar">
+          <form className="search inv-loc-search inv-cat-search" role="search" onSubmit={searchNow}>
+            <Icon name="search" size={15} />
+            <input type="search" aria-label="Find a product type by name, brand, model or category" value={q} onChange={function (e) { onSearch(e.target.value); }} placeholder="Find name, brand, model…" disabled={offline} />
+          </form>
+          <form className="inv-cat-scan" role="search" aria-label="Barcode lookup" onSubmit={runLookup}>
+            <div className="search">
+              <Icon name="tag2" size={15} />
+              <input aria-label="Scan or type a barcode" value={scan} autoComplete="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="search" onChange={function (e) { setScan(e.target.value); }} placeholder="Scan or type a barcode" disabled={offline} />
+            </div>
+            <button type="submit" className="btn-ghost" disabled={offline || !scan.trim()}>Look up</button>
+          </form>
+          {!offline && <button type="button" className="btn-primary inv-loc-new" onClick={function () { setSheet({ kind: "create" }); }}><Icon name="plus" size={14} />New product type</button>}
+        </div>
+        <div className="filters inv-cat-kinds" role="group" aria-label="Filter by kind">
+          {[""].concat(CAT_KINDS).map(function (k) {
+            return <button type="button" key={k || "all"} className={"chip" + (kind === k ? " on" : "")} aria-pressed={kind === k} disabled={offline} onClick={function () { pickKind(k); }}>{k ? CAT_KIND_LABEL[k] : "All kinds"}</button>;
+          })}
+        </div>
+        {renderLookup()}
+        {notice && <div className="inv-loc-note inv-loc-note--ok" role="status">{notice}</div>}
+        {listErr && <div className="inv-loc-note inv-loc-note--err" role="alert">{listErr}</div>}
+
+        <div className="inv-loc" data-detail={selected != null ? "1" : "0"}>
+          <div className="inv-loc__tree inv-cat__list" aria-label="Product types">
+            <div className="inv-loc__treehead" aria-live="polite">{offline ? "Unavailable offline" : loading && !list.loaded ? "Loading…" : list.total + " product type" + (list.total === 1 ? "" : "s") + (filtered ? " found" : "")}</div>
+            {renderList()}
+          </div>
+          <div className="inv-loc__detail">{renderDetail()}</div>
+        </div>
+
+        {sheet && sheet.kind === "create" && <ProductTypeSheet prefillCode={sheet.code} onClose={function () { setSheet(null); }} onDone={done} />}
+        {sheet && sheet.kind === "edit" && <ProductTypeSheet type={sheet.type} onClose={function () { setSheet(null); }} onDone={done} />}
+      </div>
+    );
+  }
+
+  // Create (optionally with a prefilled, uncommitted barcode) or edit a product
+  // type. Edits send only changed fields plus updated_at (409 → reload latest).
+  function ProductTypeSheet({ type, prefillCode, onClose, onDone }) {
+    const editing = !!type;
+    const [base, setBase] = useState(type || null);
+    const [kind, setKind] = useState(editing ? type.kind : "hardware");
+    const [name, setName] = useState(editing ? (type.name || "") : "");
+    const [brand, setBrand] = useState(editing ? (type.brand || "") : "");
+    const [model, setModel] = useState(editing ? (type.model || "") : "");
+    const [category, setCategory] = useState(editing ? (type.category || "") : "");
+    const [imageUrl, setImageUrl] = useState(editing ? (type.image_url || "") : "");
+    const [notes, setNotes] = useState(editing ? (type.notes || "") : "");
+    const [rows, setRows] = useState(function () { return editing ? specRows(type.specs) : []; });
+    const [rseq, setRseq] = useState(function () { return 1000; });
+    const [code, setCode] = useState(prefillCode || "");
+    const [codeType, setCodeType] = useState(prefillCode ? guessCodeType(normCode(prefillCode)) : "other");
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const autoName = catalogName(brand, model);
+
+    function adopt(row) {
+      setBase(row); setKind(row.kind); setName(row.name || ""); setBrand(row.brand || ""); setModel(row.model || "");
+      setCategory(row.category || ""); setImageUrl(row.image_url || ""); setNotes(row.notes || ""); setRows(specRows(row.specs));
+    }
+    function setRow(rid, patch) { setRows(rows.map(function (r) { return r.rid === rid ? Object.assign({}, r, patch) : r; })); }
+    function addRow() { setRows(rows.concat([{ rid: rseq + 1, key: "", text: "", orig: null, origText: "", has: false, nested: false }])); setRseq(rseq + 1); }
+    function dropRow(rid) { setRows(rows.filter(function (r) { return r.rid !== rid; })); }
+
+    function submit(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      const finalName = name.trim() || autoName.trim();
+      if (!finalName) { setErr("Give it a name, or a brand and model to name it from."); return; }
+      if (finalName.length > 160) { setErr("Names must be 160 characters or fewer."); return; }
+      if (brand.trim().length > 128 || model.trim().length > 128 || category.trim().length > 128) { setErr("Brand, model and category must each be 128 characters or fewer."); return; }
+      const url = imageUrl.trim();
+      if (url && (!/^https?:\/\/\S+$/i.test(url) || url.length > 1024)) { setErr("The image link must be an http:// or https:// address."); return; }
+      const spec = specsFromRows(rows);
+      if (spec.error) { setErr(spec.error); return; }
+      const fields = { kind: kind, name: finalName, brand: brand.trim() || null, model: model.trim() || null, category: category.trim() || null, image_url: url || null, notes: notes.trim() || null };
+      const a = api();
+      let call;
+      if (editing) {
+        const body = {};
+        Object.keys(fields).forEach(function (k) {
+          const was = base[k] == null || String(base[k]).trim() === "" ? null : String(base[k]).trim();
+          if (fields[k] !== was) body[k] = fields[k];
+        });
+        const baseSpecs = Object.keys(specObject(base.specs)).length ? specObject(base.specs) : null;
+        if (stable(spec.specs) !== stable(baseSpecs)) body.specs = spec.specs;
+        if (!Object.keys(body).length) { onClose(); toast("No changes to save", "check"); return; }
+        body.updated_at = base.updated_at || "";
+        call = a.updateProductType(base.id, body);
+      } else {
+        const body = Object.assign({}, fields);
+        if (spec.specs) body.specs = spec.specs;
+        const c = normCode(code);
+        if (c) {
+          const bad = codeError(c, codeType);
+          if (bad) { setErr(bad); return; }
+          body.barcode = { code: c, code_type: codeType };
+        }
+        call = a.createProductType(body);
+      }
+      setBusy(true); setErr("");
+      call.then(function (row) {
+        const id = row && row.id != null ? Number(row.id) : (editing ? base.id : undefined);
+        onDone((editing ? "Saved " : "Added ") + finalName, id, editing);
+      }).catch(function (error) {
+        setBusy(false);
+        setErr(error && error.code === "duplicate_barcode"
+          ? "The code " + normCode(code) + " is already attached to another product type, so nothing was saved. Remove the code here, or look it up to find that type."
+          : catErrorText(error, "Save failed."));
+        if (editing && error && error.code === "conflict" && a.getProductType) {
+          a.getProductType(base.id).then(function (row) { if (row) adopt(row); }).catch(function () {});
+        }
+      });
+    }
+
+    const title = editing ? "Edit " + typeTitle(base) : "New product type";
+    return (
+      <Sheet title={title} icon="tag2" wide sub={editing ? (CAT_KIND_LABEL[base.kind] || base.kind) + (base.brand ? " · " + base.brand : "") : "Describe what this thing is. Individual items are recorded in Components."} onClose={onClose}
+        footer={<><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button type="button" className="btn-primary" disabled={busy} onClick={submit}><Icon name="check" size={14} />{busy ? "Saving…" : (editing ? "Save changes" : "Add product type")}</button></>}>
+        <form className="inv-form" onSubmit={submit}>
+          <SheetError text={err} />
+          {editing && isLegacyLinked(base) && <div className="inv-loc-note" role="note">Linked to a component model — brand, model, notes and kind changes update it too.</div>}
+          <div className="inv-form__row">
+            <label className="inv-field"><span>Brand</span><input value={brand} maxLength={128} onChange={function (e) { setBrand(e.target.value); }} placeholder="Raspberry Pi" /></label>
+            <label className="inv-field"><span>Model</span><input value={model} maxLength={128} onChange={function (e) { setModel(e.target.value); }} placeholder="400" /></label>
+          </div>
+          <label className="inv-field"><span>Display name</span><input value={name} maxLength={160} onChange={function (e) { setName(e.target.value); }} placeholder={autoName || "Name shown everywhere"} /></label>
+          {!name.trim() && autoName && <div className="muted inv-cat__hint">Will be saved as “{autoName}”.</div>}
+          {name.trim() && brand.trim() && name.trim() === model.trim() && autoName !== name.trim() && (
+            <div className="muted inv-cat__hint inv-cat__hint--act">Lists show this as “{autoName}”.
+              <button type="button" className="btn-ghost" onClick={function () { setName(autoName); }}>Use “{autoName}”</button>
+            </div>
+          )}
+          <div className="inv-form__row">
+            <label className="inv-field"><span>Kind</span>
+              <select value={kind} onChange={function (e) { setKind(e.target.value); }}>
+                {CAT_KINDS.map(function (k) { return <option key={k} value={k}>{CAT_KIND_LABEL[k]}</option>; })}
+              </select></label>
+            <label className="inv-field inv-field--grow"><span>Category (optional)</span><input value={category} maxLength={128} onChange={function (e) { setCategory(e.target.value); }} placeholder="Single-board computer" /></label>
+          </div>
+          {kind === "software" && <div className="inv-loc-note inv-cat__note" role="note">Licence seats, expiry and the licence reference belong on each item. Don’t put licence keys here — they are refused.</div>}
+
+          <fieldset className="inv-cat-specs">
+            <legend>Specifications</legend>
+            {rows.length === 0 && <div className="muted inv-cat__hint">None yet — add things like RAM, ports or wattage.</div>}
+            {rows.map(function (r, i) {
+              return <div key={r.rid} className="inv-cat-spec">
+                <input aria-label={"Spec " + (i + 1) + " name"} value={r.key} maxLength={64} autoCapitalize="none" spellCheck={false} onChange={function (e) { setRow(r.rid, { key: e.target.value }); }} placeholder="ram" />
+                <input aria-label={"Spec " + (i + 1) + " value"} className={r.nested ? "inv-cat-spec__json" : ""} value={r.text} onChange={function (e) { setRow(r.rid, { text: e.target.value }); }} placeholder="4 GB" />
+                <button type="button" className="iconbtn inv-cat-spec__drop" aria-label={"Remove spec " + (r.key.trim() || i + 1)} onClick={function () { dropRow(r.rid); }}><Icon name="close" size={14} /></button>
+                {r.nested && <div className="muted inv-cat-spec__note">Structured value — edit as JSON.</div>}
+              </div>;
+            })}
+            <button type="button" className="btn-ghost" onClick={addRow}><Icon name="plus" size={14} />Add spec</button>
+          </fieldset>
+
+          <label className="inv-field"><span>Image link (optional)</span><input type="url" inputMode="url" autoCapitalize="none" spellCheck={false} value={imageUrl} maxLength={1024} onChange={function (e) { setImageUrl(e.target.value); }} placeholder="https://…" /></label>
+          <label className="inv-field"><span>Notes (optional)</span><textarea rows={3} value={notes} onChange={function (e) { setNotes(e.target.value); }} /></label>
+          {!editing && <div className="inv-form__row">
+            <label className="inv-field inv-field--grow"><span>Barcode (optional)</span><input value={code} maxLength={128} autoComplete="off" autoCapitalize="characters" spellCheck={false} onKeyDown={holdEnter} onChange={function (e) { setCode(e.target.value); }} placeholder="Scan or type" /></label>
+            <label className="inv-field"><span>Code type</span>
+              <select value={codeType} onChange={function (e) { setCodeType(e.target.value); }}>
+                {CODE_TYPES.map(function (c) { return <option key={c} value={c}>{CODE_TYPE_LABEL[c]}</option>; })}
+              </select></label>
+          </div>}
+          {!editing && prefillCode && <div className="muted inv-cat__hint">Prefilled from your scan. Nothing is saved until you add the product type.</div>}
+        </form>
+      </Sheet>
     );
   }
 
