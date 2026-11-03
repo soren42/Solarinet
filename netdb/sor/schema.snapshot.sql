@@ -23,6 +23,7 @@
 --   033_inventory_catalog sha256=f6110a624bc833f3200e148e5530047fac9030f54e57635d53d3de93e042cda5
 --   034_prov_images_os sha256=c1a56526a09b5895dde1cac3cb1aba67fa0e53454dba63dbaffdadaf59c83ed7
 --   035_catalog_display_names sha256=52bbaf178068de119d2618786d10eaf9a1f0fa473da189e154dd6b1934e7c38e
+--   036_inventory_locations sha256=6befce1891cf2b2276ad3ecab037cc83a1b78e9eaae9886d33722f6580b37916
 
 /*M!999999\- enable the sandbox mode */
 
@@ -34,6 +35,22 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*M!100616 SET @OLD_NOTE_VERBOSITY=@@NOTE_VERBOSITY, NOTE_VERBOSITY=0 */;
+DROP TABLE IF EXISTS `_solarinet_m036_location_baseline`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `_solarinet_m036_location_baseline` (
+  `id` int(10) unsigned NOT NULL,
+  `original_type` varchar(32) NOT NULL,
+  `expected_type` varchar(32) NOT NULL,
+  `parent_id` int(10) unsigned DEFAULT NULL,
+  `name` varchar(128) NOT NULL,
+  `code` varchar(32) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `deleted_at` datetime DEFAULT NULL,
+  `expected_updated_at` datetime NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `applications`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -213,6 +230,25 @@ CREATE TABLE `config_items` (
   CONSTRAINT `fk_config_items_secret` FOREIGN KEY (`secret_id`) REFERENCES `secrets` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_config_items_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Per-entity (and per-component) configuration key/values; sensitive values point into secrets';
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `container_types`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `container_types` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(64) NOT NULL,
+  `name_key` varchar(64) GENERATED ALWAYS AS (if(`deleted_at` is null,`name`,NULL)) STORED,
+  `source_id` smallint(5) unsigned NOT NULL,
+  `asserted_kind` enum('human','machine') NOT NULL DEFAULT 'human',
+  `asserted_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `deleted_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_container_types_live_name` (`name_key`),
+  KEY `ix_container_types_source` (`source_id`),
+  CONSTRAINT `fk_container_types_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Editable types for reusable storage-unit locations';
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `dhcp_ranges`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -1423,7 +1459,7 @@ CREATE TABLE `locations` (
   `parent_id` int(10) unsigned DEFAULT NULL COMMENT 'containing location; NULL = top-level site',
   `name` varchar(128) NOT NULL COMMENT 'name within the parent, e.g. "Office", "Minirack", "U4"',
   `code` varchar(32) DEFAULT NULL,
-  `loc_type` enum('site','building','floor','room','rack','shelf','position','zone','cabinet','drawer','tray','bin','container') NOT NULL,
+  `loc_type` enum('property','floor','room','section','storage_unit') NOT NULL,
   `rack_units` smallint(5) unsigned DEFAULT NULL COMMENT 'for racks: total U capacity; for positions: starting U',
   `notes` text DEFAULT NULL COMMENT 'free-form operator notes',
   `source_id` smallint(5) unsigned NOT NULL COMMENT 'provenance: system that asserted this row',
@@ -1432,14 +1468,115 @@ CREATE TABLE `locations` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'row creation time',
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT 'last row modification',
   `deleted_at` datetime DEFAULT NULL COMMENT 'soft delete; NULL = live',
+  `parent_key` int(10) unsigned GENERATED ALWAYS AS (ifnull(`parent_id`,0)) STORED,
+  `location_name_key` varchar(128) GENERATED ALWAYS AS (if(`deleted_at` is null,`name`,NULL)) STORED,
+  `container_type_id` int(10) unsigned DEFAULT NULL,
+  `assigned_project_id` int(10) unsigned DEFAULT NULL,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_locations_live_sibling` (`parent_key`,`location_name_key`),
   KEY `ix_locations_type` (`loc_type`),
   KEY `fk_locations_source` (`source_id`),
-  KEY `idx_locations_parent_name` (`parent_id`,`name`),
+  KEY `ix_locations_parent` (`parent_id`),
+  KEY `ix_locations_type_live` (`loc_type`,`deleted_at`),
+  KEY `ix_locations_container_type` (`container_type_id`),
+  KEY `ix_locations_project_live` (`assigned_project_id`,`deleted_at`),
+  CONSTRAINT `fk_locations_assigned_project` FOREIGN KEY (`assigned_project_id`) REFERENCES `projects` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_locations_container_type` FOREIGN KEY (`container_type_id`) REFERENCES `container_types` (`id`),
   CONSTRAINT `fk_locations_parent` FOREIGN KEY (`parent_id`) REFERENCES `locations` (`id`),
   CONSTRAINT `fk_locations_source` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Physical location hierarchy (site/room/rack/position) via self-referencing tree';
 /*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_locations_level_ins BEFORE INSERT ON locations FOR EACH ROW
+BEGIN
+  DECLARE parent_type VARCHAR(32);
+  IF NEW.parent_id IS NULL THEN
+    IF NEW.loc_type <> 'property' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location root must be property'; END IF;
+  ELSE
+    SELECT loc_type INTO parent_type FROM locations WHERE id=NEW.parent_id;
+    IF NEW.loc_type<>'storage_unit' AND NOT ((parent_type='property' AND NEW.loc_type='floor') OR (parent_type='floor' AND NEW.loc_type='room') OR (parent_type='room' AND NEW.loc_type='section')) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='invalid location parent/level transition';
+    END IF;
+  END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_locations_nonzero_id AFTER INSERT ON locations FOR EACH ROW
+BEGIN
+  IF NEW.id=0 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location id 0 is reserved for the root parent key'; END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50003 TRIGGER trg_locations_level_upd BEFORE UPDATE ON locations FOR EACH ROW
+BEGIN
+  DECLARE parent_type VARCHAR(32);
+  DECLARE child_bad INT DEFAULT 0;
+  DECLARE cursor_id INT UNSIGNED;
+  DECLARE next_parent INT UNSIGNED;
+  DECLARE steps INT DEFAULT 0;
+  IF NEW.parent_id IS NULL THEN
+    IF NEW.loc_type <> 'property' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location root must be property'; END IF;
+  ELSE
+    SET cursor_id=NEW.parent_id;
+    ancestor_walk: WHILE cursor_id IS NOT NULL DO
+      IF cursor_id=NEW.id THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location parent cycle'; END IF;
+      SET steps=steps+1;
+      IF steps>10000 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location parent cycle or excessive depth'; END IF;
+      SET parent_type=NULL;
+      SELECT parent_id,loc_type INTO next_parent,parent_type FROM locations WHERE id=cursor_id;
+      IF parent_type IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location parent does not exist'; END IF;
+      SET cursor_id=next_parent;
+    END WHILE;
+    SELECT loc_type INTO parent_type FROM locations WHERE id=NEW.parent_id;
+    IF NEW.loc_type<>'storage_unit' AND NOT ((parent_type='property' AND NEW.loc_type='floor') OR (parent_type='floor' AND NEW.loc_type='room') OR (parent_type='room' AND NEW.loc_type='section')) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='invalid location parent/level transition';
+    END IF;
+  END IF;
+  SELECT COUNT(*) INTO child_bad FROM locations c WHERE c.parent_id=OLD.id AND NOT (
+    c.loc_type='storage_unit' OR
+    (NEW.loc_type='property' AND c.loc_type='floor') OR
+    (NEW.loc_type='floor' AND c.loc_type='room') OR
+    (NEW.loc_type='room' AND c.loc_type='section')
+  );
+  IF child_bad>0 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location update invalidates child level'; END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 DROP TABLE IF EXISTS `monitoring_state`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
