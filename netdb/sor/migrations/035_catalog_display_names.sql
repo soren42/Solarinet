@@ -24,13 +24,13 @@ SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTIT
 UPDATE `product_types`
    SET `name` = LEFT(CASE
          WHEN `brand` IS NULL OR `brand` = '' THEN `model`
-         WHEN LEFT(`model`, CHAR_LENGTH(`brand`)) = `brand` THEN `model`
-         WHEN RIGHT(`brand`, CHAR_LENGTH(`model`)) = `model` THEN `brand`
+         WHEN BINARY LEFT(`model`, CHAR_LENGTH(`brand`)) = BINARY `brand` THEN `model`
+         WHEN BINARY RIGHT(`brand`, CHAR_LENGTH(`model`)) = BINARY `model` THEN `brand`
          ELSE CONCAT(`brand`, ' ', `model`)
        END, 160)
  WHERE `lookup_source` IN ('migration:033','legacy:hardware_models')
    AND `model` IS NOT NULL
-   AND `name` <=> `model`;
+   AND BINARY `name` <=> BINARY `model`;
 
 DROP TRIGGER IF EXISTS `trg_hw_models_catalog_ins`;
 DROP TRIGGER IF EXISTS `trg_hw_models_catalog_upd`;
@@ -52,8 +52,8 @@ BEGIN
             END,
             LEFT(CASE
               WHEN NEW.`make` IS NULL OR NEW.`make` = '' THEN NEW.`model`
-              WHEN LEFT(NEW.`model`, CHAR_LENGTH(NEW.`make`)) = NEW.`make` THEN NEW.`model`
-              WHEN RIGHT(NEW.`make`, CHAR_LENGTH(NEW.`model`)) = NEW.`model` THEN NEW.`make`
+              WHEN BINARY LEFT(NEW.`model`, CHAR_LENGTH(NEW.`make`)) = BINARY NEW.`make` THEN NEW.`model`
+              WHEN BINARY RIGHT(NEW.`make`, CHAR_LENGTH(NEW.`model`)) = BINARY NEW.`model` THEN NEW.`make`
               ELSE CONCAT(NEW.`make`, ' ', NEW.`model`)
             END, 160),
             NEW.`make`, NEW.`model`, NEW.`notes`, 'legacy:hardware_models',
@@ -78,24 +78,24 @@ BEGIN
                                       WHEN 'other' THEN 'other' ELSE 'hardware' END;
     SET old_name = LEFT(CASE
           WHEN OLD.`make` IS NULL OR OLD.`make` = '' THEN OLD.`model`
-          WHEN LEFT(OLD.`model`, CHAR_LENGTH(OLD.`make`)) = OLD.`make` THEN OLD.`model`
-          WHEN RIGHT(OLD.`make`, CHAR_LENGTH(OLD.`model`)) = OLD.`model` THEN OLD.`make`
+          WHEN BINARY LEFT(OLD.`model`, CHAR_LENGTH(OLD.`make`)) = BINARY OLD.`make` THEN OLD.`model`
+          WHEN BINARY RIGHT(OLD.`make`, CHAR_LENGTH(OLD.`model`)) = BINARY OLD.`model` THEN OLD.`make`
           ELSE CONCAT(OLD.`make`, ' ', OLD.`model`)
         END, 160);
     SET new_name = LEFT(CASE
           WHEN NEW.`make` IS NULL OR NEW.`make` = '' THEN NEW.`model`
-          WHEN LEFT(NEW.`model`, CHAR_LENGTH(NEW.`make`)) = NEW.`make` THEN NEW.`model`
-          WHEN RIGHT(NEW.`make`, CHAR_LENGTH(NEW.`model`)) = NEW.`model` THEN NEW.`make`
+          WHEN BINARY LEFT(NEW.`model`, CHAR_LENGTH(NEW.`make`)) = BINARY NEW.`make` THEN NEW.`model`
+          WHEN BINARY RIGHT(NEW.`make`, CHAR_LENGTH(NEW.`model`)) = BINARY NEW.`model` THEN NEW.`make`
           ELSE CONCAT(NEW.`make`, ' ', NEW.`model`)
         END, 160);
     -- Each IF reads only its own column, so MariaDB's left-to-right SET
     -- evaluation cannot leak one assignment into another's test.
     UPDATE `product_types`
-       SET `kind`  = IF(`kind` <=> old_kind, new_kind, `kind`),
-           `name`  = IF(`name` <=> old_name OR `name` <=> OLD.`model`, new_name, `name`),
-           `brand` = IF(`brand` <=> OLD.`make`, NEW.`make`, `brand`),
-           `model` = IF(`model` <=> OLD.`model`, NEW.`model`, `model`),
-           `notes` = IF(`notes` <=> OLD.`notes`, NEW.`notes`, `notes`),
+       SET `kind`  = IF(BINARY `kind` <=> BINARY old_kind, new_kind, `kind`),
+           `name`  = IF(BINARY `name` <=> BINARY old_name OR BINARY `name` <=> BINARY OLD.`model`, new_name, `name`),
+           `brand` = IF(BINARY `brand` <=> BINARY OLD.`make`, NEW.`make`, `brand`),
+           `model` = IF(BINARY `model` <=> BINARY OLD.`model`, NEW.`model`, `model`),
+           `notes` = IF(BINARY `notes` <=> BINARY OLD.`notes`, NEW.`notes`, `notes`),
            `deleted_at` = NEW.`deleted_at`
      WHERE `id`=NEW.`product_type_id`
        AND `lookup_source` IN ('migration:033','legacy:hardware_models');

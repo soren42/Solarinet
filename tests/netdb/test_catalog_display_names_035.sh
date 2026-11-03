@@ -77,6 +77,12 @@ q "UPDATE product_types SET notes='operator notes' WHERE id=2"
 q "UPDATE hardware_models SET notes='seed notes', make='Anker Eufy' WHERE id=2"
 eq "legacy edit keeps operator notes, follows untouched brand" "SELECT CONCAT(brand,'|',notes,'|',name) FROM product_types WHERE id=2" "Anker Eufy|operator notes|Anker Eufy Eufybase"
 
+q "INSERT INTO hardware_models(id,make,model,hw_type,source_id,asserted_kind) VALUES(7,'Cafe','CaféBook','other',$SRC,'human')"
+eq "prefix test is byte-exact (accents differ)" "SELECT pt.name FROM product_types pt JOIN hardware_models hm ON hm.product_type_id=pt.id WHERE hm.id=7" "Cafe CaféBook"
+q "UPDATE product_types pt JOIN hardware_models hm ON hm.product_type_id=pt.id SET pt.name='cafe caféBook' WHERE hm.id=7"
+q "UPDATE hardware_models SET model='CaféBook 2' WHERE id=7"
+eq "case-only operator rename survives a legacy edit" "SELECT pt.name FROM product_types pt JOIN hardware_models hm ON hm.product_type_id=pt.id WHERE hm.id=7" "cafe caféBook"
+
 q "UPDATE hardware_models SET deleted_at=NOW() WHERE id=4"
 eq "legacy soft-delete still propagates" "SELECT deleted_at IS NOT NULL FROM product_types WHERE id=4" 1
 

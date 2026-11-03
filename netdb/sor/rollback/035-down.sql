@@ -13,10 +13,10 @@ UPDATE `product_types`
    SET `name` = `model`
  WHERE `lookup_source` IN ('migration:033','legacy:hardware_models')
    AND `model` IS NOT NULL
-   AND `name` <=> LEFT(CASE
+   AND BINARY `name` <=> BINARY LEFT(CASE
          WHEN `brand` IS NULL OR `brand` = '' THEN `model`
-         WHEN LEFT(`model`, CHAR_LENGTH(`brand`)) = `brand` THEN `model`
-         WHEN RIGHT(`brand`, CHAR_LENGTH(`model`)) = `model` THEN `brand`
+         WHEN BINARY LEFT(`model`, CHAR_LENGTH(`brand`)) = BINARY `brand` THEN `model`
+         WHEN BINARY RIGHT(`brand`, CHAR_LENGTH(`model`)) = BINARY `model` THEN `brand`
          ELSE CONCAT(`brand`, ' ', `model`)
        END, 160);
 

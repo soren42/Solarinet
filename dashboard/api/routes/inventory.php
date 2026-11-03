@@ -1635,12 +1635,12 @@ function inv_allocation_row(?array $r): ?array
     ];
 }
 
-/** Catalog display name; mirrors the 035 SQL rule so legacy and API writers agree. */
+/** Catalog display name; mirrors the 035 SQL rule (byte-exact) so legacy and API writers agree. */
 function inv_catalog_display_name(?string $brand, string $model): string
 {
     if ($brand === null || $brand === '') $name = $model;
-    elseif (mb_strtolower(mb_substr($model, 0, mb_strlen($brand))) === mb_strtolower($brand)) $name = $model;
-    elseif (mb_strtolower(mb_substr($brand, -mb_strlen($model))) === mb_strtolower($model)) $name = $brand;
+    elseif (str_starts_with($model, $brand)) $name = $model;
+    elseif (str_ends_with($brand, $model)) $name = $brand;
     else $name = $brand . ' ' . $model;
     return mb_substr($name, 0, 160);
 }
