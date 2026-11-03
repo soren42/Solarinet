@@ -2144,7 +2144,7 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
   <dt>Who</dt><dd><span class="role v">viewer</span> to read; <span class="role o">operator</span> to add, edit and link</dd>
   <dt>Maturity</dt><dd>Authoritative: this is the source of truth for inventory.</dd>
 </dl>
-<figure class="fig" id="fig-components"><svg viewBox="0 0 860 370" role="img" aria-label="Components tab wireframe: KPIs, stock filter chips, search, New component and RackWire device profiles, and the sortable component table" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg"><title>Components tab wireframe: KPIs, stock filter chips, search, New component and RackWire device profiles, and the sortable component table</title>
+<figure class="fig" id="fig-components"><svg viewBox="0 0 860 370" role="img" aria-label="Components tab wireframe: KPIs, stock filter chips, search, New item and RackWire device profiles, and the sortable component table" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg"><title>Components tab wireframe: KPIs, stock filter chips, search, New item and RackWire device profiles, and the sortable component table</title>
 <rect x="0.75" y="0.75" width="858.5" height="368.5" rx="10" class="wf-frame"/>
 <path d="M1.5 40 V10 Q1.5 1.5 10 1.5 H850 Q858.5 1.5 858.5 10 V40 Z" class="wf-chrome"/>
 <line x1="1.5" y1="40" x2="858.5" y2="40" class="wf-line"/>
@@ -2208,9 +2208,9 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
 <rect x="540" y="206" width="150" height="28" rx="6" class="wf-btn"/>
 <text x="550" y="224.0" class="wf-d">Find component…</text>
 <rect x="700" y="207" width="111" height="26" rx="6" class="wf-btnp"/>
-<text x="755.5" y="224.0" class="wf-on" text-anchor="middle">New component</text>
+<text x="755.5" y="224.0" class="wf-on" text-anchor="middle">New item</text>
 <rect x="76" y="244" width="768" height="112" rx="8" class="wf-panel"/>
-<text x="90" y="264" class="wf-m">MODEL ▲</text>
+<text x="90" y="264" class="wf-m">ITEM ▲</text>
 <text x="184" y="264" class="wf-m">SERIAL</text>
 <text x="278" y="264" class="wf-m">ASSET TAG</text>
 <text x="372" y="264" class="wf-m">LOCATION</text>
@@ -2247,20 +2247,19 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
 <tr><td><span class="co">1</span></td><td>Summary tiles</td><td><b>Components</b> (tracked units), <b>In stock</b>, <b>In use</b> (allocated or deployed) and <b>Inventory value</b> at unit cost.</td></tr>
 <tr><td><span class="co">2</span></td><td>Stock chips</td><td>Show all items or only one stock status. Each chip shows a count.</td></tr>
 <tr><td><span class="co">3</span></td><td>Find component</td><td>Matches model, serial, asset tag and location.</td></tr>
-<tr><td><span class="co">4</span></td><td><span class="ui">New component</span></td><td>Opens the component form. <span class="ui">RackWire device profiles</span>, beside it, opens the profile editor (<a class="sx" href="#rw-profiles">“RackWire device profiles”</a>).</td></tr>
-<tr><td><span class="co">5</span></td><td>Table</td><td>Model, Serial, Asset tag, Location, Qty, Stock and Cost sort when you select the heading. Select a row to edit the item. Select the receipt to view it. 100 rows per page.</td></tr>
+<tr><td><span class="co">4</span></td><td><span class="ui">New item</span></td><td>Opens the item form. <span class="ui">RackWire device profiles</span>, beside it, opens the profile editor (<a class="sx" href="#rw-profiles">“RackWire device profiles”</a>).</td></tr>
+<tr><td><span class="co">5</span></td><td>Table</td><td>Item, Serial, Asset tag, Location, Qty, Stock and Cost sort when you select the heading. Select a row to edit the item. Select the receipt to view it. 100 rows per page.</td></tr>
 <tr><td><span class="co">6</span></td><td>SoR entity</td><td><span class="ui">Link entity</span>, or <span class="ui">↔ <i>name</i></span> when linked, opens the entity link panel below the table.</td></tr>
 </tbody></table></div>
 <h3 id="comp-new">Add or edit a component<a class="anchor" href="#comp-new" aria-label="Link to this section">#</a></h3>
-<ol class="steps">
-  <li>Select <span class="ui">New component</span>, or select an existing row.</li>
-  <li>Choose the <span class="ui">Model</span>. If it is not listed, select <span class="ui">+</span> beside it to add a make and model, its device type and its <span class="ui">CPU architecture</span>. Provisioning will only reimage a machine whose architecture is known.</li>
+<ol class="steps" style="break-inside:avoid">
+  <li>Select <span class="ui">New item</span>, or select an existing row to open <span class="ui">Edit item</span>.</li>
+  <li>Choose the <span class="ui">Product type</span> — what the item is — from the catalog; type to filter the list. If it is not listed, add it first in the Catalog (<a class="sx" href="#cat-add-items">“Record items of a type”</a>). An item whose type has since been retired keeps it until you choose a live type.</li>
+  <li>For <b>software</b>, the licence fields appear: <span class="ui">Seats</span>, <span class="ui">Expires on</span>, <span class="ui">Licence reference</span> and <span class="ui">Installed on</span>.</li>
   <li>Set <span class="ui">Stock status</span>, <span class="ui">Serial</span>, <span class="ui">Asset tag</span>, <span class="ui">Location</span>, <span class="ui">Quantity</span>, <span class="ui">Acquired on</span>, <span class="ui">Unit cost (USD)</span>, the <span class="ui">Receipt</span> and any <span class="ui">Notes</span>.</li>
-  <li>Select <span class="ui">Add component</span> or <span class="ui">Save changes</span>.</li>
+  <li>Select <span class="ui">Add item</span> or <span class="ui">Save changes</span>.</li>
 </ol>
-<!-- PENDING-037 -->
-<p>The model list does not offer retired catalog types. An item does not need a hardware model at all: software, consumables and other non-hardware items are recorded against their catalog type. The quickest way to add items of a known type is <span class="ui">Add item(s)</span> on the Catalog (<a class="sx" href="#cat-add-items">“Record items of a type”</a>).</p>
-<!-- /PENDING-037 -->
+<p>The product type list does not offer retired catalog types. An item does not need a hardware model at all: software, consumables and other non-hardware items are recorded against their catalog type. The quickest way to add items of a known type is <span class="ui">Add item(s)</span> on the Catalog (<a class="sx" href="#cat-add-items">“Record items of a type”</a>).</p>
 <h3 id="entity-link">Link an item to its SoR entity<a class="anchor" href="#entity-link" aria-label="Link to this section">#</a></h3>
 <p>Linking says "this physical box <em>is</em> that network host". RackWire uses the link when it resolves an asset tag for cable planning. Names are shown as candidates but never matched automatically.</p>
 <ol class="steps">
@@ -2371,10 +2370,8 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
 <text x="636.0" y="369.0" class="wf-tl" text-anchor="middle">Attach</text>
 <rect x="400" y="386" width="60" height="26" rx="6" class="wf-btnp"/>
 <text x="430.0" y="403.0" class="wf-on" text-anchor="middle">Edit</text>
-<!-- PENDING-037 -->
 <rect x="470" y="386" width="97" height="26" rx="6" class="wf-btnp"/>
 <text x="518.5" y="403.0" class="wf-on" text-anchor="middle">Add item(s)</text>
-<!-- /PENDING-037 -->
 <rect x="764" y="386" width="70" height="26" rx="6" class="t-crit"/>
 <text x="799.0" y="403.0" class="wf-tl" text-anchor="middle">Retire…</text>
 <g class="cb"><circle cx="76" cy="134" r="11" stroke-width="2.5" style="stroke:var(--color-bg)"/><text x="76" y="134.5">1</text></g>
@@ -2397,9 +2394,7 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
 <tr><td><span class="co">5</span></td><td>List</td><td>Name, brand · model · category and kind. 50 at a time; <span class="ui">Show more</span> loads the next 50.</td></tr>
 <tr><td><span class="co">6</span></td><td>Barcodes</td><td>Codes attached to this type. <span class="ui">Remove</span> detaches one after a confirmation.</td></tr>
 <tr><td><span class="co">7</span></td><td>Attach a code</td><td>Scan or type a code, choose its <span class="ui">Code type</span> and select <span class="ui">Attach</span>.</td></tr>
-<!-- PENDING-037 -->
 <tr><td><span class="co">8</span></td><td><span class="ui">Edit</span> · <span class="ui">Add item(s)</span></td><td>Edit the type, or record items of this type (<a class="sx" href="#cat-add-items">“Record items of a type”</a>).</td></tr>
-<!-- /PENDING-037 -->
 <tr><td><span class="co">9</span></td><td><span class="ui">Retire…</span></td><td>Retires the type (below).</td></tr>
 </tbody></table></div>
 <h3 id="cat-lookup">Look up a barcode<a class="anchor" href="#cat-lookup" aria-label="Link to this section">#</a></h3>
@@ -2478,7 +2473,6 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
 <tr><td>Other</td><td>Anything else</td><td>Up to 128 characters</td></tr>
 </tbody></table></div>
 <div class="note crit"><span class="lbl">No secrets in the catalog</span><p>Specification names that look like secrets, such as <i>licence key</i>, <i>password</i> or <i>token</i>, are refused. Licence keys are never stored in SolariNet. For software, record a <em>reference</em> to where the licence is kept, on each item.</p></div>
-<!-- PENDING-037 -->
 <h3 id="cat-add-items">Record items of a type<a class="anchor" href="#cat-add-items" aria-label="Link to this section">#</a></h3>
 <ol class="steps">
   <li>Open the product type in the Catalog and select <span class="ui">Add item(s)</span>.</li>
@@ -2487,7 +2481,6 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
   <li>For <b>software</b>, record the number of licence <b>seats</b>, the <b>expiry</b> date, a <b>licence reference</b> (where the licence is kept, never the key itself) and, optionally, the hardware item it is <b>installed on</b>. "Installed on" must be a physical item, not another piece of software.</li>
   <li>Save. The new items appear on the Components tab.</li>
 </ol>
-<!-- /PENDING-037 -->
 <h3 id="cat-retire">Retire a product type<a class="anchor" href="#cat-retire" aria-label="Link to this section">#</a></h3>
 <p>Select <span class="ui">Retire…</span>, then <span class="ui">Retire product type</span>. Items already recorded keep the type, but it leaves the pick lists and its barcodes are released so they can be attached elsewhere. You can retire a type that is still in use.</p>
 <div class="note info"><span class="lbl">Linked types</span><p>A type marked <q>Linked to a component model</q> is the same record as a hardware model. Changing its brand, model, notes or kind also changes that model in Components, provisioning and RackWire.</p></div>
@@ -2624,9 +2617,7 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
   <li>Choose the <span class="ui">Level</span> if more than one is allowed here. For a storage unit, optionally choose a <span class="ui">Container type</span> and a <span class="ui">Project</span>.</li>
   <li>Select <span class="ui">Add location</span>.</li>
 </ol>
-<!-- PENDING-037 -->
 <p>Codes are unique across all live locations, so the same code cannot be used in two places. Names only need to be unique within the same parent.</p>
-<!-- /PENDING-037 -->
 <h3 id="loc-bulk">Add many storage units at once<a class="anchor" href="#loc-bulk" aria-label="Link to this section">#</a></h3>
 <ol class="steps">
   <li>Select the parent and then <span class="ui">Add storage units</span>.</li>
@@ -2695,9 +2686,7 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
 <p>Under <span class="ui">Container types</span>, add a type with <span class="ui">Add type</span>, or <span class="ui">Rename</span> or <span class="ui">Retire</span> an existing one. Retiring keeps the type on containers that already have it but removes it from pick lists. <span class="ui">Include retired</span> shows retired types.</p>
 <h3 id="loc-conflict">If someone else changed it first<a class="anchor" href="#loc-conflict" aria-label="Link to this section">#</a></h3>
 <p>Edits check that the record has not changed since you opened it. If it has, you see <q>This was changed elsewhere since you opened it. The latest version has been loaded — check it and save again.</q> Review the reloaded values and save again.</p>
-<!-- PENDING-037 -->
 <p>This check is precise to the microsecond, so two quick saves in the same second are still told apart. If the database is momentarily busy with a conflicting change, the save is refused with a 409 asking you to <b>try again</b>; nothing was changed, so simply repeat it.</p>
-<!-- /PENDING-037 -->
 
 <div class="note ipad"><span class="lbl">iPad and iPhone</span><p>The Catalog and Locations tabs use two panes, list and detail. On a narrow screen, scroll down from the list to reach the detail pane <span class="tag-inf">inferred</span>. Use an iPad in landscape for long location work.</p></div>
 <h2 id="receipts"><span class="sn">4.5</span>Receipts<a class="anchor" href="#receipts" aria-label="Link to this section">#</a></h2>
@@ -3932,9 +3921,7 @@ dl.gloss.faq{grid-template-columns:1fr;gap:2px} dl.gloss.faq dd{margin:0 0 12px}
 <tr><td><q>… is already attached to …</q></td><td>A code belongs to one product type. Remove it from the other type first if it belongs here.</td></tr>
 <tr><td>A receipt disappeared after saving</td><td>Receipts saved without a scan file are not stored. Upload it again with a scan or photo.</td></tr>
 <tr><td><q>This was changed elsewhere since you opened it</q></td><td>Someone else saved first. The latest version has been loaded; check it and save again.</td></tr>
-<!-- PENDING-037 -->
 <tr><td>A save fails with 409 and <q>try again</q></td><td>The database was briefly busy with a conflicting change. Nothing was saved; repeat the action.</td></tr>
-<!-- /PENDING-037 -->
 <tr><td><q>Label renderer unavailable</q></td><td>The label tools are missing on the server; tell the administrator (<a class="sx" href="#labels">§4.8</a>).</td></tr>
 <tr><td>A project has no tag to scan</td><td>Project tags cannot be issued from the dashboard yet. Commit items from the Projects tab.</td></tr>
 </tbody></table></div>
