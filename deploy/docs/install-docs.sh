@@ -16,8 +16,10 @@ for m in "${MANUALS[@]}"; do
   odd=$(pdfinfo -f 1 -l 9999 "docs/manuals/$m.pdf" | /usr/bin/grep '^Page .* size:' | /usr/bin/grep -vc '612 x 792' || true)
   [[ "$odd" == 0 ]] || { echo "install-docs: $m.pdf has non-Letter pages" >&2; exit 1; }
 done
-rev="$(git rev-parse --short HEAD)"
-[[ -z "$(git status --porcelain -- docs/manuals deploy/docs)" ]] || { echo "install-docs: docs tree is dirty" >&2; exit 1; }
+# Run as root on a user-owned clone: trust this checkout only.
+g() { git -c safe.directory="$PWD" "$@"; }
+rev="$(g rev-parse --short HEAD)"
+[[ -z "$(g status --porcelain -- docs/manuals deploy/docs)" ]] || { echo "install-docs: docs tree is dirty" >&2; exit 1; }
 
 stage="$(mktemp -d "$DOCROOT/.docs-stage.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
@@ -33,13 +35,16 @@ install -m 0644 deploy/docs/index.html "$stage/index.html"
   done
   printf '}}\n'
 } > "$stage/manifest.json"
+chmod 0644 "$stage/manifest.json"
 chmod 0755 "$stage"
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$stage/manifest.json"
 
 # Swap the whole directory so readers never see a half-published set.
 if [[ -d "$DEST" ]]; then
   old="$DEST.old.$$"
-  mv "$DEST" "$old"; mv "$stage" "$DEST"; rm -rf "$old"
+  mv "$DEST" "$old"
+  mv "$stage" "$DEST" || { mv "$old" "$DEST"; echo "install-docs: swap failed; previous docs restored" >&2; exit 1; }
+  rm -rf "$old"
 else
   mv "$stage" "$DEST"
 fi
