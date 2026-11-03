@@ -478,7 +478,7 @@ return static function (Router $router): void {
         try {
             // The broad catalog is authoritative; hardware_models remains its provisioning/RackWire projection.
             $db->prepare("INSERT INTO product_types(kind,name,brand,model,notes,source_id,asserted_kind,asserted_at) VALUES(:kind,:name,:brand,:model,:notes,:source,'human',NOW())")
-                ->execute([':kind'=>$kind, ':name'=>$model, ':brand'=>$make, ':model'=>$model, ':notes'=>$notes, ':source'=>$source]);
+                ->execute([':kind'=>$kind, ':name'=>inv_catalog_display_name($make, $model), ':brand'=>$make, ':model'=>$model, ':notes'=>$notes, ':source'=>$source]);
             $productTypeId = (int)$db->lastInsertId();
             $db->prepare("INSERT INTO hardware_models(make,model,hw_type,arch,notes,product_type_id,source_id,asserted_kind,asserted_at) VALUES(:make,:model,:hw_type,:arch,:notes,:product_type_id,:source,'human',NOW())")
                 ->execute([':make'=>$make, ':model'=>$model, ':hw_type'=>$hwType, ':arch'=>inv_model_arch($b), ':notes'=>$notes, ':product_type_id'=>$productTypeId, ':source'=>$source]);
@@ -1633,4 +1633,14 @@ function inv_allocation_row(?array $r): ?array
         'unitAssetTag'    => $r['unit_asset_tag'] ?? null,
         'unitStockStatus' => $r['unit_stock_status'] ?? null,
     ];
+}
+
+/** Catalog display name; mirrors the 035 SQL rule so legacy and API writers agree. */
+function inv_catalog_display_name(?string $brand, string $model): string
+{
+    if ($brand === null || $brand === '') $name = $model;
+    elseif (mb_strtolower(mb_substr($model, 0, mb_strlen($brand))) === mb_strtolower($brand)) $name = $model;
+    elseif (mb_strtolower(mb_substr($brand, -mb_strlen($model))) === mb_strtolower($model)) $name = $brand;
+    else $name = $brand . ' ' . $model;
+    return mb_substr($name, 0, 160);
 }
