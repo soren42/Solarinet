@@ -230,7 +230,7 @@ return static function (Router $router): void {
             }
             $names = [];
             for ($i = 0; $i < $count; $i++) {
-                $names[] = trim($prefix) . ($start + $i);
+                $names[] = loc_name_value(trim($prefix) . ($start + $i));
             }
         }
 
