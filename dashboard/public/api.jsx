@@ -337,10 +337,9 @@
 
     // ---- inventory (SoR migration 014) ----
     inventory:    "/api/inventory",          // bounded legacy aggregate; browser adapter reads pages below
-    invUnits:     "/api/inventory/units",    // GET list / POST create
-    invComponents:"/api/inventory/components", // paginated hardware-unit list
+    invComponents:"/api/inventory/components", // paginated hardware-unit list / POST create
     invEntityLink: function (id) { return "/api/inventory/components/" + encodeURIComponent(id) + "/entity-link"; },
-    invUnit:      function (id) { return "/api/inventory/units/" + encodeURIComponent(id); },   // POST update
+    invComponent: function (id) { return "/api/inventory/components/" + encodeURIComponent(id); }, // GET one / PUT partial update
     invModels:    "/api/inventory/models",   // GET list / POST create
     invModel:     function (id) { return "/api/inventory/models/" + encodeURIComponent(id); },  // PUT {arch} only
     invLocations: "/api/inventory/locations",// GET tree / POST create
@@ -1265,9 +1264,11 @@
     },
     rackwireLibrary:  function () { return getJSON("/api/rackwire/library"); },
     saveRackwireProfile: function (modelId, body) { return post("/api/rackwire/library/" + encodeURIComponent(modelId) + "/groups", body || {}); },
-    // components (hardware_units)
-    createUnit:       function (body) { return post(EP.invUnits, body || {}); },
-    updateUnit:       function (id, body) { return post(EP.invUnit(id), body || {}); },
+    // components (hardware_units). Identify the item by product_type_id
+    // (model_id is legacy). Pass body.count (1..50) to create several identical
+    // items at once; the response is then { items, count }.
+    createUnit:       function (body) { return post(EP.invComponents, body || {}); },
+    updateUnit:       function (id, body) { return getJSON(EP.invComponent(id), { method: "PUT", body: body || {} }); },
     // models catalog (hardware_models)
     createModel:      function (body) { return post(EP.invModels, body || {}); },
     updateModel:      function (id, body) { return getJSON(EP.invModel(id), { method: "PUT", body: body || {} }); },

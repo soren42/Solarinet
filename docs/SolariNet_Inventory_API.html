@@ -14,7 +14,7 @@
 <div class="eyebrow">SolariNet · System of Record</div>
 <h1>Inventory API Reference</h1>
 <p class="lede">HTTP contract for reading and editing the inventory System of Record through the authenticated SolariNet dashboard API. This guide covers list pagination, filters, catalog writes, response metadata, and compatibility behavior.</p>
-<p class="meta">Revision 1.4 · 2026-11-03 · Location move, merge, and container API added · Internal</p>
+<p class="meta">Revision 1.5 · 2026-11-03 · Items on product types, licence fields, global location codes, microsecond lock tokens · Internal</p>
 </header>
 
 <div class="diagram" role="img" aria-label="Dashboard API reads paged inventory data from the SoR">
@@ -34,7 +34,7 @@
 <table>
 <thead><tr><th>GET path</th><th>Filters</th><th>List contents</th></tr></thead>
 <tbody>
-<tr><td><code>/api/inventory/components</code></td><td><code>stock_status</code>, <code>location_id</code>, <code>model_id</code>, <code>q</code></td><td>Hardware units joined to their model.</td></tr>
+<tr><td><code>/api/inventory/components</code></td><td><code>stock_status</code>, <code>location_id</code>, <code>model_id</code>, <code>product_type_id</code>, <code>q</code> (serial, asset tag, legacy make/model, product type name or brand)</td><td>Items joined to their product type, legacy model (if any), location and installed-on item.</td></tr>
 <tr><td><code>/api/inventory/models</code></td><td><code>hw_type</code>, <code>q</code></td><td>Hardware model catalog.</td></tr>
 <tr><td><code>/api/inventory/receipts</code></td><td><code>vendor</code>, <code>q</code></td><td>Purchase receipt metadata.</td></tr>
 <tr><td><code>/api/inventory/projects</code></td><td><code>status</code>, <code>q</code></td><td>Live project records.</td></tr>
@@ -71,6 +71,7 @@
 <tr><td>Malformed, zero, or out-of-range page size</td><td>400</td><td><code>bad_request</code>; accepted page sizes are 1 through 5000.</td></tr>
 <tr><td>Malformed or out-of-range offset</td><td>400</td><td><code>bad_request</code>; accepted offsets are 0 through 2147483647.</td></tr>
 <tr><td>Invalid allocation enum or project identifier</td><td>400</td><td><code>bad_request</code>; supply a supported allocation state and positive integer ID.</td></tr>
+<tr><td>Deadlock or lock-wait timeout on an inventory write</td><td>409</td><td><code>conflict</code>, “Another change was in progress; try again.” Nothing was saved; repeat the request.</td></tr>
 <tr><td>Missing/expired session or denied route</td><td>401/403</td><td>Authenticate through the dashboard and observe the deployment’s role policy.</td></tr>
 </tbody></table>
 <p>All list filters and pagination values are handled by the server. Do not interpolate user-provided values into SQL or treat a returned row as authorization to mutate it; write operations have separate authorization and CSRF checks.</p>
@@ -81,7 +82,7 @@
 <tr><td><code>GET /api/inventory/product-types?q=&amp;kind=&amp;limit=&amp;offset=</code></td><td>Search live types by name, brand, model, or category; optional kind filter; paged response.</td></tr>
 <tr><td><code>GET /api/inventory/product-types/{id}</code></td><td>Read one live product type.</td></tr>
 <tr><td><code>POST /api/inventory/product-types</code></td><td>Create a product type. Optional <code>barcode</code> object attaches a code in the same transaction.</td></tr>
-<tr><td><code>PUT /api/inventory/product-types/{id}</code></td><td>Partial update of kind, name, brand, model, category, specs, notes, or image URL. Optional <code>updated_at</code> detects stale edits.</td></tr>
+<tr><td><code>PUT /api/inventory/product-types/{id}</code></td><td>Partial update of kind, name, brand, model, category, specs, notes, or image URL. Requires the <code>updated_at</code> value exactly as read (microsecond precision, <code>YYYY-MM-DD HH:MM:SS.uuuuuu</code>); a missing value is <code>bad_request</code> and any later change, even within the same second, is <code>conflict</code> (409).</td></tr>
 <tr><td><code>DELETE /api/inventory/product-types/{id}</code></td><td>Soft-delete a type; existing references remain and deleted types leave pick lists.</td></tr>
 <tr><td><code>GET /api/inventory/product-barcodes?code=</code></td><td>Exact normalized lookup only. It returns a prefill candidate and never creates a type or item or calls an external service.</td></tr>
 <tr><td><code>POST /api/inventory/product-barcodes</code></td><td>Attach <code>product_type_id</code>, <code>code</code>, and optional <code>code_type</code> (<code>gtin</code>, <code>sku</code>, or <code>other</code>).</td></tr>
@@ -89,11 +90,22 @@
 </tbody></table>
 <p>Names are required and trimmed. Product type kinds are <code>hardware</code>, <code>peripheral</code>, <code>component</code>, <code>software</code>, <code>accessory</code>, <code>consumable</code>, and <code>other</code>. Secret-like keys such as password, token, credential, or licence key are rejected recursively inside <code>specs</code>; licence data must be a non-secret reference. Barcode codes are upper-cased with whitespace removed and unique while live. Declared GTIN codes must have a supported length and valid check digit. Validation uses <code>bad_request</code> (400), missing rows use <code>not_found</code> (404), duplicate codes use <code>duplicate_barcode</code> (409), and optimistic update conflicts use <code>conflict</code> (409).</p>
 
+<h3>Items (hardware units)</h3>
+<p>Each item belongs to a product type. Writes require an operator or admin session and the standard CSRF token. A legacy <code>hardware_models</code> row is optional: items created from the catalog have <code>modelId</code> null.</p>
+<table><thead><tr><th>Method and path</th><th>Behavior</th></tr></thead><tbody>
+<tr><td><code>GET /api/inventory/components/{id}</code></td><td>Read one item.</td></tr>
+<tr><td><code>POST /api/inventory/components</code></td><td>Create by <code>product_type_id</code> (preferred) or legacy <code>model_id</code>. If both are sent they must agree. Retired product types are rejected. Optional <code>count</code> (1–50) creates that many identical items in one transaction and returns <code>{"items": [...], "count": n}</code>; without <code>count</code> the single created row is returned (201). <code>serial</code> and <code>asset_tag</code> are accepted only when <code>count</code> is 1. Consumables record stock with <code>quantity</code> on one item.</td></tr>
+<tr><td><code>PUT /api/inventory/components/{id}</code></td><td>Partial update. Send <code>product_type_id</code> only to change the type; an item keeps a type that was retired after it was recorded. <code>product_type_id</code> cannot be cleared.</td></tr>
+<tr><td><code>DELETE /api/inventory/components/{id}</code></td><td>Soft-delete the item.</td></tr>
+</tbody></table>
+<p>Software items may carry <code>licence_seats</code> (positive integer), <code>licence_expires_on</code> (<code>YYYY-MM-DD</code>), <code>licence_reference</code> (up to 1024 bytes saying where the licence is kept), and <code>installed_on_unit_id</code> (another live, non-software item). These fields are rejected on any other kind; moving an item off a software type requires clearing them in the same request. A reference that looks like the secret itself—a password/token/key word, a product-key shape, or a long unbroken token—is rejected with <code>bad_request</code>; the vault name “1Password” is allowed.</p>
+<p>Item rows add <code>productTypeId</code>, <code>productTypeName</code>, <code>productTypeKind</code>, <code>productTypeBrand</code>, <code>productTypeRetired</code>, <code>licenceSeats</code>, <code>licenceExpiresOn</code>, <code>licenceReference</code>, <code>installedOnUnitId</code>, <code>installedOnName</code>, and <code>installedOnAssetTag</code>; <code>modelId</code>, <code>make</code>, <code>model</code>, and <code>hwType</code> are null for catalog-only items. Validation and database rule failures use <code>bad_request</code> (400); a serial already recorded for the same product type uses <code>conflict</code> (409).</p>
+
 <h2>6. Location schema</h2>
 <p>Locations use the levels <code>property</code>, <code>floor</code>, <code>room</code>, <code>section</code>, and <code>storage_unit</code>. A root must be a property. Ordinary parent transitions are property → floor → room → section. Storage units may be placed under any level and may contain other storage units. The database enforces these transitions and rejects parent cycles.</p>
-<p>Live sibling names are unique, including among roots; soft-deleted rows release their name. Optional <code>container_type_id</code> references the editable, soft-delete container type catalog. Optional <code>assigned_project_id</code> records explicit container ownership and becomes NULL if its project is hard-deleted. Legacy <code>site</code>/<code>building</code> rows map to properties, <code>rack</code>/<code>shelf</code>/<code>position</code>/<code>zone</code>/<code>cabinet</code>/<code>drawer</code>/<code>tray</code>/<code>bin</code>/<code>container</code> rows map to storage units.</p>
+<p>Live sibling names are unique, including among roots; soft-deleted rows release their name. Location codes are unique across all live locations (not just siblings); an empty code is stored as NULL and several locations may have no code. A code already in use is <code>duplicate_location</code> (409). Optional <code>container_type_id</code> references the editable, soft-delete container type catalog. Optional <code>assigned_project_id</code> records explicit container ownership and becomes NULL if its project is hard-deleted. Legacy <code>site</code>/<code>building</code> rows map to properties, <code>rack</code>/<code>shelf</code>/<code>position</code>/<code>zone</code>/<code>cabinet</code>/<code>drawer</code>/<code>tray</code>/<code>bin</code>/<code>container</code> rows map to storage units.</p>
 <h3>Location hierarchy and containers</h3>
-<p>Location writes require operator/admin authentication and the standard same-origin CSRF token. <code>POST /api/inventory/locations</code> accepts <code>parent_id</code>, required <code>name</code> and <code>loc_type</code>, optional <code>code</code>/<code>notes</code>, and optional <code>container_type_id</code>/<code>assigned_project_id</code>. Location rows now expose <code>containerTypeId</code> and <code>assignedProjectId</code> in the existing tree and flat response shapes. <code>PUT /api/inventory/locations/{id}</code> accepts the same metadata fields except parent (a <code>parent_id</code> key is rejected with <code>bad_request</code>; use <code>/move</code>); it requires the row’s <code>updated_at</code> (raw or ISO <code>updatedAt</code>) to reject stale edits.</p>
+<p>Location writes require operator/admin authentication and the standard same-origin CSRF token. <code>POST /api/inventory/locations</code> accepts <code>parent_id</code>, required <code>name</code> and <code>loc_type</code>, optional <code>code</code>/<code>notes</code>, and optional <code>container_type_id</code>/<code>assigned_project_id</code>. Location rows now expose <code>containerTypeId</code> and <code>assignedProjectId</code> in the existing tree and flat response shapes. <code>PUT /api/inventory/locations/{id}</code> accepts the same metadata fields except parent (a <code>parent_id</code> key is rejected with <code>bad_request</code>; use <code>/move</code>); it requires the row’s <code>updated_at</code> (raw or ISO <code>updatedAt</code>) to reject stale edits. Location and container-type tokens carry microseconds (ISO form <code>YYYY-MM-DDTHH:MM:SS.uuuuuuZ</code>); send them back unchanged so a same-second edit by someone else is detected.</p>
 <table><thead><tr><th>Method and path</th><th>Behavior</th></tr></thead><tbody>
 <tr><td><code>POST /api/inventory/locations/{id}/move</code></td><td>Set <code>parent_id</code> (nullable). Checks cycles, level transitions and sibling names under transaction locks; records old and new parents.</td></tr>
 <tr><td><code>GET /api/inventory/locations/{id}/merge-preview?target_id=…</code></td><td>Returns source/target, reference counts by hard-FK and polymorphic history class, and a SHA-256 fingerprint.</td></tr>
@@ -110,6 +122,6 @@
 <h2>7. Verification scope</h2>
 <p>The candidate’s HTTP integration test exercises list limits, page metadata, non-overlapping page boundaries, flat location pages, empty allocation pages, invalid zero limits, and the legacy aggregate’s 413 boundary against a disposable MariaDB instance. The browser adapter test traverses a two-page collection, checks stale-data behavior, and rejects over-limit and changing-total fixtures. Changed totals or duplicate IDs across pages fail the load and require a retry; page requests are not a database transaction, so same-count field updates may not be detected.</p>
 
-<footer class="foot">SolariNet · Inventory API Reference · Revision 1.4 · Generated as a single self-contained HTML file; print stylesheet is part of this document.</footer>
+<footer class="foot">SolariNet · Inventory API Reference · Revision 1.5 · Generated as a single self-contained HTML file; print stylesheet is part of this document.</footer>
 </body>
 </html>
