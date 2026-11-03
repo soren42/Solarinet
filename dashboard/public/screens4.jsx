@@ -1166,7 +1166,10 @@
       let call;
       if (editing) {
         body.updated_at = base.updated_at || "";
-        if (!isUnit && loc.loc_type === "storage_unit") { body.container_type_id = null; body.assigned_project_id = null; }
+        if (!isUnit && loc.loc_type === "storage_unit") {
+          body.container_type_id = null;
+          if (loc.assigned_project_id != null) body.assigned_project_id = null; // release only what is assigned
+        }
         call = a.updateLocation(loc.id, body);
       } else {
         body.parent_id = parentLoc ? parentLoc.id : null;
