@@ -14,7 +14,7 @@
 <div class="eyebrow">SolariNet · System of Record</div>
 <h1>Inventory API Reference</h1>
 <p class="lede">HTTP contract for reading and editing the inventory System of Record through the authenticated SolariNet dashboard API. This guide covers list pagination, filters, catalog writes, response metadata, and compatibility behavior.</p>
-<p class="meta">Revision 1.3 · 2026-11-03 · Inventory product catalog API added · Internal</p>
+<p class="meta">Revision 1.4 · 2026-11-03 · Location move, merge, and container API added · Internal</p>
 </header>
 
 <div class="diagram" role="img" aria-label="Dashboard API reads paged inventory data from the SoR">
@@ -92,10 +92,24 @@
 <h2>6. Location schema</h2>
 <p>Locations use the levels <code>property</code>, <code>floor</code>, <code>room</code>, <code>section</code>, and <code>storage_unit</code>. A root must be a property. Ordinary parent transitions are property → floor → room → section. Storage units may be placed under any level and may contain other storage units. The database enforces these transitions and rejects parent cycles.</p>
 <p>Live sibling names are unique, including among roots; soft-deleted rows release their name. Optional <code>container_type_id</code> references the editable, soft-delete container type catalog. Optional <code>assigned_project_id</code> records explicit container ownership and becomes NULL if its project is hard-deleted. Legacy <code>site</code>/<code>building</code> rows map to properties, <code>rack</code>/<code>shelf</code>/<code>position</code>/<code>zone</code>/<code>cabinet</code>/<code>drawer</code>/<code>tray</code>/<code>bin</code>/<code>container</code> rows map to storage units.</p>
+<h3>Location hierarchy and containers</h3>
+<p>Location writes require operator/admin authentication and the standard same-origin CSRF token. <code>POST /api/inventory/locations</code> accepts <code>parent_id</code>, required <code>name</code> and <code>loc_type</code>, optional <code>code</code>/<code>notes</code>, and optional <code>container_type_id</code>/<code>assigned_project_id</code>. Location rows now expose <code>containerTypeId</code> and <code>assignedProjectId</code> in the existing tree and flat response shapes. <code>PUT /api/inventory/locations/{id}</code> accepts the same metadata fields except parent; it requires the row’s <code>updated_at</code> value to reject stale edits.</p>
+<table><thead><tr><th>Method and path</th><th>Behavior</th></tr></thead><tbody>
+<tr><td><code>POST /api/inventory/locations/{id}/move</code></td><td>Set <code>parent_id</code> (nullable). Checks cycles, level transitions and sibling names under transaction locks; records old and new parents.</td></tr>
+<tr><td><code>GET /api/inventory/locations/{id}/merge-preview?target_id=…</code></td><td>Returns source/target, reference counts by hard-FK and polymorphic history class, and a SHA-256 fingerprint.</td></tr>
+<tr><td><code>POST /api/inventory/locations/{id}/merge</code></td><td>Body: <code>target_id</code> and preview <code>fingerprint</code>. Rechecks under lock, rewrites supported hard FKs and live location barcodes, preserves scan/external-reference history, then soft-deletes the source. Repeating the completed merge returns its deterministic result.</td></tr>
+<tr><td><code>POST /api/inventory/locations/bulk-storage-units</code></td><td>Body: nullable <code>parent_id</code>, <code>count</code> (1–500), and either a <code>names</code> array or <code>prefix</code>/<code>start</code>; optional <code>code_prefix</code>/<code>code_start</code>, <code>container_type_id</code>, and <code>project_id</code>. The full batch is validated and inserted atomically.</td></tr>
+<tr><td><code>PUT /api/inventory/locations/{id}/project</code></td><td>Body: nullable <code>project_id</code>. Requires a storage unit. Clearing assignment is allowed only when no live child location or hardware unit remains; the location identity and code remain.</td></tr>
+<tr><td><code>GET /api/inventory/container-types?include_deleted=1</code></td><td>List live types by default; include retired rows when requested.</td></tr>
+<tr><td><code>POST /api/inventory/container-types</code></td><td>Create a named container type.</td></tr>
+<tr><td><code>PUT /api/inventory/container-types/{id}</code></td><td>Rename with required <code>updated_at</code> for optimistic concurrency.</td></tr>
+<tr><td><code>DELETE /api/inventory/container-types/{id}</code></td><td>Soft-retire a type. In-use types may be renamed or retired; locations are never auto-deleted.</td></tr>
+</tbody></table>
+<p>Location errors use <code>bad_request</code> (400), <code>not_found</code> (404), <code>duplicate_location</code>, <code>location_cycle</code>, <code>merge_conflict</code>, <code>container_not_empty</code>, or stale-update <code>conflict</code> (all 409). A merge preview fingerprint expires when referenced rows or either endpoint changes.</p>
 
 <h2>7. Verification scope</h2>
 <p>The candidate’s HTTP integration test exercises list limits, page metadata, non-overlapping page boundaries, flat location pages, empty allocation pages, invalid zero limits, and the legacy aggregate’s 413 boundary against a disposable MariaDB instance. The browser adapter test traverses a two-page collection, checks stale-data behavior, and rejects over-limit and changing-total fixtures. Changed totals or duplicate IDs across pages fail the load and require a retry; page requests are not a database transaction, so same-count field updates may not be detected.</p>
 
-<footer class="foot">SolariNet · Inventory API Reference · Revision 1.3 · Generated as a single self-contained HTML file; print stylesheet is part of this document.</footer>
+<footer class="foot">SolariNet · Inventory API Reference · Revision 1.4 · Generated as a single self-contained HTML file; print stylesheet is part of this document.</footer>
 </body>
 </html>
