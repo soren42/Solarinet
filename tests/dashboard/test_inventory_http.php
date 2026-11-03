@@ -74,9 +74,10 @@ $suffix = bin2hex(random_bytes(6)); $make = 'HTTP fixture '.$suffix; $model = 'R
 $tag = 'HTTP-'.$suffix; $serial = 'SER-'.$suffix; $loc = 'HTTP location '.$suffix; $vendor = 'HTTP receipt '.$suffix; $user = 'inventory-http-test';
 $receiveCode = 'F22-' . $suffix; $receiveFailTrigger = 'f22_receive_fail_' . $suffix;
 $wp4Prefix = 'WP4-' . $suffix;
+$i1cPrefix = 'I1C-' . $suffix;
 $ids = ['location'=>null,'model'=>null,'unit'=>null,'barcode'=>null,'receipt'=>null,'entity'=>null,'conflict'=>null,'receivedUnit'=>null,'catalogType'=>null,'catalogBarcode'=>null,'catalogUnit'=>null];
 $work = sys_get_temp_dir().'/solarinet-inventory-http-'.bin2hex(random_bytes(8)); $sessions=$work.'/sessions'; $server=null; $failure=null;
-$cleanup = static function () use ($db,&$ids,$tag,$receiveCode,$receiveFailTrigger,$vendor,$make,$model,$loc,$wp4Prefix): void {
+$cleanup = static function () use ($db,&$ids,$tag,$receiveCode,$receiveFailTrigger,$vendor,$make,$model,$loc,$wp4Prefix,$i1cPrefix): void {
     try { $db->exec('DROP TABLE IF EXISTS wp4_unknown_location_refs'); } catch (Throwable $e) {}
     try {
         $like=$db->quote($wp4Prefix.'%');
@@ -93,6 +94,13 @@ $cleanup = static function () use ($db,&$ids,$tag,$receiveCode,$receiveFailTrigg
         $db->exec("DELETE FROM container_types WHERE name LIKE $like");
         $db->exec("DELETE FROM projects WHERE name LIKE $like");
         $db->exec("DELETE FROM hardware_units WHERE serial LIKE $like");
+    } catch (Throwable $e) {}
+    try {
+        $i1cLike=$db->quote($i1cPrefix.'%');
+        $db->exec("DELETE FROM hardware_units WHERE notes LIKE $i1cLike AND installed_on_unit_id IS NOT NULL");
+        $db->exec("DELETE FROM hardware_units WHERE notes LIKE $i1cLike");
+        $db->exec("DELETE FROM audit_log WHERE table_name='product_types' AND row_id IN (SELECT id FROM product_types WHERE name LIKE $i1cLike)");
+        $db->exec("DELETE FROM product_types WHERE name LIKE $i1cLike");
     } catch (Throwable $e) {}
     try { $db->exec("DROP TRIGGER IF EXISTS `$receiveFailTrigger`"); } catch (Throwable $e) {}
     foreach (['barcode_scans'=>"code IN (".$db->quote($tag).','.$db->quote($receiveCode).')','receipts'=>"vendor=".$db->quote($vendor)] as $table=>$where) { try {$db->exec("DELETE FROM $table WHERE $where");} catch (Throwable $e) {} }
@@ -199,7 +207,8 @@ try {
     check((httpRequest($base.'/api/inventory/product-types?q='.rawurlencode('catalog '.$suffix).'&kind=hardware','GET',null,$viewerCookie)['body']['data']['page']['total']??null)===0,'catalog kind filter did not narrow a q search');
     check(httpRequest($base.'/api/inventory/product-types/999999999','GET',null,$cookie)['status']===404,'missing product type did not return 404');
     $catPath='/api/inventory/product-types/'.$ids['catalogType'];
-    $updated=httpRequest($base.$catPath,'PUT',['name'=>'Renamed catalog '.$suffix],$cookie,$csrf);check($updated['status']===200&&($updated['body']['data']['name']??'')==='Renamed catalog '.$suffix,'product type rename failed');
+    check(httpRequest($base.$catPath,'PUT',['name'=>'No token '.$suffix],$cookie,$csrf)['status']===400,'product type PUT without updated_at was accepted');
+    $updated=httpRequest($base.$catPath,'PUT',['name'=>'Renamed catalog '.$suffix,'updated_at'=>(string)($newType['body']['data']['updated_at']??'')],$cookie,$csrf);check($updated['status']===200&&($updated['body']['data']['name']??'')==='Renamed catalog '.$suffix,'product type rename failed');
     check(httpRequest($base.$catPath,'PUT',['name'=>'stale','updated_at'=>'2000-01-01 00:00:00'],$cookie,$csrf)['status']===409,'stale product type update did not return conflict');
     $typesBeforeLookup=(int)$db->query('SELECT COUNT(*) FROM product_types')->fetchColumn();
     $missingLookup=httpRequest($base.'/api/inventory/product-barcodes?code=NO-MATCH-'.$suffix,'GET',null,$cookie);check($missingLookup['status']===200&&($missingLookup['body']['data']['found']??true)===false,'unknown product barcode lookup did not return no match');
@@ -209,7 +218,7 @@ try {
     $listed=httpRequest($base.$catPath,'GET',null,$cookie);check($listed['status']===200&&array_column($listed['body']['data']['barcodes']??[],'id')===[$ids['catalogBarcode']]&&($listed['body']['data']['barcodes'][0]['code_type']??'')==='sku','product type detail did not list its live barcode: '.json_encode($listed['body']['data']['barcodes']??null));
     $dup=httpRequest($base.'/api/inventory/product-barcodes','POST',['product_type_id'=>$ids['catalogType'],'code'=>strtoupper($code),'code_type'=>'sku'],$cookie,$csrf);check($dup['status']===409&&($dup['body']['error']['code']??'')==='duplicate_barcode','duplicate product barcode did not return 409');
     $foundCat=httpRequest($base.'/api/inventory/product-barcodes?code='.rawurlencode(strtoupper($code)),'GET',null,$cookie);check($foundCat['status']===200&&($foundCat['body']['data']['found']??false)===true&&($foundCat['body']['data']['productType']['id']??0)===$ids['catalogType'],'exact product barcode lookup failed');
-    $db->prepare("INSERT INTO hardware_units(model_id,product_type_id,source_id,asserted_kind,asserted_at) VALUES(?,?,?,'human',NOW())")->execute([$ids['model'],$ids['catalogType'],$manual]); $ids['catalogUnit']=(int)$db->lastInsertId();
+    $db->prepare("INSERT INTO hardware_units(model_id,product_type_id,source_id,asserted_kind,asserted_at) VALUES(NULL,?,?,'human',NOW())")->execute([$ids['catalogType'],$manual]); $ids['catalogUnit']=(int)$db->lastInsertId();
     check(httpRequest($base.'/api/inventory/product-barcodes/'.$ids['catalogBarcode'],'DELETE',[],$cookie,$csrf)['status']===200,'product barcode soft-delete failed');
     check((httpRequest($base.$catPath,'GET',null,$cookie)['body']['data']['barcodes']??null)===[],'product type detail still listed a soft-deleted barcode');
     check(httpRequest($base.$catPath,'DELETE',[],$cookie,$csrf)['status']===200,'in-use product type soft-delete failed');
@@ -225,8 +234,9 @@ try {
     $legacyType=(int)$db->query('SELECT product_type_id FROM hardware_models WHERE id='.(int)$ids['model'])->fetchColumn();
     $db->prepare("UPDATE product_types SET lookup_source='legacy:hardware_models' WHERE id=?")->execute([$legacyType]);
     $legacyPath='/api/inventory/product-types/'.$legacyType;
-    check(httpRequest($base.$legacyPath,'PUT',['name'=>'Friendly '.$suffix,'kind'=>'component'],$cookie,$csrf)['status']===200,'legacy type rename failed');
-    $notesOnly=httpRequest($base.$legacyPath,'PUT',['notes'=>'notes '.$suffix],$cookie,$csrf);
+    $typeToken=static fn(string $path):string=>(string)(httpRequest($base.$path,'GET',null,$cookie)['body']['data']['updated_at']??'');
+    check(httpRequest($base.$legacyPath,'PUT',['name'=>'Friendly '.$suffix,'kind'=>'component','updated_at'=>$typeToken($legacyPath)],$cookie,$csrf)['status']===200,'legacy type rename failed');
+    $notesOnly=httpRequest($base.$legacyPath,'PUT',['notes'=>'notes '.$suffix,'updated_at'=>$typeToken($legacyPath)],$cookie,$csrf);
     check($notesOnly['status']===200&&($notesOnly['body']['data']['name']??'')==='Friendly '.$suffix&&($notesOnly['body']['data']['kind']??'')==='component','notes-only PUT reverted an earlier name/kind edit on a legacy-projected type: '.json_encode($notesOnly['body']['data']??null));
     $db->prepare("DELETE FROM audit_log WHERE table_name='product_types' AND row_id=?")->execute([$legacyType]);
 
@@ -243,6 +253,7 @@ try {
     $rootUpdated=$db->query('SELECT updated_at FROM locations WHERE id='.$wp4Root)->fetchColumn();
     check(httpRequest($base.$wp4Loc.'/'.$wp4Root,'PUT',['name'=>$wp4Prefix.' renamed','updated_at'=>'2000-01-01 00:00:00'],$cookie,$csrf)['status']===409,'stale location updated_at did not conflict');
     $patched=httpRequest($base.$wp4Loc.'/'.$wp4Root,'PUT',['notes'=>'WP4 updated','updated_at'=>$root['body']['data']['updatedAt']],$cookie,$csrf);check($patched['status']===200&&($patched['body']['data']['notes']??null)==='WP4 updated','location PUT did not accept its returned updatedAt value');
+    $rootUpdated=(string)($patched['body']['data']['updatedAt']??'');// the edit above made the earlier token stale (037 sub-second lock)
     check(httpRequest($base.$wp4Loc.'/'.$wp4Root,'PUT',['loc_type'=>'room','updated_at'=>$rootUpdated],$cookie,$csrf)['status']===400,'location type change invalidating its child was accepted');
     $cycle=httpRequest($base.$wp4Loc.'/'.$wp4Root.'/move','POST',['parent_id'=>$wp4Floor],$cookie,$csrf);check($cycle['status']===409&&($cycle['body']['error']['code']??'')==='location_cycle','move into descendant did not return location_cycle');
     $otherRoot=$createLoc(['name'=>$wp4Prefix.' other property','loc_type'=>'property']);$otherFloor=$createLoc(['parent_id'=>(int)$otherRoot['body']['data']['id'],'name'=>$wp4Prefix.' floor','loc_type'=>'floor']);
@@ -320,6 +331,81 @@ try {
     $csid=(int)$collideSource['body']['data']['id'];$ctid=(int)$collideTarget['body']['data']['id'];$cp=httpRequest($base.$wp4Loc.'/'.$csid.'/merge-preview?target_id='.$ctid,'GET',null,$cookie);$cm=httpRequest($base.$wp4Loc.'/'.$csid.'/merge','POST',['target_id'=>$ctid,'fingerprint'=>$cp['body']['data']['fingerprint']],$cookie,$csrf);check($cm['status']===409&&($cm['body']['error']['code']??'')==='merge_conflict','child name collision merge was accepted: '.json_encode($cm['body']));
     $cycleSource=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' cycle source','loc_type'=>'storage_unit']);$cycleSourceId=(int)$cycleSource['body']['data']['id'];$cycleTarget=$createLoc(['parent_id'=>$cycleSourceId,'name'=>$wp4Prefix.' cycle target','loc_type'=>'storage_unit']);$cycleTargetId=(int)$cycleTarget['body']['data']['id'];$cyclePreview=httpRequest($base.$wp4Loc.'/'.$cycleSourceId.'/merge-preview?target_id='.$cycleTargetId,'GET',null,$cookie);$cycleMerge=httpRequest($base.$wp4Loc.'/'.$cycleSourceId.'/merge','POST',['target_id'=>$cycleTargetId,'fingerprint'=>$cyclePreview['body']['data']['fingerprint']],$cookie,$csrf);check($cycleMerge['status']===409&&($cycleMerge['body']['error']['code']??'')==='location_cycle','cycle-producing merge did not return location_cycle');
     $projectSource=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' project source','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectA]);$projectTarget=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' project target','loc_type'=>'storage_unit','assigned_project_id'=>$wp4ProjectB]);$psid=(int)$projectSource['body']['data']['id'];$ptid=(int)$projectTarget['body']['data']['id'];$pp=httpRequest($base.$wp4Loc.'/'.$psid.'/merge-preview?target_id='.$ptid,'GET',null,$cookie);$pm=httpRequest($base.$wp4Loc.'/'.$psid.'/merge','POST',['target_id'=>$ptid,'fingerprint'=>$pp['body']['data']['fingerprint']],$cookie,$csrf);check($pm['status']===409&&($pm['body']['error']['code']??'')==='merge_conflict','different-project merge was accepted');
+
+    // 037: items on catalog product types, software licences, live location codes, sub-second locks.
+    $comp=$base.'/api/inventory/components';
+    $isNull=static fn(array $d,string $k):bool=>array_key_exists($k,$d)&&$d[$k]===null;
+    $post=static fn(array $b):array=>httpRequest($comp,'POST',$b,$cookie,$csrf);
+    $mkType=static function(string $kind,string $name)use($base,$cookie,$csrf):int{$r=httpRequest($base.'/api/inventory/product-types','POST',['kind'=>$kind,'name'=>$name],$cookie,$csrf);check($r['status']===201,"037 $kind type create failed: ".json_encode($r['body']));return (int)$r['body']['data']['id'];};
+    $consumable=$mkType('consumable',$i1cPrefix.' cable ties');$software=$mkType('software',$i1cPrefix.' office suite');$laptopType=$mkType('hardware',$i1cPrefix.' laptop');
+    $ties=$post(['product_type_id'=>$consumable,'quantity'=>25,'location_id'=>$ids['location'],'notes'=>$i1cPrefix.' ties']);
+    check($ties['status']===201&&$isNull($ties['body']['data']??[],'modelId')&&($ties['body']['data']['productTypeId']??0)===$consumable&&($ties['body']['data']['productTypeName']??'')===$i1cPrefix.' cable ties'&&($ties['body']['data']['productTypeKind']??'')==='consumable'&&($ties['body']['data']['quantity']??0)===25,'catalog-only item create failed: '.json_encode($ties['body']));
+    $tiesListed=httpRequest($comp.'?product_type_id='.$consumable,'GET',null,$viewerCookie);check($tiesListed['status']===200&&array_column($tiesListed['body']['data']??[],'id')===[(int)($ties['body']['data']['id']??0)],'model-less item missing from the components list');
+    $tiesSearch=httpRequest($comp.'?q='.rawurlencode($i1cPrefix.' cable').'&limit=5&offset=0','GET',null,$viewerCookie);check(($tiesSearch['body']['data']['page']['total']??null)===1,'components q did not match the product type name');
+    $laptops=$post(['product_type_id'=>$laptopType,'count'=>3,'location_id'=>$ids['location'],'notes'=>$i1cPrefix.' laptops']);
+    check($laptops['status']===201&&($laptops['body']['data']['count']??0)===3&&count(array_unique(array_column($laptops['body']['data']['items']??[],'id')))===3,'count=3 item create failed: '.json_encode($laptops['body']));
+    $laptopId=(int)($laptops['body']['data']['items'][0]['id']??0);
+    check($post(['product_type_id'=>$laptopType,'count'=>2,'serial'=>$i1cPrefix.'-S'])['status']===400,'count>1 with a serial was accepted');
+    check($post(['product_type_id'=>$laptopType,'count'=>51])['status']===400,'count above the batch limit was accepted');
+    $sw=$post(['product_type_id'=>$software,'licence_seats'=>5,'licence_expires_on'=>'2027-12-31','licence_reference'=>'1Password: Office family plan, order 113-4567890','installed_on_unit_id'=>$laptopId,'notes'=>$i1cPrefix.' office']);
+    $swd=$sw['body']['data']??[];
+    check($sw['status']===201&&($swd['licenceSeats']??0)===5&&($swd['licenceExpiresOn']??'')==='2027-12-31'&&str_starts_with((string)($swd['licenceReference']??''),'1Password')&&($swd['installedOnUnitId']??0)===$laptopId&&($swd['installedOnName']??'')===$i1cPrefix.' laptop','software item with licence create failed: '.json_encode($sw['body']));
+    $swId=(int)($swd['id']??0);
+    $rejects=[
+        'licence on hardware'=>['product_type_id'=>$laptopType,'licence_seats'=>2],
+        'install target on hardware'=>['product_type_id'=>$laptopType,'installed_on_unit_id'=>$laptopId],
+        'product-key reference'=>['product_type_id'=>$software,'licence_reference'=>'ABCDE-12345-FGHIJ-67890-KLMNO'],
+        'password reference'=>['product_type_id'=>$software,'licence_reference'=>'password is hunter2'],
+        'token-like reference'=>['product_type_id'=>$software,'licence_reference'=>'ghp_9f8e7d6c5b4a39281706f5e4d3c2b1a0'],
+        'software on software'=>['product_type_id'=>$software,'installed_on_unit_id'=>$swId],
+        'install on missing unit'=>['product_type_id'=>$software,'installed_on_unit_id'=>999999999],
+        'impossible expiry'=>['product_type_id'=>$software,'licence_expires_on'=>'2027-02-30'],
+        'zero seats'=>['product_type_id'=>$software,'licence_seats'=>0],
+        'model/type mismatch'=>['model_id'=>$ids['model'],'product_type_id'=>$consumable],
+        'no identity'=>['notes'=>$i1cPrefix.' none'],
+        'missing type'=>['product_type_id'=>999999999],
+    ];
+    foreach($rejects as $label=>$body){$r=$post($body);check($r['status']===400,"037 $label was not rejected with 400 ($r[status]): ".json_encode($r['body']));}
+    $retired=$mkType('hardware',$i1cPrefix.' retired');check(httpRequest($base.'/api/inventory/product-types/'.$retired,'DELETE',[],$cookie,$csrf)['status']===200,'037 retire fixture failed');
+    $onRetired=$post(['product_type_id'=>$retired]);check($onRetired['status']===400&&str_contains((string)($onRetired['body']['error']['message']??''),'retired'),'item create on a retired product type was accepted');
+    $legacyItem=$post(['model_id'=>$ids['model'],'serial'=>$i1cPrefix.'-legacy','notes'=>$i1cPrefix.' legacy']);
+    check($legacyItem['status']===201&&($legacyItem['body']['data']['modelId']??0)===$ids['model']&&($legacyItem['body']['data']['productTypeId']??0)===$legacyType,'legacy model_id create no longer derives the product type: '.json_encode($legacyItem['body']));
+    $byType=$post(['product_type_id'=>$legacyType,'notes'=>$i1cPrefix.' by type']);check($byType['status']===201&&($byType['body']['data']['modelId']??0)===$ids['model'],'product type with a legacy model did not fill model_id');
+    $dupSerial=$post(['product_type_id'=>$laptopType,'serial'=>$i1cPrefix.'-dup','notes'=>$i1cPrefix.' dup']);check($dupSerial['status']===201,'serial fixture failed');
+    $dupAgain=$post(['product_type_id'=>$laptopType,'serial'=>$i1cPrefix.'-dup','notes'=>$i1cPrefix.' dup']);check($dupAgain['status']===409,'duplicate serial within a product type was not 409');
+    $swPath=$comp.'/'.$swId;
+    $swEdit=httpRequest($swPath,'PUT',['licence_seats'=>10,'licence_reference'=>null,'installed_on_unit_id'=>null],$cookie,$csrf);check($swEdit['status']===200&&($swEdit['body']['data']['licenceSeats']??0)===10&&$isNull($swEdit['body']['data']??[],'licenceReference')&&$isNull($swEdit['body']['data']??[],'installedOnUnitId'),'software licence edit failed: '.json_encode($swEdit['body']));
+    check(httpRequest($swPath,'PUT',['product_type_id'=>$laptopType],$cookie,$csrf)['status']===400,'changing a licensed item to hardware kept its licence fields');
+    check(httpRequest($comp.'/'.$laptopId,'PUT',['licence_seats'=>3],$cookie,$csrf)['status']===400,'licence edit on a hardware item was accepted');
+    check(httpRequest($comp.'/'.$laptopId,'PUT',['product_type_id'=>null],$cookie,$csrf)['status']===400,'product_type_id was cleared');
+    check(httpRequest($comp.'/'.$laptopId,'PUT',['product_type_id'=>$retired],$cookie,$csrf)['status']===400,'item moved onto a retired product type');
+    $retype=httpRequest($comp.'/'.(int)($ties['body']['data']['id']??0),'PUT',['product_type_id'=>$legacyType],$cookie,$csrf);check($retype['status']===200&&($retype['body']['data']['modelId']??0)===$ids['model'],'re-typing an item did not follow the catalog');
+    $unModel=httpRequest($retype['status']===200?$comp.'/'.(int)$retype['body']['data']['id']:$comp.'/0','PUT',['model_id'=>null],$cookie,$csrf);check($unModel['status']===200&&$isNull($unModel['body']['data']??[],'modelId')&&($unModel['body']['data']['productTypeId']??0)===$legacyType,'clearing the legacy model failed or lost the product type');
+
+    // Live location codes are globally unique; empty codes repeat (037).
+    $codeA='C'.$suffix;
+    $withCode=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' coded','loc_type'=>'storage_unit','code'=>$codeA]);check($withCode['status']===201,'coded location create failed');
+    foreach([$codeA,strtolower($codeA)] as $dupCode){$r=$createLoc(['parent_id'=>$wp4Floor,'name'=>$wp4Prefix.' coded '.$dupCode,'loc_type'=>'room','code'=>$dupCode]);check($r['status']===409&&($r['body']['error']['code']??'')==='duplicate_location'&&str_contains((string)($r['body']['error']['message']??''),'code'),"duplicate live code $dupCode was not refused: ".json_encode($r['body']));}
+    foreach([1,2] as $n){$r=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' blank code '.$n,'loc_type'=>'storage_unit','code'=>'']);check($r['status']===201&&$isNull($r['body']['data']??[],'code'),'empty location code was not stored as NULL / did not repeat');}
+    $plainLoc=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' to recode','loc_type'=>'storage_unit']);$plainLocId=(int)$plainLoc['body']['data']['id'];
+    $recode=httpRequest($base.$wp4Loc.'/'.$plainLocId,'PUT',['code'=>$codeA,'updated_at'=>(string)$plainLoc['body']['data']['updatedAt']],$cookie,$csrf);check($recode['status']===409&&($recode['body']['error']['code']??'')==='duplicate_location'&&str_contains((string)($recode['body']['error']['message']??''),'code'),'location edit to a used code was not refused: '.json_encode($recode['body']));
+    $bulkSeed=$createLoc(['parent_id'=>$wp4Root,'name'=>$wp4Prefix.' bulk seed','loc_type'=>'storage_unit','code'=>'B'.$suffix.'7']);check($bulkSeed['status']===201,'bulk code seed failed');
+    $bulkDup=httpRequest($base.$wp4Loc.'/bulk-storage-units','POST',['parent_id'=>$wp4Root,'count'=>2,'prefix'=>$wp4Prefix.' bulk code ','start'=>1,'code_prefix'=>'B'.$suffix,'code_start'=>6],$cookie,$csrf);check($bulkDup['status']===409&&($bulkDup['body']['error']['code']??'')==='duplicate_location'&&str_contains((string)($bulkDup['body']['error']['message']??''),'already used'),'bulk create reusing a live code was not refused: '.json_encode($bulkDup['body']));
+    check((int)$db->query('SELECT COUNT(*) FROM locations WHERE name LIKE '.$db->quote($wp4Prefix.' bulk code %'))->fetchColumn()===0,'refused bulk create left partial rows');
+
+    // Two edits inside one second: the first token is stale after the second (037 DATETIME(6)).
+    while(fmod(microtime(true),1.0)>0.5)usleep(20000);
+    $tokA=(string)$plainLoc['body']['data']['updatedAt'];check(preg_match('/\.\d{6}Z\z/',$tokA)===1,'location updatedAt token lacks microseconds: '.$tokA);
+    $e1=httpRequest($base.$wp4Loc.'/'.$plainLocId,'PUT',['notes'=>'first','updated_at'=>$tokA],$cookie,$csrf);check($e1['status']===200,'first same-second location edit failed');$tokB=(string)($e1['body']['data']['updatedAt']??'');
+    $e2=httpRequest($base.$wp4Loc.'/'.$plainLocId,'PUT',['notes'=>'second','updated_at'=>$tokB],$cookie,$csrf);check($e2['status']===200,'second same-second location edit failed');$tokC=(string)($e2['body']['data']['updatedAt']??'');
+    check(substr($tokB,0,19)===substr($tokC,0,19)&&$tokB!==$tokC,"location edits were not in one second with distinct tokens ($tokB, $tokC)");
+    check(httpRequest($base.$wp4Loc.'/'.$plainLocId,'PUT',['notes'=>'stale','updated_at'=>$tokB],$cookie,$csrf)['status']===409,'stale same-second location token was accepted');
+    while(fmod(microtime(true),1.0)>0.5)usleep(20000);
+    $ptPath='/api/inventory/product-types/'.$consumable;
+    $p1=httpRequest($base.$ptPath,'PUT',['notes'=>'first','updated_at'=>$typeToken($ptPath)],$cookie,$csrf);check($p1['status']===200,'first same-second type edit failed');$ptB=(string)($p1['body']['data']['updated_at']??'');
+    $p2=httpRequest($base.$ptPath,'PUT',['notes'=>'second','updated_at'=>$ptB],$cookie,$csrf);check($p2['status']===200,'second same-second type edit failed: '.json_encode($p2['body']));$ptC=(string)($p2['body']['data']['updated_at']??'');
+    check(substr($ptB,0,19)===substr($ptC,0,19)&&$ptB!==$ptC&&strlen($ptB)===26,"type edits were not in one second with distinct DATETIME(6) tokens ($ptB, $ptC)");
+    check(httpRequest($base.$ptPath,'PUT',['notes'=>'stale','updated_at'=>$ptB],$cookie,$csrf)['status']===409,'stale same-second product type token was accepted');
 
     $overflow=$db->prepare("INSERT INTO receipts(vendor,currency) VALUES(?,'USD')");for($i=0;$i<501;$i++)$overflow->execute([$vendor]);$tooBig=httpRequest($base.'/api/inventory','GET',null,$cookie);check($tooBig['status']===413&&($tooBig['body']['error']['code']??null)==='inventory_page_required','501 receipts did not require paginated inventory');
     echo "inventory HTTP baseline and WP4 location assertions passed (".($GLOBALS['inventory_http_assertions']??0)." checks)\n";
