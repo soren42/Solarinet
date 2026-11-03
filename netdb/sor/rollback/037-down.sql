@@ -17,6 +17,8 @@ DELIMITER ;
 CALL `_solarinet_rollback_m037_assert_reversible`();
 DROP PROCEDURE `_solarinet_rollback_m037_assert_reversible`;
 
+-- Accepted precision loss: updated_at is optimistic-lock metadata only; the
+-- fractional seconds are dropped (rounded) on rollback, no business data is lost.
 ALTER TABLE container_types
   MODIFY `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
 ALTER TABLE product_types

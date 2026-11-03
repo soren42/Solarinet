@@ -745,7 +745,7 @@
   function licenceBody(v, software) {
     if (!software) return { body: { licence_seats: null, licence_expires_on: null, licence_reference: null, installed_on_unit_id: null } };
     const seats = String(v.seats || "").trim();
-    if (seats && !/^[1-9]\d{0,8}$/.test(seats)) return { error: "Seats must be a whole number of 1 or more." };
+    if (seats && (!/^[1-9]\d{0,9}$/.test(seats) || Number(seats) > 4294967295)) return { error: "Seats must be a whole number from 1 to 4294967295." };
     const expires = String(v.expires || "").trim();
     if (expires && !/^\d{4}-\d{2}-\d{2}$/.test(expires)) return { error: "The expiry must be a date." };
     const ref = String(v.reference || "").trim();
