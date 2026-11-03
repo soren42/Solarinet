@@ -345,6 +345,11 @@
     invModel:     function (id) { return "/api/inventory/models/" + encodeURIComponent(id); },  // PUT {arch} only
     invLocations: "/api/inventory/locations",// GET tree / POST create
     invFlatLocations: "/api/inventory/locations?flat=1", // paginated flat location list
+    invLocation:  function (id) { return "/api/inventory/locations/" + encodeURIComponent(id); },  // GET one / PUT edit (updated_at lock)
+    invLocationOp: function (id, op) { return "/api/inventory/locations/" + encodeURIComponent(id) + "/" + op; }, // move|merge|merge-preview|project
+    invBulkStorage: "/api/inventory/locations/bulk-storage-units", // POST all-or-none batch
+    invContainerTypes: "/api/inventory/container-types",  // GET (?include_deleted=1) / POST create
+    invContainerType: function (id) { return "/api/inventory/container-types/" + encodeURIComponent(id); }, // PUT rename / DELETE retire
     invReceipts:  "/api/inventory/receipts", // GET list / POST create (multipart scan upload)
     invProjects:  "/api/inventory/projects", // GET list / POST create
     invProject:   function (id) { return "/api/inventory/projects/" + encodeURIComponent(id); },
@@ -1264,6 +1269,19 @@
     updateModel:      function (id, body) { return getJSON(EP.invModel(id), { method: "PUT", body: body || {} }); },
     // locations (drawer/tray/bin hierarchy)
     createLocation:   function (body) { return post(EP.invLocations, body || {}); },
+    getLocation:      function (id) { return getJSON(EP.invLocation(id)); },
+    // PUT needs body.updated_at (optimistic lock → 409 "conflict" when stale).
+    updateLocation:   function (id, body) { return getJSON(EP.invLocation(id), { method: "PUT", body: body || {} }); },
+    moveLocation:     function (id, parentId) { return post(EP.invLocationOp(id, "move"), { parent_id: parentId == null ? null : Number(parentId) }); },
+    locationMergePreview: function (id, targetId) { return getJSON(EP.invLocationOp(id, "merge-preview") + "?target_id=" + encodeURIComponent(targetId)); },
+    mergeLocation:    function (id, targetId, fingerprint) { return post(EP.invLocationOp(id, "merge"), { target_id: Number(targetId), fingerprint: fingerprint }); },
+    bulkStorageUnits: function (body) { return post(EP.invBulkStorage, body || {}); },
+    setLocationProject: function (id, projectId) { return getJSON(EP.invLocationOp(id, "project"), { method: "PUT", body: { project_id: projectId == null ? null : Number(projectId) } }); },
+    // container types (D5: retire is a soft delete; rename needs updated_at)
+    containerTypes:   function (includeRetired) { return getJSON(EP.invContainerTypes + (includeRetired ? "?include_deleted=1" : "")); },
+    createContainerType: function (name) { return post(EP.invContainerTypes, { name: name }); },
+    renameContainerType: function (id, name, updatedAt) { return getJSON(EP.invContainerType(id), { method: "PUT", body: { name: name, updated_at: updatedAt } }); },
+    retireContainerType: function (id) { return getJSON(EP.invContainerType(id), { method: "DELETE" }); },
     // receipts — scan upload is multipart (FormData); pass a FormData for the file.
     createReceipt:    function (body) { return post(EP.invReceipts, body || {}); },
     uploadReceipt:    function (form) {
