@@ -299,25 +299,60 @@ def mac_lock(conn, mac: str, wait: int):
 
 
 def advance_run(conn, run_id: int, status: str, detail: str | None = None) -> None:
-    """Move a run forward (never back, never out of a terminal state) and commit."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT status FROM prov_runs WHERE id=%s FOR UPDATE", (run_id,))
-        row = cur.fetchone()
-        if not row:
-            conn.rollback()
-            raise ProvError(f"prov_runs {run_id} does not exist")
-        cur_status = row["status"]
-        if status not in _FORWARD.get(cur_status, frozenset()):
-            conn.rollback()
-            raise ProvError(f"prov_runs {run_id}: {cur_status} -> {status} is not a forward move")
-        sets = ["status=%s", "detail=%s"]
-        if status == "running":
-            sets.append("started_at=CURRENT_TIMESTAMP")
-        if status in TERMINAL:
-            sets.append("finished_at=CURRENT_TIMESTAMP")
-        cur.execute(f"UPDATE prov_runs SET {', '.join(sets)} WHERE id=%s",
-                    (status, _clip(detail), run_id))
-    conn.commit()
+    """Move a run forward and atomically record the installed image on success."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, mode, entity_id, image_id, dry_run, asserted_kind"
+                        " FROM prov_runs WHERE id=%s FOR UPDATE", (run_id,))
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                raise ProvError(f"prov_runs {run_id} does not exist")
+            cur_status = row["status"]
+            if status not in _FORWARD.get(cur_status, frozenset()):
+                conn.rollback()
+                raise ProvError(f"prov_runs {run_id}: {cur_status} -> {status} is not a forward move")
+
+            sets = ["status=%s", "detail=%s"]
+            if status == "running":
+                sets.append("started_at=CURRENT_TIMESTAMP")
+            if status in TERMINAL:
+                sets.append("finished_at=CURRENT_TIMESTAMP")
+            cur.execute(f"UPDATE prov_runs SET {', '.join(sets)} WHERE id=%s",
+                        (status, _clip(detail), run_id))
+
+            # Only a successful real reimage means an OS was installed. Stack
+            # runs and dry-runs must not change the entity's current OS.
+            if (status == "succeeded" and row["mode"] == "reimage"
+                    and row["entity_id"] is not None and not row["dry_run"]):
+                cur.execute("SELECT os_id FROM prov_images WHERE id=%s", (row["image_id"],))
+                image = cur.fetchone()
+                if not image or image["os_id"] is None:
+                    raise ProvError(f"prov_runs {run_id}: image has no operating-system catalogue link")
+                cur.execute("SELECT os_id FROM entities WHERE id=%s FOR UPDATE", (row["entity_id"],))
+                entity = cur.fetchone()
+                if not entity:
+                    raise ProvError(f"prov_runs {run_id}: entity {row['entity_id']} does not exist")
+                os_id = image["os_id"]
+                cur.execute("SELECT id FROM sources WHERE slug='provisioner' AND deleted_at IS NULL")
+                source = cur.fetchone()
+                if not source:
+                    raise ProvError("provisioner provenance source is missing")
+                # Row provenance stays with whoever asserted the entity; the
+                # audit row below records that the provisioner set os_id.
+                cur.execute("UPDATE entities SET os_id=%s, asserted_at=CURRENT_TIMESTAMP"
+                            " WHERE id=%s", (os_id, row["entity_id"]))
+                cur.execute(
+                    "INSERT INTO audit_log (table_name,row_id,action,actor_label,source_id,"
+                    "asserted_kind,old_values,new_values,note) "
+                    "VALUES ('entities',%s,'update','provisioner',%s,%s,%s,%s,%s)",
+                    (row["entity_id"], source["id"], row["asserted_kind"],
+                     json.dumps({"os_id": entity["os_id"]}),
+                     json.dumps({"os_id": os_id}), f"provisioning run {run_id} succeeded"))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _clip(detail: str | None) -> str | None:
