@@ -617,6 +617,7 @@ class ProvStage(StageMixin, Base):
         self.assertEqual((r[0]["status"], r[0]["detail"]),
                          ("cancelled", f"superseded by run {r[1]['id']}"))
         self.assertTrue(r[0]["finished"])
+        self.assertEqual(admin(f"SELECT os_id IS NULL FROM entities WHERE id={n2}"), "1")
         self.assertEqual((r[1]["status"], r[1]["stacks"]), ("running", ["core"]))
 
         # a failing fleet-provision marks the (new) run failed
@@ -626,6 +627,7 @@ class ProvStage(StageMixin, Base):
         self.assertEqual([x["status"] for x in r], ["cancelled", "cancelled", "failed"])
         self.assertEqual(r[2]["detail"], "fleet-provision failed (exit 3)")
         self.assertEqual(r[1]["detail"], f"superseded by run {r[2]['id']}")
+        self.assertEqual(admin(f"SELECT os_id IS NULL FROM entities WHERE id={n2}"), "1")
 
     def profile(self, cfg="02-00-00-00-00-02"):
         http = os.path.join(self.prov_root, "netboot", "http")
@@ -810,6 +812,16 @@ class ProvFinish(StageMixin, Base):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.status(rid), ("succeeded", "installed; stacks applied"))
         self.assertTrue(runs(ent("p3h-node1"))[-1]["finished"])
+        entity_id = ent("p3h-node1")
+        self.assertEqual(admin(
+            f"SELECT e.os_id=i.os_id AND e.source_id=(SELECT id FROM sources WHERE slug='provisioner') "
+            f"AND e.asserted_kind=r.asserted_kind FROM entities e JOIN prov_runs r ON r.entity_id=e.id "
+            f"JOIN prov_images i ON i.id=r.image_id WHERE r.id={rid}"), "1")
+        self.assertEqual(admin(
+            f"SELECT COUNT(*) FROM audit_log WHERE table_name='entities' AND row_id={entity_id} "
+            f"AND action='update' AND source_id=(SELECT id FROM sources WHERE slug='provisioner') "
+            f"AND asserted_kind=(SELECT asserted_kind FROM prov_runs WHERE id={rid}) "
+            f"AND note='provisioning run {rid} succeeded'"), "1")
         self.assertEqual(set(self.staged_files().values()), {False})
         self.assertTrue(os.path.exists(os.path.join(self.pdir, f"finished-{rid}.env")))
         kh = os.path.join(self.prov_root, "runs", f"reimage-{rid}.known_hosts")
@@ -850,6 +862,7 @@ class ProvFinish(StageMixin, Base):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.status(rid), ("failed", "installed; stack apply pass failed; "
                                             "stacks not applied (attempt 2 of 2)"))
+        self.assertEqual(admin(f"SELECT os_id IS NULL FROM entities WHERE name='p3h-node1'"), "1")
         self.assertEqual(len(self.calls("ansible-playbook")), 4)
 
     def test_host_key_pinned_across_ticks(self):
@@ -1006,6 +1019,7 @@ class ProvFinish(StageMixin, Base):
                                 f"WHERE id={rid}")
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertEqual(self.status(rid), ("cancelled", "superseded by run 999999"))
+                self.assertEqual(admin(f"SELECT os_id IS NULL FROM entities WHERE name='p3h-node1'"), "1")
                 ans = self.calls("ansible")
                 self.assertEqual([c["argv"][c["argv"].index("-m") + 1] for c in ans],
                                  ["ansible.builtin.raw"] * raws
