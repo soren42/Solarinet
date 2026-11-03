@@ -681,6 +681,7 @@ jobs:
           php tests/dashboard/test_authz_enforce.php
           php tests/dashboard/test_authz_routes.php
           php tests/dashboard/test_authz_manifest.php
+          php tests/dashboard/test_pdo_placeholders.php
           php tests/dashboard/test_authz_negative.php
       - name: RackWire API route tests
         run: php tests/dashboard/test_rackwire_api.php
@@ -694,6 +695,8 @@ jobs:
           node tests/dashboard/test_ca_crl_ui.js
           node tests/dashboard/test_layout.js
           node tests/dashboard/test_inventory_rackwire_ui.js
+          node tests/dashboard/test_inventory_locations_ui.js
+          node tests/dashboard/test_inventory_catalog_ui.js
           node tests/dashboard/test_capability_maturity.js
       - name: Dashboard cold/warm JSX cache profile
         env:

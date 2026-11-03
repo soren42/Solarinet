@@ -162,6 +162,8 @@ try {
     check((int)$db->query('SELECT COUNT(*) FROM barcodes WHERE code='.$db->quote($receiveCode))->fetchColumn()===1,'receive retry did not create exactly one scanned barcode');
     check((int)$db->query('SELECT COUNT(*) FROM barcode_scans WHERE code='.$db->quote($receiveCode).' AND action=\'receive\'')->fetchColumn()===1,'receive retry did not create exactly one scan audit row');
     foreach(['/api/inventory/models','/api/inventory/components','/api/inventory/receipts','/api/inventory/projects','/api/inventory/locations','/api/inventory/allocations'] as $p){$r=httpRequest($base.$p.($p==='/api/inventory/locations'?'?flat=1&':'?').'limit=1&offset=0','GET',null,$cookie);check($r['status']===200&&is_array($r['body']['data']['items']??null)&&isset($r['body']['data']['page']['total']),"paged endpoint failed: $p");}
+    // Native prepares reject a reused named placeholder (HY093); every ?q= search must bind each once.
+    foreach(['/api/inventory/models','/api/inventory/components','/api/inventory/receipts','/api/inventory/projects','/api/inventory/product-types'] as $p){foreach(['','&limit=5&offset=0'] as $pg){$r=httpRequest($base.$p.'?q=zz-no-match'.$pg,'GET',null,$cookie);check($r['status']===200,"q search failed ($r[status]): $p$pg");}}
     check(httpRequest($base.'/api/inventory/models?limit=0','GET',null,$cookie)['status']===400,'limit=0 was accepted');
     $aggregate=httpRequest($base.'/api/inventory','GET',null,$cookie);$d=$aggregate['body']['data']??[];check($aggregate['status']===200&&is_array($d['models']??null)&&is_array($d['units']??null)&&!isset($d['page']),'combined inventory shape changed');
     // 031: operator edit of hardware_models.arch (provisioning's first arch source).
@@ -192,6 +194,9 @@ try {
     check(httpRequest($base.'/api/inventory/product-types','POST',['kind'=>'nope','name'=>'Bad'],$cookie,$csrf)['status']===400,'catalog accepted invalid kind');
     $newType=httpRequest($base.'/api/inventory/product-types','POST',['kind'=>'software','name'=>'HTTP catalog '.$suffix,'brand'=>'Example','specs'=>['seats'=>4]],$cookie,$csrf);
     check($newType['status']===201,'product type create failed: '.json_encode($newType['body'])); $ids['catalogType']=(int)$newType['body']['data']['id'];
+    $search=httpRequest($base.'/api/inventory/product-types?q='.rawurlencode('catalog '.$suffix).'&kind=software','GET',null,$viewerCookie);
+    check($search['status']===200&&array_column($search['body']['data']['items']??[],'id')===[$ids['catalogType']]&&($search['body']['data']['page']['total']??null)===1,'catalog q+kind search failed: '.json_encode($search['body']));
+    check((httpRequest($base.'/api/inventory/product-types?q='.rawurlencode('catalog '.$suffix).'&kind=hardware','GET',null,$viewerCookie)['body']['data']['page']['total']??null)===0,'catalog kind filter did not narrow a q search');
     check(httpRequest($base.'/api/inventory/product-types/999999999','GET',null,$cookie)['status']===404,'missing product type did not return 404');
     $catPath='/api/inventory/product-types/'.$ids['catalogType'];
     $updated=httpRequest($base.$catPath,'PUT',['name'=>'Renamed catalog '.$suffix],$cookie,$csrf);check($updated['status']===200&&($updated['body']['data']['name']??'')==='Renamed catalog '.$suffix,'product type rename failed');
@@ -201,10 +206,12 @@ try {
     check((int)$db->query('SELECT COUNT(*) FROM product_types')->fetchColumn()===$typesBeforeLookup,'lookup unexpectedly created a product type');
     $code='sku-'.$suffix;
     $catBarcode=httpRequest($base.'/api/inventory/product-barcodes','POST',['product_type_id'=>$ids['catalogType'],'code'=>$code,'code_type'=>'sku'],$cookie,$csrf);check($catBarcode['status']===201,'product barcode create failed: '.json_encode($catBarcode['body']));$ids['catalogBarcode']=(int)$catBarcode['body']['data']['id'];
+    $listed=httpRequest($base.$catPath,'GET',null,$cookie);check($listed['status']===200&&array_column($listed['body']['data']['barcodes']??[],'id')===[$ids['catalogBarcode']]&&($listed['body']['data']['barcodes'][0]['code_type']??'')==='sku','product type detail did not list its live barcode: '.json_encode($listed['body']['data']['barcodes']??null));
     $dup=httpRequest($base.'/api/inventory/product-barcodes','POST',['product_type_id'=>$ids['catalogType'],'code'=>strtoupper($code),'code_type'=>'sku'],$cookie,$csrf);check($dup['status']===409&&($dup['body']['error']['code']??'')==='duplicate_barcode','duplicate product barcode did not return 409');
     $foundCat=httpRequest($base.'/api/inventory/product-barcodes?code='.rawurlencode(strtoupper($code)),'GET',null,$cookie);check($foundCat['status']===200&&($foundCat['body']['data']['found']??false)===true&&($foundCat['body']['data']['productType']['id']??0)===$ids['catalogType'],'exact product barcode lookup failed');
     $db->prepare("INSERT INTO hardware_units(model_id,product_type_id,source_id,asserted_kind,asserted_at) VALUES(?,?,?,'human',NOW())")->execute([$ids['model'],$ids['catalogType'],$manual]); $ids['catalogUnit']=(int)$db->lastInsertId();
     check(httpRequest($base.'/api/inventory/product-barcodes/'.$ids['catalogBarcode'],'DELETE',[],$cookie,$csrf)['status']===200,'product barcode soft-delete failed');
+    check((httpRequest($base.$catPath,'GET',null,$cookie)['body']['data']['barcodes']??null)===[],'product type detail still listed a soft-deleted barcode');
     check(httpRequest($base.$catPath,'DELETE',[],$cookie,$csrf)['status']===200,'in-use product type soft-delete failed');
     check((int)$db->query('SELECT COUNT(*) FROM product_types WHERE id='.$ids['catalogType'])->fetchColumn()===1,'product type soft-delete removed a referenced row');
     $reuse=httpRequest($base.'/api/inventory/product-types','POST',['name'=>'Reuse probe '.$suffix],$cookie,$csrf);check($reuse['status']===201,'reuse probe create failed');$reuseId=(int)$reuse['body']['data']['id'];

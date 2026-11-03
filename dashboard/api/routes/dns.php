@@ -236,8 +236,11 @@ return static function (Router $router): void {
             $params[':type']  = DnsRoutes::requireType((string) $_GET['type']);
         }
         if (isset($_GET['q']) && trim((string) $_GET['q']) !== '') {
-            $where[]         = '(name LIKE :q OR rdata LIKE :q)';
-            $params[':q']    = '%' . trim((string) $_GET['q']) . '%';
+            $where[]         = '(name LIKE :q1 OR rdata LIKE :q2)';
+            $like = '%' . trim((string) $_GET['q']) . '%';  // native prepares: each placeholder bound once
+            for ($qi = 1; $qi <= 2; $qi++) {
+                $params[':q' . $qi] = $like;
+            }
         }
         if (isset($_GET['generated']) && $_GET['generated'] !== '') {
             if ($_GET['generated'] !== '0' && $_GET['generated'] !== '1') {
