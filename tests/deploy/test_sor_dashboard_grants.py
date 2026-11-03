@@ -54,6 +54,8 @@ EXPECTED = {
     "networks": {"SELECT", "UPDATE"},
     "project_allocations": {"SELECT", "INSERT", "UPDATE"},
     "projects": {"SELECT", "INSERT", "UPDATE"},
+    "product_barcodes": {"SELECT", "INSERT", "UPDATE"},
+    "product_types": {"SELECT", "INSERT", "UPDATE"},
     "receipts": {"SELECT", "INSERT", "UPDATE"},
     "rw_model_groups": {"SELECT", "INSERT", "UPDATE"},
     "rw_plan_versions": {"SELECT", "INSERT", "DELETE"},
@@ -67,9 +69,13 @@ EXPECTED = {
     "v_project_shopping": {"SELECT"},
 }
 # Column-scoped grants (information_schema.COLUMN_PRIVILEGES); the table-level
-# matrix above stays exact, so these never widen to whole-table UPDATE.
+# matrix above stays exact, so hardware_models updates never widen to the full table.
 EXPECTED_COLUMNS = {
     ("hardware_models", "arch"): {"UPDATE"},
+    ("hardware_models", "make"): {"UPDATE"},
+    ("hardware_models", "model"): {"UPDATE"},
+    ("hardware_models", "hw_type"): {"UPDATE"},
+    ("hardware_models", "notes"): {"UPDATE"},
     ("hardware_models", "source_id"): {"UPDATE"},
     ("hardware_models", "asserted_kind"): {"UPDATE"},
     ("hardware_models", "asserted_at"): {"UPDATE"},
@@ -191,15 +197,16 @@ def main():
             actual_columns.setdefault((table, column), set()).add(privilege.upper())
         assert actual_columns == EXPECTED_COLUMNS, f"column grant matrix mismatch: {actual_columns!r}"
         cur.execute(
-            "UPDATE `hardware_models` SET `arch`=`arch`, `source_id`=`source_id`, "
+            "UPDATE `hardware_models` SET `arch`=`arch`, `make`=`make`, `model`=`model`, "
+            "`hw_type`=`hw_type`, `notes`=`notes`, `source_id`=`source_id`, "
             "`asserted_kind`=`asserted_kind`, `asserted_at`=`asserted_at` WHERE 1=0"
         )
         try:
-            cur.execute("UPDATE `hardware_models` SET `make`=`make` WHERE 1=0")
+            cur.execute("UPDATE `hardware_models` SET `product_type_id`=`product_type_id` WHERE 1=0")
         except pymysql.err.OperationalError as exc:
-            assert exc.args[0] == 1143, f"unexpected hardware_models.make denial: {exc!r}"
+            assert exc.args[0] == 1143, f"unexpected hardware_models.product_type_id denial: {exc!r}"
         else:
-            raise AssertionError("dashboard must not UPDATE hardware_models beyond arch + provenance")
+            raise AssertionError("dashboard must not UPDATE hardware_models.product_type_id")
         print(f"  ok  exact column grant matrix ({len(EXPECTED_COLUMNS)} columns); other columns denied")
 
         cur.execute(
@@ -228,7 +235,9 @@ def main():
                 db.begin()
                 try:
                     cur.execute(f"INSERT INTO `{table}` (id) VALUES (NULL)")
-                except pymysql.err.OperationalError as exc:
+                # Only a privilege denial matters; a bare row may also trip
+                # NOT NULL or a catalogue trigger (IntegrityError).
+                except pymysql.err.MySQLError as exc:
                     assert exc.args[0] != 1142, f"INSERT privilege denied on {table}: {exc!r}"
                 finally:
                     db.rollback()

@@ -13,8 +13,8 @@
 <header>
 <div class="eyebrow">SolariNet · System of Record</div>
 <h1>Inventory API Reference</h1>
-<p class="lede">HTTP contract for reading the inventory System of Record through the authenticated SolariNet dashboard API. This guide covers list pagination, filters, response metadata, and compatibility behavior.</p>
-<p class="meta">Revision 1.1 · 2026-10-21 · Source: integration candidate `integrate/stability-20261020` · Internal</p>
+<p class="lede">HTTP contract for reading and editing the inventory System of Record through the authenticated SolariNet dashboard API. This guide covers list pagination, filters, catalog writes, response metadata, and compatibility behavior.</p>
+<p class="meta">Revision 1.2 · 2026-11-03 · Inventory product catalog API added · Internal</p>
 </header>
 
 <div class="diagram" role="img" aria-label="Dashboard API reads paged inventory data from the SoR">
@@ -75,9 +75,23 @@
 </tbody></table>
 <p>All list filters and pagination values are handled by the server. Do not interpolate user-provided values into SQL or treat a returned row as authorization to mutate it; write operations have separate authorization and CSRF checks.</p>
 
-<h2>5. Verification scope</h2>
+<h2>5. Product catalog</h2>
+<p>Product types describe reusable products; each physical or software instance remains a separate <code>hardware_units</code> item. Product types and barcode writes require an operator or admin session, same-origin request provenance, and the session-bound <code>X-Solari-CSRF</code> token. Reads require a session.</p>
+<table><thead><tr><th>Method and path</th><th>Behavior</th></tr></thead><tbody>
+<tr><td><code>GET /api/inventory/product-types?q=&amp;kind=&amp;limit=&amp;offset=</code></td><td>Search live types by name, brand, model, or category; optional kind filter; paged response.</td></tr>
+<tr><td><code>GET /api/inventory/product-types/{id}</code></td><td>Read one live product type.</td></tr>
+<tr><td><code>POST /api/inventory/product-types</code></td><td>Create a product type. Optional <code>barcode</code> object attaches a code in the same transaction.</td></tr>
+<tr><td><code>PUT /api/inventory/product-types/{id}</code></td><td>Partial update of kind, name, brand, model, category, specs, notes, or image URL. Optional <code>updated_at</code> detects stale edits.</td></tr>
+<tr><td><code>DELETE /api/inventory/product-types/{id}</code></td><td>Soft-delete a type; existing references remain and deleted types leave pick lists.</td></tr>
+<tr><td><code>GET /api/inventory/product-barcodes?code=</code></td><td>Exact normalized lookup only. It returns a prefill candidate and never creates a type or item or calls an external service.</td></tr>
+<tr><td><code>POST /api/inventory/product-barcodes</code></td><td>Attach <code>product_type_id</code>, <code>code</code>, and optional <code>code_type</code> (<code>gtin</code>, <code>sku</code>, or <code>other</code>).</td></tr>
+<tr><td><code>DELETE /api/inventory/product-barcodes/{id}</code></td><td>Soft-delete a code.</td></tr>
+</tbody></table>
+<p>Names are required and trimmed. Product type kinds are <code>hardware</code>, <code>peripheral</code>, <code>component</code>, <code>software</code>, <code>accessory</code>, <code>consumable</code>, and <code>other</code>. Secret-like keys such as password, token, credential, or licence key are rejected recursively inside <code>specs</code>; licence data must be a non-secret reference. Barcode codes are upper-cased with whitespace removed and unique while live. Declared GTIN codes must have a supported length and valid check digit. Validation uses <code>bad_request</code> (400), missing rows use <code>not_found</code> (404), duplicate codes use <code>duplicate_barcode</code> (409), and optimistic update conflicts use <code>conflict</code> (409).</p>
+
+<h2>6. Verification scope</h2>
 <p>The candidate’s HTTP integration test exercises list limits, page metadata, non-overlapping page boundaries, flat location pages, empty allocation pages, invalid zero limits, and the legacy aggregate’s 413 boundary against a disposable MariaDB instance. The browser adapter test traverses a two-page collection, checks stale-data behavior, and rejects over-limit and changing-total fixtures. Changed totals or duplicate IDs across pages fail the load and require a retry; page requests are not a database transaction, so same-count field updates may not be detected.</p>
 
-<footer class="foot">SolariNet · Inventory API Reference · Revision 1.1 · Generated as a single self-contained HTML file; print stylesheet is part of this document.</footer>
+<footer class="foot">SolariNet · Inventory API Reference · Revision 1.2 · Generated as a single self-contained HTML file; print stylesheet is part of this document.</footer>
 </body>
 </html>

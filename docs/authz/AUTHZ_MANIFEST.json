@@ -1065,6 +1065,54 @@
       "pattern": "/api/stream",
       "csrf": "none",
       "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/product-types",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/product-types/{id}",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/product-types",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "PUT",
+      "pattern": "/api/inventory/product-types/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/product-types/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/inventory/product-barcodes",
+      "csrf": "none",
+      "roleRequired": "session"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/inventory/product-barcodes",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/inventory/product-barcodes/{id}",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
     }
   ],
   "ctlVerbs": [
