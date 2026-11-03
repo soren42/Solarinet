@@ -202,10 +202,10 @@ def refresh_secondary(c, target, desired):
     helper = c.get("dns", "secondary_refresh_helper",
                    fallback="/usr/local/libexec/solari-dns-secondary-refresh")
     primary = c.get("dns", "primary_address", fallback="10.0.0.20")
-    primary_config = c.get("dns", "primary_config", fallback="/etc/bind/named.conf.akoria")
+    primary_config = c.get("dns", "primary_config", fallback="/etc/bind/solarinet-current/named.conf.managed")
     additional = [value.strip() for value in c.get(
         "dns", "primary_additional_configs",
-        fallback="/etc/bind/named.conf.bare,/etc/bind/named.conf.local,/etc/bind/named.conf.rpz"
+        fallback="/etc/bind/named.conf.rpz"
     ).split(",") if value.strip()]
     timeout = c.getint("dns", "secondary_refresh_timeout_sec", fallback=150)
     if not 30 <= timeout <= 600:

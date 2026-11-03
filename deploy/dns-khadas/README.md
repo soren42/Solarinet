@@ -7,11 +7,14 @@ authoritative-only BIND secondary. The installed configuration covers
 permits queries from the private `10.0.0.0/8` network, and transfers zones from
 primary `xenon` (`10.0.0.20`). It does not own or modify the CA files or service.
 
-The secondary declarations merge Xenon's `named.conf.akoria`,
-`named.conf.bare`, `named.conf.local`, and `named.conf.rpz`. Only `primary` and legacy `master`
-zone declarations are copied; forwarding and secondary declarations are
-ignored. Xenon watches all four fragments and the RPZ zone data file, then
-pushes validated declarations to chlorine. Before updating the secondary, the
+The secondary declarations merge the active DNS release's
+`/etc/bind/solarinet-current/named.conf.managed` (all SoR-generated forward,
+reverse and single-label zones since the F-04 release cutover) and
+`named.conf.rpz`. The pre-cutover `named.conf.akoria` and `named.conf.bare`
+files are no longer included by BIND and must not be used as inputs. Only
+`primary` and legacy `master` zone declarations are copied; forwarding and
+secondary declarations are ignored. Xenon watches the release symlink, the RPZ
+fragment and the RPZ zone data file, then pushes validated declarations to chlorine. Before updating the secondary, the
 refresh compares its generated zone set with the include-expanded primary-zone
 inventory from `named-checkconf -p`; it keeps the expanded output in memory and
 does not log it. It then verifies SOA serial parity for every generated zone on
@@ -53,7 +56,7 @@ SSH administration uses normal host-key verification.
 The Khadas secondary and its primary refresh are installed. For a fresh
 installation, configure transfer/notify access on Xenon for every zone before
 starting the refresh. Keep `named.conf.local`'s RPZ declaration as one include
-of `named.conf.rpz`, and generate `named.conf.bare` with current secondary
+of `named.conf.rpz`, and let the DNS release (`solarinet-dns-release`) generate the managed zone list with current secondary
 targets. Validate the full primary config before reconfiguring BIND:
 
 ```sh
@@ -65,9 +68,7 @@ the privileged atomic zone-list updater, and the refreshed primary watcher as
 shown below:
 
 ```sh
-python3 deploy/dns-khadas/gen-secondary.py /etc/bind/named.conf.akoria /tmp/zones.conf \
-  --additional-config /etc/bind/named.conf.bare \
-  --additional-config /etc/bind/named.conf.local \
+python3 deploy/dns-khadas/gen-secondary.py /etc/bind/solarinet-current/named.conf.managed /tmp/zones.conf \
   --additional-config /etc/bind/named.conf.rpz
 ssh jason@chlorine 'sudo -n apt-get update && sudo -n apt-get install -y bind9'
 scp deploy/dns-khadas/named.conf deploy/dns-khadas/options.conf /tmp/zones.conf \
@@ -86,7 +87,7 @@ ssh jason@xenon 'sudo -n sh /tmp/install-primary.sh'
 Run `named-checkconf` before starting and confirm the native package service is
 not left enabled. The local `systemd-resolved` stub remains on loopback; BIND is
 bound to the Khadas LAN address only. Xenon's path unit watches
-`/etc/bind/named.conf.akoria`, `.bare`, `.local`, and `.rpz`; each primary zone-list change triggers a validated
+`/etc/bind/solarinet-current`, `named.conf.local` and `named.conf.rpz`; each primary zone-list change triggers a validated
 atomic update on chlorine, followed by serial checks on all configured zones.
 
 ## Verify
