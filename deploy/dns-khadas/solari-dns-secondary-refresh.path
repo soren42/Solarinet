@@ -2,7 +2,7 @@
 Description=Watch Xenon's generated primary zone list
 
 [Path]
-PathChanged=/etc/bind/solarinet-current
+PathChanged=/etc/bind
 PathChanged=/etc/bind/named.conf.local
 PathChanged=/etc/bind/named.conf.rpz
 PathChanged=/etc/bind/zones/db.rpz.akoria

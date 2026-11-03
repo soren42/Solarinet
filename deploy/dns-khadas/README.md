@@ -13,7 +13,7 @@ reverse and single-label zones since the F-04 release cutover) and
 `named.conf.rpz`. The pre-cutover `named.conf.akoria` and `named.conf.bare`
 files are no longer included by BIND and must not be used as inputs. Only
 `primary` and legacy `master` zone declarations are copied; forwarding and
-secondary declarations are ignored. Xenon watches the release symlink, the RPZ
+secondary declarations are ignored. Xenon watches `/etc/bind` (where the release symlink is swapped), the RPZ
 fragment and the RPZ zone data file, then pushes validated declarations to chlorine. Before updating the secondary, the
 refresh compares its generated zone set with the include-expanded primary-zone
 inventory from `named-checkconf -p`; it keeps the expanded output in memory and
@@ -87,7 +87,7 @@ ssh jason@xenon 'sudo -n sh /tmp/install-primary.sh'
 Run `named-checkconf` before starting and confirm the native package service is
 not left enabled. The local `systemd-resolved` stub remains on loopback; BIND is
 bound to the Khadas LAN address only. Xenon's path unit watches
-`/etc/bind/solarinet-current`, `named.conf.local` and `named.conf.rpz`; each primary zone-list change triggers a validated
+`/etc/bind` (the release symlink swap is a rename in that directory), `named.conf.local` and `named.conf.rpz`; each primary zone-list change triggers a validated
 atomic update on chlorine, followed by serial checks on all configured zones.
 
 ## Verify
