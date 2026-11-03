@@ -213,7 +213,7 @@ async function main() {
 
   try {
     sql(`INSERT INTO locations (name,loc_type,source_id,asserted_kind,asserted_at)
-         VALUES (${quote(locationName)},'site',${Number(manualSource)},'human',NOW())`);
+         VALUES (${quote(locationName)},'property',${Number(manualSource)},'human',NOW())`);
     locationId = Number(sql(`SELECT id FROM locations WHERE name=${quote(locationName)} AND source_id=${Number(manualSource)} ORDER BY id DESC LIMIT 1`));
     assert(locationId > 0, 'scratch SoR must contain the seeded location');
 

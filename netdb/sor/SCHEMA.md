@@ -47,7 +47,7 @@ Physical things link to the hardware/location axis; compute things link to an
 OS; everything can link to an owner:
 
 ```
-                         locations (self-tree: site>room>rack>position)
+                         locations (self-tree: property>floor>room>section>storage_unit)
                               ▲
                               │
  hardware_models ◄── hardware_units ◄──┐
@@ -129,6 +129,12 @@ supports both user membership and AD-style nested groups
   monitoring `node.id`). This is what makes bidirectional sync idempotent.
 
 ---
+
+### Locations and storage units
+
+Locations use `property`, `floor`, `room`, `section`, and `storage_unit`. Roots must be properties; the ordinary transitions are property→floor→room→section. Storage units may sit under any level and may contain other storage units. The database enforces these rules and rejects parent cycles.
+
+Live sibling names are unique, including at the root. Soft-deleted rows do not claim a name. `container_types` is an editable, provenance-tracked soft-delete catalog; `locations.container_type_id` is optional and retained when a type is retired. `assigned_project_id` is an optional project assignment cleared when its project is hard-deleted.
 
 ## 2. Provenance & audit strategy
 
@@ -230,7 +236,7 @@ serial policy stays in the generator. DNS is now a rendered view of the SoR.
 | # | Table | Purpose |
 |---|---|---|
 | 1 | `sources` | Registry of systems allowed to assert facts (provenance targets); pre-seeded |
-| 2 | `locations` | Physical hierarchy site/room/rack/position (self-referencing tree) |
+| 2 | `locations` | Physical hierarchy property/floor/room/section/storage_unit (self-referencing tree) |
 | 3 | `hardware_models` | Product catalog: make + model + device class + CPU `arch` (031; NULL = unknown) |
 | 4 | `hardware_units` | Individual serial-numbered units of a model, placed at a location |
 | 5 | `operating_systems` | OS catalog (family, name, version, EOL) |

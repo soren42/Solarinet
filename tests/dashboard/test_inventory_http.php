@@ -87,7 +87,7 @@ try {
     $marker=$db->query("SELECT marker FROM _solarinet_test_scratch WHERE marker='solarinet-ci-scratch-v1'")->fetchColumn(); check($marker==='solarinet-ci-scratch-v1','disposable scratch SoR marker is missing');
     check(getenv('SOLARI_TEST_SOR_DB') === '1' && in_array($host,['127.0.0.1','localhost'],true) && preg_match('/^solarinet_[a-z0-9_]+$/',$name) && ctype_digit($port), 'scratch SoR guard failed');
     $manual=(int)$db->query("SELECT id FROM sources WHERE slug='manual'")->fetchColumn(); check($manual>0,'manual source missing');
-    $db->prepare("INSERT INTO locations(name,loc_type,source_id,asserted_kind,asserted_at) VALUES(?,'site',?,'human',NOW())")->execute([$loc,$manual]); $ids['location']=(int)$db->lastInsertId();
+    $db->prepare("INSERT INTO locations(name,loc_type,source_id,asserted_kind,asserted_at) VALUES(?,'property',?,'human',NOW())")->execute([$loc,$manual]); $ids['location']=(int)$db->lastInsertId();
     $db->prepare("INSERT INTO hardware_models(make,model,hw_type,notes,source_id,asserted_kind,asserted_at) VALUES(?,?,'switch','HTTP fixture',?,'human',NOW())")->execute([$make,$model,$manual]); $ids['model']=(int)$db->lastInsertId();
     $db->prepare("INSERT INTO hardware_units(model_id,serial,asset_tag,location_id,source_id,asserted_kind,asserted_at) VALUES(?,?,?,?,?,'human',NOW())")->execute([$ids['model'],$serial,$tag,$ids['location'],$manual]); $ids['unit']=(int)$db->lastInsertId();
     $db->prepare("INSERT INTO barcodes(code,code_type,symbology,subject_table,subject_id,source_id,asserted_kind,asserted_at) VALUES(?,'asset_tag','code128','hardware_units',?,?,'human',NOW())")->execute([$tag,$ids['unit'],$manual]); $ids['barcode']=(int)$db->lastInsertId();
