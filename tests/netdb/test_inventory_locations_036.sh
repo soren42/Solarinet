@@ -39,7 +39,9 @@ q "INSERT INTO locations(name,loc_type,code,source_id,asserted_kind,asserted_at)
 refuse "$M" '036 preflight: duplicate location codes'; q "DELETE FROM locations WHERE name IN ('Code A','Code B')"
 q "SET FOREIGN_KEY_CHECKS=0; INSERT INTO locations(name,loc_type,parent_id,source_id) VALUES('Orphan','site',4294967295,$SRC)"
 refuse "$M" '036 preflight: orphan location parent'; q "DELETE FROM locations WHERE name='Orphan'; SET FOREIGN_KEY_CHECKS=1"
+q "UPDATE locations SET updated_at='2020-01-02 03:04:05' WHERE id=$RACK"
 apply "$M"; ok "036 clean apply after five preflight refusal checks"
+eq "type remap preserves operator updated_at" "SELECT updated_at FROM locations WHERE id=$RACK" "2020-01-02 03:04:05"
 eq "legacy root maps to property" "SELECT loc_type FROM locations WHERE id=$SITE" property
 eq "soft-deleted root name key is NULL" "SELECT CONCAT(loc_type,':',location_name_key IS NULL) FROM locations WHERE id=$DELETED" property:1
 eq "legacy rack and container map to storage_unit" "SELECT GROUP_CONCAT(loc_type ORDER BY id) FROM locations WHERE name IN ('Rack','Bag')" storage_unit,storage_unit
@@ -62,6 +64,7 @@ q "UPDATE locations SET parent_id=$BAG WHERE id=$SITE" >"$ERR" 2>&1 && die "trig
 /usr/bin/grep -q 'location parent cycle' "$ERR" || die "wrong cycle trigger result"; : >"$ERR"; ok "trigger rejects ancestor cycles"
 q "DELETE FROM locations WHERE name IN ('New Section','Storage at property','Nested storage'); DELETE FROM locations WHERE id=$NR; DELETE FROM locations WHERE id=$NF"
 apply "$D"
+eq "rollback preserves operator updated_at" "SELECT updated_at FROM locations WHERE id=$RACK" "2020-01-02 03:04:05"
 eq "rollback restores original enum label" "SELECT loc_type FROM locations WHERE id=$SITE" site
 eq "rollback retains original deleted duplicate" "SELECT COUNT(*) FROM locations WHERE id=$DELETED AND deleted_at IS NOT NULL" 1
 eq "rollback removes 036-only schema and triggers" "SELECT (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='container_types')+(SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME IN ('trg_locations_nonzero_id','trg_locations_level_ins','trg_locations_level_upd'))" 0

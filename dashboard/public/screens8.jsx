@@ -99,7 +99,7 @@
       id: l.id,
       parentId: l.parentId !== undefined ? l.parentId : (l.parent_id !== undefined ? l.parent_id : null),
       name: l.name, code: l.code != null ? l.code : null,
-      locType: l.locType || l.loc_type || "bin",
+      locType: l.locType || l.loc_type || "storage_unit",
     };
   }
   function normModel(m) {

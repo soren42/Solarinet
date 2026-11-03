@@ -79,7 +79,7 @@
           parent_id: n.parentId != null ? n.parentId : (n.parent_id != null ? n.parent_id : null),
           name: n.name,
           code: n.code != null ? n.code : null,
-          loc_type: n.locType || n.loc_type || "bin",
+          loc_type: n.locType || n.loc_type || "storage_unit",
         });
         if (n.children && n.children.length) walk(n.children);
       });

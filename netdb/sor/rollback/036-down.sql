@@ -15,7 +15,7 @@ BEGIN
   IF (SELECT COUNT(*) FROM locations) <> (SELECT COUNT(*) FROM `_solarinet_m036_location_baseline`)
      OR EXISTS (
        SELECT 1 FROM locations l LEFT JOIN `_solarinet_m036_location_baseline` b ON b.id=l.id
-        WHERE b.id IS NULL OR l.parent_id<>b.parent_id AND NOT (l.parent_id IS NULL AND b.parent_id IS NULL)
+        WHERE b.id IS NULL OR NOT (l.parent_id <=> b.parent_id)
            OR NOT (l.name <=> b.name) OR NOT (l.code <=> b.code)
            OR NOT (l.notes <=> b.notes) OR NOT (l.deleted_at <=> b.deleted_at)
            OR NOT (l.loc_type <=> b.expected_type)
@@ -52,7 +52,7 @@ ALTER TABLE locations
   ADD KEY idx_locations_parent_name (parent_id,name),
   MODIFY loc_type ENUM('property','floor','room','section','storage_unit','site','building','rack','shelf','position','zone','cabinet','drawer','tray','bin','container') NOT NULL;
 UPDATE locations l JOIN `_solarinet_m036_location_baseline` b ON b.id=l.id
-   SET l.loc_type=b.original_type;
+   SET l.loc_type=b.original_type, l.updated_at=l.updated_at;
 ALTER TABLE locations
   MODIFY loc_type ENUM('site','building','floor','room','rack','shelf','position','zone','cabinet','drawer','tray','bin','container') NOT NULL;
 DROP TABLE container_types;

@@ -109,7 +109,8 @@ ALTER TABLE locations MODIFY loc_type ENUM('site','building','property','floor',
 UPDATE locations SET loc_type=CASE
   WHEN loc_type IN ('site','building') THEN 'property'
   WHEN loc_type IN ('floor','room') THEN loc_type
-  ELSE 'storage_unit' END;
+  ELSE 'storage_unit' END,
+  updated_at=updated_at;  -- a type remap is not an operator edit
 ALTER TABLE locations MODIFY loc_type ENUM('property','floor','room','section','storage_unit') NOT NULL;
 UPDATE `_solarinet_m036_location_baseline` b JOIN locations l ON l.id=b.id
    SET b.expected_updated_at=l.updated_at;
@@ -162,8 +163,7 @@ BEGIN
     IF NEW.loc_type <> 'property' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='location root must be property'; END IF;
   ELSE
     SELECT loc_type INTO parent_type FROM locations WHERE id=NEW.parent_id;
-    IF NEW.loc_type='storage_unit' THEN SET parent_type=parent_type;
-    ELSEIF NOT ((parent_type='property' AND NEW.loc_type='floor') OR (parent_type='floor' AND NEW.loc_type='room') OR (parent_type='room' AND NEW.loc_type='section')) THEN
+    IF NEW.loc_type<>'storage_unit' AND NOT ((parent_type='property' AND NEW.loc_type='floor') OR (parent_type='floor' AND NEW.loc_type='room') OR (parent_type='room' AND NEW.loc_type='section')) THEN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='invalid location parent/level transition';
     END IF;
   END IF;
