@@ -849,6 +849,9 @@
   // =====================================================================
   // assemble window.SOLARI live (parallel fetch of the §6/§11.2 reads)
   // =====================================================================
+  // The pending API.refresh() snapshot, shared by overlapping poll ticks.
+  var refreshInFlight = null;
+
   function loadLive() {
     // These read-only integrations fan out to independent upstreams. Do not let
     // their latency delay the core fleet snapshot and first rendered view.
@@ -1068,7 +1071,9 @@
             forgejo: Object.assign({ label: "Forgejo" }, values[0].freshness),
             certificates: Object.assign({ label: "Certificates" }, values[1].freshness),
           });
-          window.dispatchEvent(new Event("solari:data-updated"));
+          if (typeof window.dispatchEvent === "function" && typeof Event === "function") {
+            window.dispatchEvent(new Event("solari:data-updated"));
+          }
         };
         if (window.solariReady && typeof window.solariReady.then === "function") {
           window.solariReady.then(applyIntegrations, applyIntegrations);
@@ -1376,10 +1381,15 @@
     // refresh the whole model in place (re-runs loadLive, keeps fmt/api). Mutates
     // window.SOLARI in place so captured `const S = window.SOLARI` refs stay live.
     refresh: function () {
+      // One refresh at a time: a poll tick that lands while the previous
+      // snapshot is still loading joins it instead of stacking another full
+      // fan-out behind a slow endpoint (the queue grew without bound before).
+      if (refreshInFlight) return refreshInFlight;
       // lastAttemptAt is the core snapshot's "last tried" stamp (lastLiveAt is
       // "last succeeded"); the per-page freshness badge shows both.
       var attemptedAt = Date.now();
-      return loadLive().then(function (live) {
+      var settle = function () { refreshInFlight = null; };
+      refreshInFlight = loadLive().then(function (live) {
         Object.keys(live).forEach(function (k) {
           if (k !== "git" && k !== "ca" && k !== "freshness") window.SOLARI[k] = live[k];
         });
@@ -1402,6 +1412,8 @@
         }
         throw err;
       });
+      refreshInFlight.then(settle, settle);
+      return refreshInFlight;
     },
 
     // ---- read-only integrations (Git / CA) ----
