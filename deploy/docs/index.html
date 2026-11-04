@@ -8,19 +8,19 @@
   :root{
     --bg:#0b0e14; --bg2:#0d1119; --ink:#e8edf5; --mut:#8593a8; --line:rgba(255,255,255,.09);
     --card:rgba(255,255,255,.028); --card-h:rgba(255,255,255,.06); --accent:#2dd4bf;
-    --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa;
+    --c-qs:#fbbf24; --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa;
   }
   @media (prefers-color-scheme:light){
     :root{ --bg:#f3f6fb; --bg2:#eaeff7; --ink:#141a24; --mut:#5a6a80; --line:rgba(15,25,40,.10);
       --card:rgba(15,25,40,.02); --card-h:rgba(15,25,40,.045); --accent:#0d9488;
-      --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; }
+      --c-qs:#b45309; --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; }
   }
   :root[data-theme="light"]{ --bg:#f3f6fb; --bg2:#eaeff7; --ink:#141a24; --mut:#5a6a80; --line:rgba(15,25,40,.10);
     --card:rgba(15,25,40,.02); --card-h:rgba(15,25,40,.045); --accent:#0d9488;
-    --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; }
+    --c-qs:#b45309; --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; }
   :root[data-theme="dark"]{ --bg:#0b0e14; --bg2:#0d1119; --ink:#e8edf5; --mut:#8593a8; --line:rgba(255,255,255,.09);
     --card:rgba(255,255,255,.028); --card-h:rgba(255,255,255,.06); --accent:#2dd4bf;
-    --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa; }
+    --c-qs:#fbbf24; --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa; }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:radial-gradient(120% 90% at 50% -10%,var(--bg2),var(--bg));color:var(--ink);min-height:100vh;
     font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;
@@ -77,7 +77,7 @@
     <div class="brand">
       <div class="eyebrow"><a href="/">akoria.net</a> / docs</div>
       <h1>SolariNet manuals<span class="dot">.</span></h1>
-      <p>Reference documentation for the SolariNet monitoring, inventory and provisioning platform. Each manual is a single self-contained page that works offline, with a matching US Letter PDF for printing.</p>
+      <p>Documentation for the SolariNet monitoring, inventory and provisioning platform, from a picture-led quick start for the household to full reference manuals. Each manual is a single self-contained page that works offline, with a matching US Letter PDF for printing.</p>
     </div>
     <button class="toggle" id="tg" aria-label="Toggle theme">◐ theme</button>
   </header>
@@ -85,6 +85,25 @@
   <section>
     <div class="cat">Manuals</div>
     <div class="manuals">
+
+      <article class="man" style="--ac:var(--c-qs)">
+        <div class="top">
+          <span class="ico"><svg viewBox="0 0 24 24"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/></svg></span>
+          <div><div class="kicker">Everyone</div><h2>Quick Start Guide</h2></div>
+        </div>
+        <p class="desc">The home network explained in pictures. Numbered illustrated steps for the everyday tasks, no computer background needed.</p>
+        <ul>
+          <li>Sign in, check the house is fine, read an alert</li>
+          <li>The wall panel and stopping its alarm</li>
+          <li>Install, adopt and label a machine</li>
+          <li>Trust the house certificate, look after your account</li>
+        </ul>
+        <div class="meta" data-meta="SolariNet_Quick_Start_Guide"></div>
+        <div class="actions">
+          <a class="btn primary" href="SolariNet_Quick_Start_Guide.html"><svg viewBox="0 0 24 24"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="2.8"/></svg>Read online</a>
+          <a class="btn" href="SolariNet_Quick_Start_Guide.pdf"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>PDF</a>
+        </div>
+      </article>
 
       <article class="man" style="--ac:var(--c-user)">
         <div class="top">
