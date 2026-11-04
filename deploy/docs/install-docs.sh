@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 DOCROOT="${1:-/var/www/html}"
 DEST="$DOCROOT/docs"
-MANUALS=(SolariNet_User_Manual SolariNet_Developer_Manual SolariNet_API_Expansion_Manual)
+MANUALS=(SolariNet_Quick_Start_Guide SolariNet_User_Manual SolariNet_Developer_Manual SolariNet_API_Expansion_Manual)
 
 [[ -d "$DOCROOT" ]] || { echo "install-docs: no docroot $DOCROOT" >&2; exit 2; }
 for m in "${MANUALS[@]}"; do

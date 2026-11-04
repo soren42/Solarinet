@@ -1,7 +1,7 @@
 # SolariNet documentation portal
 
-`index.html` is the portal page for the three system manuals in
-`docs/manuals/` (User, Developer, API & Expansion). Each manual is one
+`index.html` is the portal page for the four system manuals in
+`docs/manuals/` (Quick Start, User, Developer, API & Expansion). Each manual is one
 self-contained HTML file plus a US Letter PDF rendered with
 `tools/docs/render-pdf.sh`.
 
