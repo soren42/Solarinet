@@ -119,6 +119,14 @@
       return () => window.removeEventListener("keydown", onKey);
     }, []);
 
+    // Independent boot integrations patch the live model after the core fleet
+    // view has rendered. Repaint consumers without waiting for the next poll.
+    useEffect(() => {
+      const onDataUpdated = () => force((x) => x + 1);
+      window.addEventListener("solari:data-updated", onDataUpdated);
+      return () => window.removeEventListener("solari:data-updated", onDataUpdated);
+    }, []);
+
     // Poll the live model. A failed refresh marks retained real data stale and
     // must re-render the warning immediately.
     useEffect(() => {

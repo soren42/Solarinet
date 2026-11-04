@@ -850,6 +850,12 @@
   // assemble window.SOLARI live (parallel fetch of the §6/§11.2 reads)
   // =====================================================================
   function loadLive() {
+    // These read-only integrations fan out to independent upstreams. Do not let
+    // their latency delay the core fleet snapshot and first rendered view.
+    var integrationReads = Promise.all([
+      getOptionalJSON("forgejo", EP.forgejo, null),
+      getOptionalJSON("certificates", EP.ca, null),
+    ]);
     return Promise.all([
       getJSON(EP.summary),
       getJSON(EP.nodes),
@@ -880,8 +886,8 @@
       getOptionalJSON("maintenance", EP.maintenance + "?status=all", []),
       // Git (Forgejo) + CA/PKI read-only integrations — tolerate absence so a
       // missing token / unreachable CA never forces the whole dashboard offline.
-      getOptionalJSON("forgejo", EP.forgejo, null),
-      getOptionalJSON("certificates", EP.ca, null),
+      Promise.resolve({ value: null, freshness: { state: "unknown", lastSuccess: null, lastAttempt: Date.now() } }),
+      Promise.resolve({ value: null, freshness: { state: "unknown", lastSuccess: null, lastAttempt: Date.now() } }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -904,8 +910,8 @@
       var opieW = A(res[14].value);
       var maintW = A(res[16].value);
       // Git (Forgejo) + CA/PKI — mapped (null-tolerant) integration payloads.
-      var git = mapForgejo(res[17].value);
-      var ca = mapCa(res[18].value);
+      var git = mapForgejo(null);
+      var ca = mapCa(null);
       // inventory — validated paginated collection reads, tolerant of API absence.
       var invResult = res[15].value;
       var invW = invResult && typeof invResult === "object" ? invResult : {};
@@ -1052,6 +1058,24 @@
         source: "live",
         api: API,
       };
+      integrationReads.then(function (values) {
+        var applyIntegrations = function () {
+          var target = window.SOLARI;
+          if (!target || target.source === "offline") return;
+          target.git = mapForgejo(values[0].value);
+          target.ca = mapCa(values[1].value);
+          target.freshness = Object.assign({}, target.freshness || {}, {
+            forgejo: Object.assign({ label: "Forgejo" }, values[0].freshness),
+            certificates: Object.assign({ label: "Certificates" }, values[1].freshness),
+          });
+          window.dispatchEvent(new Event("solari:data-updated"));
+        };
+        if (window.solariReady && typeof window.solariReady.then === "function") {
+          window.solariReady.then(applyIntegrations, applyIntegrations);
+        } else {
+          applyIntegrations();
+        }
+      });
       return live;
     });
   }
@@ -1356,7 +1380,14 @@
       // "last succeeded"); the per-page freshness badge shows both.
       var attemptedAt = Date.now();
       return loadLive().then(function (live) {
-        Object.keys(live).forEach(function (k) { window.SOLARI[k] = live[k]; });
+        Object.keys(live).forEach(function (k) {
+          if (k !== "git" && k !== "ca" && k !== "freshness") window.SOLARI[k] = live[k];
+        });
+        var previousFreshness = window.SOLARI.freshness || {};
+        window.SOLARI.freshness = Object.assign({}, live.freshness, {
+          forgejo: previousFreshness.forgejo,
+          certificates: previousFreshness.certificates,
+        });
         window.SOLARI.lastAttemptAt = attemptedAt;
         window.SOLARI.source = "live";
         window.SOLARI.lastLiveAt = Date.now();

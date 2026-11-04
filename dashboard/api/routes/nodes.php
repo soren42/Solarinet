@@ -23,29 +23,30 @@ return static function (Router $router): void {
         );
 
         // Recent sparkline history per node so the fleet/heat/card views render
-        // trend graphs (Sparkline auto-scales, so raw hostHistory values are fine
-        // for shape). One windowed query grabs the last N samples per node.
+        // trend graphs. Bound each indexed lookup at the source: the previous
+        // ROW_NUMBER() query read and ranked every retained history row before
+        // discarding all but 40 samples per node.
         $spark = [];
-        $hrows = Db::rows(
-            'SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct, netKbps
-               FROM (
-                 SELECT nodeId, cpuAvgMilli, ramUsedKb, diskMinFreePct, netKbps, sampledAt,
-                        ROW_NUMBER() OVER (PARTITION BY nodeId ORDER BY sampledAt DESC) AS rn
+        foreach ($rows as $nodeRow) {
+            $id = Coerce::id($nodeRow['nodeId']);
+            $samples = Db::rows(
+                'SELECT cpuAvgMilli, ramUsedKb, diskMinFreePct, netKbps
                    FROM hostHistory
-               ) t
-              WHERE rn <= :n
-              ORDER BY nodeId, sampledAt ASC',
-            [':n' => 40]
-        );
-        foreach ($hrows as $h) {
-            $id = Coerce::id($h['nodeId']);
-            if (!isset($spark[$id])) {
-                $spark[$id] = ['cpu' => [], 'ram' => [], 'net' => [], 'disk' => []];
+                  WHERE nodeId = :nodeId
+                  ORDER BY sampledAt DESC
+                  LIMIT 40',
+                [':nodeId' => $nodeRow['nodeId']]
+            );
+            // The index produces newest-first; sparklines consume oldest-first.
+            foreach (array_reverse($samples) as $h) {
+                if (!isset($spark[$id])) {
+                    $spark[$id] = ['cpu' => [], 'ram' => [], 'net' => [], 'disk' => []];
+                }
+                $spark[$id]['cpu'][]  = Coerce::int($h['cpuAvgMilli']);
+                $spark[$id]['ram'][]  = Coerce::int($h['ramUsedKb']);
+                $spark[$id]['disk'][] = max(0, 100 - Coerce::int($h['diskMinFreePct']));
+                $spark[$id]['net'][]  = Coerce::int($h['netKbps']);
             }
-            $spark[$id]['cpu'][]  = Coerce::int($h['cpuAvgMilli']);
-            $spark[$id]['ram'][]  = Coerce::int($h['ramUsedKb']);
-            $spark[$id]['disk'][] = max(0, 100 - Coerce::int($h['diskMinFreePct']));
-            $spark[$id]['net'][]  = Coerce::int($h['netKbps']);
         }
 
         $out = array_map(static function (array $r) use ($spark): array {

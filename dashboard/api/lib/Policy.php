@@ -106,6 +106,14 @@ final class Policy
         // paths, but enforcing here keeps the policy self-contained and also
         // covers authenticated writes under /api/auth/* (e.g. logout).
         Auth::requireSession();
+        // PHP's file-backed session handler holds an exclusive lock until the
+        // request ends. Authenticated GETs are read-only, so release that lock
+        // before a database query or upstream call can occupy the worker. Keep
+        // writes open because logout and session-bound CSRF handling may mutate
+        // session state.
+        if (in_array(strtoupper($method), ['GET', 'HEAD', 'OPTIONS'], true)) {
+            Auth::closeReadSession();
+        }
 
         // Cookie-auth state-changing requests must prove same-origin + token.
         if (self::isWrite($method) && !self::isCsrfBridged($policy, Auth::current())) {

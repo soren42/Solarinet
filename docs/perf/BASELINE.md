@@ -45,9 +45,12 @@ Read-only `EXPLAIN FORMAT=JSON` on `xenon` before the query change showed the
 windowed query scanning and sorting all **3,630,498** rows in `hostHistory`,
 with estimated cost **3,225.56**. The bounded per-node query used the existing
 `nodeId` index (`access_type: ref`) and estimated **2** rows and cost **0.00692**
-for the probe node. This is optimizer cost/row evidence, not a wall-clock
-measurement; live endpoint latency remains unverified without an authenticated
-session.
+for the probe node. Re-running both plans after the code change showed the same
+access paths: the window query scanned **3,630,839** rows at cost **3,225.86**;
+the bounded lookup remained at **2** estimated rows and cost **0.00692**. The
+optimizer estimates about 466,000× lower cost for the bounded probe. This is
+query-plan evidence, not a wall-clock measurement; live endpoint latency remains
+unverified without an authenticated session.
 
 The browser run could not be completed here: WebKit downloaded but lacks host
 runtime dependencies, and the Chromium CDN lookup failed. The Playwright venv and

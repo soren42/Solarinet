@@ -13,9 +13,24 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/../lib/Forgejo.php';
+require_once __DIR__ . '/../lib/ApiCache.php';
 
 return static function (Router $router): void {
     $router->get('/api/forgejo', static function (): void {
-        Response::ok(Forgejo::summary());
+        try {
+            $summary = ApiCache::remember('forgejo-summary-v1', 30, [Forgejo::class, 'summary']);
+        } catch (Throwable $e) {
+            // A read-only integration must degrade its own panel rather than
+            // turning an unexpected upstream/decoder failure into an API 500.
+            error_log('[solari-api] Forgejo summary failed: ' . get_class($e));
+            $summary = [
+                'available' => false,
+                'reason' => 'Forgejo data temporarily unavailable',
+                'baseUrl' => Forgejo::baseUrl(),
+                'counts' => ['repos' => 0, 'openIssues' => 0, 'openPrs' => 0],
+                'repos' => [], 'commits' => [], 'prs' => [],
+            ];
+        }
+        Response::ok($summary);
     });
 };

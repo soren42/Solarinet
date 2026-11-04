@@ -56,6 +56,11 @@ $bootstrapEnrollment = solari_method() === 'POST' &&
     in_array($reqPath, ['/api/enrollments', '/api/enrollments/ack'], true);
 if (strpos($reqPath, '/api/auth/') === false && !$bootstrapEnrollment) {
     Auth::requireSession();   // emits 401 + exits when no valid session
+    if (in_array(strtoupper(solari_method()), ['GET', 'HEAD', 'OPTIONS'], true)) {
+        // Unlock before route registration and handler work. Policy repeats the
+        // auth check, but Auth keeps the decoded session in memory for this read.
+        Auth::closeReadSession();
+    }
 }
 
 $router->dispatch(solari_method(), solari_uri());

@@ -36,6 +36,9 @@ final class Auth
     private const ABSOLUTE_MAX_SEC = 28800;
     private const OIDC_MAX_SEC = 3600;
 
+    /** Read requests keep the decoded session in memory after releasing its lock. */
+    private static bool $readSessionClosed = false;
+
     /** @var array<string,mixed>|null cached credential store */
     private static ?array $store = null;
 
@@ -78,6 +81,9 @@ final class Auth
     /** Configure + start the session exactly once. Safe to call repeatedly. */
     public static function bootSession(): void
     {
+        if (self::$readSessionClosed) {
+            return;
+        }
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
@@ -92,6 +98,15 @@ final class Auth
             'samesite' => 'Lax',
         ]);
         @session_start();
+    }
+
+    /** Release the per-session lock once a read request has passed authorization. */
+    public static function closeReadSession(): void
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+            self::$readSessionClosed = true;
+        }
     }
 
     // ----------------------------------------------------------- credentials
