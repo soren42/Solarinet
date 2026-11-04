@@ -84,7 +84,7 @@ async def instrument(page):
     """)
 
 
-async def measure_page(page, phase: str, timeout_ms: int, waterfall: list[dict[str, Any]]):
+async def measure_page(page, url: str, phase: str, timeout_ms: int, waterfall: list[dict[str, Any]]):
     current_panel = "shell"
     pending: dict[int, dict[str, Any]] = {}
 
@@ -116,7 +116,7 @@ async def measure_page(page, phase: str, timeout_ms: int, waterfall: list[dict[s
     page.on("requestfailed", on_request_done)
     await instrument(page)
     nav_start = time.monotonic()
-    response = await page.goto(args.url, wait_until="domcontentloaded") if phase == "cold" else await page.reload(wait_until="domcontentloaded")
+    response = await page.goto(url, wait_until="domcontentloaded") if phase == "cold" else await page.reload(wait_until="domcontentloaded")
     boot = await wait_ready(page, timeout_ms)
     result: dict[str, Any] = {
         "phase": phase,
@@ -136,7 +136,9 @@ async def measure_page(page, phase: str, timeout_ms: int, waterfall: list[dict[s
         current_panel = name
         start = time.monotonic()
         try:
-            await item.click(force=True, timeout=5000)
+            # The sidebar is off-canvas at iPad portrait width; a DOM click
+            # navigates without depending on the drawer being open.
+            await item.evaluate("el => el.click()")
             await page.evaluate("window.__solariPerfQuietSince = performance.now()")
             readiness = await wait_ready(page, timeout_ms)
             result["panels"].append({
@@ -166,6 +168,7 @@ async def run(args):
             "is_mobile": True,
             "has_touch": True,
             "service_workers": "allow",
+            "ignore_https_errors": args.insecure,
         }
         if state_path:
             context_args["storage_state"] = str(state_path)
@@ -175,7 +178,7 @@ async def run(args):
             cdp = await context.new_cdp_session(page)
             await cdp.send("Emulation.setCPUThrottlingRate", {"rate": 4})
         for phase in ("cold", "warm"):
-            result = await measure_page(page, phase, args.timeout_ms, results["waterfall"])
+            result = await measure_page(page, args.url, phase, args.timeout_ms, results["waterfall"])
             results["runs"].append(result)
             if result["boot_state"] == "auth_gate":
                 break
@@ -197,6 +200,7 @@ def main():
     parser.add_argument("--output", default="/tmp/solarinet-dashboard-perf.json")
     parser.add_argument("--browser", choices=["webkit", "chromium"], default="chromium")
     parser.add_argument("--timeout-ms", type=int, default=90000)
+    parser.add_argument("--insecure", action="store_true", help="accept the self-signed dashboard certificate")
     asyncio.run(run(parser.parse_args()))
 
 

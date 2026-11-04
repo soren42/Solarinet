@@ -104,6 +104,12 @@ final class Auth
     public static function closeReadSession(): void
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
+            // Mint the CSRF token while the session is still writable: GET
+            // /api/auth/whoami hands it to the client, and a token created after
+            // the close would be returned but never saved.
+            if (self::current() !== null) {
+                self::csrfToken();
+            }
             session_write_close();
             self::$readSessionClosed = true;
         }

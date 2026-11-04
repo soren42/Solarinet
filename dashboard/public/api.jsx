@@ -851,6 +851,8 @@
   // =====================================================================
   // The pending API.refresh() snapshot, shared by overlapping poll ticks.
   var refreshInFlight = null;
+  // The single follow-up refresh queued behind refreshInFlight, if any.
+  var refreshQueued = null;
 
   function loadLive() {
     // These read-only integrations fan out to independent upstreams. Do not let
@@ -1384,7 +1386,17 @@
       // One refresh at a time: a poll tick that lands while the previous
       // snapshot is still loading joins it instead of stacking another full
       // fan-out behind a slow endpoint (the queue grew without bound before).
-      if (refreshInFlight) return refreshInFlight;
+      // A caller arriving mid-flight (e.g. right after a mutation) must not be
+      // handed a snapshot that started before its write, so it gets exactly one
+      // follow-up refresh queued behind the current one; further callers share
+      // that follow-up. In-flight + queued is bounded at two.
+      if (refreshInFlight) {
+        if (!refreshQueued) {
+          var rerun = function () { refreshQueued = null; return API.refresh(); };
+          refreshQueued = refreshInFlight.then(rerun, rerun);
+        }
+        return refreshQueued;
+      }
       // lastAttemptAt is the core snapshot's "last tried" stamp (lastLiveAt is
       // "last succeeded"); the per-page freshness badge shows both.
       var attemptedAt = Date.now();
