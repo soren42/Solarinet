@@ -69,6 +69,8 @@ final class Forgejo
         $prs        = [];
         $openIssues = 0;
         $openPrs    = 0;
+        $detailRequests = [];
+        $detailRepos = [];
 
         $i = 0;
         foreach ($list as $r) {
@@ -100,45 +102,54 @@ final class Forgejo
             // Fan out commit + PR reads over the most-recently-updated repos only.
             if ($i < self::REPO_FANOUT && $owner !== '' && $name !== '') {
                 $enc = rawurlencode($owner) . '/' . rawurlencode($name);
-
-                $cRaw = self::get("/api/v1/repos/$enc/commits?limit=5&stat=false&verification=false");
-                if (is_array($cRaw)) {
-                    foreach ($cRaw as $c) {
-                        if (!is_array($c)) {
-                            continue;
-                        }
-                        $cm  = $c['commit'] ?? [];
-                        $msg = (string) ($cm['message'] ?? '');
-                        $commits[] = [
-                            'repo'       => $full,
-                            'sha'        => substr((string) ($c['sha'] ?? ''), 0, 10),
-                            'message'    => trim(strtok($msg, "\n") ?: $msg),
-                            'author'     => (string) (($cm['author']['name'] ?? $c['author']['login'] ?? '') ?: 'unknown'),
-                            'date'       => self::iso($cm['author']['date'] ?? $cm['committer']['date'] ?? null),
-                            'htmlUrl'    => ($c['html_url'] ?? null) ?: null,
-                        ];
-                    }
-                }
-
-                $pRaw = self::get("/api/v1/repos/$enc/issues?state=open&type=pulls&limit=50");
-                if (is_array($pRaw)) {
-                    foreach ($pRaw as $pr) {
-                        if (!is_array($pr)) {
-                            continue;
-                        }
-                        $openPrs++;
-                        $prs[] = [
-                            'repo'      => $full,
-                            'number'    => (int) ($pr['number'] ?? 0),
-                            'title'     => (string) ($pr['title'] ?? ''),
-                            'author'    => (string) (($pr['user']['login'] ?? '') ?: 'unknown'),
-                            'createdAt' => self::iso($pr['created_at'] ?? null),
-                            'htmlUrl'   => ($pr['html_url'] ?? null) ?: null,
-                        ];
-                    }
-                }
+                $detailIndex = count($detailRepos);
+                $detailRepos[$detailIndex] = $full;
+                $detailRequests['commits:' . $detailIndex] = "/api/v1/repos/$enc/commits?limit=5&stat=false&verification=false";
+                $detailRequests['prs:' . $detailIndex] = "/api/v1/repos/$enc/issues?state=open&type=pulls&limit=50";
             }
             $i++;
+        }
+
+        // These reads are independent. A single slow repo must not serialize
+        // every later commit and pull-request request behind its timeout.
+        $details = self::getMany($detailRequests);
+        foreach ($detailRepos as $detailIndex => $full) {
+            $cRaw = $details['commits:' . $detailIndex] ?? null;
+            if (is_array($cRaw)) {
+                foreach ($cRaw as $c) {
+                    if (!is_array($c)) {
+                        continue;
+                    }
+                    $cm  = $c['commit'] ?? [];
+                    $msg = (string) ($cm['message'] ?? '');
+                    $commits[] = [
+                        'repo'       => $full,
+                        'sha'        => substr((string) ($c['sha'] ?? ''), 0, 10),
+                        'message'    => trim(strtok($msg, "\n") ?: $msg),
+                        'author'     => (string) (($cm['author']['name'] ?? $c['author']['login'] ?? '') ?: 'unknown'),
+                        'date'       => self::iso($cm['author']['date'] ?? $cm['committer']['date'] ?? null),
+                        'htmlUrl'    => ($c['html_url'] ?? null) ?: null,
+                    ];
+                }
+            }
+
+            $pRaw = $details['prs:' . $detailIndex] ?? null;
+            if (is_array($pRaw)) {
+                foreach ($pRaw as $pr) {
+                    if (!is_array($pr)) {
+                        continue;
+                    }
+                    $openPrs++;
+                    $prs[] = [
+                        'repo'      => $full,
+                        'number'    => (int) ($pr['number'] ?? 0),
+                        'title'     => (string) ($pr['title'] ?? ''),
+                        'author'    => (string) (($pr['user']['login'] ?? '') ?: 'unknown'),
+                        'createdAt' => self::iso($pr['created_at'] ?? null),
+                        'htmlUrl'   => ($pr['html_url'] ?? null) ?: null,
+                    ];
+                }
+            }
         }
 
         // Newest commits first, then bound the merged cross-repo activity list.
@@ -193,6 +204,70 @@ final class Forgejo
     }
 
     /**
+     * Fetch a bounded set of independent JSON resources concurrently when cURL
+     * multi is available, retaining the stream/cURL fallback for small builds.
+     *
+     * @param array<string,string> $paths
+     * @return array<string,array<mixed>|null>
+     */
+    private static function getMany(array $paths): array
+    {
+        if ($paths === []) {
+            return [];
+        }
+        if (!function_exists('curl_multi_init') || !function_exists('curl_init')) {
+            $result = [];
+            foreach ($paths as $key => $path) {
+                $result[$key] = self::get($path);
+            }
+            return $result;
+        }
+
+        $headers = ['Accept: application/json', 'User-Agent: SolariNet-Dashboard'];
+        $token = self::token();
+        if ($token !== null) {
+            $headers[] = 'Authorization: token ' . $token;
+        }
+        $multi = curl_multi_init();
+        $handles = [];
+        foreach ($paths as $key => $path) {
+            $handle = curl_init(self::baseUrl() . $path);
+            curl_setopt_array($handle, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_TIMEOUT => 6,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS => 2,
+            ]);
+            curl_multi_add_handle($multi, $handle);
+            $handles[$key] = $handle;
+        }
+
+        $running = 0;
+        do {
+            do {
+                $status = curl_multi_exec($multi, $running);
+            } while ($status === CURLM_CALL_MULTI_PERFORM);
+            if ($running > 0 && curl_multi_select($multi, 0.2) === -1) {
+                usleep(1000);
+            }
+        } while ($running > 0 && $status === CURLM_OK);
+
+        $result = [];
+        foreach ($handles as $key => $handle) {
+            $body = curl_multi_getcontent($handle);
+            $code = (int) curl_getinfo($handle, CURLINFO_HTTP_CODE);
+            $decoded = is_string($body) && $code >= 200 && $code < 300
+                ? json_decode($body, true) : null;
+            $result[$key] = is_array($decoded) ? $decoded : null;
+            curl_multi_remove_handle($multi, $handle);
+        }
+        curl_multi_close($multi);
+        return $result;
+    }
+
+    /**
      * Minimal HTTP GET with a short timeout. Prefers cURL when the extension is
      * loaded, else falls back to a stream-context file_get_contents so the helper
      * works regardless of the PHP build. Returns the body string or null.
@@ -211,7 +286,6 @@ final class Forgejo
             ]);
             $body = curl_exec($ch);
             $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
             if ($body === false || $code < 200 || $code >= 300) {
                 return null;
             }

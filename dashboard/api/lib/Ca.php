@@ -449,7 +449,6 @@ final class Ca
             curl_setopt_array($ch, $options);
             $body = curl_exec($ch);
             $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
             if ($body === false || $code < 200 || $code >= 300) {
                 return null;
             }

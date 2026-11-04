@@ -849,7 +849,18 @@
   // =====================================================================
   // assemble window.SOLARI live (parallel fetch of the §6/§11.2 reads)
   // =====================================================================
+  // The pending API.refresh() snapshot, shared by overlapping poll ticks.
+  var refreshInFlight = null;
+  // The single follow-up refresh queued behind refreshInFlight, if any.
+  var refreshQueued = null;
+
   function loadLive() {
+    // These read-only integrations fan out to independent upstreams. Do not let
+    // their latency delay the core fleet snapshot and first rendered view.
+    var integrationReads = Promise.all([
+      getOptionalJSON("forgejo", EP.forgejo, null),
+      getOptionalJSON("certificates", EP.ca, null),
+    ]);
     return Promise.all([
       getJSON(EP.summary),
       getJSON(EP.nodes),
@@ -880,8 +891,8 @@
       getOptionalJSON("maintenance", EP.maintenance + "?status=all", []),
       // Git (Forgejo) + CA/PKI read-only integrations — tolerate absence so a
       // missing token / unreachable CA never forces the whole dashboard offline.
-      getOptionalJSON("forgejo", EP.forgejo, null),
-      getOptionalJSON("certificates", EP.ca, null),
+      Promise.resolve({ value: null, freshness: { state: "unknown", lastSuccess: null, lastAttempt: Date.now() } }),
+      Promise.resolve({ value: null, freshness: { state: "unknown", lastSuccess: null, lastAttempt: Date.now() } }),
     ]).then(function (res) {
       // Defensive unpack: a list endpoint that unexpectedly returns an object
       // must degrade that one section to empty, never throw — a throw here would
@@ -904,8 +915,8 @@
       var opieW = A(res[14].value);
       var maintW = A(res[16].value);
       // Git (Forgejo) + CA/PKI — mapped (null-tolerant) integration payloads.
-      var git = mapForgejo(res[17].value);
-      var ca = mapCa(res[18].value);
+      var git = mapForgejo(null);
+      var ca = mapCa(null);
       // inventory — validated paginated collection reads, tolerant of API absence.
       var invResult = res[15].value;
       var invW = invResult && typeof invResult === "object" ? invResult : {};
@@ -1052,6 +1063,26 @@
         source: "live",
         api: API,
       };
+      integrationReads.then(function (values) {
+        var applyIntegrations = function () {
+          var target = window.SOLARI;
+          if (!target || target.source === "offline") return;
+          target.git = mapForgejo(values[0].value);
+          target.ca = mapCa(values[1].value);
+          target.freshness = Object.assign({}, target.freshness || {}, {
+            forgejo: Object.assign({ label: "Forgejo" }, values[0].freshness),
+            certificates: Object.assign({ label: "Certificates" }, values[1].freshness),
+          });
+          if (typeof window.dispatchEvent === "function" && typeof Event === "function") {
+            window.dispatchEvent(new Event("solari:data-updated"));
+          }
+        };
+        if (window.solariReady && typeof window.solariReady.then === "function") {
+          window.solariReady.then(applyIntegrations, applyIntegrations);
+        } else {
+          applyIntegrations();
+        }
+      });
       return live;
     });
   }
@@ -1352,11 +1383,33 @@
     // refresh the whole model in place (re-runs loadLive, keeps fmt/api). Mutates
     // window.SOLARI in place so captured `const S = window.SOLARI` refs stay live.
     refresh: function () {
+      // One refresh at a time: a poll tick that lands while the previous
+      // snapshot is still loading joins it instead of stacking another full
+      // fan-out behind a slow endpoint (the queue grew without bound before).
+      // A caller arriving mid-flight (e.g. right after a mutation) must not be
+      // handed a snapshot that started before its write, so it gets exactly one
+      // follow-up refresh queued behind the current one; further callers share
+      // that follow-up. In-flight + queued is bounded at two.
+      if (refreshInFlight) {
+        if (!refreshQueued) {
+          var rerun = function () { refreshQueued = null; return API.refresh(); };
+          refreshQueued = refreshInFlight.then(rerun, rerun);
+        }
+        return refreshQueued;
+      }
       // lastAttemptAt is the core snapshot's "last tried" stamp (lastLiveAt is
       // "last succeeded"); the per-page freshness badge shows both.
       var attemptedAt = Date.now();
-      return loadLive().then(function (live) {
-        Object.keys(live).forEach(function (k) { window.SOLARI[k] = live[k]; });
+      var settle = function () { refreshInFlight = null; };
+      refreshInFlight = loadLive().then(function (live) {
+        Object.keys(live).forEach(function (k) {
+          if (k !== "git" && k !== "ca" && k !== "freshness") window.SOLARI[k] = live[k];
+        });
+        var previousFreshness = window.SOLARI.freshness || {};
+        window.SOLARI.freshness = Object.assign({}, live.freshness, {
+          forgejo: previousFreshness.forgejo,
+          certificates: previousFreshness.certificates,
+        });
         window.SOLARI.lastAttemptAt = attemptedAt;
         window.SOLARI.source = "live";
         window.SOLARI.lastLiveAt = Date.now();
@@ -1371,6 +1424,8 @@
         }
         throw err;
       });
+      refreshInFlight.then(settle, settle);
+      return refreshInFlight;
     },
 
     // ---- read-only integrations (Git / CA) ----
