@@ -134,7 +134,6 @@ static int  gOverflow = 0;
 static char gOverflowNote[160];
 
 /* T3 guard: pixels last painted structurally in a conditional palette colour. */
-/* Leg-path capture, armed only for the A1 cases. See __wrap_panelFbSet. */
 
 static unsigned char gGuard[PANEL_H][PANEL_W];
 static const float  *gGuardCol[PANEL_H][PANEL_W];
@@ -199,16 +198,6 @@ static int inPanel(int x, int y) {
 
 void __wrap_panelFbSet(int x, int y, PanelColor c, float b) {
   if (isTextTag(gTag)) noteGlyphRow(y);
-  /* Leg-path capture. Inside an A1 render cQuiet has exactly one source —
-   * a1Leg() — because gates take their colour from a1GateColor(), which returns
-   * cCrit/cWarn/cAzure and never cQuiet, and the particles reuse a1GateColor()
-   * too. CONTRACT-AW §4 is what guarantees that stays true: cQuiet is
-   * connective texture and never a state carrier. So this records the leg layer
-   * by PALETTE IDENTITY, deriving no geometry — the coordinates come from the
-   * real a1Leg(). The dump lets tests/dashboard/test_panel_parity.js exempt
-   * *these specific pixels* from its diff instead of exempting any quiet pixel
-   * anywhere. If cQuiet ever gains a second use inside A1 this over-collects,
-   * which is why the JS side also caps the exemption by count. */
   if (inPanel(x, y)) {
     /* A structural write in a conditional colour arms the T3 guard; any other
      * write replaces the pixel outright and disarms it. */
