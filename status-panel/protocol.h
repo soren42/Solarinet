@@ -50,7 +50,7 @@ extern "C" {
 #define PANEL_PROTO_VERSION     0x01u
 #define PANEL_HDR_SIZE          6u      /* magic..payloadLen               */
 #define PANEL_CRC_SIZE          2u
-#define PANEL_MAX_PAYLOAD       2048u
+#define PANEL_MAX_PAYLOAD       4096u
 #define PANEL_FRAME_TIMEOUT_MS  500u
 
 typedef enum {                     /* host -> panel */
@@ -102,7 +102,7 @@ typedef enum {                     /* host -> panel */
 
 typedef enum {                     /* PANEL_FT_CONTROL kinds; all idempotent */
   PANEL_CTL_SETTHEME   = 1,        /* arg 0-3                               */
-  PANEL_CTL_SETSCREEN  = 2,        /* arg 0-2 within current theme          */
+  PANEL_CTL_SETSCREEN  = 2,        /* arg 0-3 within current theme          */
   PANEL_CTL_BRIGHTNESS = 3,        /* arg 0-100, latches manual (as LUX±)   */
   PANEL_CTL_AUTOBRIGHT = 4,        /* arg ignored; re-enable light sensor   */
   PANEL_CTL_ACKALARM   = 5,        /* arg ignored; same path as button ack  */
@@ -114,7 +114,9 @@ typedef enum {                     /* PANEL_FT_CONTROL kinds; all idempotent */
 
 #define PANEL_CONTROL_SIZE 8u      /* CONTROL payload bytes                 */
 #define PANEL_STATE_SIZE   16u     /* STATE payload bytes                   */
-#define PANEL_CONFIG_SIZE  16u     /* CONFIG payload bytes                  */
+#define PANEL_CONFIG_SIZE  20u     /* CONFIG payload bytes (CONTRACT-V2 §1) */
+#define PANEL_CONFIG_SIZE_V1 16u   /* still accepted: pre-v2 firmware       */
+#define PANEL_SCREEN_SLOTS 16u
 
 /* ---- provisioning (CONTRACT-SW §4 as amended by §13 D1/D3/D4) ----------- */
 
@@ -176,10 +178,10 @@ int panelDecodeState(const uint8_t *payload, size_t len, uint8_t *theme,
                      uint8_t *alarmArmed, uint8_t *alarmAcked,
                      uint8_t *dwellSec, uint32_t *ackedEpisodeId,
                      uint32_t *lastCmdId);
-size_t panelEncodeConfig(const uint8_t screenCfg[12], uint8_t flags,
+size_t panelEncodeConfig(const uint8_t screenCfg[PANEL_SCREEN_SLOTS], uint8_t flags,
                          uint8_t *payload, size_t cap);
 int panelDecodeConfig(const uint8_t *payload, size_t len,
-                      uint8_t screenCfg[12], uint8_t *flags);
+                      uint8_t screenCfg[PANEL_SCREEN_SLOTS], uint8_t *flags);
 /* PROVISION/PROVACK codecs are structural only: item semantics (bounds,
  * DER validity, generation matching) are the firmware handler's job.
  * Encode: data must not overlap payload. Decode: PROVISION is strict
@@ -303,6 +305,38 @@ typedef enum {
 #define PANEL_ALERT_SUBJ   24u
 #define PANEL_ALERT_DETAIL 48u
 
+/* CONTRACT-V2 §3 TLV trailer, after the gear trailer. */
+#define PANEL_TLV_LINKS   1u
+#define PANEL_TLV_SYSX    2u
+#define PANEL_TLV_ALERTS  3u
+#define PANEL_TLV_PROBES  4u
+#define PANEL_TLV_POP     5u
+#define PANEL_TLV_HEAT    6u
+#define PANEL_TLV_TOTALS  7u
+#define PANEL_MAX_LINKS   12u
+#define PANEL_MAX_ALERTS  8u
+#define PANEL_MAX_PROBES  11u
+#define PANEL_MAX_POP     191u
+#define PANEL_FAULT_CODES 7u
+#define PANEL_HEAT_LEN    52u
+#define PANEL_LINK_STRIDE 24u
+#define PANEL_SYSX_STRIDE 12u
+#define PANEL_ALERTX_STRIDE 34u
+#define PANEL_PROBE_STRIDE 14u
+#define PANEL_NAME_PROBE  8u
+#define PANEL_ALERT_MSG   18u
+#define PANEL_RATE_NONE   0xFFFFFFFFu  /* unmeasured: no data, never zero    */
+
+typedef enum {
+  PANEL_LINK_WAN = 0, PANEL_LINK_TRUNK = 1, PANEL_LINK_WIFI = 2, PANEL_LINK_HOST = 3
+} PanelLinkKind;
+
+typedef enum {
+  PANEL_FAULT_OTHER = 0, PANEL_FAULT_REACH = 1, PANEL_FAULT_UNITS = 2,
+  PANEL_FAULT_READONLY = 3, PANEL_FAULT_SMART = 4, PANEL_FAULT_KERNEL = 5,
+  PANEL_FAULT_DISKGONE = 6
+} PanelFaultCode;
+
 /* Decoded snapshot — the IN-MEMORY struct both sides use after decode.
  * Never written to the wire directly.                                       */
 typedef struct {
@@ -334,6 +368,37 @@ typedef struct {
   struct {
     uint8_t role, state, rxLevel, txLevel;
   } gear[PANEL_MAX_GEAR];
+
+  /* CONTRACT-V2 §3. has* = 0 when the sender did not include that TLV. */
+  uint8_t hasLinks, hasSysx, hasAlerts, hasProbes, hasHeat, hasTotals;
+  uint8_t linkCount;
+  struct {
+    char     name[PANEL_NAME_SYS + 1];
+    uint8_t  kind, state, parent;
+    uint32_t upKbps, downKbps;
+  } links[PANEL_MAX_LINKS];
+  struct {
+    uint8_t  memPct, diskPct, faults;
+    uint32_t rxKbps, txKbps;
+  } sysx[PANEL_MAX_SYSTEMS];
+  uint8_t alertTotal, alertCount;
+  uint8_t faultCounts[PANEL_FAULT_CODES];
+  struct {
+    uint8_t  severity, code;
+    uint16_t ageMin;
+    char     host[PANEL_NAME_SYS + 1];
+    char     msg[PANEL_ALERT_MSG + 1];
+  } alerts[PANEL_MAX_ALERTS];
+  uint8_t probeCount;
+  struct {
+    char     name[PANEL_NAME_PROBE + 1];
+    uint16_t rttTenthMs, lossPermille;
+    uint8_t  state;
+  } probes[PANEL_MAX_PROBES];
+  uint8_t popCount;
+  uint8_t pop[PANEL_MAX_POP];
+  uint8_t heatWarn[PANEL_HEAT_LEN], heatCrit[PANEL_HEAT_LEN];
+  uint32_t wanUpKbps, wanDownKbps, lanUpKbps, lanDownKbps;
 } PanelSnapshot;
 
 /* ---- shared codec (implemented once, in protocol.c) --------------------- */
@@ -364,7 +429,9 @@ size_t panelEncodeSnapshot(const PanelSnapshot *snap,
  * Returns 0 on success, -1 on malformed base input (bad counts/length).
  * The same-version additive gear trailer is presence-detected: it is used
  * only when its count is <= 12 and count+entries fit entirely after the base
- * layout. An absent, short, or oversized trailer means gearCount = 0.       */
+ * layout. An absent, short, or oversized trailer means gearCount = 0.
+ * CONTRACT-V2 TLVs after it are optional: unknown tags are skipped, a truncated
+ * or malformed TLV leaves its has* flag 0 and never fails the snapshot.     */
 int panelDecodeSnapshot(const uint8_t *payload, size_t len,
                         PanelSnapshot *snap);
 

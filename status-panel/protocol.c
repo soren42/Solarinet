@@ -109,24 +109,30 @@ int panelDecodeState(const uint8_t *payload, size_t len, uint8_t *theme,
   return 0;
 }
 
-/* Purpose: encode a CONFIG payload at its fixed protocol offsets. Input: per-screen config/flags/output buffer. Output: payload size, or zero for invalid capacity. */
-size_t panelEncodeConfig(const uint8_t screenCfg[12], uint8_t flags,
+/* Purpose: encode a CONFIG payload at its fixed protocol offsets (CONTRACT-V2 §1). Input: per-screen config/flags/output buffer. Output: payload size, or zero for invalid capacity. */
+size_t panelEncodeConfig(const uint8_t screenCfg[PANEL_SCREEN_SLOTS], uint8_t flags,
                          uint8_t *payload, size_t cap) {
   if (screenCfg == NULL || payload == NULL || cap < PANEL_CONFIG_SIZE) return 0u;
   memset(payload, 0, PANEL_CONFIG_SIZE);
   memcpy(payload, screenCfg, 12u);
   payload[12] = flags;
+  memcpy(payload + PANEL_CONFIG_SIZE_V1, screenCfg + 12u, PANEL_SCREEN_SLOTS - 12u);
   return PANEL_CONFIG_SIZE;
 }
 
-/* Purpose: decode a CONFIG payload at its fixed protocol offsets. Input: complete payload/output fields. Output: zero success, -1 for malformed input. */
+/* Purpose: decode a CONFIG payload at its fixed protocol offsets; a 16-byte pre-v2 payload defaults slots 12-15 to enabled, 1x. Input: complete payload/output fields. Output: zero success, -1 for malformed input. */
 int panelDecodeConfig(const uint8_t *payload, size_t len,
-                      uint8_t screenCfg[12], uint8_t *flags) {
+                      uint8_t screenCfg[PANEL_SCREEN_SLOTS], uint8_t *flags) {
   size_t i;
-  if (payload == NULL || screenCfg == NULL || flags == NULL || len < PANEL_CONFIG_SIZE) return -1;
+  if (payload == NULL || screenCfg == NULL || flags == NULL || len < PANEL_CONFIG_SIZE_V1) return -1;
   for (i = 0u; i < 12u; ++i) if ((payload[i] & 0xf0u) != 0u) return -1;
   if (payload[13] != 0u || payload[14] != 0u || payload[15] != 0u) return -1;
+  if (len >= PANEL_CONFIG_SIZE) {
+    for (i = PANEL_CONFIG_SIZE_V1; i < PANEL_CONFIG_SIZE; ++i) if ((payload[i] & 0xf0u) != 0u) return -1;
+  }
   memcpy(screenCfg, payload, 12u);
+  if (len >= PANEL_CONFIG_SIZE) memcpy(screenCfg + 12u, payload + PANEL_CONFIG_SIZE_V1, PANEL_SCREEN_SLOTS - 12u);
+  else memset(screenCfg + 12u, 0x05, PANEL_SCREEN_SLOTS - 12u);
   *flags = payload[12];
   return 0;
 }
@@ -212,12 +218,161 @@ size_t panelEncodeFrame(uint8_t type, const uint8_t *payload, size_t payloadLen,
   crc = panelCrc16(out + 2, 4u + payloadLen); writeLe16(out + PANEL_HDR_SIZE + payloadLen, crc); return total;
 }
 
+/* Purpose: payload bytes the CONTRACT-V2 TLVs need. Input: snapshot. Output: byte count. */
+static size_t panelExtSize(const PanelSnapshot *s) {
+  size_t n = 0u;
+  if (s->hasLinks) n += 3u + 1u + PANEL_LINK_STRIDE * (size_t)s->linkCount;
+  if (s->hasSysx) n += 3u + 1u + PANEL_SYSX_STRIDE * (size_t)s->systemCount;
+  if (s->hasAlerts) n += 3u + 2u + PANEL_FAULT_CODES + PANEL_ALERTX_STRIDE * (size_t)s->alertCount;
+  if (s->hasProbes) n += 3u + 1u + PANEL_PROBE_STRIDE * (size_t)s->probeCount;
+  if (s->popCount != 0u) n += 3u + 1u + (size_t)s->popCount;
+  if (s->hasHeat) n += 3u + 2u * PANEL_HEAT_LEN;
+  if (s->hasTotals) n += 3u + 16u;
+  return n;
+}
+
+/* Purpose: start one TLV. Input: output cursor, tag, value length. Output: value cursor. */
+static uint8_t *tlvStart(uint8_t *o, uint8_t tag, size_t len) {
+  o[0] = tag; writeLe16(o + 1, (uint16_t)len); return o + 3;
+}
+
+/* Purpose: write the CONTRACT-V2 TLVs; panelExtSize has already bounded them. Input: snapshot/output cursor. Output: none. */
+static void panelExtWrite(const PanelSnapshot *s, uint8_t *o) {
+  size_t i;
+  if (s->hasLinks) {
+    o = tlvStart(o, PANEL_TLV_LINKS, 1u + PANEL_LINK_STRIDE * (size_t)s->linkCount);
+    *o++ = s->linkCount;
+    for (i = 0u; i < s->linkCount; ++i, o += PANEL_LINK_STRIDE) {
+      writeName(o, s->links[i].name, PANEL_NAME_SYS);
+      o[12] = s->links[i].kind; o[13] = s->links[i].state; o[14] = s->links[i].parent; o[15] = 0u;
+      writeLe32(o + 16, s->links[i].upKbps); writeLe32(o + 20, s->links[i].downKbps);
+    }
+  }
+  if (s->hasSysx) {
+    o = tlvStart(o, PANEL_TLV_SYSX, 1u + PANEL_SYSX_STRIDE * (size_t)s->systemCount);
+    *o++ = s->systemCount;
+    for (i = 0u; i < s->systemCount; ++i, o += PANEL_SYSX_STRIDE) {
+      o[0] = s->sysx[i].memPct; o[1] = s->sysx[i].diskPct; o[2] = s->sysx[i].faults; o[3] = 0u;
+      writeLe32(o + 4, s->sysx[i].rxKbps); writeLe32(o + 8, s->sysx[i].txKbps);
+    }
+  }
+  if (s->hasAlerts) {
+    o = tlvStart(o, PANEL_TLV_ALERTS, 2u + PANEL_FAULT_CODES + PANEL_ALERTX_STRIDE * (size_t)s->alertCount);
+    *o++ = s->alertTotal;
+    memcpy(o, s->faultCounts, PANEL_FAULT_CODES); o += PANEL_FAULT_CODES;
+    *o++ = s->alertCount;
+    for (i = 0u; i < s->alertCount; ++i, o += PANEL_ALERTX_STRIDE) {
+      o[0] = s->alerts[i].severity; o[1] = s->alerts[i].code; writeLe16(o + 2, s->alerts[i].ageMin);
+      writeName(o + 4, s->alerts[i].host, PANEL_NAME_SYS);
+      writeName(o + 16, s->alerts[i].msg, PANEL_ALERT_MSG);
+    }
+  }
+  if (s->hasProbes) {
+    o = tlvStart(o, PANEL_TLV_PROBES, 1u + PANEL_PROBE_STRIDE * (size_t)s->probeCount);
+    *o++ = s->probeCount;
+    for (i = 0u; i < s->probeCount; ++i, o += PANEL_PROBE_STRIDE) {
+      writeName(o, s->probes[i].name, PANEL_NAME_PROBE);
+      writeLe16(o + 8, s->probes[i].rttTenthMs); writeLe16(o + 10, s->probes[i].lossPermille);
+      o[12] = s->probes[i].state; o[13] = 0u;
+    }
+  }
+  if (s->popCount != 0u) {
+    o = tlvStart(o, PANEL_TLV_POP, 1u + (size_t)s->popCount);
+    *o++ = s->popCount;
+    memcpy(o, s->pop, s->popCount); o += s->popCount;
+  }
+  if (s->hasHeat) {
+    o = tlvStart(o, PANEL_TLV_HEAT, 2u * PANEL_HEAT_LEN);
+    memcpy(o, s->heatWarn, PANEL_HEAT_LEN); memcpy(o + PANEL_HEAT_LEN, s->heatCrit, PANEL_HEAT_LEN);
+    o += 2u * PANEL_HEAT_LEN;
+  }
+  if (s->hasTotals) {
+    o = tlvStart(o, PANEL_TLV_TOTALS, 16u);
+    writeLe32(o, s->wanUpKbps); writeLe32(o + 4, s->wanDownKbps);
+    writeLe32(o + 8, s->lanUpKbps); writeLe32(o + 12, s->lanDownKbps);
+  }
+}
+
+/* Purpose: decode one known TLV into the snapshot, leaving its has* flag 0 when malformed. Input: tag/value/length/snapshot. Output: none. */
+static void panelExtValue(uint8_t tag, const uint8_t *v, size_t n, PanelSnapshot *s) {
+  size_t i, count;
+  switch (tag) {
+    case PANEL_TLV_LINKS:
+      if (n < 1u || (count = v[0]) > PANEL_MAX_LINKS || n < 1u + count * PANEL_LINK_STRIDE) return;
+      for (i = 0u, v += 1; i < count; ++i, v += PANEL_LINK_STRIDE) {
+        readName(s->links[i].name, v, PANEL_NAME_SYS);
+        s->links[i].kind = v[12]; s->links[i].state = v[13]; s->links[i].parent = v[14];
+        s->links[i].upKbps = readLe32(v + 16); s->links[i].downKbps = readLe32(v + 20);
+      }
+      s->linkCount = (uint8_t)count; s->hasLinks = 1u;
+      return;
+    case PANEL_TLV_SYSX:
+      if (n < 1u || (count = v[0]) != s->systemCount || n < 1u + count * PANEL_SYSX_STRIDE) return;
+      for (i = 0u, v += 1; i < count; ++i, v += PANEL_SYSX_STRIDE) {
+        s->sysx[i].memPct = v[0]; s->sysx[i].diskPct = v[1]; s->sysx[i].faults = v[2];
+        s->sysx[i].rxKbps = readLe32(v + 4); s->sysx[i].txKbps = readLe32(v + 8);
+      }
+      s->hasSysx = 1u;
+      return;
+    case PANEL_TLV_ALERTS:
+      if (n < 2u + PANEL_FAULT_CODES || (count = v[1u + PANEL_FAULT_CODES]) > PANEL_MAX_ALERTS ||
+          n < 2u + PANEL_FAULT_CODES + count * PANEL_ALERTX_STRIDE) return;
+      s->alertTotal = v[0];
+      memcpy(s->faultCounts, v + 1, PANEL_FAULT_CODES);
+      for (i = 0u, v += 2u + PANEL_FAULT_CODES; i < count; ++i, v += PANEL_ALERTX_STRIDE) {
+        s->alerts[i].severity = v[0]; s->alerts[i].code = v[1]; s->alerts[i].ageMin = readLe16(v + 2);
+        readName(s->alerts[i].host, v + 4, PANEL_NAME_SYS);
+        readName(s->alerts[i].msg, v + 16, PANEL_ALERT_MSG);
+      }
+      s->alertCount = (uint8_t)count; s->hasAlerts = 1u;
+      return;
+    case PANEL_TLV_PROBES:
+      if (n < 1u || (count = v[0]) > PANEL_MAX_PROBES || n < 1u + count * PANEL_PROBE_STRIDE) return;
+      for (i = 0u, v += 1; i < count; ++i, v += PANEL_PROBE_STRIDE) {
+        readName(s->probes[i].name, v, PANEL_NAME_PROBE);
+        s->probes[i].rttTenthMs = readLe16(v + 8); s->probes[i].lossPermille = readLe16(v + 10);
+        s->probes[i].state = v[12];
+      }
+      s->probeCount = (uint8_t)count; s->hasProbes = 1u;
+      return;
+    case PANEL_TLV_POP:
+      if (n < 1u || (count = v[0]) > PANEL_MAX_POP || n < 1u + count) return;
+      memcpy(s->pop, v + 1, count); s->popCount = (uint8_t)count;
+      return;
+    case PANEL_TLV_HEAT:
+      if (n < 2u * PANEL_HEAT_LEN) return;
+      memcpy(s->heatWarn, v, PANEL_HEAT_LEN); memcpy(s->heatCrit, v + PANEL_HEAT_LEN, PANEL_HEAT_LEN);
+      s->hasHeat = 1u;
+      return;
+    case PANEL_TLV_TOTALS:
+      if (n < 16u) return;
+      s->wanUpKbps = readLe32(v); s->wanDownKbps = readLe32(v + 4);
+      s->lanUpKbps = readLe32(v + 8); s->lanDownKbps = readLe32(v + 12);
+      s->hasTotals = 1u;
+      return;
+    default:
+      return; /* unknown tag: a newer sender, not an error */
+  }
+}
+
+/* Purpose: walk the TLV trailer. Input: bytes after the gear trailer/length/snapshot. Output: none; a truncated TLV ends the walk without failing the snapshot. */
+static void panelExtRead(const uint8_t *p, size_t len, PanelSnapshot *s) {
+  while (len >= 3u) {
+    size_t n = readLe16(p + 1);
+    if (len - 3u < n) return;
+    panelExtValue(p[0], p + 3, n, s);
+    p += 3u + n; len -= 3u + n;
+  }
+}
+
 /* Purpose: encode canonical snapshot payload. Input: snapshot/output buffer. Output: payload size, or zero on invalid capacity/counts. */
 size_t panelEncodeSnapshot(const PanelSnapshot *s, uint8_t *p, size_t cap) {
-  size_t i, off, need;
+  size_t i, off, need, ext;
   if (s == NULL || p == NULL || s->poolCount > PANEL_MAX_POOLS || s->systemCount > PANEL_MAX_SYSTEMS || s->gearCount > PANEL_MAX_GEAR) return 0u;
   need = PANEL_GLOBALS_SIZE + PANEL_POOL_STRIDE * (size_t)s->poolCount + PANEL_SYS_STRIDE * (size_t)s->systemCount + (s->hasTopAlert ? PANEL_ALERT_SIZE : 0u) + 1u + 4u * (size_t)s->gearCount;
-  if (cap < need) return 0u;
+  if (s->linkCount > PANEL_MAX_LINKS || s->alertCount > PANEL_MAX_ALERTS || s->probeCount > PANEL_MAX_PROBES || s->popCount > PANEL_MAX_POP) return 0u;
+  ext = panelExtSize(s);
+  if (cap < need + ext || need + ext > PANEL_MAX_PAYLOAD) return 0u;
   memset(p, 0, need);
   writeLe32(p, s->ts); writeLe16(p + 4, s->seq); writeLe16(p + 6, s->score); p[8] = s->alarmActive; p[9] = s->dataStale; memcpy(p + 10, s->stateRoll, 5u); memcpy(p + 15, s->alertCounts, 3u); p[18] = s->meanLoadPct; p[19] = s->poolCount; p[20] = s->systemCount; p[21] = s->hasTopAlert ? 1u : 0u; writeLe32(p + 22, s->rxKbps); writeLe32(p + 26, s->txKbps); writeLe16(p + 30, s->rttTenthMs); writeLe16(p + 32, s->lossPermille);
   off = PANEL_GLOBALS_SIZE;
@@ -226,7 +381,8 @@ size_t panelEncodeSnapshot(const PanelSnapshot *s, uint8_t *p, size_t cap) {
   if (s->hasTopAlert) { writeLe32(p + off, s->topAlert.alertId); writeLe32(p + off + 4, s->topAlert.episodeId); p[off+8] = s->topAlert.severity; writeName(p + off + 12, s->topAlert.subject, PANEL_ALERT_SUBJ); writeName(p + off + 36, s->topAlert.detail, PANEL_ALERT_DETAIL); off += PANEL_ALERT_SIZE; }
   p[off++] = s->gearCount;
   for (i = 0u; i < s->gearCount; ++i, off += 4u) { p[off] = s->gear[i].role; p[off + 1u] = s->gear[i].state; p[off + 2u] = s->gear[i].rxLevel; p[off + 3u] = s->gear[i].txLevel; }
-  return need;
+  panelExtWrite(s, p + off);
+  return need + ext;
 }
 
 /* Purpose: decode canonical snapshot payload. Input: complete payload. Output: filled snapshot or -1 for malformed layout. */
@@ -247,6 +403,7 @@ int panelDecodeSnapshot(const uint8_t *p, size_t len, PanelSnapshot *s) {
   if (gears > PANEL_MAX_GEAR || len < off + 4u * (size_t)gears) return 0;
   s->gearCount = gears;
   for (i = 0u; i < gears; ++i, off += 4u) { s->gear[i].role = p[off]; s->gear[i].state = p[off + 1u]; s->gear[i].rxLevel = p[off + 2u]; s->gear[i].txLevel = p[off + 3u]; }
+  panelExtRead(p + off, len - off, s);
   return 0;
 }
 

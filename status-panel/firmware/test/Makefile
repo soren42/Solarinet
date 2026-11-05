@@ -34,6 +34,11 @@ PARITY_WRAP = -Wl,--wrap=panelFbSet -Wl,--wrap=panelFbSetRgb \
               -Wl,--wrap=panelFbDimAll -Wl,--wrap=panelText \
               -Wl,--wrap=panelTextOver -Wl,--wrap=panelBig \
               -Wl,--wrap=panelScroll
+# Host simulator: real renderers -> PPM frames -> tools/panelsim/sheet.py PNG.
+SIM_SRC  = panelSim.c testJson.c \
+           ../panelScreensA.c ../panelScreensB.c ../panelScreensC.c \
+           ../panelScreensD.c ../panelInlay.c ../panelHelpOverlay.c \
+           ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
 BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelProvSubsysTest panelHelpTest panelNetFsmTest panelNetTest panelPowerTest panelScreensATest panelParityTest
 
 .PHONY: all clean
@@ -66,6 +71,9 @@ panelScreensATest: $(A1_SRC)
 panelParityTest: $(PARITY_SRC) testJson.h ../panelScreens.h ../panelFb.h ../panelFont.h ../panelHelpOverlay.h
 	$(CC) $(CFLAGS) -Wno-unused-parameter -I../.. -fsanitize=address,undefined -o $@ $(PARITY_SRC) $(PARITY_WRAP) -lm
 
+panelSim: $(SIM_SRC) testJson.h ../panelScreens.h
+	$(CC) $(CFLAGS) -Wno-unused-parameter -I../.. -o $@ $(SIM_SRC) -lm
+
 panelScreenCfgTest: $(CFG_SRC) ../panelScreenCfg.h ../../protocol.h
 	$(CC) $(CFLAGS) -o $@ $(CFG_SRC)
 
@@ -88,4 +96,4 @@ panelPowerTest: $(POWER_SRC) ../panelPower.h
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $(POWER_SRC)
 
 clean:
-	rm -f $(BINS)
+	rm -f $(BINS) panelSim

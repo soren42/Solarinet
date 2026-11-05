@@ -92,3 +92,4 @@ deploy/rabbitmq/rabbitmq.env
 
 # RackWire is now a standalone repo (~/Code/RackWire); this symlink is navigation convenience only
 /RackWire
+status-panel/firmware/test/panelSim

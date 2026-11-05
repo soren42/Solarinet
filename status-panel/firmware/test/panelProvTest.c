@@ -57,8 +57,8 @@ static void caseContractLiterals(void) {
         PANEL_PROV_MAX_CACERT == 2048u && PANEL_PROV_MAX_CLIENTCERT == 4096u &&
         PANEL_PROV_MAX_CLIENTKEY == 2048u,
         "case 0: D3 item bounds");
-  check(PANEL_PROV_CHUNK == 192u && PANEL_MAX_PAYLOAD == 2048u,
-        "case 0: 192-byte chunk choice, 2048 normative frame bound (D2)");
+  check(PANEL_PROV_CHUNK == 192u && PANEL_MAX_PAYLOAD >= 2048u,
+        "case 0: 192-byte chunk choice fits the frame bound (D2)");
 }
 
 /* Case 1 — PROVISION round-trip at the wire offsets, with data. */
