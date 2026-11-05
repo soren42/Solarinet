@@ -314,6 +314,7 @@ solariStatus serverMasterReconcile(serverContext *ctx, uint64_t nodeId,
         return SOLARI_OK;
     }
 
+    (void)serverDbTouchNode(ctx->db, nodeId, solariNowUnixMs());
     rc = serverDbSetNodeState(ctx->db, nodeId, state);
     if (rc != SOLARI_OK) {
         /* The authoritative measurements are already durable; a failed state

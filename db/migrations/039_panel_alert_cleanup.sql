@@ -27,3 +27,11 @@ WHERE e.clearedAt IS NULL
   AND r.metric = 'reachable'
   AND e.targetId IS NOT NULL
   AND pt.targetId IS NULL;
+
+-- An old audit note stored as a fired event: no rule, so nothing can ever clear it.
+UPDATE alertEvent
+SET clearedAt = UTC_TIMESTAMP()
+WHERE clearedAt IS NULL
+  AND eventKind = 'fired'
+  AND ruleId IS NULL
+  AND detail LIKE 'asset removed by %';

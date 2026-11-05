@@ -23,7 +23,42 @@ function check(bool $ok, string $label): void
 check(panelShortHost('Xenon.SolariNet.local') === 'XENON', 'short first DNS label');
 check(panelResourcePct(7, 10) === 70, 'RAM percentage');
 check(panelDiskPct('[{"mount":"/","totalKb":100,"usedKb":70},{"mount":"/data","totalKb":100,"usedKb":93}]') === 93, 'fullest filesystem percentage');
-check(panelAlertMessage('reachable', '', 0, '') === 'NO RESPONSE', 'reachable text');
+check(panelShortHost('10.1.0.200') === '10.1.0.200', 'an address keeps its digits');
+check(panelPoolName('Core Infrastructure') === 'CORE', 'pool label is the first word');
+check(panelPoolName('Monitoring') === 'MONITOR', 'pool label cut without a dot');
+check(panelPoolName('') === 'NO POOL', 'unpooled label');
+check(panelProbeName('10.1.0.200', null) === '1.0.200', 'probe address tail fits eight glyphs');
+check(panelProbeName('chemistry', 'x') === 'CHEMISTR', 'probe name cut without a dot');
+check(panelAlertTarget('2:10.0.0.20:443') === ['10.0.0.20', 443], 'alert target host and port');
+check(panelAlertTarget('1:10.0.0.1') === ['10.0.0.1', null], 'icmp alert target has no port');
+check(panelAlertTarget(null) === [null, null], 'node alert has no target');
+check(panelAlertMessage('reachable', '', 0, '', 443) === 'HTTPS DOWN', 'named service text');
+check(panelAlertMessage('reachable', '', 0, '', 8443) === 'PORT 8443 DOWN', 'unnamed port text');
+check(panelAlertMessage(null, '', 0, '') === 'ALERT', 'unknown metric still says something');
+check(panelLinkState(1) === 0 && panelLinkState(2) === 2 && panelLinkState(null) === 3, 'link state is PanelState');
+check(panelStateCode('up') === 0 && panelStateCode('down') === 2 && panelStateCode('x') === 3, 'host link state');
+
+$now = 1000000;
+$probe = static fn (string $id, string $host, string $proto, ?string $outcome, ?int $rtt, ?int $ts, ?int $loss = 0): array =>
+    ['targetId' => $id, 'host' => $host, 'proto' => $proto, 'displayName' => null,
+     'outcome' => $outcome, 'rttMicros' => $rtt, 'lossPermille' => $loss, 'sampledTs' => $ts];
+$summary = panelProbeSummary([
+    $probe('icmp:10.0.0.9', '10.0.0.9', 'icmp', 'timeout', null, $now, 1000),   // dead 24 h
+    $probe('icmp:10.0.0.1', '10.0.0.1', 'icmp', 'ok', 1000, $now),              // two vantages
+    $probe('icmp:10.0.0.1', '10.0.0.1', 'icmp', 'timeout', null, $now, 1000),
+    $probe('tcp:10.0.0.1:443', '10.0.0.1', 'tcp', 'timeout', null, $now, 1000), // service failing
+    $probe('icmp:10.0.0.2', '10.0.0.2', 'icmp', 'timeout', null, $now, 1000),   // failing now
+    $probe('icmp:10.0.0.3', '10.0.0.3', 'icmp', 'ok', 3000, $now - 301),        // stale sample
+    $probe('tcp:10.0.0.4:22', '10.0.0.4', 'tcp', 'ok', 500, $now),              // TCP-only host
+], ['icmp:10.0.0.2' => true, 'tcp:10.0.0.1:443' => true], $now);
+$rows = array_column($summary['probes'], null, 'name');
+check(array_column($summary['probes'], 'name') === ['10.0.0.1', '10.0.0.2', '10.0.0.4', '10.0.0.3', '10.0.0.9'], 'alive first, ICMP first, dead last');
+check($rows['10.0.0.1']['state'] === 1 && $rows['10.0.0.1']['rttTenthMs'] === 10, 'answers but a service fails is degraded, any vantage counts');
+check($rows['10.0.0.2']['state'] === 2 && $rows['10.0.0.2']['rttTenthMs'] === null, 'failing now is down with no RTT');
+check($rows['10.0.0.3']['state'] === 3 && $rows['10.0.0.9']['state'] === 3, 'stale and dead are unknown');
+check($summary['rttTenthMs'] === 8, 'aggregate RTT excludes dead and failing targets');
+check($summary['lossPermille'] === 500, 'failing targets count as full loss, dead ones not at all');
+
 check(panelAlertMessage('health.fsReadonly', '', 0, '') === 'DISK READONLY', 'readonly text');
 check(panelAlertMessage('health.failedUnits', '', 2, '') === '2 SVCS FAILED', 'multiple units text');
 check(panelAlertMessage('health.failedUnits', '', 1, '["sshd.service"]') === 'SSHD FAILED', 'single unit text');

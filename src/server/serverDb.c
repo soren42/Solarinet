@@ -629,6 +629,29 @@ solariStatus serverDbTouchNode(serverDb *db, uint64_t nodeId, uint64_t whenUnixM
     return rc;
 }
 
+solariStatus serverDbMarkSilentNodes(serverDb *db, uint32_t silentSec)
+{
+    /* A node reports its own recovery, so nothing else ever clears an "up" it
+     * can no longer send. Silence means unknown: the host may be fine. */
+    static const char *SQL =
+        "UPDATE node SET state = 'unknown' "
+        "WHERE state IN ('up','degraded') "
+        "AND lastSeenAt < UTC_TIMESTAMP() - INTERVAL ? SECOND";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long long vSec = silentSec;
+    solariStatus rc;
+
+    if (!conn) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindU64(&b[0], &vSec);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    return rc;
+}
+
 solariStatus serverDbSetNodeState(serverDb *db, uint64_t nodeId, const char *state)
 {
     static const char *SQL = "UPDATE node SET state = ? WHERE nodeId = ?";

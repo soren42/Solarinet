@@ -8,6 +8,3 @@ ALTER TABLE gearInterfaceCurrent
 
 CREATE INDEX idx_alertEvent_current_condition
   ON alertEvent (clearedAt, ruleId, nodeId, targetId, eventId);
-
-CREATE INDEX idx_probeHistory_recent_target
-  ON probeHistory (sampledAt, targetId);

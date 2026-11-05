@@ -45,6 +45,7 @@
 enum {
     SERVER_INGEST_BURST   = 64,   /* max ingest frames drained per iteration   */
     SERVER_STANDBY_IDLE_MS = 100, /* standby pause between lease re-evaluations */
+    SERVER_NODE_SILENT_SEC = 300, /* clients report every 15 s; five minutes of silence is never a blip */
     SERVER_CTL_QUEUE_BATCH = 8    /* max queued privileged requests per tick    */
 };
 
@@ -355,6 +356,7 @@ static void serverRunLoop(serverContext *ctx, const serverConfig *cfg)
 {
     uint64_t nextLeaseMs = 0;   /* 0 -> claim/renew on the very first iteration */
     uint64_t nextDecommissionRetryMs = 0;
+    uint64_t nextSilentSweepMs = 0;
 
     solariLogf(SOLARI_LOG_INFO,
                "solariServer nodeId=0x%llx entering main loop "
@@ -381,6 +383,10 @@ static void serverRunLoop(serverContext *ctx, const serverConfig *cfg)
             if (now >= nextDecommissionRetryMs) {
                 serverProvisionRetryDecommissions(ctx, now);
                 nextDecommissionRetryMs = now + UINT64_C(5000);
+            }
+            if (now >= nextSilentSweepMs) {
+                (void)serverDbMarkSilentNodes(ctx->db, SERVER_NODE_SILENT_SEC);
+                nextSilentSweepMs = now + UINT64_C(60000);
             }
         } else {
             solariSleepMs(SERVER_STANDBY_IDLE_MS);

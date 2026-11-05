@@ -117,6 +117,13 @@ Alarm predicate, episode ids and vital-down logic do not change.
 
 - Every moving element on a screen moves because of a measurement. No synthetic jitter.
 - `rttTenthMs`/`lossPermille` aggregates exclude targets with no success in 24 h; those
-  targets still appear in `probes`.
+  targets still appear in `probes`, listed last, with state UNKNOWN and null RTT and loss
+  (JSON `null`, wire 0xFFFF). A target failing now that answered inside 24 h shows state
+  DOWN and null RTT, and counts as 100% loss in the aggregate. Each host gets one row led
+  by its ICMP target; a host that answers while one of its services does not is DEGRADED.
+- Probe values come from `probeCurrent` so they move with the network. Row order holds
+  still while state holds still, because firmware keeps history by position.
+- Monitor nodes are vantage points on hosts already in the roster, so the panel does not
+  count them as systems, and decommissioned assets are left out.
 - Screens never claim a percentile the server did not compute.
 - Local history starts empty and draws only real samples: nothing is back-filled.
