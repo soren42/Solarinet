@@ -88,9 +88,11 @@ function panelProbeName($displayName, $host): string
 function panelAlertTarget($targetId): array
 {
     $parts = explode(':', (string) ($targetId ?? ''));
-    $host = ($parts[1] ?? '') !== '' ? $parts[1] : null;
-    $port = isset($parts[2]) && ctype_digit($parts[2]) ? (int) $parts[2] : null;
-    return [$host, $port];
+    array_shift($parts);
+    /* The port is the last field only when one follows the host; an IPv6 host carries colons of its own. */
+    $port = count($parts) >= 2 && ctype_digit((string) end($parts)) ? (int) array_pop($parts) : null;
+    $host = implode(':', $parts);
+    return [$host !== '' ? $host : null, $port];
 }
 
 /** Say which service stopped answering; a bare host is NO RESPONSE. */
@@ -700,7 +702,7 @@ return static function (Router $router): void {
                ORDER BY entityCrit DESC,
                         CASE e.severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
                         e.firedAt DESC, e.eventId DESC
-                  LIMIT 256"
+                  LIMIT 4096"
             );
             $alertHeatRows = Db::rows(
                 "SELECT r.metric, e.severity, e.firedAt,
@@ -962,8 +964,7 @@ return static function (Router $router): void {
             /* A probe alert's nodeId is the monitor that saw it: name the target. */
             [$targetHost, $targetPort] = panelAlertTarget($row['targetId'] ?? null);
             $metric = $row['metric'] === null ? null : (string) $row['metric'];
-            $key = $targetHost !== null ? $metric . '|' . $targetHost . '|' . $targetPort
-                : $metric . '|' . (string) $row['nodeId'];
+            $key = (string) $row['ruleId'] . '|' . ($row['targetId'] !== null ? (string) $row['targetId'] : (string) $row['nodeId']);
             if (isset($alertKeys[$key])) continue;
             $alertKeys[$key] = true;
             $faultCounts[panelFaultCode($metric)]++;

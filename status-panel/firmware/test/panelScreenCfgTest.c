@@ -140,6 +140,10 @@ int main(void) {
           "tour: crosses theme boundaries and wraps");
     tour.screenCfg[4] &= (uint8_t)~1u;
     check(panelScreenCfgTourNext(&tour, 3u) == 5u, "tour: skips a disabled screen");
+    panelScreenCfgLoad(&tour, NULL, 0u);
+    for (i = 0u; i < PANEL_THEME_SCREENS; ++i) tour.screenCfg[PANEL_THEME_SCREENS + i] &= (uint8_t)~1u;
+    check(panelScreenCfgTourNext(&tour, (uint8_t)(PANEL_THEME_SCREENS - 1u)) == PANEL_THEME_SCREENS,
+          "tour: an all-disabled theme falls back like manual selection");
     for (i = 0u; i < PANEL_SCREEN_COUNT; ++i) tour.screenCfg[i] &= (uint8_t)~1u;
     check(panelScreenCfgTourNext(&tour, 7u) == 8u, "tour: all disabled still advances");
   }

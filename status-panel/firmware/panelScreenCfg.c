@@ -129,7 +129,8 @@ uint8_t panelScreenCfgTourNext(const PanelScreenCfg *cfg, uint8_t index) {
   if (cfg != NULL)
     for (i = 1u; i <= PANEL_SCREEN_COUNT; ++i) {
       uint8_t candidate = (uint8_t)((index + i) % PANEL_SCREEN_COUNT);
-      if ((cfg->screenCfg[candidate] & 1u) != 0u) return candidate;
+      if (panelScreenCfgEnabled(cfg, (uint8_t)(candidate / PANEL_THEME_SCREENS),
+                                (uint8_t)(candidate % PANEL_THEME_SCREENS))) return candidate;
     }
   return (uint8_t)((index + 1u) % PANEL_SCREEN_COUNT);
 }

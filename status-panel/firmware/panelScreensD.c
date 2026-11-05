@@ -151,7 +151,8 @@ void panelScreenD3(const PanelEnv *env, float t, float dt) {
     if (s->lanDownKbps != PANEL_RATE_NONE) total += (float)s->lanDownKbps;
     if (s->lanUpKbps != PANEL_RATE_NONE) total += (float)s->lanUpKbps;
   }
-  phase = fmodf(phase + (0.15f + 2.2f * panelRateLevel(total)) * dt, 6.2831853f * 16.0f);
+  /* The curtain only moves for measured traffic; a still sky means none. */
+  if (total > 0.0f) phase = fmodf(phase + (0.15f + 2.2f * panelRateLevel(total)) * dt, 6.2831853f * 16.0f);
 
   for (int x = 0; x < PANEL_W; x++) {
     /* Neighbouring bands blend so the curtain has no hard seams. */

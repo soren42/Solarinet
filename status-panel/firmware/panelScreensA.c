@@ -114,6 +114,7 @@ static void poolRow(int y, const PanelSnapshot *s, int i) {
   int cells = total <= BAR_W ? total : BAR_W;
 
   panelTextFit(0, y, p->name, 8, cInk, 1.0f);
+  if (p->total == 0) return; /* An empty pool has no hosts to colour. */
   /* Cell k shows the state of the host at its proportional position, worst
    * first, and a state with any hosts always shows at least one cell. */
   int run = 0, kind = 0, used = 0;

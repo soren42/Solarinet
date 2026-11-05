@@ -97,7 +97,8 @@ lossPermille, state}`, `popTail[]` (the bytes), `alertHeat{warn[52], crit[52]}`,
 
 | Metric | msg |
 |---|---|
-| reachable | `NO RESPONSE` |
+| reachable, with a port | `<SERVICE> DOWN` (`SSH`, `HTTPS`, …) or `PORT <n> DOWN` |
+| reachable, no port | `NO RESPONSE` |
 | health.failedUnits, one unit | `<UNIT> FAILED`, unit name cut to fit |
 | health.failedUnits, several | `<n> SVCS FAILED` |
 | health.fsReadonly | `DISK READONLY` |
@@ -120,7 +121,12 @@ Alarm predicate, episode ids and vital-down logic do not change.
   targets still appear in `probes`, listed last, with state UNKNOWN and null RTT and loss
   (JSON `null`, wire 0xFFFF). A target failing now that answered inside 24 h shows state
   DOWN and null RTT, and counts as 100% loss in the aggregate. Each host gets one row led
-  by its ICMP target; a host that answers while one of its services does not is DEGRADED.
+  by its ICMP target, unless ICMP has not answered in 24 h while another target has (a
+  firewalled host), when the live target leads. A host that answers while one of its
+  services does not is DEGRADED.
+- `alertList.total` and `faultCounts` count distinct conditions, one per rule and target,
+  so several monitors seeing one fault count once. The `alerts` severity counts match the
+  dashboard summary and count per monitor; the panel draws only `alertList`.
 - Probe values come from `probeCurrent` so they move with the network. Row order holds
   still while state holds still, because firmware keeps history by position.
 - Monitor nodes are vantage points on hosts already in the roster, so the panel does not

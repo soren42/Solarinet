@@ -125,6 +125,11 @@ static void rateSpark(const PanelEnv *env, const float *downRing, const float *u
   }
 }
 
+/* Sum two directions, pinning below the "no rate" sentinel rather than wrapping. */
+static uint32_t rateSum(uint32_t a, uint32_t b) {
+  return a > PANEL_RATE_NONE - 1u - b ? PANEL_RATE_NONE - 1u : a + b;
+}
+
 /* One rate row: 3-letter label, current total, sparkline. */
 static void rateRow(const PanelEnv *env, int y, const char *label, uint32_t down,
                     uint32_t up, const float *downRing, const float *upRing,
@@ -132,11 +137,11 @@ static void rateRow(const PanelEnv *env, int y, const char *label, uint32_t down
   char rate[8];
   uint32_t total = PANEL_RATE_NONE;
   if (down != PANEL_RATE_NONE) total = down;
-  if (up != PANEL_RATE_NONE) total = (total == PANEL_RATE_NONE ? 0u : total) + up;
+  if (up != PANEL_RATE_NONE) total = rateSum(total == PANEL_RATE_NONE ? 0u : total, up);
   panelRateLabel(total, rate, sizeof rate);
   int x = panelText(0, y, label, cInk, 1.0f);
-  panelText(x, y, rate, hue, 1.0f);
-  rateSpark(env, downRing, upRing, 33, PANEL_W - 1, y, hue);
+  x = panelText(x, y, rate, hue, 1.0f);
+  rateSpark(env, downRing, upRing, x > 33 ? x : 33, PANEL_W - 1, y, hue);
 }
 
 /* ---- B1 · WAN and LAN -----------------------------------------------------
@@ -174,7 +179,7 @@ void panelScreenB2(const PanelEnv *env, float t, float dt) {
     char rate[8];
     uint32_t rx = s->sysx[i].rxKbps == PANEL_RATE_NONE ? 0u : s->sysx[i].rxKbps;
     uint32_t tx = s->sysx[i].txKbps == PANEL_RATE_NONE ? 0u : s->sysx[i].txKbps;
-    panelRateLabel(rx + tx, rate, sizeof rate);
+    panelRateLabel(rateSum(rx, tx), rate, sizeof rate);
     panelTextFit(0, y, s->systems[i].name, 8, cInk, 1.0f);
     panelTextRight(PANEL_W - 1, y, rate, cAzure, 1.0f);
   }
