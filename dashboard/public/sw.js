@@ -23,7 +23,7 @@
 "use strict";
 
 // Bump the version to evict API responses cached by earlier service workers.
-const CACHE_VERSION = "solari-v18";
+const CACHE_VERSION = "solari-v19";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
 const TRANSFORM_CACHE = "solari-jsx-transform-v2";
 

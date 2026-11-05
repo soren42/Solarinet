@@ -1463,8 +1463,8 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
   border-left: 2px solid var(--line-2); padding-left: 12px;
 }
 
-/* --- the twelve virtual screens ------------------------------------- */
-.vp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+/* --- the sixteen virtual screens ------------------------------------- */
+.vp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; }
 .vp-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 14px; }
 .vp-tile {
   margin: 0; border: 1px solid var(--line); border-radius: var(--r-lg);
@@ -1564,6 +1564,7 @@ table.mx tbody tr.sel .mx-cell { background: color-mix(in srgb, var(--teal) 5%, 
   font-family: var(--mono); letter-spacing: .02em;
 }
 .vp-cfg .chip:disabled { opacity: .4; cursor: not-allowed; }
+@media (max-width: 720px) { .vp-grid { grid-template-columns: 1fr; } .vp-cfg .chip { min-height: 42px; min-width: 42px; } .vp-ctl .chip { min-height: 44px; } .vp-canvas { width: 100%; height: auto; image-rendering: pixelated; } }
 .vp-cfg .vp-cmd { margin-left: auto; }
 
 @media (max-width: 720px) {
