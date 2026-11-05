@@ -19,19 +19,19 @@ WHERE e.clearedAt IS NULL
   AND e.eventKind = 'fired'
   AND newest.detail LIKE 'CLEARED %';
 
--- Keep the oldest still-open event for each alert condition.
-UPDATE alertEvent AS newer
-JOIN alertEvent AS older
-  ON older.ruleId <=> newer.ruleId
- AND older.nodeId <=> newer.nodeId
- AND older.targetId <=> newer.targetId
- AND older.eventId < newer.eventId
- AND older.eventKind = 'fired'
- AND older.clearedAt IS NULL
-SET newer.clearedAt = UTC_TIMESTAMP()
-WHERE newer.clearedAt IS NULL
-  AND newer.ruleId IS NOT NULL
-  AND newer.eventKind = 'fired';
+-- Keep the newest still-open event for each alert condition, so its age is the current firing's.
+UPDATE alertEvent AS stale
+JOIN alertEvent AS kept
+  ON kept.ruleId <=> stale.ruleId
+ AND kept.nodeId <=> stale.nodeId
+ AND kept.targetId <=> stale.targetId
+ AND kept.eventId > stale.eventId
+ AND kept.eventKind = 'fired'
+ AND kept.clearedAt IS NULL
+SET stale.clearedAt = UTC_TIMESTAMP()
+WHERE stale.clearedAt IS NULL
+  AND stale.ruleId IS NOT NULL
+  AND stale.eventKind = 'fired';
 
 -- Close open reachability conditions whose probe target has been removed. An event
 -- names a target <ordinal>:<host>:<port> (1 ICMP, 2 TCP); probeTarget also holds
