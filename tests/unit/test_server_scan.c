@@ -422,7 +422,8 @@ static void test_cancel_terminates_enrichment_process_group(void)
     snprintf(expectedPorts, sizeof expectedPorts, "-p\n%s\n", portText);
     TEST_ASSERT_NOT_NULL(strstr(argsText, expectedPorts));
     TEST_ASSERT_NOT_NULL(strstr(argsText, "--version-light\n"));
-    TEST_ASSERT_NOT_NULL(strstr(argsText, "--osscan-limit\n"));
+    TEST_ASSERT_NOT_NULL(strstr(argsText, "--privileged\n"));
+    TEST_ASSERT_NULL(strstr(argsText, "--osscan-limit"));
 }
 
 static void test_enrichment_timeout_terminates_tool(void)
