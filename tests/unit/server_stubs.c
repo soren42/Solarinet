@@ -104,6 +104,9 @@ WEAK solariStatus serverDbWriteAlertEvent(serverDb *db, int rid, uint64_t n,
     const char *t, const char *sev, const char *d, uint64_t f, const char *k,
     uint64_t opened, uint64_t asset, int tier, const char *disp, uint64_t *event)
 { (void)db;(void)rid;(void)n;(void)t;(void)sev;(void)d;(void)f;(void)k;(void)opened;(void)asset;(void)tier;(void)disp;if(event)*event=0; return ERR_DB; }
+WEAK solariStatus serverDbFindOpenAlertEvent(serverDb *db, int rid, uint64_t n,
+    const char *t, uint64_t *event)
+{ (void)db;(void)rid;(void)n;(void)t;if(event)*event=0;return SOLARI_OK; }
 WEAK solariStatus serverDbLoadAlertRules(serverDb *db, const char *s,
     serverAlertRule *o, size_t *c)
 { (void)db;(void)s;(void)o; if (c) *c = 0; return ERR_DB; }

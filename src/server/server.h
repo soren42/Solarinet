@@ -405,6 +405,10 @@ solariStatus serverDbWriteAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
                                      const char *eventKind, uint64_t openedEventId,
                                      uint64_t assetId, int effectiveTier,
                                      const char *disposition, uint64_t *eventId);
+/* Find the oldest currently-open fired row for one rule condition. Returns
+ * eventId=0 when absent; targetId may be NULL for host scope. */
+solariStatus serverDbFindOpenAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
+                                        const char *targetId, uint64_t *eventId);
 /* Load all enabled alert rules of the given scope ('host' or 'probe'). Writes
  * up to *count rules into out (caller-sized); updates *count to the number
  * written. */

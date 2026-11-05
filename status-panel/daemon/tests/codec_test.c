@@ -53,7 +53,7 @@ int main(void) {
   PanelParser parser;
   PanelSnapshot lastGood;
   uint8_t frame[PANEL_HDR_SIZE+PANEL_MAX_PAYLOAD+PANEL_CRC_SIZE];
-  uint8_t control[PANEL_CONTROL_SIZE], state[PANEL_STATE_SIZE], config[PANEL_CONFIG_SIZE], screenCfg[12], configFlags;
+  uint8_t control[PANEL_CONTROL_SIZE], state[PANEL_STATE_SIZE], config[PANEL_CONFIG_SIZE], screenCfg[PANEL_SCREEN_SLOTS], configFlags;
   uint8_t stream[4u*(PANEL_HDR_SIZE+PANEL_MAX_PAYLOAD+PANEL_CRC_SIZE)+16u];
   size_t frameLen, offset, i;
   uint32_t cmdId, ackedEpisodeId, lastCmdId;
@@ -87,12 +87,12 @@ int main(void) {
   stateFrames=0; panelParserInit(&parser); frameLen=panelEncodeFrame(PANEL_FT_STATE,state,sizeof(state),frame,sizeof(frame));
   for(i=0;i<frameLen;++i) panelParserFeed(&parser,frame+i,1u,(uint32_t)i,receive,NULL);
   if(require(stateFrames==1,"STATE parser dispatch missing")) return 1;
-  for(i=0u;i<12u;++i) screenCfg[i]=(uint8_t)(i == 11u ? 0x0bu : 0x05u);
-  if(require(panelEncodeConfig(screenCfg,1u,config,sizeof(config))==PANEL_CONFIG_SIZE,"CONFIG encode failed")||require(panelDecodeConfig(config,sizeof(config),screenCfg,&configFlags)==0&&configFlags==1u&&screenCfg[11]==0x0bu,"CONFIG round trip failed")) return 1;
+  for(i=0u;i<PANEL_SCREEN_SLOTS;++i) screenCfg[i]=(uint8_t)(i == 15u ? 0x0bu : 0x05u);
+  if(require(panelEncodeConfig(screenCfg,1u,config,sizeof(config))==PANEL_CONFIG_SIZE,"CONFIG encode failed")||require(panelDecodeConfig(config,sizeof(config),screenCfg,&configFlags)==0&&configFlags==1u&&screenCfg[15]==0x0bu,"CONFIG round trip failed")) return 1;
   configFrames=0; panelParserInit(&parser); frameLen=panelEncodeFrame(PANEL_FT_CONFIG,config,sizeof(config),frame,sizeof(frame));
   for(i=0;i<frameLen;++i) panelParserFeed(&parser,frame+i,1u,(uint32_t)i,receive,NULL);
   if(require(configFrames==1,"CONFIG parser dispatch missing")) return 1;
-  if(require(panelEncodeControl(31u,PANEL_CTL_SCREENEN,(uint8_t)((11u<<1)|1u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENEN&&arg==23u,"SCREENEN round trip failed")||require(panelEncodeControl(32u,PANEL_CTL_SCREENWT,(uint8_t)((11u<<3)|5u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENWT&&arg==93u,"SCREENWT round trip failed")) return 1;
+  if(require(panelEncodeControl(31u,PANEL_CTL_SCREENEN,(uint8_t)((15u<<1)|1u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENEN&&arg==31u,"SCREENEN round trip failed")||require(panelEncodeControl(32u,PANEL_CTL_SCREENWT,(uint8_t)((15u<<3)|5u),control,sizeof(control))==PANEL_CONTROL_SIZE&&panelDecodeControl(control,sizeof(control),&cmdId,&kind,&arg)==0&&kind==PANEL_CTL_SCREENWT&&arg==125u,"SCREENWT round trip failed")) return 1;
   memset(stream,0,sizeof(stream)); memcpy(stream,control,sizeof(control));
   if(require(panelDecodeControl(stream,PANEL_CONTROL_SIZE+1u,&cmdId,&kind,&arg)==0,"CONTROL trailing bytes rejected")) return 1;
   /* Review re-check NIT: the short-gear-trailer guard case, mirrored from the
@@ -131,6 +131,25 @@ int main(void) {
     if(require(gearSnap.gear[1].role==2u&&gearSnap.gear[1].state==0u,"gear fail-dark state clamp failed")) return 1;
   }
   if(require(panelParseSnapshotForTest(badJson,&lastGood)==-1&&lastGood.ts==42u&&lastGood.score==140u,"malformed snapshot clobbered last good state")) return 1;
+
+  {
+    const char *v2Json="{\"ok\":true,\"data\":{\"ts\":44,\"score\":1,\"stateRoll\":{},\"alerts\":{},\"pools\":[],"
+      "\"systems\":[{\"name\":\"XENON\",\"pool\":0,\"tier\":1,\"state\":\"up\",\"loadPct\":20,\"memPct\":73,\"diskPct\":81,\"faults\":2,\"rxKbps\":null,\"txKbps\":19}],"
+      "\"links\":[{\"name\":\"INTERNET\",\"kind\":0,\"state\":1,\"parent\":255,\"upKbps\":null,\"downKbps\":120}],"
+      "\"alertList\":{\"total\":1,\"faultCounts\":[0,1,0,0,0,0,0],\"items\":[{\"severity\":\"crit\",\"code\":1,\"ageMin\":12,\"host\":\"XENON\",\"msg\":\"NO RESPONSE\"}]},"
+      "\"probes\":[{\"name\":\"DNS\",\"rttTenthMs\":null,\"lossPermille\":null,\"state\":3}],\"popTail\":[65],"
+      "\"alertHeat\":{\"warn\":[0],\"crit\":[0]},\"totals\":{\"wanUpKbps\":1,\"wanDownKbps\":2,\"lanUpKbps\":3,\"lanDownKbps\":4}}}";
+    const char *malformedOptional="{\"ok\":true,\"data\":{\"ts\":45,\"score\":2,\"stateRoll\":{},\"alerts\":{},\"pools\":[],\"systems\":[],\"links\":[{}]}}";
+    PanelSnapshot v2;memset(&v2,0,sizeof(v2));
+    if(require(panelParseSnapshotForTest(v2Json,&v2)==0&&v2.ts==44u,"v2 optional JSON rejected")) return 1;
+    if(require(v2.hasSysx&&v2.sysx[0].memPct==73u&&v2.sysx[0].diskPct==81u&&v2.sysx[0].rxKbps==PANEL_RATE_NONE&&v2.sysx[0].txKbps==19u,"SYSX parse/clamp failed")) return 1;
+    if(require(v2.hasLinks&&v2.linkCount==1u&&v2.links[0].upKbps==PANEL_RATE_NONE&&v2.links[0].downKbps==120u,"LINKS parse/null rate failed")) return 1;
+    if(require(v2.hasAlerts&&v2.alertTotal==1u&&v2.alerts[0].code==PANEL_FAULT_REACH,"ALERTS parse failed")) return 1;
+    if(require(v2.hasProbes&&v2.probes[0].rttTenthMs==65535u&&v2.popCount==1u&&v2.pop[0]==65u,"probe/pop parse failed")) return 1;
+    if(require(!v2.hasHeat&&v2.hasTotals&&v2.lanDownKbps==4u,"malformed optional array affected another extension")) return 1;
+    memset(&v2,0,sizeof(v2));
+    if(require(panelParseSnapshotForTest(malformedOptional,&v2)==0&&v2.ts==45u&&!v2.hasLinks,"malformed optional data discarded base snapshot")) return 1;
+  }
 
   /* forwardCommands must navigate the real API envelope: commands lives at
    * data.commands, not the root. This is the exact bug class that shipped —

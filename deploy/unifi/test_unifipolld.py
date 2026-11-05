@@ -25,6 +25,8 @@ class FakeClient:
     def get(self, path):
         if self.fail: raise OSError('timeout')
         if path.endswith('/sites'): return {'data': [{'id': 'site'}]}
+        if '/statistics/latest' in path: raise OSError('unsupported stats')
+        if '/stat/device' in path: raise OSError('classic endpoint unavailable')
         return {'data': [{'id': 'one', 'name': 'router', 'model': 'UDM Pro', 'online': True, 'statistics': {'rxBytes': 1000, 'txBytes': 2000}}]}
 
 
@@ -39,6 +41,31 @@ class UniFiPollTests(unittest.TestCase):
     def test_rate_derivation(self):
         self.assertEqual(8, unifipolld.derive_rate_kbps(1000, 11000, 10))
         self.assertEqual(0, unifipolld.derive_rate_kbps(11000, 1000, 10))
+
+    def test_classic_port_rates_topology_and_cycles(self):
+        devices = [
+            {'mac': 'aa:00', 'model': 'USW Pro Max', 'uplink': {'uplink_mac': 'bb:00'},
+             'port_table': [{'port_idx': 7, 'name': 'Uplink', 'is_uplink': True, 'up': True,
+                             'rx_bytes-r': 1250, 'tx_bytes-r': 2500, 'rx_bytes': 10000, 'tx_bytes': 20000}]},
+            {'mac': 'bb:00', 'model': 'UDM Pro', 'uplink': {'uplink_mac': 'aa:00', 'rx_rate': 1200000, 'tx_rate': 3400000},
+             'port_table': []},
+        ]
+        rows = unifipolld.classic_device_rows(devices)
+        port = rows['unifi-aa:00']['ports'][0]
+        self.assertEqual(10, port['inRateKbps'])
+        self.assertEqual(20, port['outRateKbps'])
+        self.assertEqual(7, port['ifIndex'])
+        self.assertEqual(1, port['isUplink'])
+        self.assertEqual(1200, rows['unifi-bb:00']['wanInRateKbps'])
+        self.assertEqual('unifi-bb:00', rows['unifi-aa:00']['uplinkGearId'])
+        self.assertIsNone(rows['unifi-bb:00']['uplinkGearId'])
+
+    def test_classic_failure_does_not_stop_integration_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = unifipolld.poll_once(FakeClient(), 'unused', os.path.join(directory, 'state.json'), True)
+            self.assertEqual(1, len(rows))
+            self.assertEqual('unifi-one', rows[0]['gearId'])
+            self.assertEqual([], rows[0]['ports'])
 
     def test_fail_soft_poll_error(self):
         with tempfile.TemporaryDirectory() as directory:

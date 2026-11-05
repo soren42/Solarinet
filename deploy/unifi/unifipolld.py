@@ -214,6 +214,81 @@ def device_online(item):
     return True
 
 
+def rate_bytes_per_second_kbps(value):
+    """Convert classic UniFi byte/s rates to decimal kilobits/s once."""
+    rate = numeric(value)
+    return max(0, int((rate or 0) * 8 / 1000))
+
+
+def rate_bits_per_second_kbps(value):
+    """Convert classic UniFi gateway bit/s rates to decimal kilobits/s."""
+    rate = numeric(value)
+    return max(0, int((rate or 0) / 1000))
+
+
+def classic_device_rows(devices):
+    """Normalize classic stat/device rows, retaining actual port topology."""
+    rows = {}
+    mac_to_id = {}
+    for item in devices:
+        mac = str(pick(item, "mac", "macAddress", default="")).lower()
+        if not mac:
+            continue
+        gear_id = f"unifi-{mac}"
+        model = str(pick(item, "model", "modelName", default=""))
+        ports = []
+        for port in item.get("port_table", []) if isinstance(item.get("port_table"), list) else []:
+            if not isinstance(port, dict) or numeric(port.get("port_idx")) is None or int(port["port_idx"]) <= 0:
+                continue
+            rx = pick(port, "rx_bytes-r", "rx_bytes_r", "rxRate"); tx = pick(port, "tx_bytes-r", "tx_bytes_r", "txRate")
+            ports.append({
+                "ifIndex": max(0, int(port["port_idx"])),
+                "ifName": str(pick(port, "name", "port_name", default=f"port-{port['port_idx']}")),
+                "inRateKbps": rate_bytes_per_second_kbps(rx),
+                "outRateKbps": rate_bytes_per_second_kbps(tx),
+                "inOctets": max(0, int(numeric(pick(port, "rx_bytes", "rxBytes", default=0)) or 0)),
+                "outOctets": max(0, int(numeric(pick(port, "tx_bytes", "txBytes", default=0)) or 0)),
+                "operStatus": 1 if bool(pick(port, "up", "is_up", default=False)) else 2,
+                "isUplink": 1 if bool(pick(port, "is_uplink", "isUplink", default=False)) else 0,
+            })
+        uplink = pick(item, "uplink", default={})
+        if not isinstance(uplink, dict):
+            uplink = {}
+        rows[gear_id] = {
+            "gearId": gear_id,
+            "macAddress": mac,
+            "parentMac": str(pick(uplink, "uplink_mac", "uplinkMac", default="")).lower() or None,
+            "uplinkPort": pick(uplink, "port_idx", "portIdx"),
+            "ports": ports,
+            "wanInRateKbps": rate_bits_per_second_kbps(pick(uplink, "rx_rate", "rxRate")),
+            "wanOutRateKbps": rate_bits_per_second_kbps(pick(uplink, "tx_rate", "txRate")),
+            "isGateway": model_kind(model) == "gateway",
+        }
+        mac_to_id[mac] = gear_id
+
+    for row in rows.values():
+        parent_mac = row["parentMac"]
+        row["uplinkGearId"] = mac_to_id.get(parent_mac) if parent_mac else None
+    # Break each directed cycle at the gateway when present (the WAN is the
+    # panel graph root); otherwise cut a deterministic member. Retain the
+    # remaining MAC-derived parents rather than dropping the entire loop.
+    for start in rows:
+        path = []
+        positions = {}
+        current = start
+        while current in rows and rows[current]["uplinkGearId"]:
+            if current in positions:
+                cycle = path[positions[current]:]
+                gateways = [member for member in cycle if rows[member]["isGateway"]]
+                cut = gateways[0] if gateways else max(cycle)
+                rows[cut]["uplinkGearId"] = None
+                break
+            positions[current] = len(path)
+            path.append(current)
+            current = rows[current]["uplinkGearId"]
+    return rows
+
+
 def normalise_devices(devices, state, now, stats_fetcher=None):
     rows = []
     prior = state.setdefault("devices", {})
@@ -259,15 +334,29 @@ def write_rows(rows, database, dry_run):
         for row in rows:
             print(f"DRY-RUN networkGear {row['gearId']} kind={row['kind']} name={row['name']}")
             print(f"DRY-RUN gearInterfaceCurrent {row['gearId']} ifIndex=0 in={row['inRateKbps']} out={row['outRateKbps']}")
+            for port in row.get("ports", []):
+                print(f"DRY-RUN gearInterfaceCurrent {row['gearId']} ifIndex={port['ifIndex']} uplink={port['isUplink']}")
         return
     with db_connect(database) as db, db.cursor() as cur:
         for row in rows:
-            cur.execute("""INSERT INTO networkGear (gearId,name,kind,model,mgmtIp,lastSeenAt)
-                VALUES (%(gearId)s,%(name)s,%(kind)s,%(model)s,%(mgmtIp)s,UTC_TIMESTAMP())
-                ON DUPLICATE KEY UPDATE name=VALUES(name),kind=VALUES(kind),model=VALUES(model),mgmtIp=VALUES(mgmtIp),lastSeenAt=UTC_TIMESTAMP()""", row)
+            cur.execute("""INSERT INTO networkGear
+                (gearId,name,kind,model,mgmtIp,macAddress,uplinkGearId,ports,lastSeenAt)
+                VALUES (%(gearId)s,%(name)s,%(kind)s,%(model)s,%(mgmtIp)s,%(macAddress)s,%(uplinkGearId)s,%(portCount)s,UTC_TIMESTAMP())
+                ON DUPLICATE KEY UPDATE name=VALUES(name),kind=VALUES(kind),model=VALUES(model),mgmtIp=VALUES(mgmtIp),
+                macAddress=IF(%(classicSeen)s=1,VALUES(macAddress),macAddress),
+                uplinkGearId=IF(%(classicSeen)s=1,VALUES(uplinkGearId),uplinkGearId),
+                ports=COALESCE(VALUES(ports),ports),lastSeenAt=UTC_TIMESTAMP()""", row)
             cur.execute("""INSERT INTO gearInterfaceCurrent (gearId,ifIndex,ifName,inRateKbps,outRateKbps,operStatus,sampledAt)
                 VALUES (%(gearId)s,0,'aggregate',%(inRateKbps)s,%(outRateKbps)s,%(operStatus)s,UTC_TIMESTAMP())
                 ON DUPLICATE KEY UPDATE ifName=VALUES(ifName),inRateKbps=VALUES(inRateKbps),outRateKbps=VALUES(outRateKbps),operStatus=VALUES(operStatus),sampledAt=UTC_TIMESTAMP()""", row)
+            for port in row.get("ports", []):
+                port_row = {**port, "gearId": row["gearId"]}
+                cur.execute("""INSERT INTO gearInterfaceCurrent
+                    (gearId,ifIndex,ifName,inOctets,outOctets,inRateKbps,outRateKbps,operStatus,isUplink,sampledAt)
+                    VALUES (%(gearId)s,%(ifIndex)s,%(ifName)s,%(inOctets)s,%(outOctets)s,%(inRateKbps)s,%(outRateKbps)s,%(operStatus)s,%(isUplink)s,UTC_TIMESTAMP())
+                    ON DUPLICATE KEY UPDATE ifName=VALUES(ifName),inOctets=VALUES(inOctets),outOctets=VALUES(outOctets),
+                    inRateKbps=VALUES(inRateKbps),outRateKbps=VALUES(outRateKbps),operStatus=VALUES(operStatus),
+                    isUplink=VALUES(isUplink),sampledAt=UTC_TIMESTAMP()""", port_row)
 
 
 def poll_once(client, database, state_path, dry_run=False):
@@ -285,6 +374,38 @@ def poll_once(client, database, state_path, dry_run=False):
         return client.device_statistics(site_id, device_id) if device_id else None
 
     rows = normalise_devices(devices, state, time.time(), stats_fetcher=fetch_stats)
+    # The classic endpoint enriches rates/topology, but its failure must not
+    # interfere with the existing Integration API path.
+    try:
+        classic = data_items(client.get("/proxy/network/api/s/default/stat/device"))
+        by_id = {row["gearId"]: row for row in rows}
+        enriched = classic_device_rows(classic)
+        for gear_id, detail in enriched.items():
+            if gear_id in by_id:
+                by_id[gear_id].update(detail)
+                by_id[gear_id]["classicSeen"] = 1
+                if detail["isGateway"]:
+                    by_id[gear_id]["inRateKbps"] = detail["wanInRateKbps"]
+                    by_id[gear_id]["outRateKbps"] = detail["wanOutRateKbps"]
+            else:
+                item = next((d for d in classic if f"unifi-{str(pick(d, 'mac', 'macAddress', default='')).lower()}" == gear_id), {})
+                by_id[gear_id] = {
+                    **detail, "name": str(pick(item, "name", "hostname", default=gear_id)),
+                    "kind": model_kind(str(pick(item, "model", "modelName", default=""))),
+                    "model": str(pick(item, "model", "modelName", default="")), "mgmtIp": pick(item, "ip", "ipAddress"),
+                    "inRateKbps": detail["wanInRateKbps"], "outRateKbps": detail["wanOutRateKbps"],
+                    "operStatus": 1 if device_online(item) else 2,
+                    "classicSeen": 1,
+                }
+        rows = list(by_id.values())
+    except Exception:  # noqa: BLE001 — optional classic endpoint is fail-soft.
+        pass
+    for row in rows:
+        row.setdefault("macAddress", None)
+        row.setdefault("uplinkGearId", None)
+        row.setdefault("ports", [])
+        row.setdefault("classicSeen", 0)
+        row["portCount"] = len(row["ports"]) or None
     write_rows(rows, database, dry_run)
     save_state(state_path, state)
     log(f"polled {len(rows)} UniFi devices" + (" (dry run)" if dry_run else ""))

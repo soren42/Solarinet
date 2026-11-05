@@ -2640,6 +2640,58 @@ solariStatus serverDbWriteAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
     return rc;
 }
 
+solariStatus serverDbFindOpenAlertEvent(serverDb *db, int ruleId, uint64_t nodeId,
+                                        const char *targetId, uint64_t *eventId)
+{
+    static const char *SQL =
+        "SELECT eventId FROM alertEvent WHERE ruleId=? AND nodeId=? "
+        "AND targetId <=> ? AND clearedAt IS NULL AND eventKind='fired' "
+        "ORDER BY eventId ASC LIMIT 1";
+    MYSQL *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND in[3], out[1];
+    int vRule = ruleId;
+    unsigned long long vNode = nodeId, vEvent = 0;
+    unsigned long targetLen = 0;
+    solariStatus rc;
+
+    if (eventId) *eventId = 0;
+    if (!conn || !eventId || ruleId <= 0) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindI32(&in[0], &vRule);
+    dbBindU64(&in[1], &vNode);
+    dbBindStr(&in[2], (targetId && targetId[0]) ? targetId : NULL, &targetLen);
+    if (mysql_stmt_bind_param(st, in) != 0 || mysql_stmt_execute(st) != 0) {
+        solariLogf(SOLARI_LOG_ERROR, "serverDb: find open alert event failed: %s",
+                   mysql_stmt_error(st));
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    memset(out, 0, sizeof out);
+    out[0].buffer_type = MYSQL_TYPE_LONGLONG;
+    out[0].buffer = &vEvent;
+    out[0].is_unsigned = 1;
+    if (mysql_stmt_bind_result(st, out) != 0) {
+        solariLogf(SOLARI_LOG_ERROR, "serverDb: bind open alert event result failed: %s",
+                   mysql_stmt_error(st));
+        mysql_stmt_close(st);
+        return ERR_DB;
+    }
+    {
+        int fetchRc = mysql_stmt_fetch(st);
+        if (fetchRc == 0) *eventId = (uint64_t)vEvent;
+        else if (fetchRc != MYSQL_NO_DATA) {
+            solariLogf(SOLARI_LOG_ERROR, "serverDb: fetch open alert event failed: %s",
+                       mysql_stmt_error(st));
+            mysql_stmt_close(st);
+            return ERR_DB;
+        }
+    }
+    mysql_stmt_close(st);
+    return SOLARI_OK;
+}
+
 solariStatus serverDbAckAlertEvent(serverDb *db, uint64_t eventId)
 {
     static const char *SQL =

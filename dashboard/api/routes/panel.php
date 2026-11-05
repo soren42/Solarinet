@@ -30,6 +30,13 @@ function panelText($value, int $width): string
     return substr($text, 0, max(0, $width - 1)) . '.';
 }
 
+/** Return the contract's first-label, upper-case short host label. */
+function panelShortHost($hostname): string
+{
+    $first = explode('.', (string) $hostname, 2)[0] ?? '';
+    return panelText($first !== '' ? $first : 'SYSTEM', 12);
+}
+
 /**
  * Derive a CRC-namespace alarm episode id from a triggering-set seed string.
  *
@@ -92,6 +99,82 @@ function panelInterfaceKbps($ifaces): array
         }
     }
     return [min(4294967295, $rx), min(4294967295, $tx)];
+}
+
+function panelHasInterfaceRate($ifaces): bool
+{
+    $entries = is_string($ifaces) ? json_decode($ifaces, true) : $ifaces;
+    if (!is_array($entries)) return false;
+    foreach ($entries as $entry) {
+        if (is_array($entry) && (is_numeric($entry['rxKbps'] ?? null) || is_numeric($entry['txKbps'] ?? null))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function panelResourcePct($used, $total): int
+{
+    $used = is_numeric($used) ? (float) $used : 0.0;
+    $total = is_numeric($total) ? (float) $total : 0.0;
+    return $total <= 0 ? 0 : max(0, min(100, (int) round(100 * $used / $total)));
+}
+
+function panelDiskPct($disks): int
+{
+    $entries = is_string($disks) ? json_decode($disks, true) : $disks;
+    $fullest = 0;
+    if (is_array($entries)) {
+        foreach ($entries as $disk) {
+            if (is_array($disk) && (float) ($disk['totalKb'] ?? 0) > 0) {
+                $fullest = max($fullest, panelResourcePct($disk['usedKb'] ?? 0, $disk['totalKb']));
+            }
+        }
+    }
+    return $fullest;
+}
+
+function panelFaultCode(?string $metric): int
+{
+    return match ($metric) {
+        'reachable' => 1, 'health.failedUnits' => 2, 'health.fsReadonly' => 3,
+        'health.smartFail' => 4, 'health.dmesgCrit' => 5,
+        'health.blockDevMissing' => 6, default => 0,
+    };
+}
+
+function panelAlertMessage(?string $metric, $detail, $failedUnitCount, $failedUnitList): string
+{
+    $count = is_numeric($failedUnitCount) ? max(0, (int) $failedUnitCount) : 0;
+    if ($metric === 'reachable') return 'NO RESPONSE';
+    if ($metric === 'health.failedUnits') {
+        if ($count > 1) return panelText($count . ' SVCS FAILED', 13);
+        $units = trim((string) $failedUnitList);
+        if ($units !== '' && $units[0] === '[') {
+            $decodedUnits = json_decode($units, true);
+            if (is_array($decodedUnits)) $units = implode(' ', array_map('strval', $decodedUnits));
+        }
+        if ($units !== '') {
+            $unit = preg_split('/[,;\s]+/', $units)[0] ?? '';
+            if ($unit !== '') return rtrim(panelText($unit, 6), '.') . ' FAILED';
+        }
+        if ($count === 1 && preg_match('/detail=([^ ]+)/', (string) $detail, $match)) {
+            return rtrim(panelText($match[1], 6), '.') . ' FAILED';
+        }
+        return 'UNIT FAILED';
+    }
+    return match ($metric) {
+        'health.fsReadonly' => 'DISK READONLY',
+        'health.smartFail' => 'DISK FAILING',
+        'health.dmesgCrit' => 'KERNEL ERRORS',
+        'health.blockDevMissing' => 'DISK MISSING',
+        default => panelText(strtoupper(substr(strrchr('.' . (string) $metric, '.'), 1)), 13),
+    };
+}
+
+function panelStateRank(string $state): int
+{
+    return match ($state) { 'down' => 0, 'degraded' => 1, 'unknown' => 2, 'maint' => 3, default => 4 };
 }
 
 /**
@@ -227,17 +310,17 @@ function panelCommandInput(array $body): array
     }
     $valid = match ($kind) {
         1 => $arg <= 3,
-        2 => $arg <= 2,
+        2 => $arg <= 3,
         3 => $arg <= 100,
         4, 5 => true, // Protocol reserves but deliberately ignores this byte.
         6 => in_array($arg, [3, 6, 30], true),
         7 => $arg <= 1,
         // CONTRACT-AW §3.2 + D2: PANEL_CTL_SCREENEN arg = (screenIdx<<1)|enabled,
-        // screenIdx = theme*3+slot in 0..11 -> arg <= 23 covers the whole range.
-        8 => $arg <= 23,
-        // PANEL_CTL_SCREENWT arg = (screenIdx<<3)|weightCode; D2: screenIdx <= 11
+        // screenIdx = theme*4+slot in 0..15 -> arg <= 31 covers the whole range.
+        8 => $arg <= 31,
+        // PANEL_CTL_SCREENWT arg = (screenIdx<<3)|weightCode; D2: screenIdx <= 15
         // AND weightCode <= 5, checked as the two decomposed fields.
-        9 => ($arg >> 3) <= 11 && ($arg & 0x7) <= 5,
+        9 => ($arg >> 3) <= 15 && ($arg & 0x7) <= 5,
     };
     if (!$valid) {
         Response::error('bad_request', 'Argument is invalid for this command kind.', 400);
@@ -256,7 +339,7 @@ function panelCommandInput(array $body): array
 function panelStateInput(array $body): array
 {
     $ranges = [
-        'theme' => [0, 3], 'screen' => [0, 2], 'brightnessPct' => [0, 100],
+        'theme' => [0, 3], 'screen' => [0, 3], 'brightnessPct' => [0, 100],
         'autoBright' => [0, 1], 'sleeping' => [0, 1], 'alarmArmed' => [0, 1],
         'alarmAcked' => [0, 1], 'dwellSec' => [0, 255],
         'ackedEpisodeId' => [0, 4294967295], 'lastCmdId' => [0, 4294967295],
@@ -284,8 +367,8 @@ function panelConfigInput(array $body): array
 {
     $screenCfg = $body['screenCfg'] ?? null;
     $flags = $body['flags'] ?? null;
-    if (!is_array($screenCfg) || count($screenCfg) !== 12 || !is_int($flags) || $flags < 0 || $flags > 255) {
-        Response::error('bad_request', 'screenCfg (12 entries) and flags are required.', 400);
+    if (!is_array($screenCfg) || !in_array(count($screenCfg), [12, 16], true) || !is_int($flags) || $flags < 0 || $flags > 255) {
+        Response::error('bad_request', 'screenCfg (12 or 16 entries) and flags are required.', 400);
     }
     $normalised = [];
     foreach (array_values($screenCfg) as $entry) {
@@ -356,7 +439,9 @@ return static function (Router $router): void {
              * /api/summary requires node.state verbatim over node rows. */
             $systemRows = Db::rows(
                 "SELECT n.nodeId, n.hostFqdn, n.role, n.state,
-                        hc.cpuLoadMilli, hc.ifaces,
+                        hc.cpuLoadMilli, hc.ifaces, hc.ramUsedKb, hc.ramTotalKb, hc.disks,
+                        hc.fsReadonlyCount, hc.blockDevMissing, hc.smartFailCount,
+                        hc.failedUnitCount, hc.dmesgCritCount,
                         a.assetId, a.poolId, a.displayName, a.host, a.class{$selSysCrit}
                    FROM node n
               LEFT JOIN asset a
@@ -387,15 +472,25 @@ return static function (Router $router): void {
                GROUP BY a.assetId, a.poolId, a.displayName, a.host, a.class
                ORDER BY a.assetId"
             );
-            $nodeRollRows = Db::rows(
-                'SELECT state, COUNT(*) AS count FROM node GROUP BY state'
-            );
             $poolRows = Db::rows('SELECT poolId, name FROM pool ORDER BY name');
             $alertCountRows = Db::rows(
                 "SELECT e.severity, COUNT(*) AS count
                    FROM alertEvent e
-                  WHERE e.clearedAt IS NULL
+                   JOIN (SELECT ruleId, nodeId, targetId, MIN(eventId) AS eventId
+                           FROM alertEvent
+                          WHERE clearedAt IS NULL AND eventKind='fired' AND severity IN ('info','warn','crit')
+                          GROUP BY ruleId, nodeId, targetId) d ON d.eventId=e.eventId
                   GROUP BY e.severity"
+            );
+            $faultCountRows = Db::rows(
+                "SELECT r.metric, COUNT(*) AS count
+                   FROM alertEvent e
+              LEFT JOIN alertRule r ON r.ruleId=e.ruleId
+                   JOIN (SELECT ruleId, nodeId, targetId, MIN(eventId) AS eventId
+                           FROM alertEvent WHERE clearedAt IS NULL AND eventKind='fired'
+                          GROUP BY ruleId, nodeId, targetId) d ON d.eventId=e.eventId
+                  WHERE e.clearedAt IS NULL
+               GROUP BY r.metric"
             );
             /* eventId doubles as an alarm episodeId, so the alertEvent
              * auto-increment must stay below 0x80000000 (2147483648) — the
@@ -407,12 +502,13 @@ return static function (Router $router): void {
                   ORDER BY e.eventId ASC"
             );
             $topAlertRow = Db::row(
-                "SELECT e.eventId, e.nodeId, e.targetId, e.severity, e.firedAt,
+                "SELECT e.eventId, e.nodeId, e.targetId, e.severity, e.firedAt, e.detail,
                         r.metric, n.hostFqdn, pt.label AS targetLabel,
-                        a.displayName AS targetAsset{$selAlertCrit}
+                        a.displayName AS targetAsset, hc.failedUnitCount, hc.failedUnitList{$selAlertCrit}
                    FROM alertEvent e
               LEFT JOIN alertRule r ON r.ruleId = e.ruleId
               LEFT JOIN node n ON n.nodeId = e.nodeId
+              LEFT JOIN hostCurrent hc ON hc.nodeId=e.nodeId
               /* Probe-scoped alerts carry a targetId, not a nodeId: resolve a
                * human label via the probe target and its owning asset. The two
                * tables prefix targetId differently (numeric proto ordinal vs
@@ -422,6 +518,10 @@ return static function (Router $router): void {
                       = SUBSTR(e.targetId,  INSTR(e.targetId,  ':') + 1)
               LEFT JOIN asset a ON a.assetId = pt.assetId
                   /* Copied from summary.php: dashboard-active alert predicate. */
+                  JOIN (SELECT ruleId, nodeId, targetId, MIN(eventId) AS eventId
+                          FROM alertEvent
+                         WHERE clearedAt IS NULL AND eventKind='fired' AND severity IN ('crit','warn')
+                         GROUP BY ruleId, nodeId, targetId) currentCondition ON currentCondition.eventId=e.eventId
                   WHERE e.clearedAt IS NULL AND e.severity IN ('crit', 'warn')
                   /* CONTRACT-LC §3.2: tier outranks severity for the panel's
                    * one visible alert slot (vital-but-warn beats junk-crit). */
@@ -430,9 +530,86 @@ return static function (Router $router): void {
                            e.firedAt DESC, e.eventId DESC, pt.targetId ASC
                   LIMIT 1"
             );
+            $alertItemRows = Db::rows(
+                "SELECT e.eventId, e.severity, e.firedAt, e.detail, e.ruleId,
+                        e.nodeId, e.targetId, r.metric, n.hostFqdn,
+                        hc.failedUnitCount, hc.failedUnitList,
+                        pt.label AS targetLabel, a.displayName AS targetAsset{$selAlertCrit}
+                   FROM alertEvent e
+              LEFT JOIN alertRule r ON r.ruleId=e.ruleId
+              LEFT JOIN node n ON n.nodeId=e.nodeId
+              LEFT JOIN hostCurrent hc ON hc.nodeId=e.nodeId
+              LEFT JOIN probeTarget pt
+                     ON SUBSTR(pt.targetId, INSTR(pt.targetId, ':') + 1)
+                      = SUBSTR(e.targetId, INSTR(e.targetId, ':') + 1)
+              LEFT JOIN asset a ON a.assetId=pt.assetId
+                   JOIN (SELECT ruleId, nodeId, targetId, MIN(eventId) AS eventId
+                           FROM alertEvent WHERE clearedAt IS NULL AND eventKind='fired'
+                          GROUP BY ruleId, nodeId, targetId) currentCondition
+                     ON currentCondition.eventId=e.eventId
+                  WHERE e.clearedAt IS NULL
+               ORDER BY entityCrit DESC,
+                        CASE e.severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
+                        e.firedAt DESC, e.eventId DESC
+                  LIMIT 256"
+            );
+            $alertHeatRows = Db::rows(
+                "SELECT r.metric, e.severity, e.firedAt,
+                        GREATEST(0, 51 - FLOOR(TIMESTAMPDIFF(MINUTE,e.firedAt,NOW(6))/30)) AS bucket
+                   FROM alertEvent e
+              LEFT JOIN alertRule r ON r.ruleId=e.ruleId
+                   JOIN (SELECT ruleId, nodeId, targetId, MAX(eventId) AS eventId
+                           FROM alertEvent
+                          WHERE eventKind='fired' AND firedAt >= DATE_SUB(NOW(6), INTERVAL 26 HOUR)
+                          GROUP BY ruleId, nodeId, targetId) recentCondition
+                     ON recentCondition.eventId=e.eventId
+                  WHERE e.eventKind='fired' AND e.firedAt >= DATE_SUB(NOW(6), INTERVAL 26 HOUR)
+                    AND e.severity IN ('warn','crit')
+               ORDER BY e.firedAt"
+            );
+            $faultByNodeRows = Db::rows(
+                "SELECT nodeId, COUNT(*) AS faults
+                   FROM (SELECT nodeId, ruleId, targetId
+                           FROM alertEvent
+                          WHERE clearedAt IS NULL AND eventKind='fired' AND nodeId IS NOT NULL
+                          GROUP BY nodeId, ruleId, targetId) conditions
+               GROUP BY nodeId"
+            );
+            $faultByAssetRows = Db::rows(
+                "SELECT pt.assetId, COUNT(*) AS faults
+                   FROM (SELECT ruleId, nodeId, targetId, MIN(eventId) AS eventId
+                           FROM alertEvent
+                          WHERE clearedAt IS NULL AND eventKind='fired' AND targetId IS NOT NULL
+                          GROUP BY ruleId, nodeId, targetId) conditions
+                   JOIN alertEvent e ON e.eventId=conditions.eventId
+                   JOIN probeTarget pt
+                     ON SUBSTR(pt.targetId, INSTR(pt.targetId, ':') + 1)
+                      = SUBSTR(e.targetId, INSTR(e.targetId, ':') + 1)
+               GROUP BY pt.assetId"
+            );
             $probeRow = Db::row(
-                'SELECT AVG(rttMicros) / 100 AS rttTenthMs, AVG(lossPermille) AS lossPermille
-                   FROM probeCurrent'
+                "SELECT AVG(perTarget.rttTenthMs) AS rttTenthMs,
+                        AVG(perTarget.lossPermille) AS lossPermille
+                   FROM (SELECT targetId, AVG(rttMicros) / 100 AS rttTenthMs,
+                                AVG(lossPermille) AS lossPermille
+                           FROM probeHistory
+                          WHERE outcome='ok' AND sampledAt >= DATE_SUB(NOW(6), INTERVAL 24 HOUR)
+                       GROUP BY targetId) perTarget"
+            );
+            $probeRows = Db::rows(
+                "SELECT pt.targetId, pt.label, pt.host, MAX(pc.sampledAt) AS sampledAt,
+                        MAX(success.targetId IS NOT NULL) AS hasSuccess,
+                        MAX(pc.outcome) AS outcome, success.rttTenthMs, success.lossPermille
+                   FROM probeTarget pt
+              LEFT JOIN probeCurrent pc ON pc.targetId=pt.targetId
+              LEFT JOIN (SELECT targetId, AVG(rttMicros) / 100 AS rttTenthMs,
+                                AVG(lossPermille) AS lossPermille
+                           FROM probeHistory
+                          WHERE outcome='ok' AND sampledAt >= DATE_SUB(NOW(6), INTERVAL 24 HOUR)
+                       GROUP BY targetId) success ON success.targetId=pt.targetId
+               GROUP BY pt.targetId, pt.label, pt.host, success.targetId, success.rttTenthMs, success.lossPermille
+               ORDER BY hasSuccess DESC, sampledAt DESC, pt.targetId
+                  LIMIT 11"
             );
             // Contract timestamp is sampled at payload composition, not request entry.
             $nowRow = Db::row('SELECT UNIX_TIMESTAMP(NOW()) AS ts, UNIX_TIMESTAMP(MAX(sampledAt)) AS newestSampleTs FROM hostCurrent');
@@ -449,17 +626,26 @@ return static function (Router $router): void {
                 "SELECT cmdId, kind, arg FROM panelCommand
                   WHERE status = 'pending' ORDER BY cmdId ASC"
             ) : [];
+            $gearColumns = Db::rows(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='gearInterfaceCurrent'
+                    AND COLUMN_NAME='isUplink'"
+            );
+            $selIsUplink = $gearColumns === [] ? '0 AS isUplink' : 'i.isUplink';
             /* A1 gear section (CONTRACT-AW §3.1). networkGear/gearInterfaceCurrent
              * are live from migrations 002/006 already — no feature-detect needed
              * for these two. Freshness matches the daemon's 15s poll cadence with
              * headroom; ifIndex=0 is the poller's aggregate-per-device row. */
             $gearRows = Db::rows(
-                "SELECT g.gearId, g.kind, i.inRateKbps, i.outRateKbps, i.operStatus
+                "SELECT g.gearId, g.name, g.kind, g.uplinkGearId,
+                        i.ifIndex, i.ifName, i.inRateKbps, i.outRateKbps,
+                        i.operStatus, {$selIsUplink}, i.sampledAt
                    FROM networkGear g
                    JOIN gearInterfaceCurrent i
-                     ON i.gearId = g.gearId AND i.ifIndex = 0
-                  WHERE i.sampledAt > DATE_SUB(NOW(6), INTERVAL 60 SECOND)
-                  ORDER BY g.gearId"
+                     ON i.gearId = g.gearId
+                  WHERE g.lastSeenAt > DATE_SUB(NOW(6), INTERVAL 90 DAY)
+                    AND i.sampledAt > DATE_SUB(NOW(6), INTERVAL 60 SECOND)
+                  ORDER BY g.gearId, i.ifIndex"
             );
             /* panelScreenConfig is new in migration 019, not yet applied live:
              * feature-detect per the live-file discipline (see $lcCols above). */
@@ -488,10 +674,18 @@ return static function (Router $router): void {
         $systemsAll = [];
         $rxKbps = 0;
         $txKbps = 0;
+        $faultsByNode = [];
+        foreach ($faultByNodeRows as $faultRow) {
+            $faultsByNode[(int) $faultRow['nodeId']] = min(255, (int) $faultRow['faults']);
+        }
+        $faultsByAsset = [];
+        foreach ($faultByAssetRows as $faultRow) {
+            if ($faultRow['assetId'] !== null) $faultsByAsset[(int) $faultRow['assetId']] = min(255, (int) $faultRow['faults']);
+        }
         $seenNodeIds = [];
         foreach ($systemRows as $row) {
+            $nodeId = $row['nodeId'] === null ? 0 : (int) $row['nodeId'];
             if ($row['nodeId'] !== null) {
-                $nodeId = (int) $row['nodeId'];
                 if (isset($seenNodeIds[$nodeId])) {
                     continue;
                 }
@@ -505,29 +699,40 @@ return static function (Router $router): void {
             }
             $host = (string) ($row['hostFqdn'] ?? $row['host'] ?? $row['displayName'] ?? 'SYSTEM');
             [$systemRx, $systemTx] = panelInterfaceKbps($row['ifaces'] ?? null);
+            $hasInterfaceRate = panelHasInterfaceRate($row['ifaces'] ?? null);
             $rxKbps = min(4294967295, $rxKbps + $systemRx);
             $txKbps = min(4294967295, $txKbps + $systemTx);
             $systemsAll[] = [
-                'name' => panelText($row['displayName'] ?? $host, 12),
+                'name' => panelShortHost($row['hostFqdn'] ?? $row['host'] ?? $row['displayName'] ?? 'SYSTEM'),
+                'episodeName' => panelText($row['displayName'] ?? $host, 12),
                 'poolId' => $row['poolId'] === null ? 0 : (int) $row['poolId'],
                 'tier' => panelTier($row['role'] ?? null, $row['class'] ?? null),
                 /* CONTRACT-LC §3.2: node tier wins over the linked asset's. */
                 'criticality' => (int) ($row['nodeCriticality'] ?? $row['assetCriticality'] ?? 2),
                 'state' => $state,
                 'loadPct' => panelLoadPct($row['cpuLoadMilli'] ?? null),
+                'memPct' => panelResourcePct($row['ramUsedKb'] ?? 0, $row['ramTotalKb'] ?? 0),
+                'diskPct' => panelDiskPct($row['disks'] ?? null),
+                'faults' => $nodeId !== 0 ? ($faultsByNode[$nodeId] ?? 0)
+                    : ($faultsByAsset[(int) ($row['assetId'] ?? 0)] ?? 0),
+                'rxKbps' => $hasInterfaceRate ? $systemRx : null,
+                'txKbps' => $hasInterfaceRate ? $systemTx : null,
             ];
         }
         /* Adopted probe-only systems join the roster after agent nodes. */
         foreach ($adoptedRows as $row) {
             $probed = (int) ($row['probeCount'] ?? 0) > 0;
             $systemsAll[] = [
-                'name' => panelText($row['displayName'] ?? $row['host'] ?? 'SYSTEM', 12),
+                'name' => panelShortHost($row['host'] ?? $row['displayName'] ?? 'SYSTEM'),
+                'episodeName' => panelText($row['displayName'] ?? $row['host'] ?? 'SYSTEM', 12),
                 'poolId' => $row['poolId'] === null ? 0 : (int) $row['poolId'],
                 'tier' => panelTier(null, $row['class'] ?? null),
                 'criticality' => (int) ($row['assetCriticality'] ?? 2),
                 'state' => $probed ? (((int) ($row['anyOk'] ?? 0)) === 1 ? 'up' : 'down')
                                    : 'unknown',
                 'loadPct' => 0,
+                'memPct' => 0, 'diskPct' => 0,
+                'faults' => $faultsByAsset[(int) $row['assetId']] ?? 0, 'rxKbps' => null, 'txKbps' => null,
             ];
         }
 
@@ -589,6 +794,49 @@ return static function (Router $router): void {
             $severity = (string) $row['severity'];
             if (isset($alerts[$severity])) $alerts[$severity] = (int) $row['count'];
         }
+        $faultCounts = array_fill(0, 7, 0);
+        $conditionTotal = 0;
+        foreach ($faultCountRows as $row) {
+            $count = max(0, (int) $row['count']);
+            $conditionTotal += $count;
+            $faultCounts[panelFaultCode($row['metric'] === null ? null : (string) $row['metric'])] += $count;
+        }
+        $faultCounts = array_map(static fn (int $count): int => min(255, $count), $faultCounts);
+        $alertListItems = [];
+        foreach ($alertItemRows as $row) {
+            if (count($alertListItems) >= 8) break;
+            $host = panelShortHost($row['hostFqdn'] ?? $row['targetAsset'] ?? $row['targetLabel'] ?? $row['targetId'] ?? 'SYSTEM');
+            $metric = $row['metric'] === null ? null : (string) $row['metric'];
+            $alertListItems[] = [
+                'severity' => (string) $row['severity'], 'code' => panelFaultCode($metric),
+                'ageMin' => max(0, (int) floor(((int) ($nowRow['ts'] ?? time()) - strtotime((string) $row['firedAt'])) / 60)),
+                'host' => $host, 'msg' => panelAlertMessage($metric, $row['detail'] ?? '',
+                    $row['failedUnitCount'] ?? 0, $row['failedUnitList'] ?? ''),
+            ];
+        }
+        $alertHeat = ['warn' => array_fill(0, 52, 0), 'crit' => array_fill(0, 52, 0)];
+        foreach ($alertHeatRows as $row) {
+            $severity = (string) $row['severity'];
+            $bucket = max(0, min(51, (int) $row['bucket']));
+            if (isset($alertHeat[$severity])) $alertHeat[$severity][$bucket]++;
+        }
+        foreach ($alertHeat as &$buckets) {
+            $buckets = array_map(static fn (int $count): int => min(255, $count), $buckets);
+        }
+        unset($buckets);
+        $probes = [];
+        foreach ($probeRows as $row) {
+            $success = (int) ($row['hasSuccess'] ?? 0) === 1;
+            $recentFailure = ($row['sampledAt'] ?? null) !== null
+                && strtotime((string) $row['sampledAt']) >= time() - 300
+                && (string) ($row['outcome'] ?? '') !== 'ok';
+            $probes[] = [
+                'name' => panelText($row['label'] ?? $row['host'] ?? $row['targetId'] ?? 'PROBE', 8),
+                'rttTenthMs' => $success && $row['rttTenthMs'] !== null ? max(0, min(65535, (int) round((float) $row['rttTenthMs']))) : null,
+                'lossPermille' => $success && $row['lossPermille'] !== null ? max(0, min(1000, (int) round((float) $row['lossPermille']))) : null,
+                'state' => $success ? 0 : ($recentFailure ? 2 : 3),
+            ];
+        }
         $critEpisodeId = 0;
         foreach ($critRows as $row) {
             $eventId = (int) $row['eventId'];
@@ -598,11 +846,13 @@ return static function (Router $router): void {
         if ($topAlertRow !== null) {
             /* Best human name first: agent hostname, then asset display name,
              * then the probe label, and only then the raw targetId. */
-            $node = panelText($topAlertRow['hostFqdn'] ?? $topAlertRow['targetAsset']
-                ?? $topAlertRow['targetLabel'] ?? $topAlertRow['targetId'] ?? 'SYSTEM', 12);
-            $metric = panelText($topAlertRow['metric'] ?? 'ALERT', 16);
+            $node = panelShortHost($topAlertRow['hostFqdn'] ?? $topAlertRow['targetAsset']
+                ?? $topAlertRow['targetLabel'] ?? $topAlertRow['targetId'] ?? 'SYSTEM');
+            $metric = (string) ($topAlertRow['metric'] ?? 'ALERT');
+            $message = panelAlertMessage($metric, $topAlertRow['detail'] ?? '',
+                $topAlertRow['failedUnitCount'] ?? 0, $topAlertRow['failedUnitList'] ?? '');
             $topAlert = ['id' => (int) $topAlertRow['eventId'], 'severity' => (string) $topAlertRow['severity'],
-                'subject' => panelText($node . ' ' . $metric, 24), 'detail' => panelText('CHECK ' . $metric . ' ON ' . $node, 48)];
+                'subject' => $node, 'detail' => $message];
         }
 
         sort($breachingPools, SORT_NUMERIC);
@@ -613,7 +863,7 @@ return static function (Router $router): void {
         $vitalDown = [];
         foreach ($systemsAll as $system) {
             if ($system['criticality'] === 4 && $system['state'] === 'down') {
-                $vitalDown[] = $system['name'];
+                $vitalDown[] = $system['episodeName'];
             }
         }
         sort($vitalDown, SORT_STRING);
@@ -623,11 +873,14 @@ return static function (Router $router): void {
         if ($alarmActive && $topAlert === null && $breachingPools !== []) {
             // High-bit namespace cannot collide with normal auto-increment IDs.
             $episodeId = $poolEpisodeId;
+            $poolLabels = array_map(static fn (string $id): string =>
+                (string) ($poolAgg[(int) $id]['name'] ?? $id), $breachingPools);
+            $poolDetail = count($poolLabels) === 1 ? $poolLabels[0]
+                : $poolLabels[0] . ' +' . (count($poolLabels) - 1) . ' MORE';
             $topAlert = [
                 'id' => $episodeId,
                 'severity' => 'crit',
-                'subject' => panelText('POOL BREACH', 24),
-                'detail' => panelText('CHECK ' . $poolSet, 48),
+                'subject' => 'POOL BREACH', 'detail' => panelText($poolDetail, 13),
             ];
         } elseif ($critEpisodeId > 0) {
             // The first active triggering crit event anchors this episode.
@@ -643,8 +896,7 @@ return static function (Router $router): void {
                 $topAlert = [
                     'id' => $episodeId,
                     'severity' => 'crit',
-                    'subject' => panelText('VITAL DOWN', 24),
-                    'detail' => panelText('CHECK ' . $vitalSet, 48),
+                    'subject' => 'VITAL DOWN', 'detail' => panelShortHost($vitalSet),
                 ];
             }
         } else {
@@ -653,7 +905,9 @@ return static function (Router $router): void {
 
         $pools = [];
         $poolIndex = [];
-        foreach (array_slice($poolAgg, 0, 8, true) as $poolId => $pool) {
+        $poolEntries = array_slice($poolAgg, 0, 7, true);
+        $overflowPools = array_slice($poolAgg, 7, null, true);
+        foreach ($poolEntries as $poolId => $pool) {
             $poolIndex[(int) $poolId] = count($pools);
             $pools[] = [
                 'name' => panelText($pool['name'], 8), 'tier' => $pool['tier'],
@@ -662,27 +916,44 @@ return static function (Router $router): void {
                 'loadPct' => $pool['loadPct'], 'total' => $pool['total'],
             ];
         }
-        usort($systemsAll, static fn (array $a, array $b): int => [$a['tier'], $a['name']] <=> [$b['tier'], $b['name']]);
+        if ($overflowPools !== []) {
+            $overflow = ['name' => 'OTHER', 'tier' => 3, 'up' => 0, 'degraded' => 0,
+                'down' => 0, 'unknown' => 0, 'maint' => 0, 'loadSum' => 0, 'total' => 0];
+            foreach ($overflowPools as $poolId => $pool) {
+                $poolIndex[(int) $poolId] = 7;
+                $overflow['tier'] = min($overflow['tier'], $pool['tier']);
+                foreach (['up','degraded','down','unknown','maint'] as $key) $overflow[$key] += $pool[$key];
+                $overflow['loadSum'] += $pool['loadSum'];
+                $overflow['total'] += $pool['total'];
+            }
+            $overflow['loadPct'] = $overflow['total'] === 0 ? 0 : (int) round($overflow['loadSum'] / $overflow['total']);
+            $pools[] = ['name' => 'OTHER', 'tier' => $overflow['tier'], 'up' => $overflow['up'],
+                'degraded' => $overflow['degraded'], 'down' => $overflow['down'], 'unknown' => $overflow['unknown'],
+                'maint' => $overflow['maint'], 'loadPct' => $overflow['loadPct'], 'total' => $overflow['total']];
+        }
+        usort($systemsAll, static fn (array $a, array $b): int =>
+            [panelStateRank($a['state']), -$a['criticality'], -$a['loadPct'], $a['name']]
+            <=> [panelStateRank($b['state']), -$b['criticality'], -$b['loadPct'], $b['name']]);
         $systems = [];
-        foreach ($systemsAll as $system) {
-            if (!isset($poolIndex[$system['poolId']]) || count($systems) >= 64) {
+        $popTail = [];
+        foreach ($systemsAll as $index => $system) {
+            if (!isset($poolIndex[$system['poolId']])) {
                 continue;
             }
-            $systems[] = ['name' => $system['name'], 'pool' => $poolIndex[$system['poolId']],
-                'tier' => $system['tier'], 'state' => $system['state'], 'loadPct' => $system['loadPct']];
-        }
-
-        /* stateRoll counts NODE rows verbatim — the exact population and
-         * derivation /api/summary reports, so the two can never disagree.
-         * (Pools/systems above additionally carry adopted probe-only assets;
-         * that is deliberate — the design's pools include them, but the
-         * headline roll must mirror the dashboard's.) */
-        $stateRoll = ['up' => 0, 'degraded' => 0, 'down' => 0, 'unknown' => 0, 'maint' => 0];
-        foreach ($nodeRollRows as $row) {
-            $state = (string) $row['state'];
-            if (array_key_exists($state, $stateRoll)) {
-                $stateRoll[$state] += (int) $row['count'];
+            if ($index < 64) {
+                $systems[] = ['name' => $system['name'], 'pool' => $poolIndex[$system['poolId']],
+                    'tier' => $system['tier'], 'state' => $system['state'], 'loadPct' => $system['loadPct'],
+                    'memPct' => $system['memPct'], 'diskPct' => $system['diskPct'], 'faults' => $system['faults'],
+                    'rxKbps' => $system['rxKbps'], 'txKbps' => $system['txKbps']];
+            } elseif (count($popTail) < 191) {
+                $stateCode = match ($system['state']) { 'degraded' => 1, 'down' => 2, 'unknown' => 3, 'maint' => 4, default => 0 };
+                $popTail[] = ($stateCode << 5) | ((int) floor($system['loadPct'] * 31 / 100));
             }
+        }
+        $stateRoll = ['up' => 0, 'degraded' => 0, 'down' => 0, 'unknown' => 0, 'maint' => 0];
+        foreach ($systemsAll as $system) {
+            $state = array_key_exists($system['state'], $stateRoll) ? $system['state'] : 'unknown';
+            $stateRoll[$state]++;
         }
         $loadSum = 0;
         foreach ($systemsAll as $system) {
@@ -693,13 +964,21 @@ return static function (Router $router): void {
          * then gearId for determinism; 'other'-kind rows are dropped by
          * panelGearRole() returning null (stale SNMP test gear, e.g.). */
         $gearAll = [];
+        $gearById = [];
+        $portsByGear = [];
         foreach ($gearRows as $row) {
+            $gearId = (string) $row['gearId'];
+            if ((int) $row['ifIndex'] !== 0) {
+                $portsByGear[$gearId][] = $row;
+                continue;
+            }
             $role = panelGearRole((string) $row['kind']);
             if ($role === null) {
                 continue;
             }
+            $gearById[$gearId] = $row;
             $gearAll[] = [
-                'gearId' => (string) $row['gearId'], 'role' => $role,
+                'gearId' => $gearId, 'role' => $role,
                 'state' => panelGearState($row['operStatus'] === null ? null : (int) $row['operStatus']),
                 'rxLevel' => panelGearLogScale((int) $row['inRateKbps']),
                 'txLevel' => panelGearLogScale((int) $row['outRateKbps']),
@@ -726,6 +1005,84 @@ return static function (Router $router): void {
             array_slice($gearAll, 0, 12)
         );
 
+        $links = [];
+        $gearLinkIndex = [];
+        $gateway = null;
+        $backup = null;
+        foreach ($gearById as $gearId => $row) {
+            if (in_array((string) $row['kind'], ['gateway','router'], true) && $gateway === null) $gateway = [$gearId, $row];
+            if ((string) $row['kind'] === 'wanBackup' && $backup === null) $backup = [$gearId, $row];
+        }
+        $wanUp = $wanDown = 0;
+        if ($gateway !== null) {
+            [$gearId, $row] = $gateway;
+            $wanUp = max(0, (int) ($row['outRateKbps'] ?? 0));
+            $wanDown = max(0, (int) ($row['inRateKbps'] ?? 0));
+            $links[] = ['name' => 'INTERNET', 'kind' => 0,
+                'state' => panelGearState($row['operStatus'] === null ? null : (int) $row['operStatus']),
+                'parent' => 255, 'upKbps' => $wanUp, 'downKbps' => $wanDown];
+            $gearLinkIndex[$gearId] = 0;
+        } else {
+            $links[] = ['name' => 'INTERNET', 'kind' => 0, 'state' => 3, 'parent' => 255,
+                'upKbps' => null, 'downKbps' => null];
+        }
+        if ($backup !== null) {
+            [$gearId, $row] = $backup;
+            $links[] = ['name' => 'BACKUP', 'kind' => 0,
+                'state' => panelGearState($row['operStatus'] === null ? null : (int) $row['operStatus']),
+                'parent' => 255, 'upKbps' => max(0, (int) ($row['outRateKbps'] ?? 0)),
+                'downKbps' => max(0, (int) ($row['inRateKbps'] ?? 0))];
+            $gearLinkIndex[$gearId] = 1;
+        }
+        $candidateLinks = [];
+        $lanUp = $lanDown = 0;
+        foreach ($gearById as $gearId => $row) {
+            foreach ($portsByGear[$gearId] ?? [] as $port) {
+                if (in_array((string) $row['kind'], ['switch','hub'], true)
+                    && (int) ($port['isUplink'] ?? 0) === 0 && (int) ($port['operStatus'] ?? 0) === 1) {
+                    $lanUp = min(4294967295, $lanUp + max(0, (int) ($port['outRateKbps'] ?? 0)));
+                    $lanDown = min(4294967295, $lanDown + max(0, (int) ($port['inRateKbps'] ?? 0)));
+                }
+            }
+            $parentId = $row['uplinkGearId'] === null ? null : (string) $row['uplinkGearId'];
+            if ($parentId === null || !isset($gearById[$parentId]) || in_array((string) $row['kind'], ['gateway','router','wanBackup'], true)) continue;
+            $uplinkPorts = array_values(array_filter($portsByGear[$gearId] ?? [], static fn (array $p): bool => (int) ($p['isUplink'] ?? 0) === 1));
+            if ($uplinkPorts === []) continue;
+            $port = $uplinkPorts[0];
+            $depth = 0;
+            $walk = $parentId;
+            $seen = [];
+            while ($walk !== null && isset($gearById[$walk]) && !isset($seen[$walk])) {
+                $seen[$walk] = true; $depth++;
+                $next = $gearById[$walk]['uplinkGearId'] ?? null;
+                $walk = $next === null ? null : (string) $next;
+            }
+            $candidateLinks[] = ['gearId' => $gearId, 'parentId' => $parentId, 'row' => $row,
+                'port' => $port, 'depth' => $depth];
+        }
+        usort($candidateLinks, static fn (array $a, array $b): int => [$a['depth'], $a['gearId']] <=> [$b['depth'], $b['gearId']]);
+        foreach ($candidateLinks as $candidate) {
+            if (count($links) >= 12) break;
+            $gearId = $candidate['gearId']; $port = $candidate['port']; $row = $candidate['row'];
+            $parent = $gearLinkIndex[$candidate['parentId']] ?? 255;
+            $gearLinkIndex[$gearId] = count($links);
+            $links[] = ['name' => panelText($row['name'] ?? $gearId, 12),
+                'kind' => (string) $row['kind'] === 'ap' ? 2 : 1,
+                'state' => panelGearState($port['operStatus'] === null ? null : (int) $port['operStatus']),
+                'parent' => $parent, 'upKbps' => max(0, (int) ($port['outRateKbps'] ?? 0)),
+                'downKbps' => max(0, (int) ($port['inRateKbps'] ?? 0))];
+        }
+        $hostLinks = $systemsAll;
+        usort($hostLinks, static fn (array $a, array $b): int =>
+            [-(int) $a['rxKbps'] - (int) $a['txKbps'], $a['name']]
+            <=> [-(int) $b['rxKbps'] - (int) $b['txKbps'], $b['name']]);
+        foreach ($hostLinks as $system) {
+            if (count($links) >= 12) break;
+            if ((int) $system['rxKbps'] === 0 && (int) $system['txKbps'] === 0) continue;
+            $links[] = ['name' => $system['name'], 'kind' => 3, 'state' => 1, 'parent' => 255,
+                'upKbps' => $system['txKbps'], 'downKbps' => $system['rxKbps']];
+        }
+
         $payload = [
             'ts' => (int) ($nowRow['ts'] ?? time()), 'score' => $score,
             'stateRoll' => $stateRoll, 'alerts' => $alerts,
@@ -734,6 +1091,13 @@ return static function (Router $router): void {
             'rttTenthMs' => max(0, min(65535, (int) round((float) ($probeRow['rttTenthMs'] ?? 0)))),
             'lossPermille' => max(0, min(65535, (int) round((float) ($probeRow['lossPermille'] ?? 0)))),
             'pools' => $pools, 'systems' => $systems, 'topAlert' => $topAlert,
+            'popTail' => $popTail,
+            'links' => $links,
+            'alertList' => ['total' => min(255, $conditionTotal), 'faultCounts' => $faultCounts, 'items' => $alertListItems],
+            'probes' => $probes,
+            'alertHeat' => $alertHeat,
+            'totals' => ['wanUpKbps' => $wanUp, 'wanDownKbps' => $wanDown,
+                'lanUpKbps' => $lanUp, 'lanDownKbps' => $lanDown],
             'alarmActive' => $alarmActive, 'episodeId' => $episodeId,
             'dataStale' => ($nowRow['newestSampleTs'] ?? null) !== null && ((int) $nowRow['ts'] - (int) $nowRow['newestSampleTs']) > 30,
             'panelState' => $panelStateRow === null ? null : [
