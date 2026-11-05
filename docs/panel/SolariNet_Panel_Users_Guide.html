@@ -95,7 +95,7 @@ a:hover{text-decoration:underline}
     <p class="sub">The five-minute version: what the wall is telling you, which buttons do what, how to answer an alarm, and how to shape the rotation from the dashboard. <b>State note (21 October 2026):</b> this guide describes the panel contract and a recorded deployment topology; the live daemon host, listener, and certificate state have not been rechecked for this edition. For the full mechanism, colour law, and per-pixel anatomy, read the <a href="SolariNet_Panel_Manual.html">Operator Manual</a>.</p>
   </div></div>
   <div class="rule"></div>
-  <div class="body">
+  <div class="body"><div style="border-left:3px solid #d97706;padding:7px 11px;margin:0 0 10px;font-size:.92em;line-height:1.4"><b>The screens changed on 5 November 2026.</b> The current sixteen are in the <i>Panel Screen Guide</i> at akoria.net/docs/. This document describes the earlier screen set; its hardware, alarm and operations material still applies.</div>
     <h2>What you are looking at</h2>
     <p>A Pimoroni Galactic Unicorn — 53×11 LEDs on the wall — rendering live SolariNet fleet health. <b>xenon</b> computes the state and serves it; the <b>solariPanel</b> daemon on <b>lithium</b> polls it every 5&nbsp;s and frames it to the panel over USB every 2&nbsp;s; the panel firmware animates at 25&nbsp;Hz from the last snapshot it received. The panel never computes fleet state — it renders what arrived, and it tells you loudly when nothing is arriving.</p>
     <h3>The three ideas that explain everything</h3>

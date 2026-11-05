@@ -16,7 +16,7 @@ html[data-theme="dark"]{color-scheme:dark;--ink:#e4edf4;--muted:#a9bac6;--line:#
 <header>
 <svg viewBox="0 0 72 72" role="img" aria-label="SolariNet status panel mark"><rect x="2" y="2" width="68" height="68" rx="14" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15 48h42M20 40V27m8 13V18m8 22V31m8 9V22m8 18V14" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><circle cx="54" cy="54" r="4" fill="#087a96"/></svg>
 <div><h1>SolariNet Status Panel</h1><p class="meta">Developer reference · firmware, daemon, protocol, and dashboard integration · 21 October 2026</p></div>
-</header>
+</header><div style="border-left:3px solid #d97706;padding:7px 11px;margin:0 0 10px;font-size:.92em;line-height:1.4"><b>The screens changed on 5 November 2026.</b> The current sixteen are in the <i>Panel Screen Guide</i> at akoria.net/docs/. This document describes the earlier screen set; its hardware, alarm and operations material still applies.</div>
 <p class="lede">This guide is for engineers changing the Galactic Unicorn panel or its supporting software. The normative contracts remain <code>status-panel/protocol.h</code>, <code>CONTRACT.md</code>, <code>CONTRACT-CP.md</code>, <code>CONTRACT-AW.md</code>, and <code>CONTRACT-SW.md</code>; this reference explains how those pieces fit and how to verify a change.</p>
 <div class="note"><strong>Observed architecture:</strong> xenon composes fleet data and panel commands in the dashboard API. lithium runs <code>solariPanel</code>, which polls over verified HTTPS and transports snapshots/commands to the RP2350 over USB CDC. The firmware renders locally and reports state. An optional authenticated TLS listener supports the network transport path described by the software contract.</div>
 

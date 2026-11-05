@@ -8,19 +8,19 @@
   :root{
     --bg:#0b0e14; --bg2:#0d1119; --ink:#e8edf5; --mut:#8593a8; --line:rgba(255,255,255,.09);
     --card:rgba(255,255,255,.028); --card-h:rgba(255,255,255,.06); --accent:#2dd4bf;
-    --c-qs:#fbbf24; --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa;
+    --c-qs:#fbbf24; --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa; --c-panel:#a3e635;
   }
   @media (prefers-color-scheme:light){
     :root{ --bg:#f3f6fb; --bg2:#eaeff7; --ink:#141a24; --mut:#5a6a80; --line:rgba(15,25,40,.10);
       --card:rgba(15,25,40,.02); --card-h:rgba(15,25,40,.045); --accent:#0d9488;
-      --c-qs:#b45309; --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; }
+      --c-qs:#b45309; --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; --c-panel:#4d7c0f; }
   }
   :root[data-theme="light"]{ --bg:#f3f6fb; --bg2:#eaeff7; --ink:#141a24; --mut:#5a6a80; --line:rgba(15,25,40,.10);
     --card:rgba(15,25,40,.02); --card-h:rgba(15,25,40,.045); --accent:#0d9488;
-    --c-qs:#b45309; --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; }
+    --c-qs:#b45309; --c-user:#0d9488; --c-dev:#0284c7; --c-api:#7c3aed; --c-panel:#4d7c0f; }
   :root[data-theme="dark"]{ --bg:#0b0e14; --bg2:#0d1119; --ink:#e8edf5; --mut:#8593a8; --line:rgba(255,255,255,.09);
     --card:rgba(255,255,255,.028); --card-h:rgba(255,255,255,.06); --accent:#2dd4bf;
-    --c-qs:#fbbf24; --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa; }
+    --c-qs:#fbbf24; --c-user:#2dd4bf; --c-dev:#38bdf8; --c-api:#a78bfa; --c-panel:#a3e635; }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:radial-gradient(120% 90% at 50% -10%,var(--bg2),var(--bg));color:var(--ink);min-height:100vh;
     font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;
@@ -102,6 +102,25 @@
         <div class="actions">
           <a class="btn primary" href="SolariNet_Quick_Start_Guide.html"><svg viewBox="0 0 24 24"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="2.8"/></svg>Read online</a>
           <a class="btn" href="SolariNet_Quick_Start_Guide.pdf"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>PDF</a>
+        </div>
+      </article>
+
+      <article class="man" style="--ac:var(--c-panel)">
+        <div class="top">
+          <span class="ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="19" height="10" rx="1.5"/><path d="M6.5 10.5h.01M10 10.5h.01M13.5 10.5h.01M17 10.5h.01M6.5 13.5h.01M10 13.5h.01M13.5 13.5h.01M17 13.5h.01"/></svg></span>
+          <div><div class="kicker">Everyone</div><h2>Panel Screen Guide</h2></div>
+        </div>
+        <p class="desc">Every screen on the wall panel, drawn as the panel draws it. What each part means, how the screens are grouped, and what you can change.</p>
+        <ul>
+          <li>Sixteen screens in four groups</li>
+          <li>Numbered pictures of each screen</li>
+          <li>The screens that interrupt the rotation</li>
+          <li>Every setting, and how it behaves</li>
+        </ul>
+        <div class="meta" data-meta="SolariNet_Panel_Screen_Guide"></div>
+        <div class="actions">
+          <a class="btn primary" href="SolariNet_Panel_Screen_Guide.html"><svg viewBox="0 0 24 24"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="2.8"/></svg>Read online</a>
+          <a class="btn" href="SolariNet_Panel_Screen_Guide.pdf"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>PDF</a>
         </div>
       </article>
 

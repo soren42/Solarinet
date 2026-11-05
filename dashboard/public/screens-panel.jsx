@@ -2029,7 +2029,7 @@
 
         <p className="vp-footnote">
           <strong>Rotation and dwell</strong> are set per screen on the tile itself. A weight multiplies the
-          theme&rsquo;s base dwell, so at a 30&nbsp;s base ½× is 15&nbsp;s and 5× is 150&nbsp;s. The panel stores
+          base dwell, so at a 30&nbsp;s base ½× is 15&nbsp;s and 5× is 150&nbsp;s. The panel stores
           this in its own flash and keeps it across resets, which is why a control here shows a setting as in
           force <em>only</em> once the panel has reported it back &mdash; before that, and while a change is in
           flight, no option is marked. Turning every screen of a theme off is not a way to blank the panel: the
