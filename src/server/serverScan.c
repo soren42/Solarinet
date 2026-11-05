@@ -462,22 +462,15 @@ static solariStatus scanEnrichNmap(const char *ipSafe, const int *openPorts,
         if (n <= 0 || (size_t)n >= sizeof ports - off) return SOLARI_OK;
         off += (size_t)n;
     }
-    /* -O needs raw sockets: the unit grants CAP_NET_RAW, and --privileged tells
-     * nmap to use it rather than quit for not being root. Without the capability
-     * nmap still fails, so fall back to version detection alone. */
+    /* -O needs raw sockets: the worker unit grants CAP_NET_RAW, and --privileged
+     * tells nmap to use it rather than quit for not being root. Without the
+     * capability nmap still reports ports and services, just no OS. */
     snprintf(cmd, sizeof cmd,
              "nmap --privileged -O -sV --version-light --osscan-limit --host-timeout 30s "
              "-Pn -p %s -oX - %s 2>/dev/null", ports, ipSafe);
     toolRc = scanToolAll(cmd, xml, sizeof xml, control);
     if (toolRc == -2) return scanToolCancellation(toolRc, control);
-    if (toolRc != 0) {
-        snprintf(cmd, sizeof cmd,
-                 "nmap -sV --version-light --host-timeout 30s "
-                 "-Pn -p %s -oX - %s 2>/dev/null", ports, ipSafe);
-        toolRc = scanToolAll(cmd, xml, sizeof xml, control);
-        if (toolRc == -2) return scanToolCancellation(toolRc, control);
-        if (toolRc != 0) return SOLARI_OK;
-    }
+    if (toolRc != 0) return SOLARI_OK;
     discoverParseNmapXml(xml, e->mac, sizeof e->mac, e->vendor, sizeof e->vendor,
                          e->osName, sizeof e->osName, svc, sizeof svc);
     if (!e->sysDescr[0] && svc[0]) snprintf(e->sysDescr, sizeof e->sysDescr, "%s", svc);

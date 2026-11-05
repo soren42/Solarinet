@@ -38,7 +38,8 @@ SystemCallErrorNumber=EPERM
 # nmap -O in the scan path needs raw sockets.
 CapabilityBoundingSet=CAP_NET_RAW
 AmbientCapabilities=CAP_NET_RAW
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# nmap needs netlink for routes and packet sockets for its raw probes; it returns nothing without them.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
 ReadWritePaths=/run/solari
 
 [Install]

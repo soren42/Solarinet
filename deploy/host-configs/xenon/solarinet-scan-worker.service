@@ -1,0 +1,21 @@
+# /etc/systemd/system/solarinet-scan-worker.service
+[Unit]
+Description=SolariNet durable discovery scan worker
+After=network-online.target solarinet-server.service
+Wants=network-online.target solarinet-server.service
+
+[Service]
+Type=simple
+User=jason
+Group=jason
+WorkingDirectory=/opt/solarinet/current
+EnvironmentFile=/home/jason/Code/Solarinet/run/server.env
+ExecStart=/opt/solarinet/current/bin/solariScanWorker --config /home/jason/Code/Solarinet/run/server.conf
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+# nmap -O in the scan path needs raw sockets.
+AmbientCapabilities=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
