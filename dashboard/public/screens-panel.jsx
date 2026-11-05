@@ -266,10 +266,23 @@
     for (let si=0; si<samples.length; si++) {
       const q=samples[si], totals=q.totals;
       [env.wanDown,env.wanUp,env.lanDown,env.lanUp].forEach(a=>{a.copyWithin(0,1);a[HIST_LEN-1]=-1;});
-      if(totals) { env.wanDown[HIST_LEN-1]=totals.wanDownKbps==null?-1:num(totals.wanDownKbps); env.wanUp[HIST_LEN-1]=totals.wanUpKbps==null?-1:num(totals.wanUpKbps); env.lanDown[HIST_LEN-1]=totals.lanDownKbps==null?-1:num(totals.lanDownKbps); env.lanUp[HIST_LEN-1]=totals.lanUpKbps==null?-1:num(totals.lanUpKbps); }
+  if (totals) {
+    env.wanDown[HIST_LEN - 1] = totals.wanDownKbps == null ? -1 : num(totals.wanDownKbps);
+    env.wanUp[HIST_LEN - 1] = totals.wanUpKbps == null ? -1 : num(totals.wanUpKbps);
+    env.lanDown[HIST_LEN - 1] = totals.lanDownKbps == null ? -1 : num(totals.lanDownKbps);
+    env.lanUp[HIST_LEN - 1] = totals.lanUpKbps == null ? -1 : num(totals.lanUpKbps);
+  }
       env.cpuLocal.copyWithin(0,1); env.cpuLocal[HIST_LEN-1]=num(q.meanLoadPct)/100;
       env.rttLocal.copyWithin(0,1); env.rttLocal[HIST_LEN-1]=num(q.lossPermille)>=1000?-1:num(q.rttTenthMs)/10;
-      for(let pi=0;pi<11;pi++){const a=env.probeHist[pi];a.copyWithin(0,1);a[HIST_LEN-1]=-1;const probe=q.probes&&q.probes[pi];if(probe){a[HIST_LEN-1]=num(probe.lossPermille)>=500?65535:num(probe.rttTenthMs);}}
+  for (let pi = 0; pi < 11; pi++) {
+    const a = env.probeHist[pi];
+    a.copyWithin(0, 1);
+    a[HIST_LEN - 1] = -1;
+    const probe = q.probes && q.probes[pi];
+    if (probe) {
+      a[HIST_LEN - 1] = num(probe.lossPermille) >= 500 ? 65535 : num(probe.rttTenthMs);
+    }
+  }
     }
 
     // Alert text — panelHist.c:261-272.
@@ -290,29 +303,549 @@
   function pageBar(p,n){if(n<=1)return;for(let x=Math.floor(p*PW/n);x<Math.floor((p+1)*PW/n);x++)fbSet(x,5,cAzure,.45);}
   function stateColor(s){return [cOk,cWarn,cCrit,cUnknown,cMaint][stateEnum(s)]||cUnknown;}
   function pageCount(n,k){return Math.max(1,Math.ceil(n/k));}
-  function sA0(env){const a=(env.raw.systems||[]).map(q=>({state:stateEnum(q.state),load:num(q.loadPct)/100}));for(const b of env.raw.popTail||[])a.push({state:(num(b)>>5)&7,load:(num(b)&31)/31});let n=a.length;if(!n)return;let cols=1,rows=1,gx=0,gy=0,ba=-1,bg=-1;for(let r=1;r<=PH;r++){let c=Math.ceil(n/r);if(c>PW)continue;for(let g=0;g<4;g++){let ux=g&1,uy=g>>1,tw=Math.floor((PW-(c-1)*ux)/c),th=Math.floor((PH-(r-1)*uy)/r);if(tw<1||th<1)continue;let ar=tw*th,gu=ux+uy;if(ar>ba||(ar===ba&&gu>bg)){ba=ar;bg=gu;cols=c;rows=r;gx=ux;gy=uy;}}}for(let i=0;i<n;i++){let q=a[i],col=i%cols,row=Math.floor(i/cols),x0=Math.floor(col*(PW+gx)/cols),x1=Math.floor((col+1)*(PW+gx)/cols)-gx,y0=Math.floor(row*(PH+gy)/rows),y1=Math.floor((row+1)*(PH+gy)/rows)-gy,h=y1-y0,H=stateColor(q.state),flat=q.state===ST_DOWN||q.state===ST_UNKNOWN||q.state===ST_MAINT;if(flat){let b=q.state===ST_DOWN?1:.35;for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)fbSet(x,y,H,b);}else if(h>=3){let lit=Math.max(1,ri(q.load*h));for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)fbSet(x,y,H,y>=y1-lit?1:.28);}else for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)fbSet(x,y,H,.2+.8*q.load);}}
-  function sA1(env,t,dt){let a=env.raw.systems||[],p=pageFor(1,dt,pageCount(a.length,2));for(let j=0;j<2;j++){let q=a[p*2+j];if(!q)continue;let y=j?6:0,h=stateColor(q.state),st=stateEnum(q.state);for(let r=0;r<5;r++){fbSet(0,y+r,h,1);fbSet(1,y+r,h,1);}textFit(3,y,q.name,8,cInk,1);textRight(52,y,st===ST_DOWN?"DOWN":st===ST_MAINT?"MNT":st===ST_UNKNOWN?"?":num(q.loadPct)+"%",st===ST_OK?cAzure:h,1);}pageBar(p,pageCount(a.length,2));}
-  function sA2(env,t,dt){let a=env.raw.pools||[],p=pageFor(2,dt,pageCount(a.length,2));for(let j=0;j<2;j++){let q=a[p*2+j];if(!q)continue;let y=j?6:0;textFit(0,y,q.name,8,cInk,1);let order=[ST_DOWN,ST_DEGRADED,ST_UNKNOWN,ST_MAINT,ST_OK],counts=[q.down,q.degraded,q.unknown,q.maint,q.up],total=num(q.total)||1,cells=Math.min(20,total),gap=total<=10?1:0,run=0,k=0;for(let x=0;x<cells;x++){while(k<4&&run>=num(counts[k])){k++;run=0;}let x0=33+Math.floor(x*(20+gap)/cells),x1=33+Math.floor((x+1)*(20+gap)/cells)-gap,used=Math.floor((x+1)*total/cells)-Math.floor(x*total/cells);for(let r=0;r<3;r++)for(let xx=x0;xx<x1;xx++)fbSet(xx,y+r,stateColor(order[k]),1);run+=used;}let lit=Math.max(num(q.loadPct)>0?1:0,Math.floor((num(q.loadPct)*20+50)/100));for(let x=0;x<20;x++)fbSet(33+x,y+4,cAzure,x<lit?1:.1);}pageBar(p,pageCount(a.length,2));}
-  function sA3(env){let r=env.raw.stateRoll||{},up=num(r.up),d=num(r.down),g=num(r.degraded),u=num(r.unknown),m=num(r.maint),h=d?cCrit:g?cWarn:u?cUnknown:m?cMaint:cOk,line=d?d+" DOWN":g?g+" DEGRADED":u?u+" UNKNOWN":m?m+" MAINT":"ALL OK",x=panelBig(0,2,String(up),h,1)+1;textFit(x,0,"OF "+env.total,Math.floor((PW-x+1)/4),cInk,1);textFit(x,6,line,Math.floor((PW-x+1)/4),h,1);}
+  function sA0(env) {
+    const a = (env.raw.systems || []).map(q => ({
+      state: stateEnum(q.state),
+      load: num(q.loadPct) / 100
+    }));
+    for (const b of env.raw.popTail || []) a.push({
+      state: num(b) >> 5 & 7,
+      load: (num(b) & 31) / 31
+    });
+    let n = a.length;
+    if (!n) return;
+    let cols = 1,
+      rows = 1,
+      gx = 0,
+      gy = 0,
+      ba = -1,
+      bg = -1;
+    for (let r = 1; r <= PH; r++) {
+      let c = Math.ceil(n / r);
+      if (c > PW) continue;
+      for (let g = 0; g < 4; g++) {
+        let ux = g & 1,
+          uy = g >> 1,
+          tw = Math.floor((PW - (c - 1) * ux) / c),
+          th = Math.floor((PH - (r - 1) * uy) / r);
+        if (tw < 1 || th < 1) continue;
+        let ar = tw * th,
+          gu = ux + uy;
+        if (ar > ba || ar === ba && gu > bg) {
+          ba = ar;
+          bg = gu;
+          cols = c;
+          rows = r;
+          gx = ux;
+          gy = uy;
+        }
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      let q = a[i],
+        col = i % cols,
+        row = Math.floor(i / cols),
+        x0 = Math.floor(col * (PW + gx) / cols),
+        x1 = Math.floor((col + 1) * (PW + gx) / cols) - gx,
+        y0 = Math.floor(row * (PH + gy) / rows),
+        y1 = Math.floor((row + 1) * (PH + gy) / rows) - gy,
+        h = y1 - y0,
+        H = stateColor(q.state),
+        flat = q.state === ST_DOWN || q.state === ST_UNKNOWN || q.state === ST_MAINT;
+      if (flat) {
+        let b = q.state === ST_DOWN ? 1 : .35;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) fbSet(x, y, H, b);
+      } else if (h >= 3) {
+        let lit = Math.max(1, ri(q.load * h));
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) fbSet(x, y, H, y >= y1 - lit ? 1 : .28);
+      } else for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) fbSet(x, y, H, .2 + .8 * q.load);
+    }
+  }
+  function sA1(env, t, dt) {
+    let a = env.raw.systems || [],
+      p = pageFor(1, dt, pageCount(a.length, 2));
+    for (let j = 0; j < 2; j++) {
+      let q = a[p * 2 + j];
+      if (!q) continue;
+      let y = j ? 6 : 0,
+        h = stateColor(q.state),
+        st = stateEnum(q.state);
+      for (let r = 0; r < 5; r++) {
+        fbSet(0, y + r, h, 1);
+        fbSet(1, y + r, h, 1);
+      }
+      textFit(3, y, q.name, 8, cInk, 1);
+      textRight(52, y, st === ST_DOWN ? "DOWN" : st === ST_MAINT ? "MNT" : st === ST_UNKNOWN ? "?" : num(q.loadPct) + "%", st === ST_OK ? cAzure : h, 1);
+    }
+    pageBar(p, pageCount(a.length, 2));
+  }
+  function sA2(env, t, dt) {
+    let a = env.raw.pools || [],
+      p = pageFor(2, dt, pageCount(a.length, 2));
+    for (let j = 0; j < 2; j++) {
+      let q = a[p * 2 + j];
+      if (!q) continue;
+      let y = j ? 6 : 0;
+      textFit(0, y, q.name, 8, cInk, 1);
+      if (num(q.total) === 0) continue;
+      let order = [ST_DOWN, ST_DEGRADED, ST_UNKNOWN, ST_MAINT, ST_OK],
+        counts = [q.down, q.degraded, q.unknown, q.maint, q.up],
+        total = num(q.total) || 1,
+        cells = Math.min(20, total),
+        gap = total <= 10 ? 1 : 0,
+        run = 0,
+        k = 0;
+      for (let x = 0; x < cells; x++) {
+        while (k < 4 && run >= num(counts[k])) {
+          k++;
+          run = 0;
+        }
+        let x0 = 33 + Math.floor(x * (20 + gap) / cells),
+          x1 = 33 + Math.floor((x + 1) * (20 + gap) / cells) - gap,
+          used = Math.floor((x + 1) * total / cells) - Math.floor(x * total / cells);
+        for (let r = 0; r < 3; r++) for (let xx = x0; xx < x1; xx++) fbSet(xx, y + r, stateColor(order[k]), 1);
+        run += used;
+      }
+      let lit = Math.max(num(q.loadPct) > 0 ? 1 : 0, Math.floor((num(q.loadPct) * 20 + 50) / 100));
+      for (let x = 0; x < 20; x++) fbSet(33 + x, y + 4, cAzure, x < lit ? 1 : .1);
+    }
+    pageBar(p, pageCount(a.length, 2));
+  }
+  function sA3(env) {
+    let r = env.raw.stateRoll || {},
+      up = num(r.up),
+      d = num(r.down),
+      g = num(r.degraded),
+      u = num(r.unknown),
+      m = num(r.maint),
+      h = d ? cCrit : g ? cWarn : u ? cUnknown : m ? cMaint : cOk,
+      line = d ? d + " DOWN" : g ? g + " DEGRADED" : u ? u + " UNKNOWN" : m ? m + " MAINT" : "ALL OK",
+      x = panelBig(0, 2, String(up), h, 1) + 1;
+    textFit(x, 0, "OF " + env.total, Math.floor((PW - x + 1) / 4), cInk, 1);
+    textFit(x, 6, line, Math.floor((PW - x + 1) / 4), h, 1);
+  }
   function linkKind(k){if(typeof k==="string")return ({wan:0,trunk:1,wifi:2,host:3})[k.toLowerCase()]||0;return num(k);}
-  function sB2(env,t,dt){let a=(env.raw.systems||[]).map((q,i)=>({q,i,r:(q.rxKbps==null?0:num(q.rxKbps))+(q.txKbps==null?0:num(q.txKbps))})).filter(x=>x.q.rxKbps!=null||x.q.txKbps!=null).sort((x,y)=>y.r-x.r).slice(0,8),p=pageFor(6,dt,pageCount(a.length,2));for(let j=0;j<2;j++){let x=a[p*2+j];if(!x)continue;let y=j?6:0;textFit(0,y,x.q.name,8,cInk,1);textRight(52,y,rateLabel(x.r),cAzure,1);}pageBar(p,pageCount(a.length,2));}
-  function sC0(env,t,dt){let a=env.raw.alertList;if(!a){textCentre(3,"NO ALERT DATA",cAzure,1);return;}let items=a.items||[];if(!items.length){textCentre(3,"ALL CLEAR",cOk,1);return;}let p=pageFor(8,dt,pageCount(items.length+(a.total>items.length?1:0),1));if(p>=items.length){textCentre(0,"+"+(a.total-items.length)+" MORE",cInk,1);textCentre(6,"SEE DASHBOARD",cAzure,1);}else{let q=items[p],age=num(q.ageMin)<60?q.ageMin+"M":num(q.ageMin)<1440?Math.floor(q.ageMin/60)+"H":Math.floor(q.ageMin/1440)+"D",h=num(q.severity)===2?cCrit:num(q.severity)===1?cWarn:cAzure;textFit(0,0,q.host,9,cInk,1);textRight(52,0,age,cAzure,1);textCentre(6,q.msg,h,1);}pageBar(p,items.length+(a.total>items.length?1:0));}
-  function sC1(env,t,dt){let a=env.raw.alertList;if(!a){textCentre(3,"NO ALERT DATA",cAzure,1);return;}let f=a.faultCounts||[],p=pageFor(9,dt,f[0]?2:1);if(p){textCentre(0,"OTHER "+num(f[0]),cWarn,1);textCentre(6,"SEE DASHBOARD",cAzure,1);}else{[[0,0,"NET",f[1],cCrit],[28,0,"SVC",f[2],cWarn],[0,6,"DSK",num(f[3])+num(f[4])+num(f[6]),cWarn],[28,6,"KRN",f[5],cWarn]].forEach(([x,y,l,n,h])=>panelText(x,y,l+" "+Math.min(99,num(n)),num(n)?h:cOk,1));}pageBar(p,f[0]?2:1);}
-  function sC2(env){let a=env.raw.probes||[];if(!a.length){textCentre(3,"NO PROBE DATA",cAzure,1);return;}let n=Math.min(11,a.length),gap=n<=6?1:0;for(let p=0;p<n;p++){let y0=Math.floor(p*(PH+gap)/n),y1=Math.floor((p+1)*(PH+gap)/n)-gap,row=env.probeHist[p],base=65535;for(let x=0;x<HIST_LEN;x++)if(row[x]>0&&row[x]<base)base=row[x];for(let x=0;x<HIST_LEN;x++){let cell=row[x];if(cell<0)continue;let h,b;if(stateEnum(a[p].state)===ST_UNKNOWN){h=cUnknown;b=.25;}else if(cell>=65535){h=cCrit;b=1;}else if(base!==65535&&cell>=base*2+5){h=cWarn;b=1;}else{h=cOk;b=.4;}for(let y=y0;y<y1;y++)fbSet(x,y,h,b);}}}
+  function sB2(env, t, dt) {
+    let a = (env.raw.systems || []).map((q, i) => ({
+        q,
+        i,
+        r: (q.rxKbps == null ? 0 : num(q.rxKbps)) + (q.txKbps == null ? 0 : num(q.txKbps))
+      })).filter(x => x.q.rxKbps != null || x.q.txKbps != null).sort((x, y) => y.r - x.r).slice(0, 8),
+      p = pageFor(6, dt, pageCount(a.length, 2));
+    for (let j = 0; j < 2; j++) {
+      let x = a[p * 2 + j];
+      if (!x) continue;
+      let y = j ? 6 : 0;
+      textFit(0, y, x.q.name, 8, cInk, 1);
+      textRight(52, y, rateLabel(Math.min(x.r, RATE_MAX)), cAzure, 1);
+    }
+    pageBar(p, pageCount(a.length, 2));
+  }
+  function sC0(env, t, dt) {
+    let a = env.raw.alertList;
+    if (!a) {
+      textCentre(3, "NO ALERT DATA", cAzure, 1);
+      return;
+    }
+    let items = a.items || [];
+    if (!items.length) {
+      textCentre(3, "ALL CLEAR", cOk, 1);
+      return;
+    }
+    let p = pageFor(8, dt, pageCount(items.length + (a.total > items.length ? 1 : 0), 1));
+    if (p >= items.length) {
+      textCentre(0, "+" + (a.total - items.length) + " MORE", cInk, 1);
+      textCentre(6, "SEE DASHBOARD", cAzure, 1);
+    } else {
+      let q = items[p],
+        age = num(q.ageMin) < 60 ? q.ageMin + "M" : num(q.ageMin) < 1440 ? Math.floor(q.ageMin / 60) + "H" : Math.floor(q.ageMin / 1440) + "D",
+        h = num(q.severity) === 2 ? cCrit : num(q.severity) === 1 ? cWarn : cAzure;
+      textFit(0, 0, q.host, 9, cInk, 1);
+      textRight(52, 0, age, cAzure, 1);
+      textCentre(6, q.msg, h, 1);
+    }
+    pageBar(p, items.length + (a.total > items.length ? 1 : 0));
+  }
+  function sC1(env, t, dt) {
+    let a = env.raw.alertList;
+    if (!a) {
+      textCentre(3, "NO ALERT DATA", cAzure, 1);
+      return;
+    }
+    let f = a.faultCounts || [],
+      p = pageFor(9, dt, f[0] ? 2 : 1);
+    if (p) {
+      textCentre(0, "OTHER " + num(f[0]), cWarn, 1);
+      textCentre(6, "SEE DASHBOARD", cAzure, 1);
+    } else {
+      [[0, 0, "NET", f[1], cCrit], [28, 0, "SVC", f[2], cWarn], [0, 6, "DSK", num(f[3]) + num(f[4]) + num(f[6]), cWarn], [28, 6, "KRN", f[5], cWarn]].forEach(([x, y, l, n, h]) => panelText(x, y, l + " " + Math.min(99, num(n)), num(n) ? h : cOk, 1));
+    }
+    pageBar(p, f[0] ? 2 : 1);
+  }
+  function sC2(env) {
+    let a = env.raw.probes || [];
+    if (!a.length) {
+      textCentre(3, "NO PROBE DATA", cAzure, 1);
+      return;
+    }
+    let n = Math.min(11, a.length),
+      gap = n <= 6 ? 1 : 0;
+    for (let p = 0; p < n; p++) {
+      let y0 = Math.floor(p * (PH + gap) / n),
+        y1 = Math.floor((p + 1) * (PH + gap) / n) - gap,
+        row = env.probeHist[p],
+        base = 65535;
+      for (let x = 0; x < HIST_LEN; x++) if (row[x] > 0 && row[x] < base) base = row[x];
+      for (let x = 0; x < HIST_LEN; x++) {
+        let cell = row[x];
+        if (cell < 0) continue;
+        let h, b;
+        if (stateEnum(a[p].state) === ST_UNKNOWN) {
+          h = cUnknown;
+          b = .25;
+        } else if (cell >= 65535) {
+          h = cCrit;
+          b = 1;
+        } else if (base !== 65535 && cell >= base * 2 + 5) {
+          h = cWarn;
+          b = 1;
+        } else {
+          h = cOk;
+          b = .4;
+        }
+        for (let y = y0; y < y1; y++) fbSet(x, y, h, b);
+      }
+    }
+  }
   function sC0oldUnused(){}
 
-  function rateLabel(k){if(k==null)return "--";k=num(k);if(k<1000)return Math.floor(k)+"K";const m=k/1000;if(m<9.95)return m.toFixed(1)+"M";if(m<999.5)return Math.floor(m+.5)+"M";if(m<9950)return (m/1000).toFixed(1)+"G";return Math.floor(m/1000+.5)+"G";}
-  function sB1(env){const q=env.raw.totals;if(!q){textCentre(3,"NO RATE DATA",cAzure,1);return;}function row(y,l,d,u,dr,ur,h){let total=d==null?(u==null?null:num(u)):(u==null?num(d):num(d)+num(u)),x=panelText(0,y,l+" ",cInk,1);panelText(x,y,rateLabel(total),h,1);let peak=1;for(let a=0;a<PW;a++){let dn=dr[HIST_LEN-1-a],up=ur[HIST_LEN-1-a],v=(dn>0?dn:0)+(up>0?up:0);if(v>peak)peak=v;}for(let a=0;a<PW;a++){let dn=dr[HIST_LEN-1-a],up=ur[HIST_LEN-1-a];if(dn<0&&up<0)continue;if(dn<0)dn=0;if(up<0)up=0;let xx=PW-1-a,hd=ri(dn/peak*5),hu=ri((dn+up)/peak*5)-hd;if(hd<1&&dn>0)hd=1;for(let r=0;r<hd&&r<5;r++)fbSet(xx,y+4-r,h,1);for(let r=hd;r<hd+hu&&r<5;r++)fbSet(xx,y+4-r,cMaint,1);}}row(0,"WAN",q.wanDownKbps,q.wanUpKbps,env.wanDown,env.wanUp,cAzure);row(6,"LAN",q.lanDownKbps,q.lanUpKbps,env.lanDown,env.lanUp,cOk);}
+  const RATE_MAX = 4294967294; // One below the wire's "no rate" value, as firmware pins it.
+  function rateLabel(k) {
+    if (k == null) return "--";
+    k = num(k);
+    if (k < 1000) return Math.floor(k) + "K";
+    const m = k / 1000;
+    if (m < 9.95) return m.toFixed(1) + "M";
+    if (m < 999.5) return Math.floor(m + .5) + "M";
+    if (m < 9950) return (m / 1000).toFixed(1) + "G";
+    return Math.floor(m / 1000 + .5) + "G";
+  }
+  function sB1(env) {
+    const q = env.raw.totals;
+    if (!q) {
+      textCentre(3, "NO RATE DATA", cAzure, 1);
+      return;
+    }
+    function row(y, l, d, u, dr, ur, h) {
+      let total = d == null ? u == null ? null : num(u) : u == null ? num(d) : Math.min(num(d) + num(u), RATE_MAX),
+        x = panelText(0, y, l + " ", cInk, 1);
+      x = panelText(x, y, rateLabel(total), h, 1);
+      let x0 = Math.max(33, x),
+        cols = PW - x0,
+        peak = 1;
+      for (let a = 0; a < cols; a++) {
+        let dn = dr[HIST_LEN - 1 - a],
+          up = ur[HIST_LEN - 1 - a],
+          v = (dn > 0 ? dn : 0) + (up > 0 ? up : 0);
+        if (v > peak) peak = v;
+      }
+      for (let a = 0; a < cols; a++) {
+        let dn = dr[HIST_LEN - 1 - a],
+          up = ur[HIST_LEN - 1 - a];
+        if (dn < 0 && up < 0) continue;
+        if (dn < 0) dn = 0;
+        if (up < 0) up = 0;
+        let xx = PW - 1 - a,
+          hd = ri(dn / peak * 5),
+          hu = ri((dn + up) / peak * 5) - hd;
+        if (hd < 1 && dn > 0) hd = 1;
+        if (hu < 0) hu = 0;
+        for (let r = 0; r < hd && r < 5; r++) fbSet(xx, y + 4 - r, h, 1);
+        for (let r = hd; r < hd + hu && r < 5; r++) fbSet(xx, y + 4 - r, cMaint, 1);
+      }
+    }
+    row(0, "WAN", q.wanDownKbps, q.wanUpKbps, env.wanDown, env.wanUp, cAzure);
+    row(6, "LAN", q.lanDownKbps, q.lanUpKbps, env.lanDown, env.lanUp, cOk);
+  }
 
   // Detailed firmware ports for the topology and resource charts.
-  function sB3(env,t,dt){const a=env.raw.links||[],n=a.length;if(!n){textCentre(3,"NO LINK DATA",cAzure,1);return;}function parentOf(i){let p=a[i].parent;if(p==null||num(p)>=n)return -1;let at=i,steps=0;while(a[at].parent!=null&&num(a[at].parent)<n){at=num(a[at].parent);if(++steps>n)return -1;}return at===i?-1:num(p);}function depth(i){let d=0,at=i;while(a[at].parent!=null&&num(a[at].parent)<n){at=num(a[at].parent);if(++d>n)return 0;}return d;}let par=a.map((_,i)=>parentOf(i)),dep=a.map((_,i)=>par[i]<0?0:depth(i)),md=Math.max.apply(null,dep),order=[],stack=[];for(let i=n-1;i>=0;i--)if(par[i]<0)stack.push(i);while(stack.length&&order.length<n){let at=stack.pop();order.push(at);for(let c=n-1;c>=0;c--)if(par[c]===at)stack.push(c);}let leaves=order.filter(i=>!par.some(x=>x===i)).length||1,leaf=0,nx=[],ny=[];for(const i of order){let child=par.some(x=>x===i);nx[i]=5+Math.floor(dep[i]*45/(md||1));ny[i]=1+Math.floor((2*leaf+1)*9/(2*leaves));if(!child)leaf++;}function point(px,py,cx,cy,d){let dy=Math.abs(cy-py);return d<=dy?[px,py+(cy>py?d:-d)]:[px+d-dy,cy];}for(const i of order){let px=par[i]<0?0:nx[par[i]],py=par[i]<0?ny[i]:ny[par[i]],len=Math.abs(ny[i]-py)+nx[i]-px,q=a[i],h=stateEnum(q.state)===ST_DOWN?cCrit:[cInk,cAzure,cMaint,cOk][linkKind(q.kind)]||cOk;for(let d=0;d<=len;d++){let [x,y]=point(px,py,nx[i],ny[i],d);fbSet(x,y,h,stateEnum(q.state)===ST_DOWN?.6:.22);}for(let dir=0;dir<2;dir++){let rate=q[dir?"upKbps":"downKbps"];if(rate==null||num(rate)===0||stateEnum(q.state)===ST_DOWN||len<=0)continue;let spacing=14-11*panelRateLevel(rate),speed=2+22*panelRateLevel(rate),key=i*2+dir;v2LanePhase[16+key]=(v2LanePhase[16+key]||0)+speed*dt;if(spacing>len)spacing=len+1;for(let z=v2LanePhase[16+key]%spacing;z<=len;z+=spacing){let d=Math.floor(z);if(dir)d=len-d;let [x,y]=point(px,py,nx[i],ny[i],d);fbSet(x,y,h,1);}}}for(const i of order)for(let yy=0;yy<2;yy++)for(let xx=0;xx<2;xx++)fbSet(nx[i]+xx,ny[i]+yy,stateColor(a[i].state),1);}
-  function sC3(env){const heat=env.raw.alertHeat;if(!heat){textCentre(3,"NO HISTORY",cAzure,1);return;}const w=heat.warn||[],c=heat.crit||[];let peak=3;for(let i=0;i<52;i++)peak=Math.max(peak,num(w[i])+num(c[i]));const scale=PH/Math.log2(peak+1);for(let i=0;i<52;i++){const nw=num(w[i]),nc=num(c[i]),h=Math.min(PH,Math.ceil(Math.log2(nw+nc+1)*scale)),hc=nc?Math.ceil(Math.log2(nc+1)*scale):0;for(let r=0;r<h;r++)fbSet(i,PH-1-r,r>=h-hc?cCrit:cWarn,1);if(!h&&(51-i)%12===0)fbSet(i,10,cAzure,.3);}for(let y=0;y<PH;y++)fbSet(52,y,cAzure,.45);}
-  function sD0(env,t,dt){const a=env.raw.systems||[];if(!a.length)return;const p=pageFor(12,dt,a.length),q=a[p],st=stateEnum(q.state),h=stateColor(st),word=["OK","DEG","DOWN","?","MNT"][st];textFit(0,0,q.name,8,cInk,1);textRight(52,0,word,h,1);if(st===ST_DOWN||st===ST_UNKNOWN)textCentre(6,"NO READINGS",cUnknown,1);else{[[0,"C",q.loadPct,cAzure],[19,"M",q.memPct,cMaint],[38,"D",q.diskPct,cOk]].forEach(([x,l,v,col])=>{panelText(x,6,l,cInk,1);const valid=v!=null&&num(v)<=100,pct=num(v);panelText(x+4,6,valid?String(pct):"--",valid?(pct>=90?cCrit:pct>=75?cWarn:col):cUnknown,1);});}pageBar(p,a.length);}
-  function sD1(env,t,dt){const a=env.raw.systems||[],n=Math.min(PW,a.length);if(!n)return;const gap=PW>=n*2?1:0;for(let i=0;i<n;i++){let q=a[i],x0=Math.floor(i*(PW+gap)/n),x1=Math.floor((i+1)*(PW+gap)/n)-gap,st=stateEnum(q.state),h=stateColor(st),mem=q.memPct==null?255:num(q.memPct),measured=st!==ST_DOWN&&st!==ST_UNKNOWN,up=measured?Math.floor((num(q.loadPct)*5+50)/100):0,dn=measured&&mem<=100?Math.floor((mem*5+50)/100):0;if(measured&&up<1&&num(q.loadPct)>0)up=1;if(dn<1&&measured&&mem<=100&&mem>0)dn=1;for(let x=x0;x<x1;x++){fbSet(x,5,h,1);for(let r=1;r<=5;r++){if(r<=up)fbSet(x,5-r,num(q.loadPct)>=90?cCrit:num(q.loadPct)>=75?cWarn:cAzure,1);if(r<=dn)fbSet(x,5+r,mem>=90?cCrit:mem>=75?cWarn:cMaint,1);}}}}
-  function sD2(env){const rings=[env.wanDown,env.cpuLocal,env.rttLocal],rings2=[env.wanUp,null,null],peaks=[1,.4,10],values=Array.from({length:3},()=>new Float32Array(PW));for(let a=0;a<PW;a++)for(let k=0;k<3;k++){let v=rings[k][HIST_LEN-1-a];if(rings2[k]){let v2=rings2[k][HIST_LEN-1-a];if(v2>0)v=(v>0?v:0)+v2;}values[k][a]=v;if(v>peaks[k])peaks[k]=v;}for(let a=0;a<PW;a++)for(let k=0;k<3;k++){let v=values[k][a];if(v<0)continue;let rows=Math.min(3,v/peaks[k]*3),x=PW-1-a,y=[0,4,8][k],h=[cInk,cAzure,cMaint][k];for(let r=0;r<3;r++){let cover=rows-r;if(cover<=0)break;fbSet(x,y+2-r,h,cover>=1?1:.25+.75*cover);}}}
-  function sD3(env,t,dt){const hosts=env.raw.systems||[],tiles=hosts.map(q=>({state:stateEnum(q.state),load:clamp01(num(q.loadPct)/100)}));for(const b of env.raw.popTail||[])tiles.push({state:(num(b)>>5)&7,load:(num(b)&31)/31});let n=tiles.length;if(!n)return;let total=0,q=env.raw.totals||{};for(const k of ["wanDownKbps","wanUpKbps","lanDownKbps","lanUpKbps"])if(q[k]!=null)total+=num(q[k]);env.aurora=(env.aurora||0)+dt*(.15+2.2*panelRateLevel(total));for(let x=0;x<PW;x++){let pos=(x+.5)*n/PW-.5,a=Math.floor(pos),b=a+1,mix=pos-a;if(a<0)a=0;if(b>=n)b=n-1;let ta=tiles[a],tb=tiles[b],own=mix<.5?ta:tb;if(own.state===ST_DOWN){for(let y=0;y<PH;y++)fbSet(x,y,cCrit,1);continue;}let load=ta.load+(tb.load-ta.load)*mix,h=own.state===ST_OK?cAzure:stateColor(own.state),top=own.state===ST_OK?cOk:h,height=4+load*7,wave=Math.sin(env.aurora+x*.28)*1.3+Math.sin(env.aurora*.61+x*.11)*.9,crest=PH-height+wave,ray=.62+.38*Math.sin(env.aurora*2.3+x*1.35);for(let y=0;y<PH;y++){let d=y-crest;if(d<-.5)continue;fbSet(x,y,d<1?top:h,d<1?1:ray/(1+d*.28));}}}
+  function sB3(env, t, dt) {
+    const a = env.raw.links || [],
+      n = a.length;
+    if (!n) {
+      textCentre(3, "NO LINK DATA", cAzure, 1);
+      return;
+    }
+    function parentOf(i) {
+      let p = a[i].parent;
+      if (p == null || num(p) >= n) return -1;
+      let at = i,
+        steps = 0;
+      while (a[at].parent != null && num(a[at].parent) < n) {
+        at = num(a[at].parent);
+        if (++steps > n) return -1;
+      }
+      return at === i ? -1 : num(p);
+    }
+    function depth(i) {
+      let d = 0,
+        at = i;
+      while (a[at].parent != null && num(a[at].parent) < n) {
+        at = num(a[at].parent);
+        if (++d > n) return 0;
+      }
+      return d;
+    }
+    let par = a.map((_, i) => parentOf(i)),
+      dep = a.map((_, i) => par[i] < 0 ? 0 : depth(i)),
+      md = Math.max.apply(null, dep),
+      order = [],
+      stack = [];
+    for (let i = n - 1; i >= 0; i--) if (par[i] < 0) stack.push(i);
+    while (stack.length && order.length < n) {
+      let at = stack.pop();
+      order.push(at);
+      for (let c = n - 1; c >= 0; c--) if (par[c] === at) stack.push(c);
+    }
+    let leaves = order.filter(i => !par.some(x => x === i)).length || 1,
+      leaf = 0,
+      nx = [],
+      ny = [];
+    for (const i of order) {
+      let child = par.some(x => x === i);
+      nx[i] = 5 + Math.floor(dep[i] * 45 / (md || 1));
+      ny[i] = 1 + Math.floor((2 * leaf + 1) * 9 / (2 * leaves));
+      if (!child) leaf++;
+    }
+    function point(px, py, cx, cy, d) {
+      let dy = Math.abs(cy - py);
+      return d <= dy ? [px, py + (cy > py ? d : -d)] : [px + d - dy, cy];
+    }
+    for (const i of order) {
+      let px = par[i] < 0 ? 0 : nx[par[i]],
+        py = par[i] < 0 ? ny[i] : ny[par[i]],
+        len = Math.abs(ny[i] - py) + nx[i] - px,
+        q = a[i],
+        h = stateEnum(q.state) === ST_DOWN ? cCrit : [cInk, cAzure, cMaint, cOk][linkKind(q.kind)] || cOk;
+      for (let d = 0; d <= len; d++) {
+        let [x, y] = point(px, py, nx[i], ny[i], d);
+        fbSet(x, y, h, stateEnum(q.state) === ST_DOWN ? .6 : .22);
+      }
+      for (let dir = 0; dir < 2; dir++) {
+        let rate = q[dir ? "upKbps" : "downKbps"];
+        if (rate == null || num(rate) === 0 || stateEnum(q.state) === ST_DOWN || len <= 0) continue;
+        let spacing = 14 - 11 * panelRateLevel(rate),
+          speed = 2 + 22 * panelRateLevel(rate),
+          key = i * 2 + dir;
+        v2LanePhase[16 + key] = (v2LanePhase[16 + key] || 0) + speed * dt;
+        if (spacing > len) spacing = len + 1;
+        for (let z = v2LanePhase[16 + key] % spacing; z <= len; z += spacing) {
+          let d = Math.floor(z);
+          if (dir) d = len - d;
+          let [x, y] = point(px, py, nx[i], ny[i], d);
+          fbSet(x, y, h, 1);
+        }
+      }
+    }
+    for (const i of order) for (let yy = 0; yy < 2; yy++) for (let xx = 0; xx < 2; xx++) fbSet(nx[i] + xx, ny[i] + yy, stateColor(a[i].state), 1);
+  }
+  function sC3(env) {
+    const heat = env.raw.alertHeat;
+    if (!heat) {
+      textCentre(3, "NO HISTORY", cAzure, 1);
+      return;
+    }
+    const w = heat.warn || [],
+      c = heat.crit || [];
+    let peak = 3;
+    for (let i = 0; i < 52; i++) peak = Math.max(peak, num(w[i]) + num(c[i]));
+    const scale = PH / Math.log2(peak + 1);
+    for (let i = 0; i < 52; i++) {
+      const nw = num(w[i]),
+        nc = num(c[i]),
+        h = Math.min(PH, Math.ceil(Math.log2(nw + nc + 1) * scale)),
+        hc = nc ? Math.ceil(Math.log2(nc + 1) * scale) : 0;
+      for (let r = 0; r < h; r++) fbSet(i, PH - 1 - r, r >= h - hc ? cCrit : cWarn, 1);
+      if (!h && (51 - i) % 12 === 0) fbSet(i, 10, cAzure, .3);
+    }
+    for (let y = 0; y < PH; y++) fbSet(52, y, cAzure, .45);
+  }
+  function sD0(env, t, dt) {
+    const a = env.raw.systems || [];
+    if (!a.length) return;
+    const p = pageFor(12, dt, a.length),
+      q = a[p],
+      st = stateEnum(q.state),
+      h = stateColor(st),
+      word = ["OK", "DEG", "DOWN", "?", "MNT"][st];
+    textFit(0, 0, q.name, 8, cInk, 1);
+    textRight(52, 0, word, h, 1);
+    if (st === ST_DOWN || st === ST_UNKNOWN) textCentre(6, "NO READINGS", cUnknown, 1);else {
+      [[0, "C", q.loadPct, cAzure], [19, "M", q.memPct, cMaint], [38, "D", q.diskPct, cOk]].forEach(([x, l, v, col]) => {
+        panelText(x, 6, l, cInk, 1);
+        const valid = v != null && num(v) <= 100,
+          pct = num(v);
+        panelText(x + 4, 6, valid ? String(pct) : "--", valid ? pct >= 90 ? cCrit : pct >= 75 ? cWarn : col : cUnknown, 1);
+      });
+    }
+    pageBar(p, a.length);
+  }
+  function sD1(env, t, dt) {
+    const a = env.raw.systems || [],
+      n = Math.min(PW, a.length);
+    if (!n) return;
+    const gap = PW >= n * 2 ? 1 : 0;
+    for (let i = 0; i < n; i++) {
+      let q = a[i],
+        x0 = Math.floor(i * (PW + gap) / n),
+        x1 = Math.floor((i + 1) * (PW + gap) / n) - gap,
+        st = stateEnum(q.state),
+        h = stateColor(st),
+        mem = q.memPct == null ? 255 : num(q.memPct),
+        measured = st !== ST_DOWN && st !== ST_UNKNOWN,
+        up = measured ? Math.floor((num(q.loadPct) * 5 + 50) / 100) : 0,
+        dn = measured && mem <= 100 ? Math.floor((mem * 5 + 50) / 100) : 0;
+      if (measured && up < 1 && num(q.loadPct) > 0) up = 1;
+      if (dn < 1 && measured && mem <= 100 && mem > 0) dn = 1;
+      for (let x = x0; x < x1; x++) {
+        fbSet(x, 5, h, 1);
+        for (let r = 1; r <= 5; r++) {
+          if (r <= up) fbSet(x, 5 - r, num(q.loadPct) >= 90 ? cCrit : num(q.loadPct) >= 75 ? cWarn : cAzure, 1);
+          if (r <= dn) fbSet(x, 5 + r, mem >= 90 ? cCrit : mem >= 75 ? cWarn : cMaint, 1);
+        }
+      }
+    }
+  }
+  function sD2(env) {
+    const rings = [env.wanDown, env.cpuLocal, env.rttLocal],
+      rings2 = [env.wanUp, null, null],
+      peaks = [1, .4, 10],
+      values = Array.from({
+        length: 3
+      }, () => new Float32Array(PW));
+    for (let a = 0; a < PW; a++) for (let k = 0; k < 3; k++) {
+      let v = rings[k][HIST_LEN - 1 - a];
+      if (rings2[k]) {
+        let v2 = rings2[k][HIST_LEN - 1 - a];
+        if (v2 > 0) v = (v > 0 ? v : 0) + v2;
+      }
+      values[k][a] = v;
+      if (v > peaks[k]) peaks[k] = v;
+    }
+    for (let a = 0; a < PW; a++) for (let k = 0; k < 3; k++) {
+      let v = values[k][a];
+      if (v < 0) continue;
+      let rows = Math.min(3, v / peaks[k] * 3),
+        x = PW - 1 - a,
+        y = [0, 4, 8][k],
+        h = [cInk, cAzure, cMaint][k];
+      for (let r = 0; r < 3; r++) {
+        let cover = rows - r;
+        if (cover <= 0) break;
+        fbSet(x, y + 2 - r, h, cover >= 1 ? 1 : .25 + .75 * cover);
+      }
+    }
+  }
+  function sD3(env, t, dt) {
+    const hosts = env.raw.systems || [],
+      tiles = hosts.map(q => ({
+        state: stateEnum(q.state),
+        load: clamp01(num(q.loadPct) / 100)
+      }));
+    for (const b of env.raw.popTail || []) tiles.push({
+      state: num(b) >> 5 & 7,
+      load: (num(b) & 31) / 31
+    });
+    let n = tiles.length;
+    if (!n) return;
+    let total = 0,
+      q = env.raw.totals || {};
+    for (const k of ["wanDownKbps", "wanUpKbps", "lanDownKbps", "lanUpKbps"]) if (q[k] != null) total += num(q[k]);
+    if (total > 0) env.aurora = (env.aurora || 0) + dt * (.15 + 2.2 * panelRateLevel(total));
+    for (let x = 0; x < PW; x++) {
+      let pos = (x + .5) * n / PW - .5,
+        a = Math.floor(pos),
+        b = a + 1,
+        mix = pos - a;
+      if (a < 0) a = 0;
+      if (b >= n) b = n - 1;
+      let ta = tiles[a],
+        tb = tiles[b],
+        own = mix < .5 ? ta : tb;
+      if (own.state === ST_DOWN) {
+        for (let y = 0; y < PH; y++) fbSet(x, y, cCrit, 1);
+        continue;
+      }
+      let load = ta.load + (tb.load - ta.load) * mix,
+        h = own.state === ST_OK ? cAzure : stateColor(own.state),
+        top = own.state === ST_OK ? cOk : h,
+        height = 4 + load * 7,
+        wave = Math.sin(env.aurora + x * .28) * 1.3 + Math.sin(env.aurora * .61 + x * .11) * .9,
+        crest = PH - height + wave,
+        ray = .62 + .38 * Math.sin(env.aurora * 2.3 + x * 1.35);
+      for (let y = 0; y < PH; y++) {
+        let d = y - crest;
+        if (d < -.5) continue;
+        fbSet(x, y, d < 1 ? top : h, d < 1 ? 1 : ray / (1 + d * .28));
+      }
+    }
+  }
 
-  function sB0(env,t,dt){const a=env.raw.links||[];if(!a.length){textCentre(3,"NO LINK DATA",cAzure,1);return;}const p=pageFor(4,dt,pageCount(a.length,2));function lane(x0,x1,y,rate,key,dir,h,step){if(rate==null){for(let x=x0;x<=x1;x+=4)fbSet(x,y,cUnknown,.35);return;}rate=num(rate);if(rate===0){for(let x=x0;x<=x1;x++)fbSet(x,y,h,.06);return;}let spacing=14-11*panelRateLevel(rate),speed=2+22*panelRateLevel(rate);v2LanePhase[key]=(v2LanePhase[key]||0)+speed*step;v2LanePhase[key]%=spacing*64;for(let x=x0;x<=x1;x++)fbSet(x,y,h,.08);for(let z=v2LanePhase[key]%spacing-spacing;z<=x1-x0;z+=spacing){let d=Math.floor(z);if(d<0||d>x1-x0)continue;let head=dir>0?x0+d:x1-d;fbSet(head,y,h,1);let tail=head-dir;if(tail>=x0&&tail<=x1)fbSet(tail,y,h,.4);}}for(let slot=0;slot<2;slot++){let i=p*2+slot,q=a[i];if(!q)break;let y=slot?6:0,st=stateEnum(q.state),kind=linkKind(q.kind),h=[cInk,cAzure,cMaint,cOk][kind]||cOk,label=kind===0?(String(q.name).indexOf("BACKUP")===0?"WAN2":"WAN"):q.name;textFit(0,y,label,5,st===ST_DOWN?cCrit:cInk,1);if(st===ST_DOWN){for(let x=21;x<PW;x++){fbSet(x,y,cCrit,.6);fbSet(x,y+4,cCrit,.6);}continue;}lane(21,52,y,q.downKbps,i*2,-1,h,dt);lane(21,52,y+1,q.downKbps,i*2,-1,h,0);lane(21,52,y+3,q.upKbps,i*2+1,1,h,dt);lane(21,52,y+4,q.upKbps,i*2+1,1,h,0);}pageBar(p,pageCount(a.length,2));}
+  function sB0(env, t, dt) {
+    const a = env.raw.links || [];
+    if (!a.length) {
+      textCentre(3, "NO LINK DATA", cAzure, 1);
+      return;
+    }
+    const p = pageFor(4, dt, pageCount(a.length, 2));
+    function lane(x0, x1, y, rate, key, dir, h, step) {
+      if (rate == null) {
+        for (let x = x0; x <= x1; x += 4) fbSet(x, y, cUnknown, .35);
+        return;
+      }
+      rate = num(rate);
+      if (rate === 0) {
+        for (let x = x0; x <= x1; x++) fbSet(x, y, h, .06);
+        return;
+      }
+      let spacing = 14 - 11 * panelRateLevel(rate),
+        speed = 2 + 22 * panelRateLevel(rate);
+      v2LanePhase[key] = (v2LanePhase[key] || 0) + speed * step;
+      v2LanePhase[key] %= spacing * 64;
+      for (let x = x0; x <= x1; x++) fbSet(x, y, h, .08);
+      for (let z = v2LanePhase[key] % spacing - spacing; z <= x1 - x0; z += spacing) {
+        let d = Math.floor(z);
+        if (d < 0 || d > x1 - x0) continue;
+        let head = dir > 0 ? x0 + d : x1 - d;
+        fbSet(head, y, h, 1);
+        let tail = head - dir;
+        if (tail >= x0 && tail <= x1) fbSet(tail, y, h, .4);
+      }
+    }
+    for (let slot = 0; slot < 2; slot++) {
+      let i = p * 2 + slot,
+        q = a[i];
+      if (!q) break;
+      let y = slot ? 6 : 0,
+        st = stateEnum(q.state),
+        kind = linkKind(q.kind),
+        h = [cInk, cAzure, cMaint, cOk][kind] || cOk,
+        label = kind === 0 ? String(q.name).indexOf("BACKUP") === 0 ? "WAN2" : "WAN" : q.name;
+      textFit(0, y, label, 5, st === ST_DOWN ? cCrit : cInk, 1);
+      if (st === ST_DOWN) {
+        for (let x = 21; x < PW; x++) {
+          fbSet(x, y, cCrit, .6);
+          fbSet(x, y + 4, cCrit, .6);
+        }
+        continue;
+      }
+      lane(21, 52, y, q.downKbps, i * 2, -1, h, dt);
+      lane(21, 52, y + 1, q.downKbps, i * 2, -1, h, 0);
+      lane(21, 52, y + 3, q.upKbps, i * 2 + 1, 1, h, dt);
+      lane(21, 52, y + 4, q.upKbps, i * 2 + 1, 1, h, 0);
+    }
+    pageBar(p, pageCount(a.length, 2));
+  }
 
   // 11. Screen table + the paint order from main.c
   // =====================================================================
@@ -368,7 +901,7 @@
      when the alarm is armed, then the beacon LAST so it overrides the inlay's
      right-hand rail. `armed` mirrors main.c's gAlarmArmed: alarmActive and not
      acknowledged for the current episode. */
-  const SCREEN_LABELS=["HOST TILES","ROSTER","POOLS","HEAD COUNT","SWIM LANES","WAN AND LAN","TOP TALKERS","FLOW MAP","ALERTS","FAULT BOARD","REACHABILITY","ALERT HISTORY","HOST DETAIL","CPU AND MEM","TRENDS","AURORA"];
+  const SCREEN_LABELS = ["HOST TILES", "ROSTER", "POOLS", "HEAD COUNT", "SWIM LANES", "WAN AND LAN", "TOP TALKERS", "FLOW MAP", "ALERTS", "FAULT BOARD", "REACHABILITY", "ALERT HISTORY", "HOST DETAIL", "CPU AND MEM", "TRENDS", "AURORA"];
   const HELP_TEXTS=[
     ["TILE IS HOST","FILL IS LOAD"],["HOST LIST","WORST FIRST"],["EACH POOL","HOSTS LOAD"],["HOSTS UP","AND WORST NOW"],
     ["LINK TRAFFIC","DOTS ARE RATE"],["INTERNET AND","LOCAL TRAFFIC"],["BUSIEST HOSTS","BY TRAFFIC"],["NETWORK TREE","DOTS ARE RATE"],
@@ -377,7 +910,17 @@
   ];
   function helpOverlay(index){if(index<0||index>15)return;const h=HELP_TEXTS[index];textCentre(0,h[0],cInk,1);textCentre(6,h[1],cAzure,1);}
   function titleCard(index,age){if(age<0||age>=1)return;fbDimAll(.08);textCentre(3,SCREEN_LABELS[index],cInk,1);}
-  function inlay(env,t){fbDimAll(.1);const pulse=.55+.45*Math.abs(Math.sin(t*2.2));for(let y=0;y<PH;y++){fbSet(0,y,cCrit,pulse);fbSet(52,y,cCrit,pulse);}for(let y=0;y<PH;y++)for(let x=1;x<52;x++)fbDim(x,y,.2);textCentre(0,String(env.subject||"ALERT").slice(0,12),cCrit,1);textCentre(6,env.detail||"",cInk,1);}
+  function inlay(env, t) {
+    fbDimAll(.1);
+    const pulse = .55 + .45 * Math.abs(Math.sin(t * 2.2));
+    for (let y = 0; y < PH; y++) {
+      fbSet(0, y, cCrit, pulse);
+      fbSet(52, y, cCrit, pulse);
+    }
+    for (let y = 0; y < PH; y++) for (let x = 1; x < 52; x++) fbDim(x, y, .2);
+    textCentre(0, String(env.subject || "ALERT").slice(0, 12), cCrit, 1);
+    textCentre(6, env.detail || "", cInk, 1);
+  }
   function beacon(t){if(t%1>=.5)return;for(let y=0;y<=1;y++)for(let x=51;x<=52;x++)fbSet(x,y,cCrit,1);}
   function screenNoData(t,haveData){textCentre(3,haveData?"NO HOSTS":"AWAITING DATA",cAzure,.6+.4*(.5+.5*Math.sin(t*.8)));}
   function screenLinkLost(t){fbDimAll(.06);textCentre(0,"NO DATA FEED",cWarn,1);textCentre(6,"SCREEN IS OLD",cInk,1);fbSet(Math.floor(t*12)%PW,5,cWarn,.6);}
