@@ -233,8 +233,11 @@
                 const fill = function (value) { return function (cur) { return cur || value; }; };
                 setManualName(fill(scanned));
                 setManualVendor(fill(row.vendor || ""));
-                setManualOs(fill(row.osGuess || row.osName || row.sysDescr || ""));
-                setManualPorts(fill((row.openPorts || []).map(function (p) { return String(p).split("/")[0]; }).join(", ")));
+                // services and osName are what this scan wrote; openPorts and osGuess may be months old.
+                const scannedPorts = (row.services || []).map(function (s) { return String(s).split(":").pop(); }).filter(function (p) { return /^[0-9]+$/.test(p); });
+                const priorPorts = (row.openPorts || []).map(function (p) { return String(p).split("/")[0]; });
+                setManualOs(fill(row.osName || row.osGuess || row.sysDescr || ""));
+                setManualPorts(fill((scannedPorts.length ? scannedPorts : priorPorts).join(", ")));
                 const scannedClass = ({ server: "server", workstation: "host", host: "host", printer: "appliance", nas: "appliance", camera: "iot", iot: "iot", network: "network", ap: "network", gateway: "network" })[row.deviceRole];
                 if (!manualClassTouched.current && scannedClass) setManualClass(scannedClass);
                 setManualScanState("Scan complete. Review and edit the fields, then save when ready.");

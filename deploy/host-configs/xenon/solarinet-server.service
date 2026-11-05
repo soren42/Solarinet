@@ -5,6 +5,8 @@ After=network-online.target mariadb.service
 Wants=network-online.target mariadb.service
 
 [Service]
+# nmap -O in the scan path needs raw sockets.
+AmbientCapabilities=CAP_NET_RAW
 Type=simple
 User=jason
 Group=jason

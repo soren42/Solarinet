@@ -35,8 +35,9 @@ MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-CapabilityBoundingSet=
-AmbientCapabilities=
+# nmap -O in the scan path needs raw sockets.
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/run/solari
 
