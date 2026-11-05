@@ -3873,6 +3873,25 @@ solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,
     return rc;
 }
 
+solariStatus serverDbMarkDiscoveredAdopted(serverDb *db, const char *ip)
+{
+    static const char *SQL = "UPDATE discovered SET status = 'adopted' "
+                             "WHERE ip = ? AND status = 'new'";
+    MYSQL      *conn = dbConn(db);
+    MYSQL_STMT *st;
+    MYSQL_BIND  b[1];
+    unsigned long ipLen;
+    solariStatus rc;
+
+    if (!conn || !ip) return ERR_INVALID_ARG;
+    rc = dbStmtPrepare(conn, SQL, &st);
+    if (rc != SOLARI_OK) return rc;
+    dbBindStr(&b[0], ip, &ipLen);
+    rc = dbStmtRunWrite(st, b, 1);
+    mysql_stmt_close(st);
+    return rc;
+}
+
 solariStatus serverDbSetDiscoveredStatus(serverDb *db, uint64_t discId,
                                          const char *status)
 {

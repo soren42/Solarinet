@@ -753,7 +753,7 @@ return static function (Router $router): void {
         if (!is_string($kind) || !in_array($kind, ['image-refresh', 'prov-stage', 'stack-apply', 'fleet-updates'], true)) {
             ProvCatalog::bad('kind must be one of: image-refresh, prov-stage, stack-apply, fleet-updates.');
         }
-        $id = $kind === 'fleet-updates' ? 1 : ProvCatalog::idValue($_GET['id'] ?? null, 'id');
+        $id = ProvCatalog::idValue($_GET['id'] ?? null, 'id');
         $sock = getenv('SOLARI_CTL_SOCK') ?: '/run/solari/solariCtl.sock';
         $file = dirname($sock) . '/' . $kind . '-' . $id . '.log';
         $max = 65536;
@@ -795,6 +795,9 @@ return static function (Router $router): void {
     $router->post("$P/updates", static function (): void {
         $op = Operator::requireOperator();
         $idem = ProvCatalog::idemKey();
+        if ($idem === null) {
+            ProvCatalog::bad('Idempotency-Key is required.');
+        }
         $b = ProvCatalog::body(['mode', 'confirm'], 4096);
         $mode = $b['mode'] ?? null;
         if (!is_string($mode) || !in_array($mode, ['check', 'apply'], true)) {
@@ -806,8 +809,11 @@ return static function (Router $router): void {
         if (array_key_exists('confirm', $b) && !is_bool($b['confirm'])) {
             ProvCatalog::bad('confirm must be boolean.');
         }
-        $reply = SolariCtl::callQueued('FLEET_UPDATES', ['mode' => $mode], $op, $idem, 4.0);
-        Response::ok(ProvCatalog::queuedOut(['mode' => $mode], $reply), 202);
+        // The run id names this run's log, so a poller can never read an earlier
+        // run's result. A retry with the same key finds the same log.
+        $run = hexdec(substr(hash('sha256', $idem), 0, 7)) + 1;
+        $reply = SolariCtl::callQueued('FLEET_UPDATES', ['run' => (string) $run, 'mode' => $mode], $op, $idem, 4.0);
+        Response::ok(ProvCatalog::queuedOut(['mode' => $mode, 'run' => $run], $reply), 202);
     });
 
     // -------------------------------------------------------------- store

@@ -148,6 +148,7 @@ WEAK solariStatus serverDbLeaseRead(serverDb *db, uint64_t *h, uint64_t *e)
 { (void)db; if(h)*h=0; if(e)*e=0; return ERR_DB; }
 WEAK solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,
     uint64_t w, uint64_t *id) { (void)db;(void)e;(void)w; if(id)*id=0; return ERR_DB; }
+WEAK solariStatus serverDbMarkDiscoveredAdopted(serverDb *db, const char *ip) { (void)db; (void)ip; return SOLARI_OK; }
 WEAK solariStatus serverDbSetDiscoveredStatus(serverDb *db, uint64_t id,
     const char *s) { (void)db;(void)id;(void)s; return ERR_DB; }
 WEAK solariStatus serverDbDiscoveredIsKnown(serverDb *db, const char *ip,

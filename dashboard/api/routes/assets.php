@@ -32,6 +32,10 @@ return static function (Router $router): void {
         } else {
             Response::error('bad_request', 'ip must be one private, loopback, or link-local IPv4 address.', 400);
         }
+        // ASSET_CREATE upserts, so an existing asset would be silently overwritten.
+        if (Db::row('SELECT assetId FROM asset WHERE ip = :i', [':i' => $ip]) !== null) {
+            Response::error('conflict', "An asset with address $ip already exists.", 409);
+        }
         $name = $b['displayName'] ?? '';
         if (!is_string($name) || strlen($name) > 120) Response::error('bad_request', 'displayName must be 120 characters or fewer.', 400);
         $class = $b['class'] ?? 'host';

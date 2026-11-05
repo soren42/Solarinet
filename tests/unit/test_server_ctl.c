@@ -420,7 +420,7 @@ static void test_rbac(void)
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("IMAGE_REFRESH", "image=1", op, sizeof op));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("PROV_STAGE", "entity=1 image=1 stacks=core op=", op, sizeof op));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("STACK_APPLY", "entity=1 stacks=core dryRun=1", op, sizeof op));
-    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("FLEET_UPDATES", "mode=apply", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("FLEET_UPDATES", "run=77 mode=apply", op, sizeof op));
 }
 
 /* Task #1 — verb-class mapping is an ALLOWLIST (review F1/F4). Only an explicit
@@ -1246,18 +1246,20 @@ static void test_fleet_updates_exec_exact_argv(void)
     serverCtl ctl;
     memset(&ctl, 0, sizeof ctl);
     ctl_use_fixture(&ctl);
-    snprintf(buf, sizeof buf, "%s", "FLEET_UPDATES mode=check op=alice");
+    snprintf(buf, sizeof buf, "%s", "FLEET_UPDATES run=77 mode=check op=alice");
     gSpawnCalls = 0; gSpawnArgv[0] = '\0'; gSpawnLog[0] = '\0';
     (void)ctlHandleLine(&ctl, buf, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
     snprintf(wantArgv, sizeof wantArgv, "%s/deploy/fleet/fleet-updates.py|--mode|check|--op|alice", gHelperRoot);
-    snprintf(wantLog, sizeof wantLog, "%s/fleet-updates-1.log", gLogDir);
+    snprintf(wantLog, sizeof wantLog, "%s/fleet-updates-77.log", gLogDir);
     TEST_ASSERT_EQUAL_UINT(1, gSpawnCalls);
     TEST_ASSERT_EQUAL_STRING(wantArgv, gSpawnArgv);
     TEST_ASSERT_EQUAL_STRING(wantLog, gSpawnLog);
     TEST_ASSERT_EQUAL_STRING("OK status=started\n", reply);
 
-    prov_expect_err("FLEET_UPDATES mode=--help op=alice", ERR_INVALID_ARG);
-    prov_expect_err("FLEET_UPDATES mode=apply", ERR_AUTH_ROLE);
+    prov_expect_err("FLEET_UPDATES run=77 mode=--help op=alice", ERR_INVALID_ARG);
+    prov_expect_err("FLEET_UPDATES run=../x mode=check op=alice", ERR_INVALID_ARG);
+    prov_expect_err("FLEET_UPDATES mode=check op=alice", ERR_INVALID_ARG);
+    prov_expect_err("FLEET_UPDATES run=77 mode=apply", ERR_AUTH_ROLE);
 }
 
 static void test_prov_verbs_refuse_bad_args(void)

@@ -32,7 +32,7 @@
  *   IMAGE_REFRESH* image=<id> op=<operator>
  *   PROV_STAGE* entity=<id> image=<id> stacks=<slug[,slug...]> mac=<mac> arch=<arch> op=<operator>
  *   STACK_APPLY* entity=<id> stacks=<slug[,slug...]> dryRun=<0|1> op=<operator>
- *   FLEET_UPDATES* mode=<check|apply> op=<operator>
+ *   FLEET_UPDATES* run=<id> mode=<check|apply> op=<operator>
  *   ADOPT     disc=<id> [pool=<id>] [heartbeat=0|1] [name=] [class=] [tags=] [notes=] [services=]
  *   IGNORE    disc=<id>                             -> suppress discovered row
  *   CONTROL   node=<id> verb=<n> [epoch=<n>] [payload=<blob>]
@@ -1624,21 +1624,24 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
     }
 
     if (strcmp(verb, "FLEET_UPDATES") == 0) {
-        char mode[16], op[CTL_PROV_PRINCIPAL_MAX + 1];
+        char run[16], mode[16], op[CTL_PROV_PRINCIPAL_MAX + 1], logname[64];
         char logpath[SERVER_PATH_MAX], why[160];
         char *argv[6];
         int n = 0;
+        if (!ctlProvArgId(args, "run", run, sizeof run))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid run id");
         if (ctlArgStrStrict(args, "mode", mode, sizeof mode) != SOLARI_OK ||
             (strcmp(mode, "check") != 0 && strcmp(mode, "apply") != 0))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "mode must be check or apply");
         if (!ctlProvArgPrincipal(args, op, sizeof op))
             return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
+        (void)snprintf(logname, sizeof logname, "fleet-updates-%s.log", run);
         argv[n++] = NULL;
         argv[n++] = (char *)"--mode"; argv[n++] = mode;
         argv[n++] = (char *)"--op"; argv[n++] = op;
         argv[n] = NULL;
         st = ctlSpawnHelper(ctl, "deploy/fleet/fleet-updates.py", argv,
-                            "fleet-updates-1.log", logpath, sizeof logpath,
+                            logname, logpath, sizeof logpath,
                             why, sizeof why);
         if (st != SOLARI_OK) return ctlReplyErr(replyOut, replyCap, st, why);
         solariLogf(SOLARI_LOG_INFO, "ctl: fleet updates mode=%s op=%s -> %s", mode, op, logpath);

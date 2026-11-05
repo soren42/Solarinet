@@ -224,10 +224,7 @@ solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
 
     if (!ctx || !ctx->db || !ip || !ip[0]) return ERR_INVALID_ARG;
 
-    st = serverDbUpsertAsset(ctx->db, ip,
-                             (displayName && displayName[0] && strcmp(displayName, ip) != 0)
-                                 ? displayName : NULL,
-                             displayName,
+    st = serverDbUpsertAsset(ctx->db, ip, NULL, displayName,
                              (className && className[0]) ? className : "host",
                              poolId, (tagsJson && tagsJson[0]) ? tagsJson : NULL,
                              (notes && notes[0]) ? notes : NULL, monitorHost, &aid);
@@ -256,6 +253,8 @@ solariStatus serverAssetsCreate(serverContext *ctx, const char *ip,
     if (st != SOLARI_OK) return st;
     if (servicesCsv && servicesCsv[0]) assetAddCsvServices(ctx, ip, servicesCsv, NULL, aid);
     assetSyncHeartbeat(ctx, ip, monitorHost, NULL, aid);
+    /* A scan that prefilled this asset left a candidate row; it is decided now. */
+    (void)serverDbMarkDiscoveredAdopted(ctx->db, ip);
     *assetId = aid;
     solariLogf(SOLARI_LOG_INFO, "assets/create: ip=%s asset=%llu services=%s hb=%d",
                ip, (unsigned long long)aid, servicesCsv ? servicesCsv : "", (int)monitorHost);

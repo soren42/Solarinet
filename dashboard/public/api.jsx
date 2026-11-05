@@ -671,6 +671,8 @@
       enrichedAt: w.enrichedAt || null,
       mdnsName: w.mdnsName || null,
       mdnsServices: mdnsSvcs,
+      osGuess: w.osGuess || null,
+      openPorts: Array.isArray(w.openPorts) ? w.openPorts : [],
       // best-effort LLDP/topology neighbor {gearName,peerPort,localIf,linkType,speedMbps,rssi,viaLldp} or null
       neighbor: w.neighbor || null,
       // CONTRACT-LC A-2: {assetId,lifecycle,displayName} when this scan matched a
@@ -1248,8 +1250,8 @@
     // Reads are session-only; writes are operator + CSRF (server-enforced).
     // Enqueue verbs carry an Idempotency-Key so a retried click cannot
     // double-queue a destructive run; the caller keeps the key for retries.
-    fleetUpdates: function (mode, confirm) { return post(EP.provPath("updates"), { mode: mode, confirm: !!confirm }); },
-    fleetUpdatesLog: function () { return getJSON(EP.provPath("log") + "?kind=fleet-updates&id=1"); },
+    fleetUpdates: function (mode, confirm, key) { return post(EP.provPath("updates"), { mode: mode, confirm: !!confirm }, { "Idempotency-Key": key }); },
+    fleetUpdatesLog: function (run) { return getJSON(EP.provPath("log") + "?kind=fleet-updates&id=" + encodeURIComponent(run)); },
     provImages:      function () { return getJSON(EP.provPath("images")); },
     provImageCreate: function (body) { return post(EP.provPath("images"), body || {}); },
     provImageUpdate: function (id, body) { return getJSON(EP.provPath("images", id), { method: "PUT", body: body || {} }); },

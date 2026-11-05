@@ -169,6 +169,7 @@
     const [manualIp, setManualIp] = useState("");
     const [manualName, setManualName] = useState("");
     const [manualClass, setManualClass] = useState("host");
+    const manualClassTouched = React.useRef(false);
     const [manualVendor, setManualVendor] = useState("");
     const [manualOs, setManualOs] = useState("");
     const [manualPorts, setManualPorts] = useState("");
@@ -183,11 +184,12 @@
       const a = api();
       if (!a || !a.scanManualAsset) { toast("Scanning needs the live API", "close"); return; }
       setManualIp(""); setManualName(""); setManualVendor(""); setManualOs(""); setManualPorts("");
+      manualClassTouched.current = false;
       setManualScanId(null); setManualRequestId(null);
       setManualScanState("Scanning one host… You can save this asset while the scan runs.");
       a.scanManualAsset(target).then(function (job) {
         setManualIp(job.ip || "");
-        if (job.host && !manualName) setManualName(job.host);
+        if (job.host) setManualName(function (name) { return name || job.host; });
         if (job.scanId) setManualScanId(job.scanId);
         else if (job.requestId) setManualRequestId(job.requestId);
         else setManualScanState("Waiting for scan admission… You can save this asset now.");
@@ -226,11 +228,15 @@
               setRows(Array.isArray(list) ? list : []);
               const row = (list || []).find(function (d) { return d.ip === manualIp; });
               if (row) {
-                setManualName(row.host || row.mdnsName || "");
-                setManualVendor(row.vendor || "");
-                setManualOs(row.osGuess || row.osName || row.sysDescr || "");
-                setManualPorts((row.openPorts || []).map(function (p) { return String(p).split("/")[0]; }).join(", "));
-                setManualClass(({ server: "server", workstation: "host", host: "host", printer: "appliance", nas: "appliance", camera: "iot", iot: "iot", network: "network", ap: "network", gateway: "network" })[row.deviceRole] || "host");
+                // The operator may have typed while the scan ran: fill only what is still empty.
+                const scanned = [row.host, row.mdnsName].find(function (h) { return h && h !== row.ip; }) || "";
+                const fill = function (value) { return function (cur) { return cur || value; }; };
+                setManualName(fill(scanned));
+                setManualVendor(fill(row.vendor || ""));
+                setManualOs(fill(row.osGuess || row.osName || row.sysDescr || ""));
+                setManualPorts(fill((row.openPorts || []).map(function (p) { return String(p).split("/")[0]; }).join(", ")));
+                const scannedClass = ({ server: "server", workstation: "host", host: "host", printer: "appliance", nas: "appliance", camera: "iot", iot: "iot", network: "network", ap: "network", gateway: "network" })[row.deviceRole];
+                if (!manualClassTouched.current && scannedClass) setManualClass(scannedClass);
                 setManualScanState("Scan complete. Review and edit the fields, then save when ready.");
               } else {
                 setManualScanState("Scan finished with no usable discovery data. The fields are blank; you can still save the asset.");
@@ -543,7 +549,7 @@
             <div style={{ display: "flex", alignItems: "end" }}><button className="btn-ghost" style={{ minHeight: 44 }} disabled={!!manualScanId} onClick={startManualScan}>{manualScanId ? "Scanning…" : "Scan to prefill"}</button></div>
             <label style={{ fontSize: 12 }}>Confirmed IP<input value={manualIp} readOnly placeholder="Appears after scan starts" style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
             <label style={{ fontSize: 12 }}>Name<input value={manualName} onChange={function (e) { setManualName(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
-            <label style={{ fontSize: 12 }}>Class<select value={manualClass} onChange={function (e) { setManualClass(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "var(--panel, #111820)", color: "inherit" }}>{["server", "appliance", "network", "iot", "host", "other"].map(function (x) { return <option key={x}>{x}</option>; })}</select></label>
+            <label style={{ fontSize: 12 }}>Class<select value={manualClass} onChange={function (e) { manualClassTouched.current = true; setManualClass(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "var(--panel, #111820)", color: "inherit" }}>{["server", "appliance", "network", "iot", "host", "other"].map(function (x) { return <option key={x}>{x}</option>; })}</select></label>
             <label style={{ fontSize: 12 }}>Vendor<input value={manualVendor} onChange={function (e) { setManualVendor(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
             <label style={{ fontSize: 12 }}>OS guess<input value={manualOs} onChange={function (e) { setManualOs(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
             <label style={{ fontSize: 12 }}>Open TCP ports<input value={manualPorts} onChange={function (e) { setManualPorts(e.target.value); }} placeholder="22, 80, 443" style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
@@ -863,6 +869,13 @@
   ];
   const FLEET_PROFILES = [{ id: "standard", label: "Standard stack" }, { id: "minimal", label: "Minimal" }];
 
+  const UPDATES_RUN_KEY = "solari.fleetUpdates.run";
+  function newUpdatesKey() {
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    return "updates-" + Array.from(bytes, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+  }
+
   function Provisioning({ onOpenNode, onNavigate }) {
     const [updatesLog, setUpdatesLog] = useState("");
     const [updatesBusy, setUpdatesBusy] = useState(false);
@@ -870,49 +883,60 @@
     const [updatesChecked, setUpdatesChecked] = useState(false);
     const [updatesPending, setUpdatesPending] = useState([]);
     const [updatesSkipped, setUpdatesSkipped] = useState([]);
+    const [updatesResults, setUpdatesResults] = useState([]);
     function parseUpdateLog(log) {
-      const pending = [], skipped = [];
+      const pending = [], skipped = [], results = [];
       String(log || "").split(/\r?\n/).forEach(function (line) {
-        let m = line.match(/PENDING\s+([^\s]+)\s+count=(\d+)/);
-        if (m) pending.push({ host: m[1], count: Number(m[2]) });
-        m = line.match(/SKIPPED\s+([^:]+):\s*(.*)/);
-        if (m) skipped.push({ host: m[1].trim(), reason: m[2] });
+        let m = line.match(/^PENDING (\S+) count=(\d+) new=(\d+) remove=(\d+)/);
+        if (m) pending.push({ host: m[1], count: Number(m[2]), added: Number(m[3]), removed: Number(m[4]) });
+        m = line.match(/^SKIPPED ([^:]+): (.*)/);
+        if (m) skipped.push({ host: m[1], reason: m[2] });
+        m = line.match(/^RESULT (\S+) status=(\S+) reboot_required=(\S+)/);
+        if (m) results.push({ host: m[1], status: m[2], reboot: m[3] });
       });
-      return { pending: pending, skipped: skipped };
+      return { pending: pending, skipped: skipped, results: results, finished: /^FLEET_UPDATES exit=\d+/m.test(String(log || "")) };
     }
-    function pollUpdates(mode, tries) {
+    function pollUpdates(run, mode, tries) {
       const a = api();
       if (!a || !a.fleetUpdatesLog) { setUpdatesBusy(false); return; }
-      a.fleetUpdatesLog().then(function (r) {
+      const again = function () { window.setTimeout(function () { pollUpdates(run, mode, tries + 1); }, 2500); };
+      a.fleetUpdatesLog(run).then(function (r) {
         const log = r.log || "";
-        setUpdatesLog(log);
         const parsed = parseUpdateLog(log);
-        if (mode === "check" && log.indexOf("FLEET_UPDATES exit=") >= 0) {
-          setUpdatesPending(parsed.pending); setUpdatesSkipped(parsed.skipped); setUpdatesChecked(true); setUpdatesBusy(false);
-          toast("Update check finished", "check");
-        } else if (mode === "apply" && log.indexOf("FLEET_UPDATES exit=") >= 0) {
-          setUpdatesSkipped(parsed.skipped); setUpdatesBusy(false); refresh();
-          toast("Fleet update run finished. Review each host result below.", "check");
-        } else if (tries >= 240) {
+        setUpdatesLog(log); setUpdatesPending(parsed.pending); setUpdatesSkipped(parsed.skipped); setUpdatesResults(parsed.results);
+        if (parsed.finished) {
+          setUpdatesBusy(false);
+          if (mode === "check") setUpdatesChecked(true);
+          if (mode === "apply") refresh();
+          try { window.localStorage.removeItem(UPDATES_RUN_KEY); } catch (_) {}
+          toast(mode === "check" ? "Update check finished" : "Update run finished. Review each host's result below.", "check");
+        } else if (tries >= 1500) {
           setUpdatesBusy(false); toast("Update run is taking longer than expected; its log remains available below.", "close");
         } else {
-          window.setTimeout(function () { pollUpdates(mode, tries + 1); }, 2500);
+          again();
         }
       }).catch(function () {
-        if (tries < 240) window.setTimeout(function () { pollUpdates(mode, tries + 1); }, 2500);
-        else setUpdatesBusy(false);
+        if (tries < 1500) again(); else setUpdatesBusy(false);
       });
     }
     function startUpdates(mode) {
       const a = api();
       if (!a || !a.fleetUpdates) { toast("Fleet updates need the live API", "close"); return; }
       if (mode === "apply" && !window.confirm("Apply every available operating system package update to all managed hosts? Hosts run one at a time. No host will be rebooted.")) return;
-      setUpdatesBusy(true); setUpdatesMode(mode);
+      setUpdatesBusy(true); setUpdatesMode(mode); setUpdatesResults([]);
       if (mode === "check") { setUpdatesChecked(false); setUpdatesPending([]); setUpdatesSkipped([]); }
       setUpdatesLog("Starting update " + (mode === "check" ? "check" : "run") + "…");
-      a.fleetUpdates(mode, mode === "apply").then(function () { pollUpdates(mode, 0); })
-        .catch(function (e) { setUpdatesBusy(false); setUpdatesLog("Could not start: " + (e && e.message || "error")); });
+      a.fleetUpdates(mode, mode === "apply", newUpdatesKey()).then(function (r) {
+        // A long run outlives a closed tab, so remember it and pick it up on return.
+        try { window.localStorage.setItem(UPDATES_RUN_KEY, JSON.stringify({ run: r.run, mode: mode })); } catch (_) {}
+        pollUpdates(r.run, mode, 0);
+      }).catch(function (e) { setUpdatesBusy(false); setUpdatesLog("Could not start: " + (e && e.message || "error")); });
     }
+    useEffect(function () {
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(UPDATES_RUN_KEY) || "null"); } catch (_) {}
+      if (saved && saved.run) { setUpdatesBusy(true); setUpdatesMode(saved.mode); pollUpdates(saved.run, saved.mode, 0); }
+    }, []);
     const [enr, setEnr] = useState(S.enrollments);
     const [allocatorNetworks, setAllocatorNetworks] = useState([]);
     const [allocatorBusy, setAllocatorBusy] = useState(false);
@@ -1163,8 +1187,10 @@
               <button className="btn-ghost" style={{ minHeight: 44 }} disabled={updatesBusy} onClick={function () { startUpdates("check"); }}>{updatesBusy && updatesMode === "check" ? "Checking…" : "Check for updates"}</button>
               <button className="btn-primary" style={{ minHeight: 44 }} disabled={updatesBusy || !updatesChecked} onClick={function () { startUpdates("apply"); }}>{updatesBusy && updatesMode === "apply" ? "Updating hosts…" : "Apply all updates"}</button>
             </div>
-            {updatesPending.length > 0 && <div role="status" aria-live="polite" style={{ marginTop: 14 }}><strong>Pending updates</strong>{updatesPending.map(function (host) { return <div key={host.host} className="enr-row"><span className="td-mono">{host.host}</span><span className="right">{host.count} update{host.count === 1 ? "" : "s"}</span></div>; })}</div>}
-            {updatesChecked && updatesPending.length === 0 && <div className="muted" style={{ marginTop: 12 }}>No package updates were reported by managed hosts.</div>}
+            {updatesPending.length > 0 && <div role="status" aria-live="polite" style={{ marginTop: 14 }}><strong>Pending updates</strong>{updatesPending.map(function (host) { return <div key={host.host} className="enr-row"><span className="td-mono">{host.host}</span><span className="right">{host.count} update{host.count === 1 ? "" : "s"}{host.added ? " · " + host.added + " new" : ""}{host.removed ? " · " + host.removed + " removed" : ""}</span></div>; })}</div>}
+            {updatesChecked && updatesPending.length > 0 && updatesPending.every(function (host) { return host.count + host.added + host.removed === 0; }) && <div className="muted" style={{ marginTop: 12 }}>Every managed host is up to date.</div>}
+            {updatesChecked && updatesPending.length === 0 && <div className="muted" style={{ marginTop: 12 }}>No managed host reported its package state. Read the log below.</div>}
+            {updatesResults.length > 0 && <div role="status" aria-live="polite" style={{ marginTop: 14 }}><strong>Results</strong>{updatesResults.map(function (host) { return <div key={host.host} className="enr-row"><span className="td-mono">{host.host}</span><span className="right" style={host.status === "failed" ? { color: "var(--crit)" } : undefined}>{host.status === "failed" ? "failed" : "updated"}{host.reboot === "yes" ? " · reboot required" : host.reboot === "no" ? " · no reboot needed" : ""}</span></div>; })}</div>}
             {updatesSkipped.length > 0 && <div style={{ marginTop: 12 }}><strong>Skipped</strong>{updatesSkipped.map(function (host) { return <div key={host.host} className="muted" style={{ padding: "6px 0" }}><span className="td-mono">{host.host}</span> — {host.reason}</div>; })}</div>}
             {updatesLog && <pre role="log" aria-live="polite" style={{ maxHeight: 260, overflow: "auto", whiteSpace: "pre-wrap", fontSize: 11, marginTop: 14, padding: 10, background: "rgba(0,0,0,0.18)", borderRadius: 8 }}>{updatesLog}</pre>}
           </div>

@@ -524,6 +524,7 @@ solariStatus serverDbUpsertDiscoveredFenced(serverDb *db,
 solariStatus serverDbUpsertDiscovered(serverDb *db, const serverDiscEntity *e,
                                       uint64_t whenUnixMs, uint64_t *discId);
 /* Set a discovered row's status ('new'|'ignored'|'adopting'|'adopted'). */
+solariStatus serverDbMarkDiscoveredAdopted(serverDb *db, const char *ip);
 solariStatus serverDbSetDiscoveredStatus(serverDb *db, uint64_t discId,
                                          const char *status);
 /* True (via *exists) if (ip,kind) already corresponds to an enrolled node -
