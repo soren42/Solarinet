@@ -1,9 +1,9 @@
 /*
  * screens-panel.jsx — Panel control page (window.PanelScreen).
  *
- * CONTRACT-CP.md v1.1 §7 (dashboard page) + §10 (dispositions, which win).
- * Renders all 4 themes x 3 screens of the physical Galactic Unicorn status
- * panel simultaneously as 53x11 virtual LED matrices, plus the §7 software
+ * CONTRACT-V2: sixteen firmware screens, universal treatments and controls.
+ * Renders all 4 themes x 4 screens of the physical Galactic Unicorn status
+ * panel simultaneously as 53x11 virtual LED matrices, plus the panel software
  * control set (theme / screen / brightness+AUTO / ACK / dwell / sleep-wake).
  *
  * SOURCES, and the rule for reconciling them (§10: "every ported renderer
@@ -20,8 +20,8 @@
  * (matches screens.jsx / screens6.jsx). Everything below lives in one IIFE and
  * only PanelScreen escapes onto window.
  *
- * PARITY MODE (§10): ?fixture=1 renders status-panel/fixtures/panel-snapshot
- * .json deterministically with no API traffic and no animation clock, so two
+ * PARITY MODE (§10): ?fixture=1 renders status-panel/fixtures/parity-fixture.json
+ * deterministically with no API traffic and no animation clock, so two
  * reviewers looking at the same build see identical pixels.
  */
 (function () {
@@ -40,10 +40,6 @@
   const PW = 53;
   const PH = 11;
   const HIST_LEN = PW;                 // panelHist.h:26
-  const LOAD_BUCKETS = 35;             // panelHist.h:27
-  const LATTICE_SLOTS = PW * PH;       // panelHist.h:28  (583)
-  const MAX_POOLS = 8;                 // protocol.h PANEL_MAX_POOLS
-  const MAX_SYSTEMS = 64;              // protocol.h PANEL_MAX_SYSTEMS
 
   const cOk      = [61, 214, 140];     // panelFb.c:11
   const cWarn    = [245, 166, 35];     // panelFb.c:12
@@ -59,18 +55,6 @@
   // protocol.h PanelState enum
   const ST_OK = 0, ST_DEGRADED = 1, ST_DOWN = 2, ST_UNKNOWN = 3, ST_MAINT = 4;
 
-  /* Network gear — CONTRACT-AW §3.1, the v2 SNAPSHOT gear section. Two enums
-     arrive on the wire and they are NOT the two above: role is its own
-     namespace, and gear STATE is 0=down 1=up 2=degraded, which is neither the
-     PanelState order nor its membership. stateEnum() must never be pointed at
-     a gear row — hence the separate gearState() below. */
-  const GR_ROUTER = 0, GR_SWITCH = 1, GR_HUB = 2, GR_AP = 3, GR_WANBK = 4;
-  const GS_DOWN = 0, GS_UP = 1, GS_DEGRADED = 2;
-  const MAX_GEAR = 12;                 // §3.1 gearCount 0..12
-  const MAX_LEVEL = 7;                 // §3.1 rx/txLevel 0..7
-
-  const PANEL_SEP = "   ";             // panelHist.h:33
-  const PANEL_TAIL = "       ";        // panelHist.h:34
 
   // =====================================================================
   // 2. Framebuffer — panelFb.c
@@ -182,21 +166,6 @@
     }
     return cx;
   }
-  function panelScroll(t, y, s, c, b, speed) {                        // panelFont.c:164
-    s = String(s);
-    const total = textW(s) + PW;
-    if (total <= 0) return;
-    let off = (t * speed) % total;
-    if (off < 0) off += total;
-    off = Math.floor(off);
-    let cx = PW - off;
-    for (let i = 0; i < s.length; i++) {
-      if (cx > -4 && cx < PW) drawSmall(cx, y, s.charAt(i), c, b);
-      cx += 4;
-    }
-  }
-
-  // =====================================================================
   // 4. Small numeric helpers that mirror C semantics exactly
   // =====================================================================
   function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
@@ -205,22 +174,6 @@
   function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
   function f1(v) { return v.toFixed(1); }               // "%.1f"
 
-  /* PanelRng — the mockup's rng(seed) LCG (Themes.dc.html) and panelScreensA.c
-     :12-16. Seeded per screen so the animated screens are reproducible. */
-  function rngNew(seed) { return { s: seed >>> 0 }; }
-  function rngNext(r) {
-    r.s = (Math.imul(r.s, 1664525) + 1013904223) >>> 0;
-    return r.s / 4294967296;
-  }
-
-  /* stateRank — panelHist.c:19-27. UNKNOWN sits between degraded and maint. */
-  function stateRank(st) {
-    if (st === ST_DOWN) return 4;
-    if (st === ST_DEGRADED) return 3;
-    if (st === ST_UNKNOWN) return 2;
-    if (st === ST_MAINT) return 1;
-    return 0;
-  }
   const STATE_ENUM = { ok: ST_OK, up: ST_OK, degraded: ST_DEGRADED, down: ST_DOWN, unknown: ST_UNKNOWN, maint: ST_MAINT };
   function stateEnum(s) {
     if (typeof s === "number") return (s >= 0 && s <= 4) ? s : ST_UNKNOWN;
@@ -228,63 +181,6 @@
     return v === undefined ? ST_UNKNOWN : v;
   }
 
-  /* gearRole / gearState / gearLevel — CONTRACT-AW §3.1 arrives as plain u8s,
-     so the numeric path is the real one. The string branches exist because the
-     server maps these from `networkGear.kind` text (§2) and a mapper that
-     forgets to numify would otherwise render every device as a router at
-     index 0 — silently, and plausibly. Anything unrecognised is REJECTED
-     (null / down / 0), never coerced to a flattering default. */
-  const GEAR_ROLE_ENUM = {
-    router: GR_ROUTER, gateway: GR_ROUTER, udm: GR_ROUTER,
-    switch: GR_SWITCH, usw: GR_SWITCH,
-    hub: GR_HUB,
-    ap: GR_AP, accesspoint: GR_AP,
-    wanbackup: GR_WANBK, backup: GR_WANBK, wan: GR_WANBK,
-  };
-  const GEAR_STATE_ENUM = { down: GS_DOWN, up: GS_UP, ok: GS_UP, degraded: GS_DEGRADED };
-  function gearRole(v) {
-    if (typeof v === "number") return (v >= 0 && v <= GR_WANBK) ? v : null;
-    const r = GEAR_ROLE_ENUM[String(v || "").toLowerCase().replace(/[^a-z]/g, "")];
-    return r === undefined ? null : r;
-  }
-  function gearState(v) {
-    if (typeof v === "number") return (v >= 0 && v <= GS_DEGRADED) ? v : GS_DOWN;
-    const s = GEAR_STATE_ENUM[String(v || "").toLowerCase()];
-    return s === undefined ? GS_DOWN : s;
-  }
-  function gearLevel(v) {
-    let n = Math.round(num(v));
-    if (!(n > 0)) return 0;
-    return n > MAX_LEVEL ? MAX_LEVEL : n;
-  }
-
-  /* panelFormatRate — panelHist.c:65-74. */
-  function formatRate(kbps) {
-    const gbps = kbps / 1000000;
-    if (gbps >= 10) return ri(gbps) + "G";
-    if (gbps >= 1) return f1(gbps) + "G";
-    const mbps = kbps / 1000;
-    if (mbps >= 10) return ri(mbps) + "M";
-    return f1(mbps) + "M";
-  }
-
-  // =====================================================================
-  // 5. buildEnv — the page's panelEnvApply (panelHist.c:124-273)
-  //
-  //    The firmware accumulates its history rings one sample per snapshot
-  //    arrival. The page accumulates the same rings from the polls it has
-  //    seen, but CONTRACT-CP §10 requires the resample be done on the SERVER
-  //    timestamp and be gap-aware — a browser tab that was backgrounded for
-  //    four minutes must not paint four minutes of missing history as if the
-  //    fleet had been flat, and must not compress it either.
-  //
-  //    Slot i covers tNewest - (52 - i) * cadence. Each slot takes the newest
-  //    sample at or before it (within half a cadence of tolerance); a slot
-  //    whose backing sample is more than 2 cadences old is flagged a GAP and
-  //    holds the previous value, which is what the ring physically does. Slots
-  //    before the first sample are unfilled, and histAt() clamps reads to the
-  //    first real slot exactly as panelHistAt (panelHist.c:50-58) does.
-  // =====================================================================
   const CADENCE_MS_DEFAULT = 5000;      // §7 poll cadence
   const PEAK_FLOOR_KBPS = 1000;         // panelHist.c:37
   const PEAK_DECAY = 0.997;             // panelHist.c:38
@@ -339,14 +235,13 @@
              histFill: N - firstReal, gaps: gaps, peakKbps: peak };
   }
 
-  const EMPTY_POOL = { name: "", tier: 3, ok: 0, degraded: 0, down: 0, unknown: 0, maint: 0, total: 1, load: 0 };
-
   function buildEnv(samples, cadenceMs) {
     const d = samples[samples.length - 1];
     const env = {};
     const roll = d.stateRoll || {};
 
     env.haveData = true;
+    env.raw = d;
     env.alarmActive = !!d.alarmActive;
     env.dataStale = !!d.dataStale;
     env.score = num(d.score);
@@ -360,932 +255,88 @@
     env.maint = num(roll.maint);
     env.total = env.up + env.deg + env.down + env.unknown + env.maint;
 
-    env.meanLoad = clamp01(num(d.meanLoadPct) / 100);
-    env.rtt = num(d.rttTenthMs) / 10;
-    env.loss = num(d.lossPermille) / 10;
-
-    const rxK = num(d.rxKbps), txK = num(d.txKbps);
-    env.rxGbps = rxK / 1000000;
-    env.txGbps = txK / 1000000;
-    env.gbps = (rxK + txK) / 1000000;
-    env.gLabel = formatRate(rxK + txK);                    // panelHist.c:153
-
     const rings = resampleRings(samples, cadenceMs);
-    env.thru = rings.thru; env.egress = rings.egress;
-    env.cpuHist = rings.cpuHist; env.rttHist = rings.rttHist;
     env.histFill = rings.histFill;
     env.gaps = rings.gaps;
-    env.peakKbps = rings.peakKbps;
-
-    // panelHist.c:164-193 — pools in wire order, plus the worst-first index.
-    const rawPools = Array.isArray(d.pools) ? d.pools.slice(0, MAX_POOLS) : [];
-    env.pools = rawPools.map(function (p) {
-      return {
-        name: String(p.name || ""), tier: num(p.tier),
-        ok: num(p.up != null ? p.up : p.ok), degraded: num(p.degraded),
-        down: num(p.down), unknown: num(p.unknown), maint: num(p.maint),
-        total: num(p.total) || 1, load: clamp01(num(p.loadPct) / 100),
-      };
-    });
-    env.poolCount = env.pools.length;
-    env.poolWorstFirst = env.pools.map(function (_, i) { return i; });
-    // (down*9 + degraded) desc, then load desc — panelHist.c:179-193.
-    for (let i = 1; i < env.poolCount; i++) {
-      const key = env.poolWorstFirst[i];
-      let j2 = i - 1;
-      while (j2 >= 0) {
-        const a = env.pools[env.poolWorstFirst[j2]], b = env.pools[key];
-        const wa = a.down * 9 + a.degraded, wb = b.down * 9 + b.degraded;
-        const worse = (wb !== wa) ? (wb > wa) : (b.load > a.load);
-        if (!worse) break;
-        env.poolWorstFirst[j2 + 1] = env.poolWorstFirst[j2];
-        j2--;
-      }
-      env.poolWorstFirst[j2 + 1] = key;
+    // Firmware-local rings replay snapshots in arrival order, oldest first.
+    env.wanDown = new Float32Array(HIST_LEN).fill(-1); env.wanUp = new Float32Array(HIST_LEN).fill(-1);
+    env.lanDown = new Float32Array(HIST_LEN).fill(-1); env.lanUp = new Float32Array(HIST_LEN).fill(-1);
+    env.probeHist = Array.from({length: 11}, () => new Float32Array(HIST_LEN).fill(-1));
+    env.cpuLocal = new Float32Array(HIST_LEN).fill(-1); env.rttLocal = new Float32Array(HIST_LEN).fill(-1);
+    for (let si=0; si<samples.length; si++) {
+      const q=samples[si], totals=q.totals;
+      [env.wanDown,env.wanUp,env.lanDown,env.lanUp].forEach(a=>{a.copyWithin(0,1);a[HIST_LEN-1]=-1;});
+      if(totals) { env.wanDown[HIST_LEN-1]=totals.wanDownKbps==null?-1:num(totals.wanDownKbps); env.wanUp[HIST_LEN-1]=totals.wanUpKbps==null?-1:num(totals.wanUpKbps); env.lanDown[HIST_LEN-1]=totals.lanDownKbps==null?-1:num(totals.lanDownKbps); env.lanUp[HIST_LEN-1]=totals.lanUpKbps==null?-1:num(totals.lanUpKbps); }
+      env.cpuLocal.copyWithin(0,1); env.cpuLocal[HIST_LEN-1]=num(q.meanLoadPct)/100;
+      env.rttLocal.copyWithin(0,1); env.rttLocal[HIST_LEN-1]=num(q.lossPermille)>=1000?-1:num(q.rttTenthMs)/10;
+      for(let pi=0;pi<11;pi++){const a=env.probeHist[pi];a.copyWithin(0,1);a[HIST_LEN-1]=-1;const probe=q.probes&&q.probes[pi];if(probe){a[HIST_LEN-1]=num(probe.lossPermille)>=500?65535:num(probe.rttTenthMs);}}
     }
-
-    // systems — capped at 64, already ordered (tier, name) by the API.
-    const rawSys = Array.isArray(d.systems) ? d.systems.slice(0, MAX_SYSTEMS) : [];
-    env.systems = rawSys.map(function (s) {
-      return { name: String(s.name || ""), pool: num(s.pool), tier: num(s.tier),
-               state: stateEnum(s.state), loadPct: num(s.loadPct) };
-    });
-    const sysN = env.systems.length;
-
-    // C0 load histogram — panelHist.c:198-215. down/unknown excluded, then
-    // normalised by the tallest bucket.
-    const hist = new Array(LOAD_BUCKETS).fill(0);
-    for (let i = 0; i < sysN; i++) {
-      const st = env.systems[i].state;
-      if (st === ST_DOWN || st === ST_UNKNOWN) continue;
-      let b = trunc((env.systems[i].loadPct / 100) * LOAD_BUCKETS);
-      if (b < 0) b = 0;
-      if (b >= LOAD_BUCKETS) b = LOAD_BUCKETS - 1;
-      hist[b]++;
-    }
-    let hMax = 1;
-    for (let b = 0; b < LOAD_BUCKETS; b++) if (hist[b] > hMax) hMax = hist[b];
-    env.loadHist = hist.map(function (v) { return v / hMax; });
-
-    // A0 lattice — panelHist.c:217-245. Systems bucketed evenly across the
-    // 583 slots so the picture holds at any fleet size.
-    const order = env.systems.map(function (_, i) { return i; });
-    sortLatticeOrder(env.systems, order);
-    env.latticeOwner = new Uint8Array(LATTICE_SLOTS).fill(0xFF);
-    env.lattice = new Array(LATTICE_SLOTS);
-    let per = Math.ceil(sysN / LATTICE_SLOTS);
-    if (per < 1) per = 1;
-    for (let slot = 0; slot < LATTICE_SLOTS; slot++) {
-      const a = slot * per;
-      if (a >= sysN) break;
-      let worst = ST_OK, tier = 3, n = 0, load = 0;
-      for (let k = a; k < sysN && k < a + per; k++) {
-        const s = env.systems[order[k]];
-        if (stateRank(s.state) > stateRank(worst)) { worst = s.state; tier = s.tier; }
-        if (s.tier < tier && worst === ST_OK) tier = s.tier;
-        load += s.loadPct / 100;
-        n++;
-      }
-      env.latticeOwner[slot] = 1;
-      env.lattice[slot] = { state: worst, tier: tier > 3 ? 3 : tier, load: n ? load / n : 0 };
-    }
-
-    // D0 waterfall rows — panelHist.c:247-259, the 11 worst-first systems.
-    const worstOrder = env.systems.map(function (_, i) { return i; });
-    sortWorstFirst(env.systems, worstOrder);
-    env.probeRows = sysN < PH ? sysN : PH;
-    env.probeRow = new Array(PH).fill(0xFF);
-    for (let i = 0; i < env.probeRows; i++) env.probeRow[i] = worstOrder[i];
 
     // Alert text — panelHist.c:261-272.
     const ta = d.topAlert;
     env.hasAlert = !!ta;
     env.subject = ta ? String(ta.subject || "") : "ALL NOMINAL";
     env.detail = ta ? String(ta.detail || "") : "NO FINDINGS";
-    env.ticker = env.subject + PANEL_SEP + env.detail + PANEL_TAIL;
-
-    /* Gear — CONTRACT-AW §3.1. A row whose role does not decode is DROPPED
-       rather than defaulted, because a mis-roled device does not just look
-       wrong, it moves gates into the wrong band and changes what the picture
-       claims about the network. Order is preserved exactly as the server sent
-       it (§3.1: router, switch(es), hubs, aps, wanBackup; stable by gearId
-       within a role) — the layout re-groups by role but keeps wire order
-       inside each band, so gate identity is stable poll to poll. */
-    const rawGear = Array.isArray(d.gear) ? d.gear.slice(0, MAX_GEAR) : [];
-    env.gear = [];
-    for (let i = 0; i < rawGear.length; i++) {
-      const g = rawGear[i] || {};
-      const role = gearRole(g.role);
-      if (role === null) continue;
-      env.gear.push({
-        role: role,
-        state: gearState(g.state),
-        rx: gearLevel(g.rxLevel),
-        tx: gearLevel(g.txLevel),
-      });
-    }
-    env.gearCount = env.gear.length;
-
-    env.poolLane = function (wanted) {                   // panelScreensA.c:20-25
-      if (env.poolCount <= 0) return EMPTY_POOL;
-      if (wanted >= env.poolCount) wanted = env.poolCount - 1;
-      if (wanted < 0) wanted = 0;
-      return env.pools[wanted];
-    };
     return env;
   }
 
-  /* sortWorstFirst — panelHist.c:86-103: rank desc, tier asc, load desc.
-     Insertion sort, kept because the comparator is not a total order on ties
-     and the firmware's stability is observable in the D0 row identities. */
-  function sortWorstFirst(sys, idx) {
-    for (let i = 1; i < idx.length; i++) {
-      const key = idx[i];
-      let j = i - 1;
-      while (j >= 0) {
-        const a = sys[idx[j]], b = sys[key];
-        const ra = stateRank(a.state), rb = stateRank(b.state);
-        const worse = (rb !== ra) ? (rb > ra)
-          : (b.tier !== a.tier) ? (b.tier < a.tier)
-            : (b.loadPct > a.loadPct);
-        if (!worse) break;
-        idx[j + 1] = idx[j];
-        j--;
-      }
-      idx[j + 1] = key;
-    }
-  }
-  /* sortLatticeOrder — panelHist.c:107-122: tier asc, then rank desc. */
-  function sortLatticeOrder(sys, idx) {
-    for (let i = 1; i < idx.length; i++) {
-      const key = idx[i];
-      let j = i - 1;
-      while (j >= 0) {
-        const a = sys[idx[j]], b = sys[key];
-        const before = (b.tier !== a.tier) ? (b.tier < a.tier)
-          : (stateRank(b.state) > stateRank(a.state));
-        if (!before) break;
-        idx[j + 1] = idx[j];
-        j--;
-      }
-      idx[j + 1] = key;
-    }
-  }
+  // V2 renderers, aligned with panelScreensA-D.c.
+  function panelRateLevel(v){return v<=1?0:Math.min(1,Math.log10(v)/6);}
+  function textFit(x,y,s,n,c,b){s=String(s).slice(0,n);while(s.endsWith(" "))s=s.slice(0,-1);panelText(x,y,s,c,b);}
+  function textRight(x,y,s,c,b){panelText(x-textW(String(s))+1,y,String(s),c,b);}
+  function textCentre(y,s,c,b){s=String(s).slice(0,13);panelText(Math.floor((PW-textW(s))/2),y,s,c,b);}
+  const v2PageClock=new Float32Array(16),v2LanePhase=[];
+  function pageFor(i,dt,p){v2PageClock[i]=(v2PageClock[i]+dt)%(3*256);return Math.floor(v2PageClock[i]/3)%Math.max(1,p);}
+  function pageBar(p,n){if(n<=1)return;for(let x=Math.floor(p*PW/n);x<Math.floor((p+1)*PW/n);x++)fbSet(x,5,cAzure,.45);}
+  function stateColor(s){return [cOk,cWarn,cCrit,cUnknown,cMaint][stateEnum(s)]||cUnknown;}
+  function pageCount(n,k){return Math.max(1,Math.ceil(n/k));}
+  function sA0(env){const a=(env.raw.systems||[]).map(q=>({state:stateEnum(q.state),load:num(q.loadPct)/100}));for(const b of env.raw.popTail||[])a.push({state:(num(b)>>5)&7,load:(num(b)&31)/31});let n=a.length;if(!n)return;let cols=1,rows=1,gx=0,gy=0,ba=-1,bg=-1;for(let r=1;r<=PH;r++){let c=Math.ceil(n/r);if(c>PW)continue;for(let g=0;g<4;g++){let ux=g&1,uy=g>>1,tw=Math.floor((PW-(c-1)*ux)/c),th=Math.floor((PH-(r-1)*uy)/r);if(tw<1||th<1)continue;let ar=tw*th,gu=ux+uy;if(ar>ba||(ar===ba&&gu>bg)){ba=ar;bg=gu;cols=c;rows=r;gx=ux;gy=uy;}}}for(let i=0;i<n;i++){let q=a[i],col=i%cols,row=Math.floor(i/cols),x0=Math.floor(col*(PW+gx)/cols),x1=Math.floor((col+1)*(PW+gx)/cols)-gx,y0=Math.floor(row*(PH+gy)/rows),y1=Math.floor((row+1)*(PH+gy)/rows)-gy,h=y1-y0,H=stateColor(q.state),flat=q.state===ST_DOWN||q.state===ST_UNKNOWN||q.state===ST_MAINT;if(flat){let b=q.state===ST_DOWN?1:.35;for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)fbSet(x,y,H,b);}else if(h>=3){let lit=Math.max(1,ri(q.load*h));for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)fbSet(x,y,H,y>=y1-lit?1:.28);}else for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)fbSet(x,y,H,.2+.8*q.load);}}
+  function sA1(env,t,dt){let a=env.raw.systems||[],p=pageFor(1,dt,pageCount(a.length,2));for(let j=0;j<2;j++){let q=a[p*2+j];if(!q)continue;let y=j?6:0,h=stateColor(q.state),st=stateEnum(q.state);for(let r=0;r<5;r++){fbSet(0,y+r,h,1);fbSet(1,y+r,h,1);}textFit(3,y,q.name,8,cInk,1);textRight(52,y,st===ST_DOWN?"DOWN":st===ST_MAINT?"MNT":st===ST_UNKNOWN?"?":num(q.loadPct)+"%",st===ST_OK?cAzure:h,1);}pageBar(p,pageCount(a.length,2));}
+  function sA2(env,t,dt){let a=env.raw.pools||[],p=pageFor(2,dt,pageCount(a.length,2));for(let j=0;j<2;j++){let q=a[p*2+j];if(!q)continue;let y=j?6:0;textFit(0,y,q.name,8,cInk,1);let order=[ST_DOWN,ST_DEGRADED,ST_UNKNOWN,ST_MAINT,ST_OK],counts=[q.down,q.degraded,q.unknown,q.maint,q.up],total=num(q.total)||1,cells=Math.min(20,total),gap=total<=10?1:0,run=0,k=0;for(let x=0;x<cells;x++){while(k<4&&run>=num(counts[k])){k++;run=0;}let x0=33+Math.floor(x*(20+gap)/cells),x1=33+Math.floor((x+1)*(20+gap)/cells)-gap,used=Math.floor((x+1)*total/cells)-Math.floor(x*total/cells);for(let r=0;r<3;r++)for(let xx=x0;xx<x1;xx++)fbSet(xx,y+r,stateColor(order[k]),1);run+=used;}let lit=Math.max(num(q.loadPct)>0?1:0,Math.floor((num(q.loadPct)*20+50)/100));for(let x=0;x<20;x++)fbSet(33+x,y+4,cAzure,x<lit?1:.1);}pageBar(p,pageCount(a.length,2));}
+  function sA3(env){let r=env.raw.stateRoll||{},up=num(r.up),d=num(r.down),g=num(r.degraded),u=num(r.unknown),m=num(r.maint),h=d?cCrit:g?cWarn:u?cUnknown:m?cMaint:cOk,line=d?d+" DOWN":g?g+" DEGRADED":u?u+" UNKNOWN":m?m+" MAINT":"ALL OK",x=panelBig(0,2,String(up),h,1)+1;textFit(x,0,"OF "+env.total,Math.floor((PW-x+1)/4),cInk,1);textFit(x,6,line,Math.floor((PW-x+1)/4),h,1);}
+  function linkKind(k){if(typeof k==="string")return ({wan:0,trunk:1,wifi:2,host:3})[k.toLowerCase()]||0;return num(k);}
+  function sB2(env,t,dt){let a=(env.raw.systems||[]).map((q,i)=>({q,i,r:(q.rxKbps==null?0:num(q.rxKbps))+(q.txKbps==null?0:num(q.txKbps))})).filter(x=>x.q.rxKbps!=null||x.q.txKbps!=null).sort((x,y)=>y.r-x.r).slice(0,8),p=pageFor(6,dt,pageCount(a.length,2));for(let j=0;j<2;j++){let x=a[p*2+j];if(!x)continue;let y=j?6:0;textFit(0,y,x.q.name,8,cInk,1);textRight(52,y,rateLabel(x.r),cAzure,1);}pageBar(p,pageCount(a.length,2));}
+  function sC0(env,t,dt){let a=env.raw.alertList;if(!a){textCentre(3,"NO ALERT DATA",cAzure,1);return;}let items=a.items||[];if(!items.length){textCentre(3,"ALL CLEAR",cOk,1);return;}let p=pageFor(8,dt,pageCount(items.length+(a.total>items.length?1:0),1));if(p>=items.length){textCentre(0,"+"+(a.total-items.length)+" MORE",cInk,1);textCentre(6,"SEE DASHBOARD",cAzure,1);}else{let q=items[p],age=num(q.ageMin)<60?q.ageMin+"M":num(q.ageMin)<1440?Math.floor(q.ageMin/60)+"H":Math.floor(q.ageMin/1440)+"D",h=num(q.severity)===2?cCrit:num(q.severity)===1?cWarn:cAzure;textFit(0,0,q.host,9,cInk,1);textRight(52,0,age,cAzure,1);textCentre(6,q.msg,h,1);}pageBar(p,items.length+(a.total>items.length?1:0));}
+  function sC1(env,t,dt){let a=env.raw.alertList;if(!a){textCentre(3,"NO ALERT DATA",cAzure,1);return;}let f=a.faultCounts||[],p=pageFor(9,dt,f[0]?2:1);if(p){textCentre(0,"OTHER "+num(f[0]),cWarn,1);textCentre(6,"SEE DASHBOARD",cAzure,1);}else{[[0,0,"NET",f[1],cCrit],[28,0,"SVC",f[2],cWarn],[0,6,"DSK",num(f[3])+num(f[4])+num(f[6]),cWarn],[28,6,"KRN",f[5],cWarn]].forEach(([x,y,l,n,h])=>panelText(x,y,l+" "+Math.min(99,num(n)),num(n)?h:cOk,1));}pageBar(p,f[0]?2:1);}
+  function sC2(env){let a=env.raw.probes||[];if(!a.length){textCentre(3,"NO PROBE DATA",cAzure,1);return;}let n=Math.min(11,a.length),gap=n<=6?1:0;for(let p=0;p<n;p++){let y0=Math.floor(p*(PH+gap)/n),y1=Math.floor((p+1)*(PH+gap)/n)-gap,row=env.probeHist[p],base=65535;for(let x=0;x<HIST_LEN;x++)if(row[x]>0&&row[x]<base)base=row[x];for(let x=0;x<HIST_LEN;x++){let cell=row[x];if(cell<0)continue;let h,b;if(stateEnum(a[p].state)===ST_UNKNOWN){h=cUnknown;b=.25;}else if(cell>=65535){h=cCrit;b=1;}else if(base!==65535&&cell>=base*2+5){h=cWarn;b=1;}else{h=cOk;b=.4;}for(let y=y0;y<y1;y++)fbSet(x,y,h,b);}}}
+  function sC0oldUnused(){}
 
-  /* histAt — panelHist.c:50-58. */
-  function histAt(env, ring, i) {
-    if (i < 0) i = 0;
-    if (i >= HIST_LEN) i = HIST_LEN - 1;
-    let firstReal = HIST_LEN - env.histFill;
-    if (firstReal < 0) firstReal = 0;
-    if (i < firstReal) i = firstReal;
-    if (i >= HIST_LEN) i = HIST_LEN - 1;
-    return ring[i];
-  }
+  function rateLabel(k){if(k==null)return "--";k=num(k);if(k<1000)return Math.floor(k)+"K";const m=k/1000;if(m<9.95)return m.toFixed(1)+"M";if(m<999.5)return Math.floor(m+.5)+"M";if(m<9950)return (m/1000).toFixed(1)+"G";return Math.floor(m/1000+.5)+"G";}
+  function sB1(env){const q=env.raw.totals;if(!q){textCentre(3,"NO RATE DATA",cAzure,1);return;}function row(y,l,d,u,dr,ur,h){let total=d==null?(u==null?null:num(u)):(u==null?num(d):num(d)+num(u)),x=panelText(0,y,l+" ",cInk,1);panelText(x,y,rateLabel(total),h,1);let peak=1;for(let a=0;a<PW;a++){let dn=dr[HIST_LEN-1-a],up=ur[HIST_LEN-1-a],v=(dn>0?dn:0)+(up>0?up:0);if(v>peak)peak=v;}for(let a=0;a<PW;a++){let dn=dr[HIST_LEN-1-a],up=ur[HIST_LEN-1-a];if(dn<0&&up<0)continue;if(dn<0)dn=0;if(up<0)up=0;let xx=PW-1-a,hd=ri(dn/peak*5),hu=ri((dn+up)/peak*5)-hd;if(hd<1&&dn>0)hd=1;for(let r=0;r<hd&&r<5;r++)fbSet(xx,y+4-r,h,1);for(let r=hd;r<hd+hu&&r<5;r++)fbSet(xx,y+4-r,cMaint,1);}}row(0,"WAN",q.wanDownKbps,q.wanUpKbps,env.wanDown,env.wanUp,cAzure);row(6,"LAN",q.lanDownKbps,q.lanUpKbps,env.lanDown,env.lanUp,cOk);}
 
-  // =====================================================================
-  // 6. THEME A · ABSTRACT — panelScreensA.c
-  // =====================================================================
+  // Detailed firmware ports for the topology and resource charts.
+  function sB3(env,t,dt){const a=env.raw.links||[],n=a.length;if(!n){textCentre(3,"NO LINK DATA",cAzure,1);return;}function parentOf(i){let p=a[i].parent;if(p==null||num(p)>=n)return -1;let at=i,steps=0;while(a[at].parent!=null&&num(a[at].parent)<n){at=num(a[at].parent);if(++steps>n)return -1;}return at===i?-1:num(p);}function depth(i){let d=0,at=i;while(a[at].parent!=null&&num(a[at].parent)<n){at=num(a[at].parent);if(++d>n)return 0;}return d;}let par=a.map((_,i)=>parentOf(i)),dep=a.map((_,i)=>par[i]<0?0:depth(i)),md=Math.max.apply(null,dep),order=[],stack=[];for(let i=n-1;i>=0;i--)if(par[i]<0)stack.push(i);while(stack.length&&order.length<n){let at=stack.pop();order.push(at);for(let c=n-1;c>=0;c--)if(par[c]===at)stack.push(c);}let leaves=order.filter(i=>!par.some(x=>x===i)).length||1,leaf=0,nx=[],ny=[];for(const i of order){let child=par.some(x=>x===i);nx[i]=5+Math.floor(dep[i]*45/(md||1));ny[i]=1+Math.floor((2*leaf+1)*9/(2*leaves));if(!child)leaf++;}function point(px,py,cx,cy,d){let dy=Math.abs(cy-py);return d<=dy?[px,py+(cy>py?d:-d)]:[px+d-dy,cy];}for(const i of order){let px=par[i]<0?0:nx[par[i]],py=par[i]<0?ny[i]:ny[par[i]],len=Math.abs(ny[i]-py)+nx[i]-px,q=a[i],h=stateEnum(q.state)===ST_DOWN?cCrit:[cInk,cAzure,cMaint,cOk][linkKind(q.kind)]||cOk;for(let d=0;d<=len;d++){let [x,y]=point(px,py,nx[i],ny[i],d);fbSet(x,y,h,stateEnum(q.state)===ST_DOWN?.6:.22);}for(let dir=0;dir<2;dir++){let rate=q[dir?"upKbps":"downKbps"];if(rate==null||num(rate)===0||stateEnum(q.state)===ST_DOWN||len<=0)continue;let spacing=14-11*panelRateLevel(rate),speed=2+22*panelRateLevel(rate),key=i*2+dir;v2LanePhase[16+key]=(v2LanePhase[16+key]||0)+speed*dt;if(spacing>len)spacing=len+1;for(let z=v2LanePhase[16+key]%spacing;z<=len;z+=spacing){let d=Math.floor(z);if(dir)d=len-d;let [x,y]=point(px,py,nx[i],ny[i],d);fbSet(x,y,h,1);}}}for(const i of order)for(let yy=0;yy<2;yy++)for(let xx=0;xx<2;xx++)fbSet(nx[i]+xx,ny[i]+yy,stateColor(a[i].state),1);}
+  function sC3(env){const heat=env.raw.alertHeat;if(!heat){textCentre(3,"NO HISTORY",cAzure,1);return;}const w=heat.warn||[],c=heat.crit||[];let peak=3;for(let i=0;i<52;i++)peak=Math.max(peak,num(w[i])+num(c[i]));const scale=PH/Math.log2(peak+1);for(let i=0;i<52;i++){const nw=num(w[i]),nc=num(c[i]),h=Math.min(PH,Math.ceil(Math.log2(nw+nc+1)*scale)),hc=nc?Math.ceil(Math.log2(nc+1)*scale):0;for(let r=0;r<h;r++)fbSet(i,PH-1-r,r>=h-hc?cCrit:cWarn,1);if(!h&&(51-i)%12===0)fbSet(i,10,cAzure,.3);}for(let y=0;y<PH;y++)fbSet(52,y,cAzure,.45);}
+  function sD0(env,t,dt){const a=env.raw.systems||[];if(!a.length)return;const p=pageFor(12,dt,a.length),q=a[p],st=stateEnum(q.state),h=stateColor(st),word=["OK","DEG","DOWN","?","MNT"][st];textFit(0,0,q.name,8,cInk,1);textRight(52,0,word,h,1);if(st===ST_DOWN||st===ST_UNKNOWN)textCentre(6,"NO READINGS",cUnknown,1);else{[[0,"C",q.loadPct,cAzure],[19,"M",q.memPct,cMaint],[38,"D",q.diskPct,cOk]].forEach(([x,l,v,col])=>{panelText(x,6,l,cInk,1);const valid=v!=null&&num(v)<=100,pct=num(v);panelText(x+4,6,valid?String(pct):"--",valid?(pct>=90?cCrit:pct>=75?cWarn:col):cUnknown,1);});}pageBar(p,a.length);}
+  function sD1(env,t,dt){const a=env.raw.systems||[],n=Math.min(PW,a.length);if(!n)return;const gap=PW>=n*2?1:0;for(let i=0;i<n;i++){let q=a[i],x0=Math.floor(i*(PW+gap)/n),x1=Math.floor((i+1)*(PW+gap)/n)-gap,st=stateEnum(q.state),h=stateColor(st),mem=q.memPct==null?255:num(q.memPct),measured=st!==ST_DOWN&&st!==ST_UNKNOWN,up=measured?Math.floor((num(q.loadPct)*5+50)/100):0,dn=measured&&mem<=100?Math.floor((mem*5+50)/100):0;if(measured&&up<1&&num(q.loadPct)>0)up=1;if(dn<1&&measured&&mem<=100&&mem>0)dn=1;for(let x=x0;x<x1;x++){fbSet(x,5,h,1);for(let r=1;r<=5;r++){if(r<=up)fbSet(x,5-r,num(q.loadPct)>=90?cCrit:num(q.loadPct)>=75?cWarn:cAzure,1);if(r<=dn)fbSet(x,5+r,mem>=90?cCrit:mem>=75?cWarn:cMaint,1);}}}}
+  function sD2(env){const rings=[env.wanDown,env.cpuLocal,env.rttLocal],rings2=[env.wanUp,null,null],peaks=[1,.4,10],values=Array.from({length:3},()=>new Float32Array(PW));for(let a=0;a<PW;a++)for(let k=0;k<3;k++){let v=rings[k][HIST_LEN-1-a];if(rings2[k]){let v2=rings2[k][HIST_LEN-1-a];if(v2>0)v=(v>0?v:0)+v2;}values[k][a]=v;if(v>peaks[k])peaks[k]=v;}for(let a=0;a<PW;a++)for(let k=0;k<3;k++){let v=values[k][a];if(v<0)continue;let rows=Math.min(3,v/peaks[k]*3),x=PW-1-a,y=[0,4,8][k],h=[cInk,cAzure,cMaint][k];for(let r=0;r<3;r++){let cover=rows-r;if(cover<=0)break;fbSet(x,y+2-r,h,cover>=1?1:.25+.75*cover);}}}
+  function sD3(env,t,dt){const hosts=env.raw.systems||[],tiles=hosts.map(q=>({state:stateEnum(q.state),load:clamp01(num(q.loadPct)/100)}));for(const b of env.raw.popTail||[])tiles.push({state:(num(b)>>5)&7,load:(num(b)&31)/31});let n=tiles.length;if(!n)return;let total=0,q=env.raw.totals||{};for(const k of ["wanDownKbps","wanUpKbps","lanDownKbps","lanUpKbps"])if(q[k]!=null)total+=num(q[k]);env.aurora=(env.aurora||0)+dt*(.15+2.2*panelRateLevel(total));for(let x=0;x<PW;x++){let pos=(x+.5)*n/PW-.5,a=Math.floor(pos),b=a+1,mix=pos-a;if(a<0)a=0;if(b>=n)b=n-1;let ta=tiles[a],tb=tiles[b],own=mix<.5?ta:tb;if(own.state===ST_DOWN){for(let y=0;y<PH;y++)fbSet(x,y,cCrit,1);continue;}let load=ta.load+(tb.load-ta.load)*mix,h=own.state===ST_OK?cAzure:stateColor(own.state),top=own.state===ST_OK?cOk:h,height=4+load*7,wave=Math.sin(env.aurora+x*.28)*1.3+Math.sin(env.aurora*.61+x*.11)*.9,crest=PH-height+wave,ray=.62+.38*Math.sin(env.aurora*2.3+x*1.35);for(let y=0;y<PH;y++){let d=y-crest;if(d<-.5)continue;fbSet(x,y,d<1?top:h,d<1?1:ray/(1+d*.28));}}}
 
-  /* A0 · State lattice.
-     mockup: sA0() Themes.dc.html:408 · firmware: panelScreensA.c:36-75.
-     One cell per system bucket over the full 53x11 grid; heat by tier;
-     tier-0 downs pulse at 3 rad/s. The UNKNOWN branch (A.c:59-67) is a
-     firmware DEVIATION — the mockup never emits UNKNOWN. */
-  const HEAT_BY_TIER = [1.0, 0.62, 0.4, 0.26];                    // A.c:37
-  function sA0(env, t) {
-    for (let i = 0; i < LATTICE_SLOTS; i++) {
-      if (env.latticeOwner[i] === 0xFF) continue;
-      const s = env.lattice[i];
-      const x = i % PW, y = Math.floor(i / PW);
-      const heat = HEAT_BY_TIER[s.tier & 3];
-      const phase = (i * 0.41) % 6.283;
-      if (s.state === ST_OK) {
-        fbSet(x, y, cQuiet, (0.1 + s.load * 0.14) * (0.6 + heat * 0.5)
-          + Math.sin(t * 0.6 + phase) * 0.015);
-      } else if (s.state === ST_DEGRADED) {
-        fbSet(x, y, cWarn, (0.3 + 0.5 * heat) * (0.92 + 0.08 * Math.sin(t * 2.0 + phase)));
-      } else if (s.state === ST_DOWN) {
-        fbSet(x, y, cCrit, 0.3 + 0.68 * heat
-          * (s.tier === 0 ? 0.7 + 0.3 * Math.abs(Math.sin(t * 3.0)) : 1.0));
-      } else if (s.state === ST_UNKNOWN) {
-        fbSet(x, y, cUnknown, 0.18 + 0.14 * heat
-          + (Math.floor(t * 1.4 + phase) & 1) * 0.08);
-      } else {  // ST_MAINT
-        fbSet(x, y, cMaint, 0.2 + 0.16 * heat
-          + (Math.floor(t * 1.4 + phase) & 1) * 0.1);
-      }
-    }
-  }
+  function sB0(env,t,dt){const a=env.raw.links||[];if(!a.length){textCentre(3,"NO LINK DATA",cAzure,1);return;}const p=pageFor(4,dt,pageCount(a.length,2));function lane(x0,x1,y,rate,key,dir,h,step){if(rate==null){for(let x=x0;x<=x1;x+=4)fbSet(x,y,cUnknown,.35);return;}rate=num(rate);if(rate===0){for(let x=x0;x<=x1;x++)fbSet(x,y,h,.06);return;}let spacing=14-11*panelRateLevel(rate),speed=2+22*panelRateLevel(rate);v2LanePhase[key]=(v2LanePhase[key]||0)+speed*step;v2LanePhase[key]%=spacing*64;for(let x=x0;x<=x1;x++)fbSet(x,y,h,.08);for(let z=v2LanePhase[key]%spacing-spacing;z<=x1-x0;z+=spacing){let d=Math.floor(z);if(d<0||d>x1-x0)continue;let head=dir>0?x0+d:x1-d;fbSet(head,y,h,1);let tail=head-dir;if(tail>=x0&&tail<=x1)fbSet(tail,y,h,.4);}}for(let slot=0;slot<2;slot++){let i=p*2+slot,q=a[i];if(!q)break;let y=slot?6:0,st=stateEnum(q.state),kind=linkKind(q.kind),h=[cInk,cAzure,cMaint,cOk][kind]||cOk,label=kind===0?(String(q.name).indexOf("BACKUP")===0?"WAN2":"WAN"):q.name;textFit(0,y,label,5,st===ST_DOWN?cCrit:cInk,1);if(st===ST_DOWN){for(let x=21;x<PW;x++){fbSet(x,y,cCrit,.6);fbSet(x,y+4,cCrit,.6);}continue;}lane(21,52,y,q.downKbps,i*2,-1,h,dt);lane(21,52,y+1,q.downKbps,i*2,-1,h,0);lane(21,52,y+3,q.upKbps,i*2+1,1,h,dt);lane(21,52,y+4,q.upKbps,i*2+1,1,h,0);}pageBar(p,pageCount(a.length,2));}
 
-  /* A1 · Flow gates — CONTRACT-AW §1 + §4 (task #11).
-     This REPLACES the pool-lane A1 that shipped under CONTRACT-CP. That screen
-     drew four synthetic pool lanes through one bar at x=34; A1 is now a picture
-     of the actual Ubiquiti path, one vertical gate per device, traffic flowing
-     left→right along the direction packets really travel:
-
-         APs  →  hubs  →  switch  →  router  →  internet (+ wanBackup)
-
-     §1's two placement bullets cannot both be read literally (the first puts
-     every hub on the left, the second puts a hub on the right, and "the router
-     line" is never placed). §4 IS unambiguous — "Internet: rightmost column
-     treatment right of the router gate" — so §4 governs and §1's "switch + hub"
-     is read as "switch + router". Flagged to Lead 2026-08-07; if that
-     adjudication comes back differently, only the band table below moves.
-
-     §1/§4 fix the HEIGHTS (router 11, switch 8, hubs 5-6 staggered, APs 3) and
-     the stagger, but not the columns. The band table is therefore this lane's
-     proposal, sent to Lead for ratification so the firmware (AW2) and this
-     renderer agree on the same fixture bytes — acceptance A1 is a PARITY test,
-     so a private choice here is a divergence there.
-
-     DEVIATION (page-only, inherited from the old A1): the firmware holds its
-     particle array in a file static because only one screen is ever live;
-     twelve are live here, so the state is per-tile in `st`. */
-
-  // Band table — [lo, hi] columns on the 53-wide grid. n gates spread evenly
-  // inside the band; a single gate sits at the band's centre.
-  const A1_BAND = {};
-  A1_BAND[GR_AP] = [2, 16];
-  A1_BAND[GR_HUB] = [20, 34];
-  A1_BAND[GR_SWITCH] = [38, 44];
-  A1_BAND[GR_ROUTER] = [46, 48];
-  const A1_INET_X = 51;                 // §4 "rightmost column treatment"
-  const A1_WAN_X = 52;                  // §4 wanBackup, "dimmer beside it"
-  // Left-to-right band order. wanBackup is NOT a band: §1 draws it with the
-  // internet connection, not as a gate in the chain.
-  const A1_BANDS = [GR_AP, GR_HUB, GR_SWITCH, GR_ROUTER];
-
-  function a1Spread(n, lo, hi) {
-    if (n <= 0) return [];
-    if (n === 1) return [ri((lo + hi) / 2)];
-    const out = new Array(n);
-    const step = (hi - lo) / (n - 1);
-    for (let i = 0; i < n; i++) out[i] = ri(lo + i * step);
-    return out;
-  }
-
-  /* a1GateGeom — §1 heights and §4 stagger, by role and index-within-role. */
-  function a1GateGeom(role, i, n) {
-    if (role === GR_ROUTER) return { h: PH, y0: 0 };                    // 100%
-    if (role === GR_SWITCH) {
-      const h = 8;                                                      // 75%
-      return { h: h, y0: Math.floor((PH - h) / 2) };
-    }
-    if (role === GR_HUB) {
-      // 50% of 11 is 5.5, so §1's "5-6 rows" alternates with the stagger:
-      // even gates are 6 rows aligned TOP, odd are 5 rows aligned BOTTOM.
-      const h = (i % 2 === 0) ? 6 : 5;
-      return { h: h, y0: (i % 2 === 0) ? 0 : (PH - h) };
-    }
-    /* APs, §9 A-1 verbatim: h=3, y0 = round(i*(11-3)/(n-1)), centred at 4 when
-       n==1. The band is DISTRIBUTED down the height, not parked on shared
-       rows. (AW2's firmware briefly fixed these at y0=4 and this lane matched
-       it; A-1 then ratified the distribution and pointed AW2 here. The
-       contract is the parity oracle, not either implementation.) */
-    if (n <= 1) return { h: 3, y0: 4 };
-    return { h: 3, y0: ri(i * (PH - 3) / (n - 1)) };
-  }
-
-  /* a1Layout — pure: gear rows in, gates + legs out. Exported to the harness
-     so the geometry can be asserted without a canvas. */
-  function a1Layout(gear) {
-    const bands = [];
-    for (let b = 0; b < A1_BANDS.length; b++) {
-      const role = A1_BANDS[b];
-      const members = [];
-      for (let i = 0; i < gear.length; i++) if (gear[i].role === role) members.push(gear[i]);
-      if (!members.length) { bands.push([]); continue; }
-      const xs = a1Spread(members.length, A1_BAND[role][0], A1_BAND[role][1]);
-      const row = [];
-      for (let i = 0; i < members.length; i++) {
-        const g = a1GateGeom(role, i, members.length);
-        row.push({
-          role: role, state: members[i].state, rx: members[i].rx, tx: members[i].tx,
-          x: xs[i], y0: g.y0, h: g.h, cy: g.y0 + Math.floor(g.h / 2),
-        });
-      }
-      bands.push(row);
-    }
-    const gates = [];
-    for (let b = 0; b < bands.length; b++)
-      for (let i = 0; i < bands[b].length; i++) gates.push(bands[b][i]);
-
-    /* Legs. Each gate feeds the gate at (i mod n) in the next NON-EMPTY band,
-       so a fleet missing a whole tier still draws a connected path instead of
-       a floating column. The last band's gates run on to the internet. */
-    const legs = [];
-    const nonEmpty = [];
-    for (let b = 0; b < bands.length; b++) if (bands[b].length) nonEmpty.push(bands[b]);
-    for (let b = 0; b + 1 < nonEmpty.length; b++) {
-      const src = nonEmpty[b], dst = nonEmpty[b + 1];
-      for (let i = 0; i < src.length; i++) {
-        const d = dst[i % dst.length];
-        legs.push({ x0: src[i].x, y0: src[i].cy, x1: d.x, y1: d.cy, src: src[i] });
-      }
-    }
-    if (nonEmpty.length) {
-      const last = nonEmpty[nonEmpty.length - 1];
-      for (let i = 0; i < last.length; i++)
-        legs.push({ x0: last[i].x, y0: last[i].cy, x1: A1_INET_X, y1: 5, src: last[i] });
-    }
-    let wan = null;
-    for (let i = 0; i < gear.length; i++) if (gear[i].role === GR_WANBK) { wan = gear[i]; break; }
-    let router = null;
-    for (let i = 0; i < gear.length; i++) if (gear[i].role === GR_ROUTER) { router = gear[i]; break; }
-    return { bands: bands, gates: gates, legs: legs, wan: wan, router: router };
-  }
-
-  function a1Col(state) {
-    return state === GS_DOWN ? cCrit : state === GS_DEGRADED ? cWarn : cAzure;
-  }
-
-  /* One vertical flow gate. A line-for-line port of
-     firmware/panelScreensA.c:95 a1Gate() — same signature, same broken-when-
-     down rule (every other row dropped, so a dead link reads as severed and
-     not merely as a red one from across the room), same lack of an endcap
-     boost. Both sides must paint identical pixels from identical gear bytes;
-     keep this function and that one in step. */
-  function a1Gate(x, y0, h, state, brightness) {
-    const col = a1Col(state);
-    for (let k = 0; k < h; k++) {
-      if (state === GS_DOWN && (k % 2) === 1) continue;
-      fbSet(x, y0 + k, col, brightness);
-    }
-  }
-
-  const A1_PARTICLES = 72;
-  function a1Init(nLegs) {
-    const r = rngNew(77);              // same seed as the old A1 (A.c:97)
-    const out = new Array(A1_PARTICLES);
-    for (let i = 0; i < A1_PARTICLES; i++) {
-      out[i] = {
-        leg: nLegs > 0 ? (i % nLegs) : 0,
-        u: rngNext(r),                 // progress along the leg, 0..1
-        v: 0.55 + rngNext(r) * 0.6,    // per-particle speed jitter
-      };
-    }
-    return out;
-  }
-
-  function sA1(env, t, dt, st) {
-    /* §4: "No gear data (gearCount 0 or v1 server) → A1's existing no-data
-       treatment." A v1 server, an empty inventory and a poller that has been
-       down past the 60 s freshness window (§E7) all land here, and all three
-       mean the same thing to a viewer: this screen has nothing to say. */
-    if (!env.gearCount) { screenNoData(t); return; }
-
-    const L = a1Layout(env.gear);
-    if (!st.a1 || st.a1.n !== L.legs.length) {
-      st.a1 = { n: L.legs.length, p: a1Init(L.legs.length) };
-    }
-    const parts = st.a1.p;
-
-    /* Legs first, dimmest: the wire is lit by the SOURCE's rxLevel, so a link
-       carrying nothing still shows its shape rather than vanishing. */
-    for (let i = 0; i < L.legs.length; i++) {
-      const lg = L.legs[i];
-      const b = 0.035 + (lg.src.rx / MAX_LEVEL) * 0.05;
-      const span = lg.x1 - lg.x0;
-      for (let x = lg.x0 + 1; x < lg.x1; x++) {
-        const k = span > 0 ? (x - lg.x0) / span : 0;
-        fbAdd(x, ri(lg.y0 + (lg.y1 - lg.y0) * k), cQuiet, b);
-      }
-    }
-
-    /* Gates. §4: colour by state, and a DOWN gate is "rendered broken" — every
-       other pixel dropped, so it reads as a severed line at a glance and not
-       merely as a red one, which matters on a panel seen from across a room. */
-    for (let i = 0; i < L.gates.length; i++) {
-      const g = L.gates[i];
-      const lvl = (g.rx > g.tx ? g.rx : g.tx) / MAX_LEVEL;
-      const base = g.state === GS_DOWN ? 0.8
-        : g.state === GS_DEGRADED ? 0.5 * (0.8 + 0.2 * Math.abs(Math.sin(t * 2.2)))
-          : 0.20 + lvl * 0.30;
-      a1Gate(g.x, g.y0, g.h, g.state, base);
-    }
-
-    /* Particles. §4: spawn rate and brightness scale by rx/txLevel — here the
-       UPSTREAM direction, so a leg is driven by its source's txLevel. Level 0
-       is idle by §3.1 and draws nothing at all: a creeping particle would be a
-       claim of traffic the panel was told there is none of. */
-    for (let i = 0; i < A1_PARTICLES; i++) {
-      const pt = parts[i];
-      const lg = L.legs[pt.leg];
-      if (!lg) continue;
-      const lvl = lg.src.tx / MAX_LEVEL;
-      const gate = lg.src.state;
-      const rate = gate === GS_DOWN ? 0 : gate === GS_DEGRADED ? 0.45 : 1.0;
-      pt.u += pt.v * (0.25 + lvl * 1.15) * rate * dt;
-      while (pt.u >= 1) pt.u -= 1;
-      if (lg.src.tx <= 0 || rate === 0) continue;
-      const px = ri(lg.x0 + (lg.x1 - lg.x0) * pt.u);
-      const py = ri(lg.y0 + (lg.y1 - lg.y0) * pt.u);
-      const col = a1Col(gate);
-      const b = 0.22 + lvl * 0.38;
-      fbAdd(px, py, col, b);
-      fbAdd(px - 1, py, col, b * 0.3);
-    }
-
-    /* Internet, §4: the rightmost column, right of the router gate, with the
-       backup WAN dimmer beside it.
-
-       §10 A-3, the ruling on this lane's flag: the internet is only meaningful
-       THROUGH the router, so the marker column renders in the ROUTER's state
-       treatment — warn when the router is degraded, crit and broken when it is
-       down. Never a healthy full-height marker over a dead router. A missing
-       router row is treated as down for the same reason: nothing is reaching
-       the internet through a gateway we have no word on. */
-    a1Gate(A1_INET_X, 0, PH, L.router ? L.router.state : GS_DOWN, 0.50);
-
-    /* wanBackup keeps its OWN device state (§10 A-3), which is the point: when
-       the router goes down this column stays lit beside a broken internet
-       marker and reads as the only live path left. Rows 3..7, dimmer —
-       firmware/panelScreensA.c:154, a1Gate(52, 3, 5, state, 0.28f). */
-    if (L.wan) a1Gate(A1_WAN_X, 3, 5, L.wan.state, 0.28);
-  }
-
-  /* A2 · MQ and SNMP.
-     mockup: sA2() Themes.dc.html:474 · firmware: panelScreensA.c:173-207.
-     DEVIATION (A.c:158-172): the mockup's lane backlogs are scenario
-     constants; protocol.h carries no MQ/SNMP telemetry, so the four lanes are
-     driven by loss / dataStale / unknown-share / degraded-share. Geometry,
-     rates, colours and thresholds unchanged. */
-  const A2_LANE_Y = [1, 3, 6, 8];                                 // A.c:174
-  const A2_LANE_RATES = [0.7, 0.45, 0.9, 0.3];                    // A.c:175
-  function sA2(env, t) {
-    const denom = env.total > 0 ? env.total : 1;
-    const backlog = [
-      env.loss / 100 * 2,
-      env.dataStale ? 0.8 : 0.05,
-      env.unknown / denom,
-      env.deg / denom,
-    ];
-    for (let i = 0; i < 4; i++) {
-      const y = A2_LANE_Y[i];
-      for (let x = 4; x < PW; x++) fbSet(x, y, cQuiet, 0.04);
-      const bl = backlog[i] > 1 ? 1 : backlog[i];
-      const q = ri(bl * 3.0);
-      for (let k = 0; k < 3; k++)
-        fbSet(k, y, k < q ? (bl > 0.5 ? cCrit : cWarn) : cQuiet, k < q ? 0.7 : 0.06);
-      const base = (i < 2) ? cAzure : cOk;
-      for (let j = 0; j < 5; j++) {
-        const x = 5.0 + ((t * A2_LANE_RATES[i] * 22.0 + j * 10.0 + i * 4.0) % (PW - 6));
-        const col = bl > 0.5 ? cWarn : base;
-        const px = ri(x);
-        fbAdd(px, y, col, 0.45);
-        fbAdd(px - 1, y, col, 0.15);
-      }
-    }
-    for (let x = 0; x < PW; x++) fbSet(x, 5, cQuiet, (x % 4) === 0 ? 0.07 : 0.02);
-    fbSet(0, 10, cAzure, 0.1);
-    fbSet(1, 10, cAzure, 0.1);
-  }
-
-  // =====================================================================
-  // 7. THEME B · TEXT — panelScreensB.c
-  // =====================================================================
-
-  /* B0 · Condition counts.
-     mockup: sB0() Themes.dc.html:498 · firmware: panelScreensB.c:16-56.
-     DEVIATION (B.c:29-48, the 2026-08-04 hardware pass): text hierarchy is
-     carried by HUE, not brightness — cQuiet is never used for small text any
-     more, so a zero count reads azure and a real one reads its condition
-     colour. The tier flag is computed from POOL aggregates (full fleet) rather
-     than the 64-capped systems array. */
-  function sB0(env) {
-    const up = String(env.up), dn = String(env.down);
-    const dg = String(env.deg), mn = String(env.maint);
-
-    panelBig(1, 2, up, cQuiet, 0.3);
-    panelTextOver(1, 0, "UP", cOk, 0.5);
-
-    let x = 2 + bigW(up) + 3;
-    if (x < 22) x = 22;
-
-    let cx = panelTextOver(x, 0, dn, env.down ? cCrit : cAzure, env.down ? 0.9 : 0.16);
-    cx = panelTextOver(cx + 1, 0, "DOWN", cAzure, 0.3);
-
-    let tierZeroDown = 0;
-    for (let i = 0; i < env.poolCount; i++)
-      if (env.pools[i].tier === 0 && env.pools[i].down > 0) tierZeroDown = 1;
-    const tierMsg = env.down ? (tierZeroDown ? "TIER 0" : "TIER 3") : "OK";
-    panelTextOver(cx + 3, 0, tierMsg, tierZeroDown ? cCrit : cAzure, 0.4);
-
-    cx = panelTextOver(x, 6, dg, env.deg ? cWarn : cAzure, env.deg ? 0.65 : 0.16);
-    cx = panelTextOver(cx + 1, 6, "DEG", cAzure, 0.3);
-    cx = panelTextOver(cx + 3, 6, mn, env.maint ? cMaint : cAzure, env.maint ? 0.5 : 0.16);
-    panelTextOver(cx + 1, 6, "MNT", cAzure, 0.3);
-  }
-
-  /* B1 · Throughput.
-     mockup: sB1() Themes.dc.html:519 · firmware: panelScreensB.c:63-98.
-     DEVIATION (B.c:88-97): the mockup synthesised OUT as 0.6x and PEAK as
-     1.4x of one aggregate figure; the wire carries the real split, so IN/OUT
-     are the real directions and the bar is scaled against the adaptive peak. */
-  function sB1(env, t) {
-    panelBig(1, 2, env.gLabel, cQuiet, 0.3);
-    panelTextOver(1, 0, "AGGREGATE", cAzure, 0.5);
-
-    let x0 = bigW(env.gLabel) + 4;
-    if (x0 < 26) x0 = 26;
-
-    let util = histAt(env, env.thru, HIST_LEN - 1) + histAt(env, env.egress, HIST_LEN - 1);
-    if (util > 1) util = 1;
-
-    for (let k = 0; k < 24; k++) {
-      const frac = k / 24;
-      const on = frac < util;
-      const col = frac > 0.85 ? cCrit : frac > 0.7 ? cWarn : cAzure;
-      fbSet(x0 + k, 1, on ? col : cQuiet, on ? 0.5 : 0.05);
-      fbSet(x0 + k, 2, on ? col : cQuiet, on ? 0.18 : 0.03);
-    }
-
-    /* DOC1 review parity (panelScreensB.c, two rounds): the standalone
-       percent is dropped — no third text element fits this screen; the bar
-       is the glance, the ticker the absolute figure. Ticker at y=5. */
-
-    const inLabel = formatRate(env.rxGbps * 1000000);
-    const outLabel = formatRate(env.txGbps * 1000000);
-    const ticker = "IN " + inLabel + "/S" + PANEL_SEP + "OUT " + outLabel + "/S"
-      + PANEL_SEP + "LINK " + ri(util * 100) + "%" + PANEL_TAIL;
-    panelScroll(t, 5, ticker, cInk, 0.45, 11.0);
-  }
-
-  /* B2 · Load and latency.
-     mockup: sB2() Themes.dc.html:535 · firmware: panelScreensB.c:108-180.
-     Two firmware DEVIATIONS reproduced verbatim because they are the shipped
-     truth and the mockup's layout does not fit 53 px:
-       #14 (B.c:113-150) row 0 — label contracts to "LOAD"; the P95 and LOSS
-           readings ALTERNATE on a 5 s slot, right-aligned to the panel edge
-           and floored clear of the label at rMinX = textW("LOAD") + 3.
-       #13 (B.c:160-179) row 6 — "%d/%d>85": the denominator makes CONTRACT
-           §9b's second population self-evident, right-aligned and floored at
-           minX = bigW(pct) + 3. */
-  function sB2(env, t) {
-    const pct = ri(env.meanLoad * 100) + "%";
-    panelBig(1, 2, pct, env.meanLoad > 0.75 ? cWarn : cQuiet, env.meanLoad > 0.75 ? 0.22 : 0.3);
-    panelTextOver(1, 0, "LOAD", cInk, 0.45);
-
-    let reading, rcol;
-    if ((trunc(t / 5.0) & 1) === 0) {
-      let ms = ri(env.rtt);
-      if (ms > 999) ms = 999;
-      reading = "P95 " + ms + "MS";
-      rcol = env.rtt > 35.0 ? cWarn : cInk;
-    } else {
-      reading = env.loss >= 10.0 ? ("LOSS " + ri(env.loss) + "%")
-        : ("LOSS " + f1(env.loss) + "%");
-      rcol = env.loss > 1.0 ? cCrit : cInk;
-    }
-    let rx = PW - textW(reading);
-    const rMinX = textW("LOAD") + 3;
-    if (rx < rMinX) rx = rMinX;
-    panelTextOver(rx, 0, reading, rcol, 0.5);
-
-    let hot = 0;
-    const n = env.systems.length;
-    for (let i = 0; i < n; i++) if (env.systems[i].loadPct > 85) hot++;
-
-    const over = hot + "/" + n + ">85";
-    let tx = PW - textW(over);
-    const minX = bigW(pct) + 3;
-    if (tx < minX) tx = minX;
-    panelTextOver(tx, 6, over, hot ? cWarn : cAzure, 0.45);
-  }
-
-  // =====================================================================
-  // 8. THEME C · CHARTS — panelScreensC.c
-  //    DEVIATION common to C0 and C1 (panelScreensC.c:6-12): the mockup
-  //    scrolls a STATIC waveform with a synthetic offset because its data
-  //    never changed. The rings genuinely advance here, so the traces are
-  //    indexed chronologically and the offset is dropped.
-  // =====================================================================
-
-  /* C0 · Load distribution.
-     mockup: sC0() Themes.dc.html:547 · firmware: panelScreensC.c:25-54. */
-  function sC0(env) {
-    for (let b = 0; b < LOAD_BUCKETS; b++) {
-      const share = env.loadHist[b];
-      const pct = (b + 0.5) / LOAD_BUCKETS;
-      let h = share <= 0 ? 0 : ri(Math.pow(share, 0.62) * 7.0);
-      if (share > 0 && h < 1) h = 1;
-      const col = pct > 0.9 ? cCrit : pct > 0.75 ? cWarn : cQuiet;
-      const base = pct > 0.9 ? 0.8 : pct > 0.75 ? 0.5 : 0.12 + pct * 0.15;
-      for (let k = 0; k < h; k++)
-        fbSet(b, 7 - k, col, base * (k === h - 1 ? 1.5 : 1.0));
-    }
-    for (let x = 0; x < LOAD_BUCKETS; x++)
-      fbSet(x, 8, cQuiet, (x % 7) === 0 ? 0.12 : 0.03);
-
-    for (let k = 0; k < 15; k++) {
-      const idx = HIST_LEN - 15 + k;
-      const v = histAt(env, env.thru, idx);
-      const o = histAt(env, env.egress, idx);
-      const x = 38 + k;
-      let hi = ri(v * 4.0); if (hi < 1) hi = 1;
-      let ho = ri(o * 4.0); if (ho < 1) ho = 1;
-      for (let j = 0; j < hi; j++)
-        fbSet(x, 4 - j, v > 0.85 ? cWarn : cAzure, j === hi - 1 ? 0.55 : 0.14);
-      for (let j = 0; j < ho; j++)
-        fbSet(x, 6 + j, cAzure, j === ho - 1 ? 0.38 : 0.11);
-    }
-    for (let y = 0; y < PH; y++)
-      fbSet(36, y, cQuiet, (y % 2) ? 0.05 : 0.1);
-  }
-
-  /* C1 · Live traces.
-     mockup: sC1() Themes.dc.html:567 · firmware: panelScreensC.c:61-82. */
-  function sC1(env) {
-    const traces = [
-      { data: env.thru, y0: 0, col: cAzure, hot: 0.85 },
-      { data: env.cpuHist, y0: 4, col: cOk, hot: 0.80 },
-      { data: env.rttHist, y0: 8, col: cAzure, hot: 0.70 },
-    ];
-    for (let ti = 0; ti < 3; ti++) {
-      for (let x = 0; x < PW; x++) {
-        const v = histAt(env, traces[ti].data, x);
-        let h = ri(v * 3.0); if (h < 1) h = 1;
-        const col = v > traces[ti].hot ? cWarn : traces[ti].col;
-        for (let k = 0; k < h; k++)
-          fbSet(x, traces[ti].y0 + 3 - 1 - k, col, k === h - 1 ? 0.5 : 0.12);
-      }
-    }
-    for (let x = 0; x < PW; x += 3) {
-      fbAdd(x, 3, cQuiet, 0.05);
-      fbAdd(x, 7, cQuiet, 0.05);
-    }
-  }
-
-  /* C2 · Pool load.
-     mockup: sC2() Themes.dc.html:588 · firmware: panelScreensC.c:90-116.
-     DEVIATION #8 (C.c:98-101): severity order is down > degraded > unknown >
-     maint — a pool nobody can reach outranks one down for planned work. D1
-     uses the same order; the two pool screens must not disagree. */
-  function sC2(env) {
-    const n = env.poolCount > 7 ? 7 : env.poolCount;
-    for (let i = 0; i < n; i++) {
-      const p = env.pools[env.poolWorstFirst[i]];
-      const y = i + 2;
-      if (y > 8) break;
-      const key = p.down ? cCrit : p.degraded ? cWarn
-        : p.unknown ? cUnknown : p.maint ? cMaint : cQuiet;
-      const kb = p.down ? 0.9 : p.degraded ? 0.6 : p.unknown ? 0.4
-        : p.maint ? 0.3 : 0.12;
-      fbSet(0, y, key, kb);
-      const len = ri(p.load * 46.0);
-      for (let k = 0; k < 46; k++) {
-        const on = k < len;
-        const frac = k / 46;
-        const col = frac > 0.85 ? cCrit : frac > 0.7 ? cWarn : cAzure;
-        fbSet(2 + k, y, on ? col : cQuiet, on ? (k === len - 1 ? 0.6 : 0.22) : 0.03);
-      }
-      if (p.tier === 0) fbSet(49, y, cCrit, 0.18);
-    }
-    for (let x = 0; x < PW; x++)
-      fbSet(x, 0, cQuiet, (x % 4) === 0 ? 0.08 : 0.02);
-    /* DOC1 review parity: the y=9 label clipped to two rows; removed. */
-  }
-
-  // =====================================================================
-  // 9. THEME D · INSTRUMENTS — panelScreensD.c
-  // =====================================================================
-
-  /* D0 · Reachability.
-     mockup: sD0() Themes.dc.html:609 + sample() :626 · firmware:
-     panelScreensD.c:38-87. 11-row waterfall, one new column every 0.42 s.
-     DEVIATION (D.c:18-24): the mockup's rows are 11 named probe targets with
-     synthetic per-row loss; protocol.h carries only fleet-aggregate
-     rtt/loss, so each row tracks one of the 11 worst-first systems.
-     DEVIATION (page-only): gWf/gWfRng/gWfStep are firmware file statics —
-     per-tile here, for the same reason as A1. */
-  const D0_LOSS = 0, D0_SLOW = 1, D0_OK = 2;                      // D.c:25-27
-  function d0Sample(env, i, rng) {                                // D.c:38-62
-    const si = (i < env.probeRows) ? env.probeRow[i] : 0xFF;
-    let st = ST_UNKNOWN;
-    if (si !== 0xFF && si < env.systems.length) st = env.systems[si].state;
-
-    const lossRate = env.loss / 100;
-    const r = rngNext(rng);
-    if (st === ST_DOWN) {
-      if (r > 0.25) return { st: D0_LOSS, rtt: 0.15 };
-      return { st: D0_SLOW, rtt: 0.15 };
-    }
-    if (st === ST_DEGRADED || st === ST_UNKNOWN) {
-      if (r > 0.5) return { st: D0_SLOW, rtt: 0.15 };
-    } else if (lossRate > 0 && r < lossRate) {
-      return { st: D0_LOSS, rtt: 0.15 };
-    }
-    let base = env.rtt / 100;
-    if (base < 0.05) base = 0.05;
-    if (base > 1.0) base = 1.0;
-    let rtt = base * (0.8 + rngNext(rng) * 0.4);
-    if (rtt > 1.0) rtt = 1.0;
-    return { st: D0_OK, rtt: rtt };
-  }
-  function sD0(env, t, dt, st) {
-    if (!st.d0) {
-      const rng = rngNew(4211);                                   // D.c:66
-      const grid = new Array(PH);
-      for (let y = 0; y < PH; y++) {
-        grid[y] = new Array(PW);
-        for (let x = 0; x < PW; x++) grid[y][x] = d0Sample(env, y, rng);
-      }
-      st.d0 = { rng: rng, grid: grid, step: t };
-    }
-    const w = st.d0;
-    if (t - w.step > 0.42) {                                      // D.c:72
-      w.step = t;
-      for (let y = 0; y < PH; y++) {
-        w.grid[y].shift();
-        w.grid[y].push(d0Sample(env, y, w.rng));
-      }
-    }
-    for (let y = 0; y < PH; y++) {
-      for (let x = 0; x < PW; x++) {
-        const v = w.grid[y][x];
-        if (v.st === D0_LOSS) fbSet(x, y, cCrit, 0.85);
-        else if (v.st === D0_SLOW) fbSet(x, y, cWarn, 0.5);
-        else fbSet(x, y, cAzure, 0.06 + v.rtt * 0.26);
-      }
-    }
-  }
-
-  /* D1 · Pool bars + ticker.
-     mockup: sD1() Themes.dc.html:634 · firmware: panelScreensD.c:95-143.
-     Two firmware DEVIATIONS the mockup lacks:
-       - worst-first row ordering (D.c:101-103): with only 6 of up to 8 rows
-         visible, wire order can push the one down pool off the bottom;
-       - the UNKNOWN band `nu` (D.c:121/126/134): unreachable hosts previously
-         rendered as idle shimmer. */
-  function sD1(env, t) {
-    let big = 1;
-    for (let i = 0; i < env.poolCount; i++)
-      if (env.pools[i].total > big) big = env.pools[i].total;
-
-    for (let i = 0; i < env.poolCount && i <= 5; i++) {
-      const p = env.pools[env.poolWorstFirst[i]];
-      const y = i;
-      const worst = p.down ? cCrit : p.degraded ? cWarn
-        : p.unknown ? cUnknown : p.maint ? cMaint : cQuiet;
-      const kb = p.down ? 0.9 : p.degraded ? 0.6 : p.unknown ? 0.4
-        : p.maint ? 0.3 : 0.14;
-      fbSet(0, y, worst, kb);
-      fbSet(1, y, worst, kb * 0.5);
-
-      let len = ri(50.0 * p.total / big);
-      if (len < 6) len = 6;
-      const tot = p.total ? p.total : 1;
-      let nd = ri(len * p.down / tot);
-      let ng = ri(len * p.degraded / tot);
-      let nu = ri(len * p.unknown / tot);
-      let nm = ri(len * p.maint / tot);
-      if (p.down && nd < 1) nd = 1;
-      if (p.degraded && ng < 1) ng = 1;
-      if (p.unknown && nu < 1) nu = 1;
-      if (p.maint && nm < 1) nm = 1;
-      for (let k = 0; k < len; k++) {
-        const x = 3 + k;
-        if (k >= len - nd) fbSet(x, y, cCrit, 0.9);
-        else if (k >= len - nd - ng) fbSet(x, y, cWarn, 0.58);
-        else if (k >= len - nd - ng - nu) fbSet(x, y, cUnknown, 0.42);
-        else if (k >= len - nd - ng - nu - nm) fbSet(x, y, cMaint, 0.36);
-        else fbSet(x, y, cQuiet, 0.09 + 0.08 * (0.5 + 0.5 * Math.sin(t * 0.9 + k * 0.35 + i)));
-      }
-    }
-    for (let x = 0; x < PW; x += 2) fbSet(x, 6, cQuiet, 0.05);
-    panelScroll(t, 6, env.ticker, cInk, 0.48, 13.0);
-  }
-
-  /* D2 · Ambient field.
-     mockup: sD2() Themes.dc.html:657 · firmware: panelScreensD.c:152-207.
-     Procedural 3-sine field, warmth from mean load, up to 9 crit sparks whose
-     glow is set by the tier of the first down system in WIRE order (D.c:178),
-     and a 5 s rotating centred caption over a dimmed knockout box. */
-  const D2_TIER_GLOW = [1.0, 0.7, 0.45, 0.3];                     // D.c:185
-  function sD2(env, t) {
-    const totalF = env.total < 10 ? 10 : env.total;
-    const gran = 0.6 + Math.log(totalF) / Math.LN10 * 1.5;
-    let warmth = (env.meanLoad - 0.35) / 0.5;
-    if (warmth < 0) warmth = 0;
-    if (warmth > 1) warmth = 1;
-
-    for (let y = 0; y < PH; y++) {
-      for (let x = 0; x < PW; x++) {
-        const u = x / PW * gran;
-        const v = y / PH * gran * 0.4;
-        let n = Math.sin(u * 2.1 + t * 0.5) * 0.5
-          + Math.sin(v * 3.3 - t * 0.31) * 0.3
-          + Math.sin((u + v) * 1.7 + t * 0.77) * 0.4;
-        n = (n + 1.2) / 2.4;
-        if (n < 0) n = 0;
-        const b = 0.03 + Math.pow(n, 3.1) * 0.6;
-        fbSetRgb(x, y,
-          cAzure[0] + (cWarn[0] - cAzure[0]) * warmth * n,
-          cAzure[1] + (cWarn[1] - cAzure[1]) * warmth * n,
-          cAzure[2] + (cWarn[2] - cAzure[2]) * warmth * n,
-          b);
-      }
-    }
-
-    const sparks = env.down > 9 ? 9 : env.down;
-    let downTier = 3;
-    for (let i = 0; i < env.systems.length; i++)
-      if (env.systems[i].state === ST_DOWN) { downTier = env.systems[i].tier & 3; break; }
-    for (let i = 0; i < sparks; i++) {
-      const x = 4 + ((i * 11 + 3) % (PW - 8));
-      const y = (i * 4 + 2) % PH;
-      const puls = (0.35 + 0.65 * D2_TIER_GLOW[downTier]) * (0.7 + 0.3 * Math.sin(t * 3.0 + i));
-      fbSet(x, y, cCrit, puls);
-      fbAdd(x - 1, y, cCrit, puls * 0.25);
-      fbAdd(x + 1, y, cCrit, puls * 0.25);
-    }
-
-    const slot = trunc(t / 5.0) % 3;
-    let msg;
-    if (slot === 0) msg = env.total + " SYS";
-    else if (slot === 1) msg = ri(env.meanLoad * 100) + "% LOAD";
-    else msg = env.gLabel + "/S";
-    const col = (slot === 1 && warmth > 0.6) ? cWarn : cInk;
-    const tw = textW(msg), tx = Math.floor((PW - tw) / 2);
-    for (let y = 2; y <= 8; y++)
-      for (let x = tx - 2; x <= tx + tw + 1; x++) fbDim(x, y, 0.1);
-    panelText(tx, 3, msg, col, 0.6);
-  }
-
-  // =====================================================================
-  // 10. Universal treatments — panelInlay.c
-  // =====================================================================
-
-  /* Alert inlay. mockup: inlay() Themes.dc.html:687 · firmware:
-     panelInlay.c:20-43. dimAll 0.1, pulsing crit rails on x=0 and x=52,
-     subject truncated to 12 chars centred on row 1, detail scrolling row 6. */
-  function inlay(env, t) {
-    fbDimAll(0.1);
-    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(t * 2.2));
-    for (let y = 0; y < PH; y++) {
-      fbSet(0, y, cCrit, pulse);
-      fbSet(PW - 1, y, cCrit, pulse);
-    }
-    const subj = env.subject.slice(0, 12);
-    let x = Math.floor((PW - textW(subj)) / 2);
-    if (x < 2) x = 2;
-    panelText(x, 1, subj, cCrit, 0.95);
-    panelScroll(t, 6, env.detail + PANEL_TAIL, cInk, 0.55, 11.0);
-  }
-
-  /* Unacknowledged-episode beacon. firmware: panelInlay.c:63-67 (operator
-     amendment 2026-08-04; the mockup and the DESIGN-BRIEF have no beacon).
-     Four pixels top-right, square 1 Hz 50% duty, b=1.0, painted LAST. */
-  function beacon(t) {
-    if ((t % 1.0) >= 0.5) return;
-    for (let y = 0; y <= 1; y++)
-      for (let x = PW - 2; x <= PW - 1; x++) fbSet(x, y, cCrit, 1.0);
-  }
-
-  /* LINK LOST — panelInlay.c:76-85. Deliberately warn amber, not the alarm's
-     crit rails: a dead cable is a panel fault, not a fleet fault. */
-  function screenLinkLost(t) {
-    fbDimAll(0.15);
-    const msg = "LINK LOST";
-    const tw = textW(msg), tx = Math.floor((PW - tw) / 2);
-    for (let y = 2; y <= 8; y++)
-      for (let x = tx - 2; x <= tx + tw + 1; x++) fbDim(x, y, 0.1);
-    panelText(tx, 3, msg, cWarn, 0.55 + 0.35 * Math.abs(Math.sin(t * 1.6)));
-    fbSet(trunc(t * 12.0) % PW, 9, cQuiet, 0.35);
-  }
-
-  /* NO DATA — panelInlay.c:90-95. CONTRACT §9: a zero-node fleet is valid
-     data, not an error. */
-  function screenNoData(t) {
-    const msg = "NO DATA";
-    const tw = textW(msg), tx = Math.floor((PW - tw) / 2);
-    panelText(tx, 3, msg, cAzure, 0.28 + 0.14 * (0.5 + 0.5 * Math.sin(t * 0.8)));
-    for (let x = 0; x < PW; x += 4) fbSet(x, 9, cQuiet, 0.05);
-  }
-
-  // =====================================================================
   // 11. Screen table + the paint order from main.c
   // =====================================================================
   const THEMES = [
-    { key: "A", name: "ABSTRACT" },
-    { key: "B", name: "TEXT" },
-    { key: "C", name: "CHARTS" },
-    { key: "D", name: "INSTRUMENTS" },
+    { key: "A", name: "FLEET" }, { key: "B", name: "TRAFFIC" },
+    { key: "C", name: "TROUBLE" }, { key: "D", name: "RESOURCES" },
   ];
   const SCREENS = [
-    { id: "A0", theme: 0, screen: 0, title: "State lattice", render: sA0 },
-    { id: "A1", theme: 0, screen: 1, title: "Flow gates", render: sA1 },
-    { id: "A2", theme: 0, screen: 2, title: "MQ and SNMP", render: sA2 },
-    { id: "B0", theme: 1, screen: 0, title: "Condition counts", render: sB0 },
-    { id: "B1", theme: 1, screen: 1, title: "Throughput", render: sB1 },
-    { id: "B2", theme: 1, screen: 2, title: "Load and latency", render: sB2 },
-    { id: "C0", theme: 2, screen: 0, title: "Load distribution", render: sC0 },
-    { id: "C1", theme: 2, screen: 1, title: "Live traces", render: sC1 },
-    { id: "C2", theme: 2, screen: 2, title: "Pool load", render: sC2 },
-    { id: "D0", theme: 3, screen: 0, title: "Reachability", render: sD0 },
-    { id: "D1", theme: 3, screen: 1, title: "Pool bars", render: sD1 },
-    { id: "D2", theme: 3, screen: 2, title: "Ambient field", render: sD2 },
+    { id: "A0", theme: 0, screen: 0, title: "Host Tiles", render: sA0 },
+    { id: "A1", theme: 0, screen: 1, title: "Roster", render: sA1 },
+    { id: "A2", theme: 0, screen: 2, title: "Pools", render: sA2 },
+    { id: "A3", theme: 0, screen: 3, title: "Head Count", render: sA3 },
+    { id: "B0", theme: 1, screen: 0, title: "Swim Lanes", render: sB0 },
+    { id: "B1", theme: 1, screen: 1, title: "WAN and LAN", render: sB1 },
+    { id: "B2", theme: 1, screen: 2, title: "Top Talkers", render: sB2 },
+    { id: "B3", theme: 1, screen: 3, title: "Flow Map", render: sB3 },
+    { id: "C0", theme: 2, screen: 0, title: "Alerts", render: sC0 },
+    { id: "C1", theme: 2, screen: 1, title: "Fault Board", render: sC1 },
+    { id: "C2", theme: 2, screen: 2, title: "Reachability", render: sC2 },
+    { id: "C3", theme: 2, screen: 3, title: "Alert History", render: sC3 },
+    { id: "D0", theme: 3, screen: 0, title: "Host Detail", render: sD0 },
+    { id: "D1", theme: 3, screen: 1, title: "CPU and Memory", render: sD1 },
+    { id: "D2", theme: 3, screen: 2, title: "Trends", render: sD2 },
+    { id: "D3", theme: 3, screen: 3, title: "Aurora", render: sD3 },
   ];
 
   /* SCREEN_BLURBS — one short operator description per screen, keyed by id.
@@ -1294,18 +345,22 @@
      deviation worth stating plainly. Rendered for the screen the wall is
      showing right now, and as the hover text on every tile. */
   const SCREEN_BLURBS = {
-    A0: "One LED per system across the whole matrix, filled row-major by tier then name, so core infrastructure occupies the first cells of row 0. Colour is the state and brightness is the tier; an unlit cell has no system behind it, not a fault. It answers how much is wrong, never what.",
-    A1: "The live Ubiquiti path drawn to scale by role — access points left, hubs staggered, switch, router, then the internet column and the backup WAN at the right edge. Leg brightness is the source device's receive level and the particles follow its transmit level. The internet column has no state of its own: it inherits the router's, so a healthy marker can never sit above a dead gateway.",
-    A2: "Four lanes of travelling packets, each with a three-cell backlog indicator at the left that goes amber under half and red over. No MQ or SNMP telemetry exists on the panel wire, so rather than animate a fiction the lanes are driven by the closest real signals: probe loss, host-data freshness, share of the fleet unknown, and share degraded.",
-    B0: "The headline counts in words. UP in green with its dim watermark numeral, then DOWN, the tier flag, and DEG/MNT below. A zero renders azure and dim while any real count takes its condition colour — hue is what distinguishes them, not the digits. TIER 0 in red means core infrastructure is down.",
-    B1: "Aggregate rate as a watermark numeral, a 24-cell utilisation bar coloured by position (azure to 70%, amber to 85%, red beyond), and a ticker spelling out IN, OUT and LINK. The bar is scaled against an adaptive peak the panel maintains, not a configured link speed, so read it as busy-relative-to-recent and take the ticker for absolute figures.",
-    B2: "Mean fleet load as the watermark, amber above 75%, with P95 latency and packet loss alternating on a five-second slot at the right rather than fighting for one row. The hot count at the bottom right prints its denominator — those systems come from the panel roster, a wider population than B0's agent-node counts.",
-    C0: "A 35-bucket histogram of where the fleet's load actually sits, left is idle and right is pinned, bar height being the share of systems in that bucket. Bucket colour comes from the bucket's own load band, so a bar standing in the amber or red zone means systems are genuinely there. The right third is a 15-sample throughput ribbon, ingress up and egress down.",
-    C1: "Three stacked 53-sample histories: throughput on top in azure, CPU in the middle in green, round-trip time at the bottom. Oldest sample at the left, now at the right edge, advancing one column per snapshot. All of it is the panel's own history and it is lost on reboot, so a partly filled trace is a recently restarted panel rather than a fleet that just came online.",
-    C2: "Up to seven pools, worst first, each with a one-pixel status key at the left edge and a 46-cell mean-load bar. The key is the pool's condition — down beats degraded beats unknown beats maintenance — and the bar is its capacity, so a pool can legitimately be slate-keyed with a red bar or red-keyed with a short one. Read the key first.",
-    D0: "A waterfall: eleven rows for the eleven worst-first systems, a new sample column every 0.42s scrolling right to left, about 22s of history across the width. Red is a lost probe, amber is slow, azure brightness carries the round-trip time. The rows are systems rather than named probe targets, so treat it as the shape of a fault over time and confirm identity elsewhere.",
-    D1: "The panel's resting face, and where it boots. Bar length is pool size against the largest pool; down, degraded, unknown and maintenance stack in from the right so the worst conditions always terminate the bar, and the healthy remainder shimmers. The ticker underneath is the only place outside an alarm where a specific alert gets named.",
-    D2: "A procedural field whose granularity grows with fleet size and whose hue is mean load — azure when quiet, warming toward amber past 35% and fully warm by 85%. Up to nine red sparks mark down systems. The centre readout cycles every five seconds through fleet size, mean load and aggregate rate, over a knockout box that keeps it legible without stopping the field.",
+    A0: "One state-coloured tile per host; hue shows state and fill shows load. Down and unmeasured hosts use a flat tile.",
+    A1: "A two-host roster page, worst first. Each row shows the host name, state block and load or state word.",
+    A2: "Two pools per page. State cells show each pool's host mix; the lower bar shows mean load.",
+    A3: "The up-host count in large type, total fleet size, and the worst current state beneath it.",
+    B0: "Two network links per page, with measured upload and download rates shown as moving streams. Link kind sets the colour.",
+    B1: "WAN and LAN rate labels with separate 53-sample, newest-at-right throughput sparklines.",
+    B2: "The eight busiest measured hosts, two per page, ranked by combined receive and transmit rate.",
+    B3: "A parent tree of network links. Uplinks show topology and moving dots indicate measured traffic.",
+    C0: "One open alert per page with host, age and condition text; an extra page points to remaining alerts.",
+    C1: "Current fault counts grouped as network, services, disks and kernel, with a separate other page when needed.",
+    C2: "Probe histories across the width, newest at the right. Red marks loss, amber slow response and green normal response.",
+    C3: "Warning and critical alert firings in 30-minute buckets across 26 hours; the right edge is now.",
+    D0: "One worst-first host per page, showing state, CPU, memory and disk readings.",
+    D1: "A host-by-host butterfly chart: CPU rises above the center line and memory falls below it.",
+    D2: "Three local history strips for WAN traffic, mean CPU and round-trip time. Unfilled history stays dark.",
+    D3: "A measurement-driven aurora: host bands carry load and state; down hosts form red pillars.",
   };
 
   /* paintScreen — the firmware's per-frame paint order (main.c): no-data
@@ -1313,22 +368,38 @@
      when the alarm is armed, then the beacon LAST so it overrides the inlay's
      right-hand rail. `armed` mirrors main.c's gAlarmArmed: alarmActive and not
      acknowledged for the current episode. */
-  function paintScreen(fb, idx, env, t, dt, st, armed) {
+  const SCREEN_LABELS=["HOST TILES","ROSTER","POOLS","HEAD COUNT","SWIM LANES","WAN AND LAN","TOP TALKERS","FLOW MAP","ALERTS","FAULT BOARD","REACHABILITY","ALERT HISTORY","HOST DETAIL","CPU AND MEM","TRENDS","AURORA"];
+  const HELP_TEXTS=[
+    ["TILE IS HOST","FILL IS LOAD"],["HOST LIST","WORST FIRST"],["EACH POOL","HOSTS LOAD"],["HOSTS UP","AND WORST NOW"],
+    ["LINK TRAFFIC","DOTS ARE RATE"],["INTERNET AND","LOCAL TRAFFIC"],["BUSIEST HOSTS","BY TRAFFIC"],["NETWORK TREE","DOTS ARE RATE"],
+    ["OPEN ALERTS","WORST FIRST"],["OPEN FAULTS","BY KIND"],["PING HISTORY","RED IS LOSS"],["ALERTS 26 HRS","NOW AT RIGHT"],
+    ["ONE HOST","CPU MEM DISK"],["UP IS CPU","DOWN IS MEM"],["TRAFFIC CPU","AND PING"],["AMBIENT FLEET","RED IS FAULT"]
+  ];
+  function helpOverlay(index){if(index<0||index>15)return;const h=HELP_TEXTS[index];textCentre(0,h[0],cInk,1);textCentre(6,h[1],cAzure,1);}
+  function titleCard(index,age){if(age<0||age>=1)return;fbDimAll(.08);textCentre(3,SCREEN_LABELS[index],cInk,1);}
+  function inlay(env,t){fbDimAll(.1);const pulse=.55+.45*Math.abs(Math.sin(t*2.2));for(let y=0;y<PH;y++){fbSet(0,y,cCrit,pulse);fbSet(52,y,cCrit,pulse);}for(let y=0;y<PH;y++)for(let x=1;x<52;x++)fbDim(x,y,.2);textCentre(0,String(env.subject||"ALERT").slice(0,12),cCrit,1);textCentre(6,env.detail||"",cInk,1);}
+  function beacon(t){if(t%1>=.5)return;for(let y=0;y<=1;y++)for(let x=51;x<=52;x++)fbSet(x,y,cCrit,1);}
+  function screenNoData(t,haveData){textCentre(3,haveData?"NO HOSTS":"AWAITING DATA",cAzure,.6+.4*(.5+.5*Math.sin(t*.8)));}
+  function screenLinkLost(t){fbDimAll(.06);textCentre(0,"NO DATA FEED",cWarn,1);textCentre(6,"SCREEN IS OLD",cInk,1);fbSet(Math.floor(t*12)%PW,5,cWarn,.6);}
+
+  function paintScreen(fb, idx, env, t, dt, st, armed, currentIdx, titleAge) {
     fbUse(fb);
     fbClear();
     if (!env || !env.haveData || env.total === 0) {
-      screenNoData(t);
+      screenNoData(t, !!(env && env.haveData));
       if (armed) beacon(t);
       return;
     }
     SCREENS[idx].render(env, t, dt, st);
+    if (env.dataStale) { fbSet(0, 10, cWarn, 1); fbSet(1, 10, cWarn, 1); }
+    if (idx === currentIdx) titleCard(idx, titleAge == null ? 99 : titleAge);
     if (armed) { inlay(env, t); beacon(t); }
   }
 
   // =====================================================================
   // 12. Canvas painter
   //
-  //    583 LEDs x 12 screens x 25 fps is ~175k arc() calls a second, which no
+  //    583 LEDs x 16 screens x 25 fps is ~175k arc() calls a second, which no
   //    browser will hold. Instead: write the framebuffer as a 53x11 ImageData,
   //    nearest-neighbour upscale it, mask it to round dots with a cached
   //    destination-in stencil, then composite it with 'lighter' over a cached
@@ -1435,7 +506,7 @@
   // =====================================================================
   // 13a. Per-screen enable + dwell weight — CONTRACT-AW §3.2/§3.3 (task #12)
   // =====================================================================
-  const N_SCREENS = 12;                  // §3.2 screenIdx 0..11
+  const N_SCREENS = 16;                  // CONTRACT-V2 §1, theme*4+slot
   /* §3.2 weightCode 0..5. The multiplier column is the operator's mental
      model (30 s base × 5 = 150 s, §1) and is shown as such — the code is a
      wire detail and never appears in the UI. */
@@ -1461,7 +532,7 @@
   function packScreenWt(idx, code) { return (idx << 3) | (code & 7); }
 
   /* cmdGroup — the pend map is keyed per CONTROL, and kinds 8/9 address one of
-     twelve screens each, so they cannot share a key the way the global
+     sixteen screens each, so they cannot share a key the way the global
      controls do: toggling A1 must not paint B2 as pending. */
   function cmdGroup(kind, arg) {
     if (kind === CMD_KIND.screenEn) return "screenEn:" + (arg >> 1);
@@ -1481,20 +552,20 @@
   }
 
   /* readScreenCfg — decode whatever GET /api/panel puts in panelScreenConfig
-     into 12 entries of { enabled, weightCode } or null.
-     STATE AUTHORITY (CONTRACT-AW §3.3): this is the PANEL's report of its own
+     into 16 entries of { enabled, weightCode } or null.
+     STATE AUTHORITY (CONTRACT-V2 §1): this is the PANEL's report of its own
      persisted config, relayed by the daemon. A null entry means the panel has
      not told us, and the UI must render that as unknown — NEVER as the §3.4
      factory default (enabled, 1×), because "we have not heard" and "the panel
      says all-on at 1×" are different facts and only one of them is ours to
      assert. Returning null for the whole thing is a valid outcome.
 
-     AW1's exact packet shape is not landed yet, so the shapes below are all
-     accepted and a mismatch is reported to Lead rather than guessed at:
+     The config API accepts sixteen entries and preserves twelve-entry legacy
+     reports by applying the firmware defaults to the four new slots:
        - [12] u8 bytes            bit0 enabled, bits1..3 weightCode  (§3.3)
        - [12] objects             { enabled, weightCode | weight }
        - { screenCfg: <above> }   the §3.3 field name, wrapped
-       - 24-char hex string       the 12 bytes, as the daemon might relay them
+       - 32-char hex string       the 16 bytes, as the daemon might relay them
      Anything else decodes to null: unknown, not assumed. */
   /* §10 D3: screenCfg bits 4..7 are RESERVED, transmitted zero, and receivers
      must IGNORE them — so they are masked off rather than treated as a
@@ -1526,14 +597,15 @@
     if (src && !Array.isArray(src) && typeof src === "object") src = src.screenCfg;
     if (typeof src === "string") {
       const hex = src.trim();
-      if (!/^[0-9a-fA-F]{24}$/.test(hex)) return null;
-      const out = new Array(N_SCREENS);
-      for (let i = 0; i < N_SCREENS; i++) out[i] = decodeScreenByte(parseInt(hex.substr(i * 2, 2), 16));
+      if (!/^(?:[0-9a-fA-F]{24}|[0-9a-fA-F]{32})$/.test(hex)) return null;
+      const old = hex.length === 24, out = new Array(N_SCREENS);
+      for (let i = 0; i < 12; i++) out[i] = decodeScreenByte(parseInt(hex.substr(i * 2, 2), 16));
+      for (let i = 12; i < N_SCREENS; i++) out[i] = old ? { enabled: true, weightCode: 2 } : decodeScreenByte(parseInt(hex.substr(i * 2, 2), 16));
       return out;
     }
-    if (!Array.isArray(src) || src.length !== N_SCREENS) return null;
+    if (!Array.isArray(src) || (src.length !== N_SCREENS && src.length !== 12)) return null;
     const out = new Array(N_SCREENS);
-    for (let i = 0; i < N_SCREENS; i++) out[i] = decodeScreenEntry(src[i]);
+    for (let i = 0; i < N_SCREENS; i++) out[i] = i < src.length ? decodeScreenEntry(src[i]) : { enabled: true, weightCode: 2 };
     return out;
   }
 
@@ -1555,18 +627,12 @@
     return (f & 1) === 1;
   }
 
-  // Where the parity fixture may live once deployed. The repo path is
-  // status-panel/fixtures/panel-snapshot.json; deployment copies it under the
-  // docroot. Tried in order, first hit wins.
-  const FIXTURE_PATHS = [
-    "fixtures/panel-snapshot.json",
-    "panel-snapshot.json",
-    "../status-panel/fixtures/panel-snapshot.json",
-  ];
+  // Fixture copy paths, tried in order for local and deployed docroots.
+  const FIXTURE_PATHS = ["fixtures/parity-fixture.json", "parity-fixture.json", "../status-panel/fixtures/parity-fixture.json"];
 
   function api() { return window.SolariAPI; }
 
-  /* readRole — FAIL CLOSED (CONTRACT-CP §10). Controls are presentation only;
+  /* readRole — FAIL CLOSED. Controls are presentation only;
      authority is server-side. Anything that is not a confirmed operator or
      admin — a viewer, a missing profile, a failed or still-pending whoami, or
      fixture mode, which by definition has no session — renders read-only. */
@@ -1668,7 +734,7 @@
     );
   }
 
-  function VirtualPanel({ env, armed, gain, currentIdx, sleeping, still, screenCfg, pend, send, ctlDisabled }) {
+  function VirtualPanel({ env, armed, gain, currentIdx, titleAge, sleeping, still, screenCfg, pend, send, ctlDisabled }) {
     const canvasRefs = useRef([]);
     const stRef = useRef(null);
     const fbRef = useRef(null);
@@ -1709,7 +775,7 @@
       function drawAll(t, dt, force) {
         for (let i = 0; i < SCREENS.length; i++) {
           if (!force && !visRef.current[i]) continue;
-          paintScreen(fb, i, env, t, dt, sts[i], armed);
+          paintScreen(fb, i, env, t, i === currentIdx ? dt : 0, sts[i], armed, currentIdx, titleAge);
           const prev = prevRef.current[i];
           let dirty = !paintedRef.current[i];
           if (!dirty) {
@@ -1733,7 +799,7 @@
         for (let k = 1; k <= steps; k++) {
           const t = k * FIXTURE_DT;
           for (let i = 0; i < SCREENS.length; i++) {
-            paintScreen(fb, i, env, t, FIXTURE_DT, sts[i], armed);
+            paintScreen(fb, i, env, t, i === currentIdx ? FIXTURE_DT : 0, sts[i], armed, currentIdx, titleAge);
           }
         }
         drawAll(FIXTURE_T, FIXTURE_DT, true);
@@ -1754,7 +820,7 @@
       }
       raf = window.requestAnimationFrame(frame);
       return function () { alive = false; window.cancelAnimationFrame(raf); };
-    }, [env, armed, gain, still]);
+    }, [env, armed, gain, still, currentIdx, titleAge]);
 
     return (
       <div className="vp-grid">
@@ -1800,48 +866,34 @@
     );
   }
 
-  /* Reference treatments. LINK LOST is a panel-side condition (CONTRACT §4:
-     more than 15 s without a valid frame) which the dashboard cannot observe
-     — the server only knows when the panel last POSTed STATE, which is not the
-     same fact. Rather than infer it, both firmware treatments are rendered
-     here as static reference so every paint path in panelInlay.c is visible
-     and reviewable on this page. */
-  function TreatmentStrip() {
+  /* Firmware-owned treatments are shown as static reference frames. */
+  function TreatmentStrip({ env }) {
     const refs = useRef([]);
     useEffect(function () {
       const fb = fbNew();
-      fbUse(fb); fbClear(); screenLinkLost(FIXTURE_T);
-      paintCanvas(refs.current[0], fb, 1);
-      fbUse(fb); fbClear(); screenNoData(FIXTURE_T);
-      paintCanvas(refs.current[1], fb, 1);
-    }, []);
+      fbUse(fb); fbClear(); screenLinkLost(FIXTURE_T); paintCanvas(refs.current[0], fb, 1);
+      fbUse(fb); fbClear(); screenNoData(FIXTURE_T, false); paintCanvas(refs.current[1], fb, 1);
+      fbUse(fb); fbClear(); helpOverlay(0); paintCanvas(refs.current[2], fb, 1);
+      fbUse(fb); fbClear(); SCREENS[0].render(env, 3, 0, {}); titleCard(11, .5); paintCanvas(refs.current[3], fb, 1);
+      fbUse(fb); fbClear(); SCREENS[0].render(env, 3, 0, {}); inlay(env, 3); paintCanvas(refs.current[4], fb, 1);
+    }, [env]);
     const items = [
-      { id: "LINK LOST", note: "panelInlay.c:76 — no valid frame for 15 s" },
-      { id: "NO DATA", note: "panelInlay.c:90 — zero-node fleet, or pre-first-snapshot" },
+      { id: "LINK LOST", note: "No valid frame for more than 15 seconds" },
+      { id: "NO DATA", note: "Awaiting the first snapshot" },
+      { id: "HELP", note: "Two still instruction rows" },
+      { id: "TITLE CARD", note: "Screen name over a dimmed frame" },
+      { id: "ALERT INLAY", note: "Alert subject and detail over the active screen" },
     ];
-    return (
-      <div className="vp-strip">
-        {items.map(function (it, i) {
-          return (
-            <figure key={it.id} className="vp-tile vp-tile--ref">
-              <figcaption className="vp-tile__head">
-                <span className="vp-tile__id">{it.id}</span>
-                <span className="vp-tile__title">{it.note}</span>
-              </figcaption>
-              <div className="vp-tile__screen">
-                <canvas ref={function (el) { refs.current[i] = el; }}
-                  width={TILE_W} height={TILE_H} className="vp-canvas"
-                  role="img" aria-label={it.id + " treatment, simulated LED matrix"} />
-              </div>
-            </figure>
-          );
-        })}
-      </div>
-    );
+    return <div className="vp-strip">{items.map(function (it, i) {
+      return <figure key={it.id} className="vp-tile vp-tile--ref">
+        <figcaption className="vp-tile__head"><span className="vp-tile__id">{it.id}</span><span className="vp-tile__title">{it.note}</span></figcaption>
+        <div className="vp-tile__screen"><canvas ref={function (el) { refs.current[i] = el; }} width={TILE_W} height={TILE_H} className="vp-canvas" role="img" aria-label={it.id + " reference treatment on the 53 by 11 matrix"} /></div>
+      </figure>;
+    })}</div>;
   }
 
   // =====================================================================
-  // 15. Controls (CONTRACT-CP §7)
+  // 15. Controls (panel command API)
   // =====================================================================
   function CmdState({ p }) {
     if (!p) return null;
@@ -1903,9 +955,9 @@
           <div className="vp-ctl">
             <div className="vp-ctl__label">Screen <CmdState p={pend.screen} /></div>
             <div className="vp-ctl__row">
-              {[0, 1, 2].map(function (n) {
+              {[0, 1, 2, 3].map(function (n) {
                 const on = state && state.screen === n;
-                const title = state ? (SCREENS[(state.theme || 0) * 3 + n] || {}).title : "";
+                const title = state ? (SCREENS[(state.theme || 0) * 4 + n] || {}).title : "";
                 return (
                   <button key={n} type="button"
                     className={"chip" + (on ? " on" : "")}
@@ -2045,7 +1097,6 @@
     const [role, setRole] = useState(undefined);       // undefined = not resolved yet
     const [pend, setPend] = useState({});
     const [fixDoc, setFixDoc] = useState(null);
-    const [fixScenario, setFixScenario] = useState(null);
     const [cadenceMs, setCadenceMs] = useState(CADENCE_MS_DEFAULT);
     const [now, setNow] = useState(Date.now());
     const pendRef = useRef({});
@@ -2062,7 +1113,7 @@
       function attempt() {
         if (!alive) return;
         if (i >= FIXTURE_PATHS.length) {
-          setErr("Parity fixture not found. Deploy status-panel/fixtures/panel-snapshot.json to "
+          setErr("Parity fixture not found. Deploy status-panel/fixtures/parity-fixture.json to "
             + FIXTURE_PATHS[0] + " under the dashboard docroot.");
           return;
         }
@@ -2073,7 +1124,6 @@
             if (!alive) return;
             setFixDoc(doc);
             setCadenceMs((Number(doc.cadenceSec) || 5) * 1000);
-            setFixScenario(doc.defaultScenario || (doc.scenarios && doc.scenarios[0] && doc.scenarios[0].id));
           })
           .catch(function () { attempt(); });
       }
@@ -2085,7 +1135,7 @@
        The ONLY path that can set a controlling role is a resolved
        /api/auth/whoami response. There is deliberately no seed, hint or
        pre-resolution promotion from window.SOLARI or any other already-loaded
-       profile: CONTRACT-CP §10 requires read-only under EVERY whoami outcome
+       profile: The command API requires read-only under EVERY whoami outcome
        including "not answered yet", and a seed would open a window in which
        the controls are live before the server has confirmed anything. */
     useEffect(function () {
@@ -2291,14 +1341,7 @@
     }, []);
 
     // ---- resolve the working sample set ----------------------------------
-    const scenario = useMemo(function () {
-      if (!fixDoc || !Array.isArray(fixDoc.scenarios)) return null;
-      for (let i = 0; i < fixDoc.scenarios.length; i++)
-        if (fixDoc.scenarios[i].id === fixScenario) return fixDoc.scenarios[i];
-      return fixDoc.scenarios[0] || null;
-    }, [fixDoc, fixScenario]);
-
-    const working = fixtureMode ? (scenario ? scenario.history : []) : samples;
+    const working = fixtureMode ? (fixDoc && Array.isArray(fixDoc.history) ? fixDoc.history : []) : samples;
     const head = working.length ? working[working.length - 1] : null;
 
     const env = useMemo(function () {
@@ -2326,12 +1369,13 @@
     }, [head, pstate]);
     const armed = !!(env && env.alarmActive && !(pstate && pstate.alarmAcked
       && Number(pstate.ackedEpisodeId) === Number(env.episodeId)));
-    const currentIdx = pstate ? (num(pstate.theme) * 3 + num(pstate.screen)) : -1;
+    const currentIdx = pstate ? (num(pstate.theme) * 4 + num(pstate.screen)) : -1;
     const gain = driverGain(pstate ? pstate.brightnessPct : 100);
 
     const reportedAt = pstate ? parseReportedAt(pstate.reportedAt) : null;
     const refAge = fixtureMode && head ? (sampleMs(head) - (reportedAt || 0)) : (reportedAt ? now - reportedAt : null);
     const stale = refAge != null && refAge > 90000;
+    const titleAge = refAge == null ? 99 : Math.max(0, refAge / 1000);
 
     /* A one-line read of the rotation the panel reports: how many screens it is
        skipping and how far the dwell weights spread the cycle. `unknown` is
@@ -2365,7 +1409,7 @@
           <div>
             <h2 className="page-title">Panel</h2>
             <div className="page-sub">
-              All twelve status-panel screens, simulated from the same telemetry the physical panel receives.
+              All sixteen status-panel screens, simulated from the same telemetry the physical panel receives.
             </div>
           </div>
           <div className="page-head__right">
@@ -2380,22 +1424,7 @@
           </div>
         )}
 
-        {fixtureMode && fixDoc && (
-          <div className="panel vp-scenarios">
-            <div className="panel__body">
-              <div className="filters">
-                {fixDoc.scenarios.map(function (s) {
-                  return (
-                    <button key={s.id} type="button"
-                      className={"chip" + (scenario && scenario.id === s.id ? " on" : "")}
-                      onClick={function () { setFixScenario(s.id); }}>{s.label || s.id}</button>
-                  );
-                })}
-              </div>
-              {scenario && <div className="vp-scenarios__note">{scenario.note}</div>}
-            </div>
-          </div>
-        )}
+        {fixtureMode && fixDoc && <p className="vp-footnote">Rendering the committed parity fixture ({working.length} chronological samples).</p>}
 
         <div className="vp-chips">
           {!pstate && <span className="vp-chip vp-chip--muted">Panel has never reported</span>}
@@ -2417,13 +1446,6 @@
           {env && env.dataStale && <span className="vp-chip vp-chip--warn">Upstream data stale</span>}
           {env && env.gaps > 0 && <span className="vp-chip vp-chip--muted">{env.gaps} history gap{env.gaps === 1 ? "" : "s"}</span>}
           {env && <span className="vp-chip vp-chip--muted">{env.histFill}/{HIST_LEN} history slots</span>}
-          {env && (
-            <span className={"vp-chip" + (env.gearCount ? " vp-chip--muted" : " vp-chip--warn")}>
-              {env.gearCount
-                ? env.gearCount + " network device" + (env.gearCount === 1 ? "" : "s") + " on A1"
-                : "No gear data — A1 shows NO DATA"}
-            </span>
-          )}
           {pstate && !screenCfg && (
             <span className="vp-chip vp-chip--muted">Screen config not reported</span>
           )}
@@ -2446,6 +1468,7 @@
             armed={armed}
             gain={gain}
             currentIdx={currentIdx}
+            titleAge={titleAge}
             sleeping={!!(pstate && pstate.sleeping)}
             still={fixtureMode}
             screenCfg={screenCfg}
@@ -2455,15 +1478,10 @@
           />
         )}
 
-        {env && <TreatmentStrip />}
+        {env && <TreatmentStrip env={env} />}
 
         <p className="vp-footnote">
-          The simulation is a <strong>~5&nbsp;s cadence approximation</strong>: the panel is driven at the
-          firmware's own snapshot rate, while this page resamples the 5&nbsp;s dashboard poll onto the same
-          53-sample rings (gap-aware, on the server timestamp). Ribbons, histograms and traces will therefore
-          differ in detail from the physical panel even when the fleet data is identical. The sleep state is
-          shown as an overlay on the on-panel tile rather than blanking every screen, so the other eleven stay
-          previewable. Colours reproduce the panel and are exempt from the Interface Guide palette.
+          The sixteen screen previews use the same framebuffer geometry, state, layout, page timing and history rules as the firmware. The selected screen preview also shows the title card during its reported first second. Sleep blanks the physical panel; the previews remain visible for comparison.
         </p>
 
         <p className="vp-footnote">
@@ -2473,9 +1491,7 @@
           force <em>only</em> once the panel has reported it back &mdash; before that, and while a change is in
           flight, no option is marked. Turning every screen of a theme off is not a way to blank the panel: the
           firmware treats an all-disabled theme as all-enabled rather than showing a black wall.
-          <strong> A1</strong> draws the live Ubiquiti path &mdash; access points and hubs on the left feeding
-          the switch and router, the internet in the rightmost column &mdash; from the gear section of the
-          snapshot; with no gear data it shows NO DATA rather than an invented topology.
+
         </p>
 
         <PanelControls
