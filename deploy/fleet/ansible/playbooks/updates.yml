@@ -1,148 +1,115 @@
 ---
+# Run per host by fleet-updates.py, which reads the SOLARI_UPDATE lines. A failed
+# task is the failure report. This playbook never reboots a host.
+#
+# Every registered name belongs to one family: Ansible overwrites a registered
+# name even when the task is skipped.
 - name: Check or apply operating system package updates
   hosts: all
-  serial: 1
   gather_facts: false
-  ignore_unreachable: true
-  pre_tasks:
-    - name: Gather facts on supported candidates
-      ansible.builtin.setup:
-      when: solari_updates_skip_reason is not defined
-      ignore_errors: true
+  vars:
+    solari_update_hold_restarts: false
   tasks:
-    - name: Skip host explicitly marked as an appliance
+    - name: Read the OS family
+      ansible.builtin.setup:
+        gather_subset: [min]
+
+    - name: Report an unmanaged OS family
       ansible.builtin.debug:
-        msg: "SKIPPED {{ inventory_hostname }}: {{ solari_updates_skip_reason }}"
-      when: solari_updates_skip_reason is defined
+        msg: "SOLARI_UPDATE SKIPPED OS family {{ ansible_facts['os_family'] }} is not managed by this playbook"
+      when: ansible_facts['os_family'] not in ['Debian', 'Suse']
 
-    - name: Explain unsupported operating system
-      ansible.builtin.debug:
-        msg: "SKIPPED {{ inventory_hostname }}: OS family {{ ansible_os_family }} is not managed by this playbook"
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family is defined
-        - ansible_os_family not in ['Debian', 'Suse', 'RedHat']
+    - name: Stop on an unmanaged OS family
+      ansible.builtin.meta: end_host
+      when: ansible_facts['os_family'] not in ['Debian', 'Suse']
 
-    - name: Explain unreachable hosts without OS facts
-      ansible.builtin.debug:
-        msg: "SKIPPED {{ inventory_hostname }}: unreachable or OS facts unavailable"
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family is not defined
+    - name: Debian family
+      when: ansible_facts['os_family'] == 'Debian'
+      block:
+        - name: Refresh the package lists
+          ansible.builtin.command: apt-get update
+          changed_when: false
+          failed_when: false
 
-    - name: Count pending Debian-family package updates
-      ansible.builtin.command: apt-get -s dist-upgrade
-      register: solari_update_check
-      changed_when: false
-      failed_when: false
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'Debian'
+        - name: Simulate the upgrade
+          ansible.builtin.command: apt-get -s dist-upgrade
+          register: solari_apt_pending
+          changed_when: false
 
-    - name: Count pending RedHat-family package updates
-      ansible.builtin.command: dnf -q check-update
-      register: solari_update_check
-      changed_when: false
-      failed_when: solari_update_check.rc not in [0, 100]
-      ignore_errors: true
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'RedHat'
+        - name: Report pending packages
+          ansible.builtin.debug:
+            msg: >-
+              SOLARI_UPDATE PENDING
+              count={{ solari_apt_pending.stdout_lines | select('match', '^Inst \S+ \[') | list | length }}
+              new={{ solari_apt_pending.stdout_lines | select('match', '^Inst \S+ \(') | list | length }}
+              remove={{ solari_apt_pending.stdout_lines | select('match', '^Remv ') | list | length }}
 
-    - name: Count pending SUSE-family package updates
-      ansible.builtin.command: zypper --non-interactive --quiet list-updates
-      register: solari_update_check
-      changed_when: false
-      failed_when: false
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'Suse'
+        - name: Apply the upgrade
+          ansible.builtin.apt:
+            update_cache: false
+            upgrade: dist
+          environment:
+            # needrestart must not restart the service that started this run.
+            NEEDRESTART_SUSPEND: "{{ '1' if solari_update_hold_restarts | bool else '' }}"
+          register: solari_apt_apply
+          when: solari_update_mode == 'apply'
 
-    - name: Set Debian pending update count
-      ansible.builtin.set_fact:
-        solari_update_count: "{{ solari_update_check.stdout_lines | select('match', '^Inst ') | list | length }}"
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'Debian'
+        - name: Look for the reboot marker
+          ansible.builtin.stat:
+            path: /run/reboot-required
+          register: solari_apt_marker
+          when: solari_update_mode == 'apply'
 
-    - name: Set RedHat pending update count
-      ansible.builtin.set_fact:
-        solari_update_count: "{{ solari_update_check.stdout_lines | length }}"
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'RedHat'
+        # Plain Debian has no reboot marker, so also read what was installed.
+        - name: Report the result
+          ansible.builtin.debug:
+            msg: >-
+              SOLARI_UPDATE RESULT
+              reboot_required={{ 'yes' if solari_apt_marker.stat.exists
+              or solari_apt_apply.stdout | default('') is search('Setting up (linux-image|libc6|systemd[: ]|raspi-firmware)')
+              else 'no' }}
+          when: solari_update_mode == 'apply'
 
-    - name: Set SUSE pending update count
-      ansible.builtin.set_fact:
-        solari_update_count: "{{ solari_update_check.stdout_lines | select('match', '^v\\s') | list | length }}"
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'Suse'
+    - name: SUSE family
+      when: ansible_facts['os_family'] == 'Suse'
+      vars:
+        # A rolling release moves by distribution upgrade; `zypper update` is not supported on it.
+        solari_zypper_verb: "{{ 'dup --auto-agree-with-licenses' if 'Tumbleweed' in ansible_facts['distribution'] else 'update --auto-agree-with-licenses' }}"
+      block:
+        - name: Refresh the repositories
+          ansible.builtin.command: zypper --non-interactive --quiet refresh
+          changed_when: false
+          failed_when: false
 
-    - name: Report available updates
-      ansible.builtin.debug:
-        msg: "PENDING {{ inventory_hostname }} count={{ solari_update_count | default(0) }}"
-      when:
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']
+        - name: Simulate the upgrade
+          ansible.builtin.command: "zypper --non-interactive --no-color {{ solari_zypper_verb }} --dry-run"
+          register: solari_zypper_pending
+          changed_when: false
+          failed_when: solari_zypper_pending.rc not in [0, 100, 101, 102, 103, 106]
 
-    - name: Apply Debian-family updates
-      ansible.builtin.apt:
-        update_cache: true
-        upgrade: dist
-      register: solari_update_apply
-      ignore_errors: true
-      when:
-        - solari_update_mode == 'apply'
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'Debian'
+        - name: Report pending packages
+          ansible.builtin.debug:
+            msg: >-
+              SOLARI_UPDATE PENDING
+              count={{ solari_zypper_pending.stdout | regex_search('([0-9]+) packages? to upgrade', '\1') | default(['0'], true) | first }}
+              new={{ solari_zypper_pending.stdout | regex_search('([0-9]+) new', '\1') | default(['0'], true) | first }}
+              remove={{ solari_zypper_pending.stdout | regex_search('([0-9]+) to remove', '\1') | default(['0'], true) | first }}
 
-    - name: Apply RedHat-family updates
-      ansible.builtin.dnf:
-        name: '*'
-        state: latest
-        update_only: true
-      register: solari_update_apply
-      ignore_errors: true
-      when:
-        - solari_update_mode == 'apply'
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'RedHat'
+        - name: Apply the upgrade
+          ansible.builtin.command: "zypper --non-interactive --no-color {{ solari_zypper_verb }}"
+          register: solari_zypper_apply
+          changed_when: true
+          failed_when: solari_zypper_apply.rc not in [0, 100, 101, 102, 103, 106]
+          when: solari_update_mode == 'apply'
 
-    - name: Apply SUSE-family updates
-      ansible.builtin.command: zypper --non-interactive update
-      register: solari_update_apply
-      ignore_errors: true
-      changed_when: solari_update_apply.rc == 0 and 'No updates found' not in solari_update_apply.stdout
-      when:
-        - solari_update_mode == 'apply'
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') == 'Suse'
+        - name: Ask zypper whether a reboot is needed
+          ansible.builtin.command: zypper needs-rebooting
+          register: solari_zypper_reboot
+          changed_when: false
+          failed_when: false
+          when: solari_update_mode == 'apply'
 
-    - name: Check whether the host reports a pending reboot
-      ansible.builtin.stat:
-        path: /run/reboot-required
-      register: solari_reboot_marker
-      changed_when: false
-      when:
-        - solari_update_mode == 'apply'
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']
-
-    - name: Check the alternate reboot marker used by SUSE hosts
-      ansible.builtin.stat:
-        path: /var/run/reboot-needed
-      register: solari_reboot_marker_alt
-      changed_when: false
-      when:
-        - solari_update_mode == 'apply'
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']
-
-    - name: Report per-host update result
-      ansible.builtin.debug:
-        msg: "RESULT {{ inventory_hostname }} status={{ 'failed' if (solari_update_apply is defined and solari_update_apply.failed | default(false)) else 'complete' }} reboot_required={{ ((solari_reboot_marker.stat.exists | default(false)) or (solari_reboot_marker_alt.stat.exists | default(false))) | ternary('yes', 'no') }}"
-      when:
-        - solari_update_mode == 'apply'
-        - solari_updates_skip_reason is not defined
-        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']
+        - name: Report the result
+          ansible.builtin.debug:
+            msg: "SOLARI_UPDATE RESULT reboot_required={{ 'yes' if solari_zypper_reboot.rc == 102 or solari_zypper_apply.rc == 102 else 'no' }}"
+          when: solari_update_mode == 'apply'
