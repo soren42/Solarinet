@@ -99,7 +99,12 @@
           ansible.builtin.command: "zypper --non-interactive --no-color {{ solari_zypper_verb }}"
           register: solari_zypper_apply
           changed_when: true
-          failed_when: solari_zypper_apply.rc not in [0, 100, 101, 102, 103, 106]
+          # 103: zypper updated itself and must run again to do the rest. 106: a repository
+          # was skipped, so the host is not up to date and must not report as complete.
+          until: solari_zypper_apply.rc != 103
+          retries: 3
+          delay: 5
+          failed_when: solari_zypper_apply.rc not in [0, 100, 101, 102]
           when: solari_update_mode == 'apply'
 
         - name: Ask zypper whether a reboot is needed

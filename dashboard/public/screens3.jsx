@@ -870,6 +870,8 @@
   const FLEET_PROFILES = [{ id: "standard", label: "Standard stack" }, { id: "minimal", label: "Minimal" }];
 
   const UPDATES_RUN_KEY = "solari.fleetUpdates.run";
+  // A host may run silently for its full hour; a log still unchanged past that belongs to a dead run.
+  const UPDATES_QUIET_MS = 65 * 60 * 1000;
   function newUpdatesKey() {
     const bytes = new Uint8Array(16);
     window.crypto.getRandomValues(bytes);
@@ -896,28 +898,33 @@
       });
       return { pending: pending, skipped: skipped, results: results, finished: /^FLEET_UPDATES exit=\d+/m.test(String(log || "")) };
     }
-    function pollUpdates(run, mode, tries) {
+    function pollUpdates(run, mode, seen) {
       const a = api();
       if (!a || !a.fleetUpdatesLog) { setUpdatesBusy(false); return; }
-      const again = function () { window.setTimeout(function () { pollUpdates(run, mode, tries + 1); }, 2500); };
+      const remember = function () {
+        try { window.localStorage.setItem(UPDATES_RUN_KEY, JSON.stringify({ run: run, mode: mode, len: seen.len, at: seen.at })); } catch (_) {}
+      };
+      const again = function () {
+        if (Date.now() - seen.at <= UPDATES_QUIET_MS) { window.setTimeout(function () { pollUpdates(run, mode, seen); }, 2500); return; }
+        setUpdatesBusy(false);
+        try { window.localStorage.removeItem(UPDATES_RUN_KEY); } catch (_) {}
+        toast("This update run went quiet and never finished. Its log is below; run a new check.", "close");
+      };
       a.fleetUpdatesLog(run).then(function (r) {
         const log = r.log || "";
         const parsed = parseUpdateLog(log);
         setUpdatesLog(log); setUpdatesPending(parsed.pending); setUpdatesSkipped(parsed.skipped); setUpdatesResults(parsed.results);
+        if (log.length !== seen.len) { seen = { len: log.length, at: Date.now() }; remember(); }
         if (parsed.finished) {
           setUpdatesBusy(false);
           if (mode === "check") setUpdatesChecked(true);
           if (mode === "apply") refresh();
           try { window.localStorage.removeItem(UPDATES_RUN_KEY); } catch (_) {}
           toast(mode === "check" ? "Update check finished" : "Update run finished. Review each host's result below.", "check");
-        } else if (tries >= 1500) {
-          setUpdatesBusy(false); toast("Update run is taking longer than expected; its log remains available below.", "close");
         } else {
           again();
         }
-      }).catch(function () {
-        if (tries < 1500) again(); else setUpdatesBusy(false);
-      });
+      }).catch(again);
     }
     function startUpdates(mode) {
       const a = api();
@@ -928,14 +935,15 @@
       setUpdatesLog("Starting update " + (mode === "check" ? "check" : "run") + "…");
       a.fleetUpdates(mode, mode === "apply", newUpdatesKey()).then(function (r) {
         // A long run outlives a closed tab, so remember it and pick it up on return.
-        try { window.localStorage.setItem(UPDATES_RUN_KEY, JSON.stringify({ run: r.run, mode: mode })); } catch (_) {}
-        pollUpdates(r.run, mode, 0);
+        const seen = { len: -1, at: Date.now() };
+        try { window.localStorage.setItem(UPDATES_RUN_KEY, JSON.stringify({ run: r.run, mode: mode, len: seen.len, at: seen.at })); } catch (_) {}
+        pollUpdates(r.run, mode, seen);
       }).catch(function (e) { setUpdatesBusy(false); setUpdatesLog("Could not start: " + (e && e.message || "error")); });
     }
     useEffect(function () {
       let saved = null;
       try { saved = JSON.parse(window.localStorage.getItem(UPDATES_RUN_KEY) || "null"); } catch (_) {}
-      if (saved && saved.run) { setUpdatesBusy(true); setUpdatesMode(saved.mode); pollUpdates(saved.run, saved.mode, 0); }
+      if (saved && saved.run) { setUpdatesBusy(true); setUpdatesMode(saved.mode); pollUpdates(saved.run, saved.mode, { len: saved.len == null ? -1 : saved.len, at: saved.at || Date.now() }); }
     }, []);
     const [enr, setEnr] = useState(S.enrollments);
     const [allocatorNetworks, setAllocatorNetworks] = useState([]);
