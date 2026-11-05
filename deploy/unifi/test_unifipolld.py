@@ -98,6 +98,65 @@ class UniFiPollTests(unittest.TestCase):
             seen.append(port['inRateKbps'])
         self.assertEqual([8, 8, 8, 8], seen[4:])
 
+    def test_outbound_counter_is_measured_too(self):
+        port = {'ifIndex': 1, 'inRateKbps': 0, 'outRateKbps': 99, 'inOctets': 0, 'outOctets': 0}
+        row = {'gearId': 'g', 'ports': [port]}
+        state = {}
+        for now, octets in ((100.0, 1000), (110.0, 11000), (120.0, 21000), (130.0, 31000)):
+            port['outOctets'] = octets
+            unifipolld.rates_from_counters([row], state, now)
+        self.assertEqual(8, port['outRateKbps'])
+
+    def test_state_survives_a_json_round_trip_and_an_older_shape(self):
+        port = {'ifIndex': 1, 'inRateKbps': 5, 'outRateKbps': 5, 'inOctets': 1000, 'outOctets': 1000}
+        row = {'gearId': 'g', 'ports': [port]}
+        # An earlier build stored bare counters under the same key.
+        state = {'ports': {'g/1': {'in': 900, 'out': 900, 'at': 50.0}}}
+        for now, octets in ((100.0, 1000), (110.0, 11000), (120.0, 21000), (130.0, 31000)):
+            port['inOctets'] = octets
+            state = json.loads(json.dumps(state))
+            unifipolld.rates_from_counters([row], state, now)
+        self.assertEqual(8, port['inRateKbps'])
+
+    def test_trunks_are_marked_but_ap_ports_stay_edge_ports(self):
+        core = {'gearId': 'core', 'kind': 'switch', 'ports': [
+            {'ifIndex': 1, 'isTrunk': 0}, {'ifIndex': 2, 'isTrunk': 0}, {'ifIndex': 3, 'isTrunk': 0}]}
+        access = {'gearId': 'sw', 'kind': 'hub', 'uplinkGearId': 'core', 'uplinkRemotePort': 1, 'ports': []}
+        ap = {'gearId': 'ap', 'kind': 'ap', 'uplinkGearId': 'core', 'uplinkRemotePort': 2, 'ports': []}
+        unifipolld.mark_trunk_ports([core, access, ap])
+        self.assertEqual([1, 0, 0], [port['isTrunk'] for port in core['ports']])
+
+    def test_a_full_poll_measures_ports_then_derives_the_ap_and_aggregates(self):
+        counters = [0]
+        class Client:
+            def get(self, path):
+                if path.endswith('/sites'): return {'data': [{'id': 'site'}]}
+                if '/stat/device' in path:
+                    return {'data': [
+                        {'mac': 'aa', 'name': 'sw', 'model': 'USW Pro', 'uplink': {'port_idx': 2},
+                         'port_table': [{'port_idx': 1, 'up': True, 'rx_bytes': counters[0], 'tx_bytes': 2 * counters[0]},
+                                        {'port_idx': 2, 'up': True, 'rx_bytes': 3 * counters[0], 'tx_bytes': 4 * counters[0]}]},
+                        {'mac': 'bb', 'name': 'ap', 'model': 'U7 Pro', 'uplink': {'uplink_mac': 'aa', 'uplink_remote_port': 1}},
+                    ]}
+                return {'data': []}
+        clock = [1000.0]
+        original = unifipolld.time.time
+        unifipolld.time.time = lambda: clock[0]
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = os.path.join(directory, 'state.json')
+                for step in range(4):
+                    counters[0] = 10000 * step
+                    clock[0] += 10.0
+                    rows = unifipolld.poll_once(Client(), 'unused', path, True)
+        finally:
+            unifipolld.time.time = original
+        by_id = {row['gearId']: row for row in rows}
+        # Down the AP's wire is the switch port's output: 16 kbps; its uplink is the switch's input: 8.
+        self.assertEqual((16, 8), (by_id['unifi-bb']['ports'][0]['inRateKbps'], by_id['unifi-bb']['ports'][0]['outRateKbps']))
+        self.assertEqual((16, 8), (by_id['unifi-bb']['inRateKbps'], by_id['unifi-bb']['outRateKbps']))
+        self.assertEqual((24, 32), (by_id['unifi-aa']['inRateKbps'], by_id['unifi-aa']['outRateKbps']))
+
     def test_aggregate_follows_the_uplink_port(self):
         row = {'gearId': 'g', 'inRateKbps': 0, 'outRateKbps': 0, 'ports': [
             {'isUplink': 0, 'inRateKbps': 1, 'outRateKbps': 2}, {'isUplink': 1, 'inRateKbps': 30, 'outRateKbps': 40}]}
@@ -135,7 +194,7 @@ class UniFiPollTests(unittest.TestCase):
         row = {'gearId': 'g', 'name': 'sw', 'kind': 'switch', 'model': 'USW', 'mgmtIp': None, 'macAddress': 'aa:00',
                'uplinkGearId': None, 'portCount': 1, 'classicSeen': 1, 'inRateKbps': 1, 'outRateKbps': 2, 'operStatus': 1,
                'ports': [{'ifIndex': 1, 'ifName': 'p1', 'inOctets': 1, 'outOctets': 2, 'inRateKbps': 3,
-                          'outRateKbps': 4, 'operStatus': 1, 'isUplink': 1}]}
+                          'outRateKbps': 4, 'operStatus': 1, 'isUplink': 1, 'isTrunk': 0}]}
         original = unifipolld.db_connect
         unifipolld.db_connect = lambda _database: Db()
         try:

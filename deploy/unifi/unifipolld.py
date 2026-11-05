@@ -254,6 +254,7 @@ def classic_device_rows(devices):
                 "outOctets": max(0, int(numeric(pick(port, "tx_bytes", "txBytes", default=0)) or 0)),
                 "operStatus": 1 if bool(pick(port, "up", "is_up", default=False)) else 2,
                 "isUplink": 1 if bool(pick(port, "is_uplink", "isUplink", default=False)) else 0,
+                "isTrunk": 0,
             })
         uplink = pick(item, "uplink", default={})
         if not isinstance(uplink, dict):
@@ -307,7 +308,7 @@ def counter_rate(last, octets, now):
     reads full traffic, then nothing. Returns the new state entry; its "rate" stays
     None until three moves have been seen, and a counter reset starts over.
     """
-    if not last or octets < last["octets"]:
+    if not isinstance(last, dict) or octets < last["octets"]:
         return {"octets": octets, "moves": [], "rate": None}
     if octets != last["octets"]:
         moves = (last["moves"] + [[now, octets]])[-3:]
@@ -350,11 +351,23 @@ def attach_uplinks_from_parent_ports(rows):
         for port in parent.get("ports", []):
             if port["ifIndex"] == row.get("uplinkRemotePort"):
                 row["ports"] = [{
-                    "ifIndex": 1, "ifName": "uplink", "isUplink": 1, "operStatus": port["operStatus"],
+                    "ifIndex": 1, "ifName": "uplink", "isUplink": 1, "isTrunk": 0, "operStatus": port["operStatus"],
                     "inRateKbps": port["outRateKbps"], "outRateKbps": port["inRateKbps"],
                     "inOctets": port["outOctets"], "outOctets": port["inOctets"],
                 }]
                 break
+
+
+def mark_trunk_ports(rows):
+    """Flag ports facing a child switch; ports facing an AP stay edge ports, as they carry its clients."""
+    by_id = {row["gearId"]: row for row in rows}
+    for row in rows:
+        parent = by_id.get(row.get("uplinkGearId"))
+        if not parent or row.get("kind") not in ("switch", "hub"):
+            continue
+        for port in parent.get("ports", []):
+            if port["ifIndex"] == row.get("uplinkRemotePort"):
+                port["isTrunk"] = 1
 
 
 def aggregates_from_uplinks(rows):
@@ -430,11 +443,11 @@ def write_rows(rows, database, dry_run):
             for port in row.get("ports", []):
                 port_row = {**port, "gearId": row["gearId"]}
                 cur.execute("""INSERT INTO gearInterfaceCurrent
-                    (gearId,ifIndex,ifName,inOctets,outOctets,inRateKbps,outRateKbps,operStatus,isUplink,sampledAt)
-                    VALUES (%(gearId)s,%(ifIndex)s,%(ifName)s,%(inOctets)s,%(outOctets)s,%(inRateKbps)s,%(outRateKbps)s,%(operStatus)s,%(isUplink)s,UTC_TIMESTAMP())
+                    (gearId,ifIndex,ifName,inOctets,outOctets,inRateKbps,outRateKbps,operStatus,isUplink,isTrunk,sampledAt)
+                    VALUES (%(gearId)s,%(ifIndex)s,%(ifName)s,%(inOctets)s,%(outOctets)s,%(inRateKbps)s,%(outRateKbps)s,%(operStatus)s,%(isUplink)s,%(isTrunk)s,UTC_TIMESTAMP())
                     ON DUPLICATE KEY UPDATE ifName=VALUES(ifName),inOctets=VALUES(inOctets),outOctets=VALUES(outOctets),
                     inRateKbps=VALUES(inRateKbps),outRateKbps=VALUES(outRateKbps),operStatus=VALUES(operStatus),
-                    isUplink=VALUES(isUplink),sampledAt=UTC_TIMESTAMP()""", port_row)
+                    isUplink=VALUES(isUplink),isTrunk=VALUES(isTrunk),sampledAt=UTC_TIMESTAMP()""", port_row)
 
 
 def poll_once(client, database, state_path, dry_run=False):
@@ -486,6 +499,7 @@ def poll_once(client, database, state_path, dry_run=False):
         row["portCount"] = len(row["ports"]) or None
     rates_from_counters(rows, state, time.time())
     attach_uplinks_from_parent_ports(rows)
+    mark_trunk_ports(rows)
     aggregates_from_uplinks(rows)
     write_rows(rows, database, dry_run)
     save_state(state_path, state)

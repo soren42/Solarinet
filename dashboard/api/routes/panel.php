@@ -783,9 +783,9 @@ return static function (Router $router): void {
             $gearColumns = Db::rows(
                 "SELECT COLUMN_NAME FROM information_schema.COLUMNS
                   WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='gearInterfaceCurrent'
-                    AND COLUMN_NAME='isUplink'"
+                    AND COLUMN_NAME='isTrunk'"
             );
-            $selIsUplink = $gearColumns === [] ? '0 AS isUplink' : 'i.isUplink';
+            $selIsUplink = $gearColumns === [] ? '0 AS isUplink, 0 AS isTrunk' : 'i.isUplink, i.isTrunk';
             /* A1 gear section (CONTRACT-AW §3.1). networkGear/gearInterfaceCurrent
              * are live from migrations 002/006 already — no feature-detect needed
              * for these two. Freshness matches the daemon's 15s poll cadence with
@@ -1193,7 +1193,8 @@ return static function (Router $router): void {
         foreach ($gearById as $gearId => $row) {
             foreach ($portsByGear[$gearId] ?? [] as $port) {
                 if (in_array((string) $row['kind'], ['switch','hub'], true)
-                    && (int) ($port['isUplink'] ?? 0) === 0 && (int) ($port['operStatus'] ?? 0) === 1) {
+                    && (int) ($port['isUplink'] ?? 0) === 0 && (int) ($port['isTrunk'] ?? 0) === 0
+                    && (int) ($port['operStatus'] ?? 0) === 1) {
                     $lanUp = min(4294967295, $lanUp + max(0, (int) ($port['outRateKbps'] ?? 0)));
                     $lanDown = min(4294967295, $lanDown + max(0, (int) ($port['inRateKbps'] ?? 0)));
                 }
