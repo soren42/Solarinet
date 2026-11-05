@@ -254,11 +254,18 @@ def classic_device_rows(devices):
         uplink = pick(item, "uplink", default={})
         if not isinstance(uplink, dict):
             uplink = {}
+        # Some switches never flag is_uplink; their uplink dict still names the port.
+        if not any(port["isUplink"] for port in ports):
+            own_port = numeric(pick(uplink, "port_idx", "portIdx"))
+            for port in ports:
+                if port["ifIndex"] == own_port:
+                    port["isUplink"] = 1
         rows[gear_id] = {
             "gearId": gear_id,
             "macAddress": mac,
             "parentMac": str(pick(uplink, "uplink_mac", "uplinkMac", default="")).lower() or None,
             "uplinkPort": pick(uplink, "port_idx", "portIdx"),
+            "uplinkRemotePort": numeric(pick(uplink, "uplink_remote_port", "uplinkRemotePort")),
             "ports": ports,
             "wanInRateKbps": rate_bits_per_second_kbps(pick(uplink, "rx_rate", "rxRate")),
             "wanOutRateKbps": rate_bits_per_second_kbps(pick(uplink, "tx_rate", "txRate")),
@@ -287,6 +294,37 @@ def classic_device_rows(devices):
             path.append(current)
             current = rows[current]["uplinkGearId"]
     return rows
+
+
+def fill_port_rates_from_counters(rows, state, now):
+    """Some switches (USPM16) report zero rates while their counters climb."""
+    prior = state.setdefault("ports", {})
+    for row in rows:
+        for port in row.get("ports", []):
+            key = f"{row['gearId']}/{port['ifIndex']}"
+            last = prior.get(key)
+            if last and now > last["at"]:
+                elapsed = now - last["at"]
+                port["inRateKbps"] = port["inRateKbps"] or derive_rate_kbps(last["in"], port["inOctets"], elapsed)
+                port["outRateKbps"] = port["outRateKbps"] or derive_rate_kbps(last["out"], port["outOctets"], elapsed)
+            prior[key] = {"in": port["inOctets"], "out": port["outOctets"], "at": now}
+
+
+def attach_uplinks_from_parent_ports(rows):
+    """Access points have no port table, so read their link from the parent's end."""
+    by_id = {row["gearId"]: row for row in rows}
+    for row in rows:
+        parent = by_id.get(row.get("uplinkGearId"))
+        if row.get("ports") or not parent:
+            continue
+        for port in parent.get("ports", []):
+            if port["ifIndex"] == row.get("uplinkRemotePort"):
+                row["ports"] = [{
+                    "ifIndex": 1, "ifName": "uplink", "isUplink": 1, "operStatus": port["operStatus"],
+                    "inRateKbps": port["outRateKbps"], "outRateKbps": port["inRateKbps"],
+                    "inOctets": port["outOctets"], "outOctets": port["inOctets"],
+                }]
+                break
 
 
 def normalise_devices(devices, state, now, stats_fetcher=None):
@@ -406,6 +444,8 @@ def poll_once(client, database, state_path, dry_run=False):
         row.setdefault("ports", [])
         row.setdefault("classicSeen", 0)
         row["portCount"] = len(row["ports"]) or None
+    fill_port_rates_from_counters(rows, state, time.time())
+    attach_uplinks_from_parent_ports(rows)
     write_rows(rows, database, dry_run)
     save_state(state_path, state)
     log(f"polled {len(rows)} UniFi devices" + (" (dry run)" if dry_run else ""))

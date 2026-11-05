@@ -60,6 +60,38 @@ class UniFiPollTests(unittest.TestCase):
         self.assertEqual('unifi-bb:00', rows['unifi-aa:00']['uplinkGearId'])
         self.assertIsNone(rows['unifi-bb:00']['uplinkGearId'])
 
+    def test_uplink_flag_falls_back_to_the_named_port(self):
+        rows = unifipolld.classic_device_rows([
+            {'mac': 'aa:00', 'model': 'USPM16', 'uplink': {'port_idx': 16},
+             'port_table': [{'port_idx': 15, 'up': True}, {'port_idx': 16, 'up': True}]},
+        ])
+        self.assertEqual([0, 1], [p['isUplink'] for p in rows['unifi-aa:00']['ports']])
+
+    def test_zero_rates_fill_from_counters_but_real_rates_win(self):
+        port = {'ifIndex': 1, 'inRateKbps': 0, 'outRateKbps': 7, 'inOctets': 1000, 'outOctets': 1000}
+        row = {'gearId': 'g', 'ports': [port]}
+        state = {}
+        unifipolld.fill_port_rates_from_counters([row], state, 100.0)
+        self.assertEqual(0, port['inRateKbps'])
+        port['inOctets'], port['outOctets'] = 11000, 11000
+        unifipolld.fill_port_rates_from_counters([row], state, 110.0)
+        self.assertEqual(8, port['inRateKbps'])
+        self.assertEqual(7, port['outRateKbps'])
+        port.update(inRateKbps=0, inOctets=5)
+        unifipolld.fill_port_rates_from_counters([row], state, 120.0)
+        self.assertEqual(0, port['inRateKbps'])
+
+    def test_portless_gear_reads_its_link_from_the_parent_port(self):
+        parent = {'gearId': 'sw', 'ports': [{'ifIndex': 4, 'operStatus': 1, 'inRateKbps': 3, 'outRateKbps': 9,
+                                             'inOctets': 30, 'outOctets': 90, 'isUplink': 0}]}
+        ap = {'gearId': 'ap', 'ports': [], 'uplinkGearId': 'sw', 'uplinkRemotePort': 4}
+        orphan = {'gearId': 'x', 'ports': [], 'uplinkGearId': 'sw', 'uplinkRemotePort': 5}
+        unifipolld.attach_uplinks_from_parent_ports([parent, ap, orphan])
+        self.assertEqual(9, ap['ports'][0]['inRateKbps'])
+        self.assertEqual(3, ap['ports'][0]['outRateKbps'])
+        self.assertEqual(1, ap['ports'][0]['isUplink'])
+        self.assertEqual([], orphan['ports'])
+
     def test_classic_failure_does_not_stop_integration_path(self):
         with tempfile.TemporaryDirectory() as directory:
             rows = unifipolld.poll_once(FakeClient(), 'unused', os.path.join(directory, 'state.json'), True)
