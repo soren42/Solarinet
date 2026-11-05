@@ -161,5 +161,26 @@ compareCase("title", 251, (fb, k) => {
   M.SCREENS[0].render(env, k * dt, dt, {});
   M.titleCard(11, .5);
 });
+{
+  /* D3's phase outlives the environment: the feed rebuilds it, the firmware's static carries on. */
+  const fb = M.fbNew(),
+    d3 = M.SCREENS[15],
+    draw = e => {
+      M.fbUse(fb);
+      M.fbClear();
+      d3.render(e, 0, 0, {});
+      return fb.slice().join();
+    };
+  d3.render(env, 0, 1, {});
+  const before = draw(env),
+    after = draw(M.buildEnv(fixture.history, fixture.cadenceSec * 1000));
+  if (before === after) {
+    pass++;
+    console.log("ok:   D3 phase survives a feed rebuild");
+  } else {
+    fail++;
+    console.log("FAIL: D3 phase reset by a feed rebuild");
+  }
+}
 console.log(pass + " passed, " + fail + " failed; allowed max channel delta " + maxDelta + " (tolerance 1/255 for float quantization)");
 process.exit(fail ? 1 : 0);

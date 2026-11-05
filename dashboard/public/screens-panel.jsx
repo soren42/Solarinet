@@ -299,6 +299,7 @@
   function textRight(x,y,s,c,b){panelText(x-textW(String(s))+1,y,String(s),c,b);}
   function textCentre(y,s,c,b){s=String(s).slice(0,13);panelText(Math.floor((PW-textW(s))/2),y,s,c,b);}
   const v2PageClock=new Float32Array(16),v2LanePhase=[];
+  let v2AuroraPhase=0;
   function pageFor(i,dt,p){v2PageClock[i]=(v2PageClock[i]+dt)%(3*256);return Math.floor(v2PageClock[i]/3)%Math.max(1,p);}
   function pageBar(p,n){if(n<=1)return;for(let x=Math.floor(p*PW/n);x<Math.floor((p+1)*PW/n);x++)fbSet(x,5,cAzure,.45);}
   function stateColor(s){return [cOk,cWarn,cCrit,cUnknown,cMaint][stateEnum(s)]||cUnknown;}
@@ -761,7 +762,7 @@
     let total = 0,
       q = env.raw.totals || {};
     for (const k of ["wanDownKbps", "wanUpKbps", "lanDownKbps", "lanUpKbps"]) if (q[k] != null) total += num(q[k]);
-    if (total > 0) env.aurora = (env.aurora || 0) + dt * (.15 + 2.2 * panelRateLevel(total));
+    if (total > 0) v2AuroraPhase = (v2AuroraPhase + dt * (.15 + 2.2 * panelRateLevel(total))) % (Math.PI * 32);
     for (let x = 0; x < PW; x++) {
       let pos = (x + .5) * n / PW - .5,
         a = Math.floor(pos),
@@ -780,9 +781,9 @@
         h = own.state === ST_OK ? cAzure : stateColor(own.state),
         top = own.state === ST_OK ? cOk : h,
         height = 4 + load * 7,
-        wave = Math.sin(env.aurora + x * .28) * 1.3 + Math.sin(env.aurora * .61 + x * .11) * .9,
+        wave = Math.sin(v2AuroraPhase + x * .28) * 1.3 + Math.sin(v2AuroraPhase * .61 + x * .11) * .9,
         crest = PH - height + wave,
-        ray = .62 + .38 * Math.sin(env.aurora * 2.3 + x * 1.35);
+        ray = .62 + .38 * Math.sin(v2AuroraPhase * 2.3 + x * 1.35);
       for (let y = 0; y < PH; y++) {
         let d = y - crest;
         if (d < -.5) continue;

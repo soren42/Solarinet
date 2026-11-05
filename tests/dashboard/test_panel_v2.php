@@ -32,6 +32,8 @@ check(panelProbeName('chemistry', 'x') === 'CHEMISTR', 'probe name cut without a
 check(panelAlertTarget('2:10.0.0.20:443') === ['10.0.0.20', 443], 'alert target host and port');
 check(panelAlertTarget('1:10.0.0.1') === ['10.0.0.1', null], 'icmp alert target has no port');
 check(panelAlertTarget('2:fd1f:0000:0000:0000:0000:0000:0000:0001:443') === ['fd1f:0000:0000:0000:0000:0000:0000:0001', 443], 'ipv6 host keeps its colons');
+check(panelAlertTarget('1:10.0.0.1:0') === ['10.0.0.1', 0], 'stored icmp target carries port 0');
+check(panelAlertTarget('1:2001:db8::1:0') === ['2001:db8::1', 0], 'stored ipv6 icmp target keeps its host');
 check(panelAlertTarget(null) === [null, null], 'node alert has no target');
 check(panelAlertMessage('reachable', '', 0, '', 443) === 'HTTPS DOWN', 'named service text');
 check(panelAlertMessage('reachable', '', 0, '', 8443) === 'PORT 8443 DOWN', 'unnamed port text');
