@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <glob.h>
+#include <math.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -26,7 +27,7 @@
 typedef struct { char apiBase[512],user[128],passFile[512],serialDev[512],listenAddr[256],tlsCert[512],tlsKey[512],clientCa[512],allowedSan[256],denylist[512];unsigned int pollSec,snapshotSec,listenPort; } Config;
 typedef struct { char data[BODY_MAX + 1u]; size_t len; long status; char contentType[128]; } HttpResponse;
 typedef struct { uint8_t theme, screen, brightnessPct, autoBright, sleeping, alarmArmed, alarmAcked, dwellSec; uint32_t ackedEpisodeId, lastCmdId; } PanelStateReport;
-typedef struct { uint8_t screenCfg[12], flags; } PanelScreenConfigReport;
+typedef struct { uint8_t screenCfg[PANEL_SCREEN_SLOTS], flags; } PanelScreenConfigReport;
 typedef struct { CURL *curl; const Config *config; PanelStateReport lastState; uint32_t lastStatePostMs; uint64_t generation; PanelListener *listener; int stateSeen, haveState, withholdingLogged; } PanelLink;
 static volatile sig_atomic_t running = 1;
 
@@ -59,7 +60,7 @@ static CURL *login(const Config *config,const char *password){CURL *curl=curl_ea
 /* Purpose: upload the latest decoded STATE using the hardened shared curl handle. Input: link/state. Output: zero on an accepted JSON response, -1 otherwise. */
 static int postState(PanelLink *link,const PanelStateReport *state){cJSON *json;char *body,url[768];struct curl_slist *headers;HttpResponse response;CURLcode result;if(link->curl==NULL)return -1;json=cJSON_CreateObject();if(json==NULL)return -1;if(!cJSON_AddNumberToObject(json,"theme",state->theme)||!cJSON_AddNumberToObject(json,"screen",state->screen)||!cJSON_AddNumberToObject(json,"brightnessPct",state->brightnessPct)||!cJSON_AddNumberToObject(json,"autoBright",state->autoBright)||!cJSON_AddNumberToObject(json,"sleeping",state->sleeping)||!cJSON_AddNumberToObject(json,"alarmArmed",state->alarmArmed)||!cJSON_AddNumberToObject(json,"alarmAcked",state->alarmAcked)||!cJSON_AddNumberToObject(json,"dwellSec",state->dwellSec)||!cJSON_AddNumberToObject(json,"ackedEpisodeId",state->ackedEpisodeId)||!cJSON_AddNumberToObject(json,"lastCmdId",state->lastCmdId)){cJSON_Delete(json);return -1;}body=cJSON_PrintUnformatted(json);cJSON_Delete(json);if(body==NULL)return -1;headers=curl_slist_append(NULL,"Content-Type: application/json");if(headers==NULL){cJSON_free(body);return -1;}snprintf(url,sizeof(url),"%s/api/panel/state",link->config->apiBase);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,headers);result=request(link->curl,url,body,&response);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,NULL);curl_slist_free_all(headers);cJSON_free(body);if(result!=CURLE_OK||response.status<200L||response.status>=300L||strncasecmp(trim(response.contentType),"application/json",16u)!=0){logMessage("panel state post failed (curl=%d HTTP=%ld)",(int)result,response.status);return -1;}return 0;}
 /* Purpose: upload one decoded CONFIG report. Input: raw wire config/link. Output: zero for accepted API response. */
-static int postConfig(PanelLink *link,const PanelScreenConfigReport *config){cJSON *json,*array,*entry;char *body,url[768];struct curl_slist *headers;HttpResponse response;CURLcode result;int i;if(link->curl==NULL)return -1;json=cJSON_CreateObject();array=cJSON_CreateArray();if(json==NULL||array==NULL||!cJSON_AddItemToObject(json,"screenCfg",array)){cJSON_Delete(json);cJSON_Delete(array);return -1;}for(i=0;i<12;++i){entry=cJSON_CreateObject();if(entry==NULL||!cJSON_AddNumberToObject(entry,"enabled",config->screenCfg[i]&1u)||!cJSON_AddNumberToObject(entry,"weightCode",(config->screenCfg[i]>>1)&7u)||!cJSON_AddItemToArray(array,entry)){cJSON_Delete(entry);cJSON_Delete(json);return -1;}}if(!cJSON_AddNumberToObject(json,"flags",config->flags)){cJSON_Delete(json);return -1;}body=cJSON_PrintUnformatted(json);cJSON_Delete(json);if(body==NULL)return -1;headers=curl_slist_append(NULL,"Content-Type: application/json");if(headers==NULL){cJSON_free(body);return -1;}snprintf(url,sizeof(url),"%s/api/panel/config",link->config->apiBase);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,headers);result=request(link->curl,url,body,&response);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,NULL);curl_slist_free_all(headers);cJSON_free(body);if(result!=CURLE_OK||response.status<200L||response.status>=300L||strncasecmp(trim(response.contentType),"application/json",16u)!=0){logMessage("panel config post failed (curl=%d HTTP=%ld)",(int)result,response.status);return -1;}return 0;}
+static int postConfig(PanelLink *link,const PanelScreenConfigReport *config){cJSON *json,*array,*entry;char *body,url[768];struct curl_slist *headers;HttpResponse response;CURLcode result;int i;if(link->curl==NULL)return -1;json=cJSON_CreateObject();array=cJSON_CreateArray();if(json==NULL||array==NULL||!cJSON_AddItemToObject(json,"screenCfg",array)){cJSON_Delete(json);cJSON_Delete(array);return -1;}for(i=0;i<(int)PANEL_SCREEN_SLOTS;++i){entry=cJSON_CreateObject();if(entry==NULL||!cJSON_AddNumberToObject(entry,"enabled",config->screenCfg[i]&1u)||!cJSON_AddNumberToObject(entry,"weightCode",(config->screenCfg[i]>>1)&7u)||!cJSON_AddItemToArray(array,entry)){cJSON_Delete(entry);cJSON_Delete(json);return -1;}}if(!cJSON_AddNumberToObject(json,"flags",config->flags)){cJSON_Delete(json);return -1;}body=cJSON_PrintUnformatted(json);cJSON_Delete(json);if(body==NULL)return -1;headers=curl_slist_append(NULL,"Content-Type: application/json");if(headers==NULL){cJSON_free(body);return -1;}snprintf(url,sizeof(url),"%s/api/panel/config",link->config->apiBase);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,headers);result=request(link->curl,url,body,&response);curl_easy_setopt(link->curl,CURLOPT_HTTPHEADER,NULL);curl_slist_free_all(headers);cJSON_free(body);if(result!=CURLE_OK||response.status<200L||response.status>=300L||strncasecmp(trim(response.contentType),"application/json",16u)!=0){logMessage("panel config post failed (curl=%d HTTP=%ld)",(int)result,response.status);return -1;}return 0;}
 /* Purpose: clamp signed JSON integer to protocol byte range. Input: JSON item/default. Output: 0..255 value. */
 static uint8_t byteValue(const cJSON *item,int fallback){int n=cJSON_IsNumber(item)?item->valueint:fallback;return (uint8_t)(n<0?0:(n>255?255:n));}
 /* Purpose: clamp a JSON number to an unsigned 16-bit wire value. Input: item/default. Output: 0..65535. */
@@ -70,6 +71,91 @@ static uint32_t u32Value(const cJSON *item,uint32_t fallback){double n=cJSON_IsN
 static uint8_t stateValue(const cJSON *item){const char *s=cJSON_GetStringValue((cJSON *)item);if(s==NULL)return PANEL_ST_UNKNOWN;if(strcmp(s,"up")==0||strcmp(s,"ok")==0)return PANEL_ST_OK;if(strcmp(s,"degraded")==0)return PANEL_ST_DEGRADED;if(strcmp(s,"down")==0)return PANEL_ST_DOWN;if(strcmp(s,"maint")==0)return PANEL_ST_MAINT;return PANEL_ST_UNKNOWN;}
 /* Purpose: map API alert severity labels to protocol values. Input: severity string item. Output: PanelSeverity value. */
 static uint8_t severityValue(const cJSON *item){const char *s=cJSON_GetStringValue((cJSON *)item);if(s!=NULL&&strcmp(s,"crit")==0)return PANEL_SEV_CRIT;if(s!=NULL&&strcmp(s,"warn")==0)return PANEL_SEV_WARN;return PANEL_SEV_INFO;}
+static int optionalU32(const cJSON *item,uint32_t maximum,int allowNull,uint32_t *out){double n;if(cJSON_IsNull(item)&&allowNull){*out=PANEL_RATE_NONE;return 1;}if(!cJSON_IsNumber(item)||!isfinite(item->valuedouble))return 0;n=item->valuedouble;if(n<0.0)n=0.0;if(n>(double)maximum)n=(double)maximum;*out=(uint32_t)n;return 1;}
+static int copyOptionalText(const cJSON *item,char *out,size_t cap){const char *s=cJSON_GetStringValue((cJSON *)item);if(s==NULL)return 0;snprintf(out,cap,"%s",s);return 1;}
+static int parseOptionalSnapshot(const cJSON *data,PanelSnapshot *s,const cJSON *systems){
+  const cJSON *arr,*item,*faults;uint32_t n;int i,j,count,valid;
+  arr=cJSON_GetObjectItemCaseSensitive((cJSON *)data,"links");
+  if(cJSON_IsArray(arr)){
+    count=cJSON_GetArraySize(arr);valid=count<=(int)PANEL_MAX_LINKS;
+    for(i=0;valid&&i<count;++i){uint32_t kind,state,parent,up,down;item=cJSON_GetArrayItem(arr,i);if(!cJSON_IsObject(item)){valid=0;break;}
+      if(!copyOptionalText(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"name"),s->links[i].name,sizeof(s->links[i].name))||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"kind"),3u,0,&kind)||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"state"),4u,0,&state)||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"parent"),255u,0,&parent)||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"upKbps"),UINT32_MAX,1,&up)||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"downKbps"),UINT32_MAX,1,&down)||
+         (parent!=255u&&parent>=(uint32_t)count)){valid=0;break;}
+      s->links[i].kind=(uint8_t)kind;s->links[i].state=(uint8_t)state;s->links[i].parent=(uint8_t)parent;s->links[i].upKbps=up;s->links[i].downKbps=down;
+    }
+    if(valid){s->linkCount=(uint8_t)count;s->hasLinks=1u;}else{memset(s->links,0,sizeof(s->links));s->linkCount=0u;}
+  }
+  /* SYSX is parallel to the base roster. Missing or malformed additions leave
+   * the base systems intact and advertise the optional extension as absent. */
+  count=cJSON_GetArraySize(systems);valid=1;
+  for(i=0;valid&&i<count;++i){uint32_t mem,disk,faultsValue,rx,tx;item=cJSON_GetArrayItem(systems,i);
+    if(!cJSON_IsObject(item)||!optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"memPct"),100u,0,&mem)||
+       !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"diskPct"),100u,0,&disk)||
+       !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"faults"),255u,0,&faultsValue)||
+       !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"rxKbps"),UINT32_MAX,1,&rx)||
+       !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"txKbps"),UINT32_MAX,1,&tx)){valid=0;break;}
+    s->sysx[i].memPct=(uint8_t)mem;s->sysx[i].diskPct=(uint8_t)disk;s->sysx[i].faults=(uint8_t)faultsValue;s->sysx[i].rxKbps=rx;s->sysx[i].txKbps=tx;
+  }
+  if(valid)s->hasSysx=1u;else memset(s->sysx,0,sizeof(s->sysx));
+
+  arr=cJSON_GetObjectItemCaseSensitive((cJSON *)data,"alertList");
+  if(cJSON_IsObject(arr)){
+    uint32_t total;const cJSON *items=cJSON_GetObjectItemCaseSensitive((cJSON *)arr,"items");faults=cJSON_GetObjectItemCaseSensitive((cJSON *)arr,"faultCounts");
+    valid=optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)arr,"total"),255u,0,&total)&&cJSON_IsArray(items)&&cJSON_GetArraySize(items)<=(int)PANEL_MAX_ALERTS&&cJSON_IsArray(faults)&&cJSON_GetArraySize(faults)==(int)PANEL_FAULT_CODES;
+    for(i=0;valid&&i<(int)PANEL_FAULT_CODES;++i){if(!optionalU32(cJSON_GetArrayItem(faults,i),255u,0,&n)){valid=0;break;}s->faultCounts[i]=(uint8_t)n;}
+    count=valid?cJSON_GetArraySize(items):0;
+    for(i=0;valid&&i<count;++i){uint32_t sev,code,age;item=cJSON_GetArrayItem(items,i);const char *sevText=cJSON_GetStringValue((cJSON *)cJSON_GetObjectItemCaseSensitive((cJSON *)item,"severity"));
+      if(!cJSON_IsObject(item)||sevText==NULL){valid=0;break;}
+      if(strcmp(sevText,"info")==0)sev=PANEL_SEV_INFO;else if(strcmp(sevText,"warn")==0)sev=PANEL_SEV_WARN;else if(strcmp(sevText,"crit")==0)sev=PANEL_SEV_CRIT;else{valid=0;break;}
+      if(!optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"code"),6u,0,&code)||!optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"ageMin"),65535u,0,&age)||
+         !copyOptionalText(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"host"),s->alerts[i].host,sizeof(s->alerts[i].host))||
+         !copyOptionalText(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"msg"),s->alerts[i].msg,sizeof(s->alerts[i].msg))){valid=0;break;}
+      s->alerts[i].severity=(uint8_t)sev;s->alerts[i].code=(uint8_t)code;s->alerts[i].ageMin=(uint16_t)age;
+    }
+    if(valid){s->alertTotal=(uint8_t)total;s->alertCount=(uint8_t)count;s->hasAlerts=1u;}else{memset(s->faultCounts,0,sizeof(s->faultCounts));memset(s->alerts,0,sizeof(s->alerts));s->alertTotal=s->alertCount=0u;}
+  }
+
+  arr=cJSON_GetObjectItemCaseSensitive((cJSON *)data,"probes");
+  if(cJSON_IsArray(arr)){
+    count=cJSON_GetArraySize(arr);valid=count<=(int)PANEL_MAX_PROBES;
+    for(i=0;valid&&i<count;++i){uint32_t rtt,loss,state;item=cJSON_GetArrayItem(arr,i);
+      if(!cJSON_IsObject(item)||!copyOptionalText(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"name"),s->probes[i].name,sizeof(s->probes[i].name))||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"rttTenthMs"),65535u,1,&rtt)||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"lossPermille"),1000u,1,&loss)||
+         !optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)item,"state"),4u,0,&state)){valid=0;break;}
+      s->probes[i].rttTenthMs=(uint16_t)rtt;s->probes[i].lossPermille=(uint16_t)loss;s->probes[i].state=(uint8_t)state;
+    }
+    if(valid){s->probeCount=(uint8_t)count;s->hasProbes=1u;}else{memset(s->probes,0,sizeof(s->probes));s->probeCount=0u;}
+  }
+
+  arr=cJSON_GetObjectItemCaseSensitive((cJSON *)data,"popTail");
+  if(cJSON_IsArray(arr)){
+    count=cJSON_GetArraySize(arr);valid=count<=(int)PANEL_MAX_POP;
+    for(i=0;valid&&i<count;++i){if(!optionalU32(cJSON_GetArrayItem(arr,i),255u,0,&n)||(n>>5)>4u)valid=0;else s->pop[i]=(uint8_t)n;}
+    if(valid)s->popCount=(uint8_t)count;else{memset(s->pop,0,sizeof(s->pop));s->popCount=0u;}
+  }
+
+  arr=cJSON_GetObjectItemCaseSensitive((cJSON *)data,"alertHeat");
+  if(cJSON_IsObject(arr)){
+    const cJSON *warn=cJSON_GetObjectItemCaseSensitive((cJSON *)arr,"warn"),*crit=cJSON_GetObjectItemCaseSensitive((cJSON *)arr,"crit");
+    valid=cJSON_IsArray(warn)&&cJSON_GetArraySize(warn)==(int)PANEL_HEAT_LEN&&cJSON_IsArray(crit)&&cJSON_GetArraySize(crit)==(int)PANEL_HEAT_LEN;
+    for(i=0;valid&&i<(int)PANEL_HEAT_LEN;++i){uint32_t w,c;if(!optionalU32(cJSON_GetArrayItem(warn,i),255u,0,&w)||!optionalU32(cJSON_GetArrayItem(crit,i),255u,0,&c))valid=0;else{s->heatWarn[i]=(uint8_t)w;s->heatCrit[i]=(uint8_t)c;}}
+    if(valid)s->hasHeat=1u;else{memset(s->heatWarn,0,sizeof(s->heatWarn));memset(s->heatCrit,0,sizeof(s->heatCrit));}
+  }
+
+  arr=cJSON_GetObjectItemCaseSensitive((cJSON *)data,"totals");
+  if(cJSON_IsObject(arr)){
+    uint32_t values[4];const char *keys[4]={"wanUpKbps","wanDownKbps","lanUpKbps","lanDownKbps"};valid=1;
+    for(j=0;j<4;++j)if(!optionalU32(cJSON_GetObjectItemCaseSensitive((cJSON *)arr,keys[j]),UINT32_MAX,1,&values[j]))valid=0;
+    if(valid){s->wanUpKbps=values[0];s->wanDownKbps=values[1];s->lanUpKbps=values[2];s->lanDownKbps=values[3];s->hasTotals=1u;}
+  }
+  return 0;
+}
 /* Purpose: validate and transform one complete panel JSON document. Input: JSON bytes/snapshot. Output: zero valid, -1 otherwise. */
 static int parseSnapshot(const char *text,PanelSnapshot *snapshot) {
   PanelSnapshot staged;
@@ -121,6 +207,7 @@ static int parseSnapshot(const char *text,PanelSnapshot *snapshot) {
       staged.gearCount=(uint8_t)o;
     }
   }
+  parseOptionalSnapshot(data,&staged,systems);
   cJSON_Delete(root);
   /* seq belongs to the sender's SESSION, not the payload: preserve the
    * caller's counter across the staged copy, or every poll resets it and

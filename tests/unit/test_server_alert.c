@@ -148,6 +148,37 @@ static void test_state_find_create(void)
     TEST_ASSERT_EQUAL_PTR(h1, h2);
 }
 
+static void test_open_transition_condition_is_not_refired(void)
+{
+    alertBreachState *s = alertStateFind(31, 0xCC, "", true);
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_TRUE(alertNeedsOpen(true, s));
+
+    /* Once the transition has opened the condition, another changing sample
+     * cannot create a second row while that condition remains open. */
+    s->fired = true;
+    TEST_ASSERT_FALSE(alertNeedsOpen(true, s));
+    TEST_ASSERT_TRUE(s->fired);
+
+    /* A false sample follows the ordinary clear path and rearms the rule. */
+    s->fired = false;
+    s->openedEventId = 0;
+    TEST_ASSERT_TRUE(alertNeedsOpen(true, s));
+}
+
+static void test_database_open_condition_is_reused_then_cleared(void)
+{
+    alertBreachState *s = alertStateFind(32, 0xCD, "target-x", true);
+    TEST_ASSERT_NOT_NULL(s);
+    alertHydrateOpenState(s, 4201u);
+    TEST_ASSERT_TRUE(s->checkedOpen);
+    TEST_ASSERT_TRUE(s->fired);
+    TEST_ASSERT_EQUAL_UINT64(4201u, s->openedEventId);
+    TEST_ASSERT_FALSE(alertNeedsOpen(true, s));
+    TEST_ASSERT_FALSE(alertShouldClear(true, s));
+    TEST_ASSERT_TRUE(alertShouldClear(false, s));
+}
+
 static void test_drop_target_state_is_scoped(void)
 {
     alertBreachState *a = alertStateFind(1, 0xAA, "target-a", true);
@@ -171,6 +202,8 @@ int main(void)
     RUN_TEST(test_probe_metrics);
     RUN_TEST(test_probe_target_id);
     RUN_TEST(test_state_find_create);
+    RUN_TEST(test_open_transition_condition_is_not_refired);
+    RUN_TEST(test_database_open_condition_is_reused_then_cleared);
     RUN_TEST(test_drop_target_state_is_scoped);
     return UNITY_END();
 }

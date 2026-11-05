@@ -54,6 +54,7 @@ typedef struct {
     char     targetId[SERVER_TARGETID_MAX]; /* "" for host scope            */
     uint64_t breachSinceMs;                 /* first observed breach (wall)  */
     bool     fired;                         /* an open alertEvent exists     */
+    bool     checkedOpen;                   /* DB state hydrated this life   */
     uint64_t openedEventId;                 /* immutable fired transition    */
     double   lastValue;                     /* for transition-op edge detect */
     bool     haveLast;
@@ -280,6 +281,28 @@ static alertBreachState *alertStateFind(int ruleId, uint64_t nodeId,
     return freeSlot;
 }
 
+/* A transition rule may keep changing while the same condition is already
+ * open.  The transition predicate still observes each edge, but an open row
+ * remains the one current condition until a later non-breaching report clears
+ * it. */
+static bool alertNeedsOpen(bool breached, const alertBreachState *state)
+{
+    return breached && state != NULL && !state->fired;
+}
+
+static void alertHydrateOpenState(alertBreachState *state, uint64_t eventId)
+{
+    if (state == NULL) return;
+    state->openedEventId = eventId;
+    state->fired = eventId != 0;
+    state->checkedOpen = true;
+}
+
+static bool alertShouldClear(bool breached, const alertBreachState *state)
+{
+    return !breached && state != NULL && state->fired;
+}
+
 /* Build a notification frame for an alert transition onto the PUB socket. The
  * SCP has no dedicated alert message type (alerts are a server->subscriber PUB
  * concern); SCP_MSG_ERROR is the structured carrier whose {code,detail} shape
@@ -403,9 +426,26 @@ static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
         breached = alertThresholdBreached(r->op, value, r->threshold);
     }
 
+    /* The in-memory table is only a cache; after a server restart it starts
+     * empty while alertEvent still holds current conditions. Hydrate once per
+     * rule instance so a continuing breach reuses its row and a false sample
+     * can clear it. */
+    if (!s->checkedOpen) {
+        st = serverDbFindOpenAlertEvent(ctx->db, r->ruleId, nodeId,
+                                        (targetId && targetId[0]) ? targetId : NULL,
+                                        &s->openedEventId);
+        if (st != SOLARI_OK) {
+            solariLogf(SOLARI_LOG_ERROR,
+                       "alert: lookup open event rule %d failed: %s",
+                       r->ruleId, solariStrError(st));
+            return st;
+        }
+        alertHydrateOpenState(s, s->openedEventId);
+    }
+
     if (breached) {
         if (s->breachSinceMs == 0) s->breachSinceMs = nowMs;
-        if (!s->fired) {
+        if (alertNeedsOpen(breached, s)) {
             uint64_t sustainedMs = nowMs - s->breachSinceMs;
             uint64_t needMs = (r->forSeconds > 0)
                             ? (uint64_t)r->forSeconds * 1000u : 0u;
@@ -432,11 +472,9 @@ static solariStatus alertApply(serverContext *ctx, uint64_t nodeId,
                 alertPublish(ctx, severity, detail);
             }
         }
-        /* transition fires are instantaneous edges, not sustained states */
-        if (isTransition) { s->fired = false; s->breachSinceMs = 0; }
     } else {
         s->breachSinceMs = 0;
-        if (s->fired) {
+        if (alertShouldClear(breached, s)) {
             alertBuildDetail(detail, sizeof(detail), r, targetId, value, false,
                              extraDetail);
             if (s->openedEventId) {
