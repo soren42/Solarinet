@@ -34,7 +34,7 @@ HELPER_ENTRYPOINTS = {
     "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
     "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
     "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
-    "deploy/fleet/prov-finish.py",
+    "deploy/fleet/fleet-updates.py", "deploy/fleet/prov-finish.py",
 }
 HELPER_RUNTIME_FILES = HELPER_ENTRYPOINTS | {
     "bin/solariCtlClient",
@@ -42,6 +42,7 @@ HELPER_RUNTIME_FILES = HELPER_ENTRYPOINTS | {
     "deploy/fleet/stackgen.py", "deploy/fleet/fetch-images.sh",
     "deploy/fleet/provisioning-guard.sh", "deploy/fleet/prov-store-guard.sh",
     "deploy/fleet/ansible/ansible.cfg", "deploy/fleet/ansible/playbooks/site.yml",
+    "deploy/fleet/ansible/playbooks/updates.yml",
 }
 
 

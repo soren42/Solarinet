@@ -284,6 +284,7 @@
     },
     discovery:    "/api/discovery",         // ?status=new|all
     discScan:     "/api/discovery/scan",     // POST {cidr, ports?}
+    discManualScan: "/api/discovery/manual-scan", // POST {target} single host, durable worker
     discScanJobs: "/api/discovery/scan-jobs", // recent durable jobs for the authenticated operator
     discScanRequest: function (id) { return "/api/discovery/scan-requests/" + encodeURIComponent(id); },
     discScanStatus: function (id) { return "/api/discovery/scans/" + encodeURIComponent(id); },
@@ -1184,6 +1185,8 @@
         .then(function (w) { return (Array.isArray(w) ? w : []).map(mapDiscovered); });
     },
     discoverScan: discoverScan,
+    scanManualAsset: function (target) { return post(EP.discManualScan, { target: target }); },
+    createAsset: function (body) { return post(EP.assets, body || {}); },
     listDiscoveryScanJobs: function () { return getJSON(EP.discScanJobs); },
     discoverScanRequest: function (id, opts) { return getJSON(EP.discScanRequest(id), opts); },
     discoverScanStatus: function (id, opts) { return getJSON(EP.discScanStatus(id), opts); },
@@ -1245,6 +1248,8 @@
     // Reads are session-only; writes are operator + CSRF (server-enforced).
     // Enqueue verbs carry an Idempotency-Key so a retried click cannot
     // double-queue a destructive run; the caller keeps the key for retries.
+    fleetUpdates: function (mode, confirm) { return post(EP.provPath("updates"), { mode: mode, confirm: !!confirm }); },
+    fleetUpdatesLog: function () { return getJSON(EP.provPath("log") + "?kind=fleet-updates&id=1"); },
     provImages:      function () { return getJSON(EP.provPath("images")); },
     provImageCreate: function (body) { return post(EP.provPath("images"), body || {}); },
     provImageUpdate: function (id, body) { return getJSON(EP.provPath("images", id), { method: "PUT", body: body || {} }); },

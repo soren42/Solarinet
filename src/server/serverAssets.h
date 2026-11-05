@@ -43,6 +43,11 @@ solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
                                  const char *displayName, const char *className,
                                  uint64_t poolId, const char *tagsJson,
                                  const char *notes, bool monitorHost);
+solariStatus serverAssetsCreate(serverContext *ctx, const char *ip,
+                                const char *displayName, const char *className,
+                                uint64_t poolId, const char *tagsJson,
+                                const char *notes, bool monitorHost,
+                                const char *servicesCsv, uint64_t *assetId);
 
 /* Remove an asset by asset id or ip. Purges every owned probe target's current
  * and history state, deletes the target catalog rows, deletes the asset row, and

@@ -750,10 +750,10 @@ return static function (Router $router): void {
 
     $router->get("$P/log", static function (): void {
         $kind = $_GET['kind'] ?? '';
-        if (!is_string($kind) || !in_array($kind, ['image-refresh', 'prov-stage', 'stack-apply'], true)) {
-            ProvCatalog::bad('kind must be one of: image-refresh, prov-stage, stack-apply.');
+        if (!is_string($kind) || !in_array($kind, ['image-refresh', 'prov-stage', 'stack-apply', 'fleet-updates'], true)) {
+            ProvCatalog::bad('kind must be one of: image-refresh, prov-stage, stack-apply, fleet-updates.');
         }
-        $id = ProvCatalog::idValue($_GET['id'] ?? null, 'id');
+        $id = $kind === 'fleet-updates' ? 1 : ProvCatalog::idValue($_GET['id'] ?? null, 'id');
         $sock = getenv('SOLARI_CTL_SOCK') ?: '/run/solari/solariCtl.sock';
         $file = dirname($sock) . '/' . $kind . '-' . $id . '.log';
         $max = 65536;
@@ -790,6 +790,24 @@ return static function (Router $router): void {
             'size'       => $size,
             'updated_at' => $mtime,
         ]);
+    });
+
+    $router->post("$P/updates", static function (): void {
+        $op = Operator::requireOperator();
+        $idem = ProvCatalog::idemKey();
+        $b = ProvCatalog::body(['mode', 'confirm'], 4096);
+        $mode = $b['mode'] ?? null;
+        if (!is_string($mode) || !in_array($mode, ['check', 'apply'], true)) {
+            ProvCatalog::bad('mode must be check or apply.');
+        }
+        if ($mode === 'apply' && ($b['confirm'] ?? null) !== true) {
+            ProvCatalog::conflict('Applying OS updates requires confirm=true.');
+        }
+        if (array_key_exists('confirm', $b) && !is_bool($b['confirm'])) {
+            ProvCatalog::bad('confirm must be boolean.');
+        }
+        $reply = SolariCtl::callQueued('FLEET_UPDATES', ['mode' => $mode], $op, $idem, 4.0);
+        Response::ok(ProvCatalog::queuedOut(['mode' => $mode], $reply), 202);
     });
 
     // -------------------------------------------------------------- store

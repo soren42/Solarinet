@@ -19,6 +19,8 @@ if (($scenario = getenv('SOLARI_AUTHZ_NEGATIVE_SCENARIO')) !== false && $scenari
     $token = str_repeat('a', 64);
     $principal = ['username' => 'alice', 'role' => 'operator',
         'displayName' => 'Alice', 'source' => 'directory'];
+    $testPath = '/api/test';
+    $testPolicy = [];
     $setSession = static function (array $p, ?int $created = null) use ($token): void {
         Auth::bootSession();
         $_SESSION['solari'] = $p;
@@ -64,6 +66,9 @@ if (($scenario = getenv('SOLARI_AUTHZ_NEGATIVE_SCENARIO')) !== false && $scenari
             $_SERVER['HTTP_X_SOLARI_CSRF'] = $oldToken;
             break;
         case 'demoted-role':
+        case 'viewer-manual-asset-create':
+        case 'viewer-manual-asset-scan':
+        case 'viewer-fleet-updates':
             $store = getenv('SOLARI_AUTHZ_TEST_DIR') . '/users.json';
             file_put_contents($store, json_encode(['version' => 1, 'users' => [
                 ['username' => 'alice', 'role' => 'viewer', 'displayName' => 'Alice'],
@@ -75,6 +80,9 @@ if (($scenario = getenv('SOLARI_AUTHZ_NEGATIVE_SCENARIO')) !== false && $scenari
             putenv('SOLARI_LOCAL_LOGIN=1');
             $principal['source'] = 'local';
             $setSession($principal); // stored viewer role supersedes old operator role.
+            if ($scenario === 'viewer-manual-asset-create') { $testPath = '/api/assets'; $testPolicy = ['auth' => 'operator']; }
+            if ($scenario === 'viewer-manual-asset-scan') { $testPath = '/api/discovery/manual-scan'; $testPolicy = ['auth' => 'operator']; }
+            if ($scenario === 'viewer-fleet-updates') { $testPath = '/api/provisioning/updates'; $testPolicy = ['auth' => 'operator']; }
             break;
         case 'wrong-origin':
             $setSession($principal);
@@ -84,7 +92,7 @@ if (($scenario = getenv('SOLARI_AUTHZ_NEGATIVE_SCENARIO')) !== false && $scenari
             fwrite(STDERR, "unknown scenario\n");
             exit(2);
     }
-    Policy::enforce('POST', '/api/test', []);
+    Policy::enforce('POST', $testPath, $testPolicy);
     echo 'HANDLER_EXECUTED';
     exit(0);
 }
@@ -99,6 +107,9 @@ $cases = [
     ['rotated-session-replay', 'unauthorized', 401],
     ['stale-csrf-after-rotation', 'forbidden', 403],
     ['demoted-role', 'forbidden', 403],
+    ['viewer-manual-asset-create', 'forbidden', 403],
+    ['viewer-manual-asset-scan', 'forbidden', 403],
+    ['viewer-fleet-updates', 'forbidden', 403],
     ['wrong-origin', 'forbidden', 403],
 ];
 foreach ($cases as [$name, $expectedCode, $expectedStatus]) {

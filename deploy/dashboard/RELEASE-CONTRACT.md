@@ -25,12 +25,16 @@ files under `deploy/fleet/` and `deploy/remote-deploy.sh`, at their repository
 paths and with their tracked modes. Untracked or ignored files (caches, fetched
 images, `deploy/dist`) are never packaged. The packager fails if a helper entry
 point (`remote-deploy.sh`, `fleet-provision.sh`, `fleet-image.sh`,
-`image-refresh.py`, `prov-stage.py`, `stack-apply.py`, `prov-finish.py`) is
+`image-refresh.py`, `prov-stage.py`, `stack-apply.py`, `fleet-updates.py`,
+`prov-finish.py`) is
 missing or not executable; the installer re-checks presence and the executable bit at load and
 on every `validate_installed`. The server resolves these against `[ctl]
 helperRoot` (default: its working directory, the release root) and writes
 helper logs to `[ctl] logDir` (default: the ctl socket's directory), replying
 ERR when a helper or its log is unusable.
+Fleet update releases also require `deploy/fleet/ansible/playbooks/updates.yml`;
+the helper and playbook ship inside the tracked `deploy/fleet/` tree so they
+stay version-aligned.
 
 The installer rejects unsafe archive paths, symlinks, undeclared files, and
 hash mismatches. It stages and verifies the full tree before making it active.
