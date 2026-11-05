@@ -8,7 +8,7 @@ Wants=network-online.target solari-server.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/solariScanWorker --config /etc/solari/server.conf
+ExecStart=/usr/local/bin/solariScanWorker --config /etc/solari/server.conf --lock-file /run/solari-scan-worker/solariScanWorker.lock
 Restart=always
 RestartSec=2
 TimeoutStopSec=10
@@ -39,7 +39,8 @@ CapabilityBoundingSet=CAP_NET_RAW
 AmbientCapabilities=CAP_NET_RAW
 # nmap needs netlink for routes and packet sockets for its raw probes; it returns nothing without them.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
-ReadWritePaths=/run/solari
+# Its own directory: the server removes /run/solari when it stops.
+RuntimeDirectory=solari-scan-worker
 
 [Install]
 WantedBy=multi-user.target

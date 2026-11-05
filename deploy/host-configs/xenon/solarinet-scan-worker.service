@@ -10,12 +10,14 @@ User=jason
 Group=jason
 WorkingDirectory=/opt/solarinet/current
 EnvironmentFile=/home/jason/Code/Solarinet/run/server.env
-ExecStart=/opt/solarinet/current/bin/solariScanWorker --config /home/jason/Code/Solarinet/run/server.conf
+ExecStart=/opt/solarinet/current/bin/solariScanWorker --config /home/jason/Code/Solarinet/run/server.conf --lock-file /run/solari-scan-worker/solariScanWorker.lock
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10
 # nmap -O in the scan path needs raw sockets.
 AmbientCapabilities=CAP_NET_RAW
+# Its own directory: the server removes /run/solari when it stops.
+RuntimeDirectory=solari-scan-worker
 
 [Install]
 WantedBy=multi-user.target
