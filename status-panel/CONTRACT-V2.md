@@ -127,6 +127,9 @@ Alarm predicate, episode ids and vital-down logic do not change.
 - `alertList.total` and `faultCounts` count distinct conditions, one per rule and target,
   so several monitors seeing one fault count once. The `alerts` severity counts match the
   dashboard summary and count per monitor; the panel draws only `alertList`.
+- Gear rates come from UniFi byte counters, measured over the last two counter moves and held until
+  the next. UniFi's reported rates are instantaneous snapshots and are used only until counters have
+  moved three times. A gear aggregate is its uplink port.
 - Probe values come from `probeCurrent` so they move with the network. Row order holds
   still while state holds still, because firmware keeps history by position.
 - Monitor nodes are vantage points on hosts already in the roster, so the panel does not

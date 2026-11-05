@@ -67,19 +67,44 @@ class UniFiPollTests(unittest.TestCase):
         ])
         self.assertEqual([0, 1], [p['isUplink'] for p in rows['unifi-aa:00']['ports']])
 
-    def test_zero_rates_fill_from_counters_but_real_rates_win(self):
-        port = {'ifIndex': 1, 'inRateKbps': 0, 'outRateKbps': 7, 'inOctets': 1000, 'outOctets': 1000}
+    def test_counters_replace_reported_rates_and_hold_between_moves(self):
+        port = {'ifIndex': 1, 'inRateKbps': 5, 'outRateKbps': 7, 'inOctets': 1000, 'outOctets': 1000}
         row = {'gearId': 'g', 'ports': [port]}
         state = {}
-        unifipolld.fill_port_rates_from_counters([row], state, 100.0)
-        self.assertEqual(0, port['inRateKbps'])
-        port['inOctets'], port['outOctets'] = 11000, 11000
-        unifipolld.fill_port_rates_from_counters([row], state, 110.0)
-        self.assertEqual(8, port['inRateKbps'])
-        self.assertEqual(7, port['outRateKbps'])
-        port.update(inRateKbps=0, inOctets=5)
-        unifipolld.fill_port_rates_from_counters([row], state, 120.0)
-        self.assertEqual(0, port['inRateKbps'])
+        def poll(now, octets, reported=99):
+            port.update(inOctets=octets, inRateKbps=reported)
+            unifipolld.rates_from_counters([row], state, now)
+            return port['inRateKbps']
+        self.assertEqual(99, poll(100.0, 1000))     # baseline: only the report exists
+        self.assertEqual(99, poll(110.0, 11000))    # first move
+        self.assertEqual(99, poll(120.0, 21000))    # second move
+        self.assertEqual(8, poll(130.0, 31000))     # third: 20000 octets over 20 s
+        self.assertEqual(8, poll(145.0, 31000))     # counter still: rate holds, snapshot ignored
+        self.assertEqual(8, poll(160.0, 31000))
+        self.assertEqual(3, poll(170.0, 41000))     # 20000 octets over the 50 s since the move at 120
+        self.assertEqual(0, poll(471.0, 41000))     # motionless past the hold: idle
+        self.assertEqual(99, poll(480.0, 10))       # counter reset: start over, no bogus spike
+
+    def test_alternate_flushes_do_not_read_as_idle(self):
+        port = {'ifIndex': 1, 'inRateKbps': 0, 'outRateKbps': 0, 'inOctets': 0, 'outOctets': 0}
+        row = {'gearId': 'g', 'ports': [port]}
+        state = {}
+        seen = []
+        octets = 0
+        for step in range(8):
+            octets += 96000 if step % 2 else 1
+            port['inOctets'] = octets
+            unifipolld.rates_from_counters([row], state, 48.0 * step)
+            seen.append(port['inRateKbps'])
+        self.assertEqual([8, 8, 8, 8], seen[4:])
+
+    def test_aggregate_follows_the_uplink_port(self):
+        row = {'gearId': 'g', 'inRateKbps': 0, 'outRateKbps': 0, 'ports': [
+            {'isUplink': 0, 'inRateKbps': 1, 'outRateKbps': 2}, {'isUplink': 1, 'inRateKbps': 30, 'outRateKbps': 40}]}
+        portless = {'gearId': 'h', 'inRateKbps': 5, 'outRateKbps': 6, 'ports': []}
+        unifipolld.aggregates_from_uplinks([row, portless])
+        self.assertEqual((30, 40), (row['inRateKbps'], row['outRateKbps']))
+        self.assertEqual((5, 6), (portless['inRateKbps'], portless['outRateKbps']))
 
     def test_portless_gear_reads_its_link_from_the_parent_port(self):
         parent = {'gearId': 'sw', 'ports': [{'ifIndex': 4, 'operStatus': 1, 'inRateKbps': 3, 'outRateKbps': 9,
@@ -91,6 +116,34 @@ class UniFiPollTests(unittest.TestCase):
         self.assertEqual(3, ap['ports'][0]['outRateKbps'])
         self.assertEqual(1, ap['ports'][0]['isUplink'])
         self.assertEqual([], orphan['ports'])
+
+    def test_write_rows_hands_the_driver_only_scalars(self):
+        class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, *_exc): return False
+            def execute(self, _sql, params):
+                # pymysql escapes every value it is given, whether the SQL uses it or not.
+                for key, value in params.items():
+                    if not (value is None or isinstance(value, (str, int, float))):
+                        raise TypeError(f'{key} can not be used as parameter')
+                calls.append(params)
+        class Db:
+            def __enter__(self): return self
+            def __exit__(self, *_exc): return False
+            def cursor(self): return Cursor()
+        calls = []
+        row = {'gearId': 'g', 'name': 'sw', 'kind': 'switch', 'model': 'USW', 'mgmtIp': None, 'macAddress': 'aa:00',
+               'uplinkGearId': None, 'portCount': 1, 'classicSeen': 1, 'inRateKbps': 1, 'outRateKbps': 2, 'operStatus': 1,
+               'ports': [{'ifIndex': 1, 'ifName': 'p1', 'inOctets': 1, 'outOctets': 2, 'inRateKbps': 3,
+                          'outRateKbps': 4, 'operStatus': 1, 'isUplink': 1}]}
+        original = unifipolld.db_connect
+        unifipolld.db_connect = lambda _database: Db()
+        try:
+            unifipolld.write_rows([row], 'unused', False)
+        finally:
+            unifipolld.db_connect = original
+        self.assertEqual(3, len(calls))
+        self.assertEqual(1, calls[2]['ifIndex'])
 
     def test_classic_failure_does_not_stop_integration_path(self):
         with tempfile.TemporaryDirectory() as directory:

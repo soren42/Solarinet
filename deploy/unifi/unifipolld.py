@@ -50,6 +50,10 @@ def model_kind(model):
     return "other"
 
 
+# How long a motionless counter keeps its last rate before the port counts as idle.
+COUNTER_HOLD_SECONDS = 300
+
+
 def derive_rate_kbps(previous, current, elapsed):
     """Match SNMP convention: octet delta * 8 / 1000 / elapsed seconds."""
     if previous is None or current is None or elapsed <= 0 or current < previous:
@@ -296,18 +300,44 @@ def classic_device_rows(devices):
     return rows
 
 
-def fill_port_rates_from_counters(rows, state, now):
-    """Some switches (USPM16) report zero rates while their counters climb."""
+def counter_rate(last, octets, now):
+    """Rate over the last two counter moves, held until the next move.
+
+    Two, because a USPM16 flushes its counters on alternate reports: a single gap
+    reads full traffic, then nothing. Returns the new state entry; its "rate" stays
+    None until three moves have been seen, and a counter reset starts over.
+    """
+    if not last or octets < last["octets"]:
+        return {"octets": octets, "moves": [], "rate": None}
+    if octets != last["octets"]:
+        moves = (last["moves"] + [[now, octets]])[-3:]
+        rate = derive_rate_kbps(moves[0][1], octets, now - moves[0][0]) if len(moves) == 3 else None
+        return {"octets": octets, "moves": moves, "rate": rate}
+    if last["moves"] and now - last["moves"][-1][0] > COUNTER_HOLD_SECONDS:
+        return {**last, "rate": 0}
+    return last
+
+
+def rates_from_counters(rows, state, now):
+    """Replace reported port rates with counter deltas wherever enough moves have been seen.
+
+    Reported rates are instantaneous snapshots: over one minute a WAN port carrying a
+    steady 5 Mbps by its counters reported 22 kbps, 25 Mbps, then 12 kbps. Counters only
+    move every 15 s on a gateway and about every 48 s on a USPM16, so a per-poll delta
+    would read zero between moves.
+    """
     prior = state.setdefault("ports", {})
     for row in rows:
         for port in row.get("ports", []):
             key = f"{row['gearId']}/{port['ifIndex']}"
-            last = prior.get(key)
-            if last and now > last["at"]:
-                elapsed = now - last["at"]
-                port["inRateKbps"] = port["inRateKbps"] or derive_rate_kbps(last["in"], port["inOctets"], elapsed)
-                port["outRateKbps"] = port["outRateKbps"] or derive_rate_kbps(last["out"], port["outOctets"], elapsed)
-            prior[key] = {"in": port["inOctets"], "out": port["outOctets"], "at": now}
+            last = prior.get(key) or {}
+            entry = {"in": counter_rate(last.get("in"), port["inOctets"], now),
+                     "out": counter_rate(last.get("out"), port["outOctets"], now)}
+            prior[key] = entry
+            if entry["in"]["rate"] is not None:
+                port["inRateKbps"] = entry["in"]["rate"]
+            if entry["out"]["rate"] is not None:
+                port["outRateKbps"] = entry["out"]["rate"]
 
 
 def attach_uplinks_from_parent_ports(rows):
@@ -325,6 +355,14 @@ def attach_uplinks_from_parent_ports(rows):
                     "inOctets": port["outOctets"], "outOctets": port["inOctets"],
                 }]
                 break
+
+
+def aggregates_from_uplinks(rows):
+    """A device's aggregate is its uplink: the Integration API reports zero for most gear."""
+    for row in rows:
+        uplink = next((port for port in row.get("ports", []) if port["isUplink"]), None)
+        if uplink:
+            row["inRateKbps"], row["outRateKbps"] = uplink["inRateKbps"], uplink["outRateKbps"]
 
 
 def normalise_devices(devices, state, now, stats_fetcher=None):
@@ -377,16 +415,18 @@ def write_rows(rows, database, dry_run):
         return
     with db_connect(database) as db, db.cursor() as cur:
         for row in rows:
+            # pymysql escapes every value it is handed, used or not, and a port list cannot be escaped.
+            scalars = {key: value for key, value in row.items() if key != "ports"}
             cur.execute("""INSERT INTO networkGear
                 (gearId,name,kind,model,mgmtIp,macAddress,uplinkGearId,ports,lastSeenAt)
                 VALUES (%(gearId)s,%(name)s,%(kind)s,%(model)s,%(mgmtIp)s,%(macAddress)s,%(uplinkGearId)s,%(portCount)s,UTC_TIMESTAMP())
                 ON DUPLICATE KEY UPDATE name=VALUES(name),kind=VALUES(kind),model=VALUES(model),mgmtIp=VALUES(mgmtIp),
                 macAddress=IF(%(classicSeen)s=1,VALUES(macAddress),macAddress),
                 uplinkGearId=IF(%(classicSeen)s=1,VALUES(uplinkGearId),uplinkGearId),
-                ports=COALESCE(VALUES(ports),ports),lastSeenAt=UTC_TIMESTAMP()""", row)
+                ports=COALESCE(VALUES(ports),ports),lastSeenAt=UTC_TIMESTAMP()""", scalars)
             cur.execute("""INSERT INTO gearInterfaceCurrent (gearId,ifIndex,ifName,inRateKbps,outRateKbps,operStatus,sampledAt)
                 VALUES (%(gearId)s,0,'aggregate',%(inRateKbps)s,%(outRateKbps)s,%(operStatus)s,UTC_TIMESTAMP())
-                ON DUPLICATE KEY UPDATE ifName=VALUES(ifName),inRateKbps=VALUES(inRateKbps),outRateKbps=VALUES(outRateKbps),operStatus=VALUES(operStatus),sampledAt=UTC_TIMESTAMP()""", row)
+                ON DUPLICATE KEY UPDATE ifName=VALUES(ifName),inRateKbps=VALUES(inRateKbps),outRateKbps=VALUES(outRateKbps),operStatus=VALUES(operStatus),sampledAt=UTC_TIMESTAMP()""", scalars)
             for port in row.get("ports", []):
                 port_row = {**port, "gearId": row["gearId"]}
                 cur.execute("""INSERT INTO gearInterfaceCurrent
@@ -436,16 +476,17 @@ def poll_once(client, database, state_path, dry_run=False):
                     "classicSeen": 1,
                 }
         rows = list(by_id.values())
-    except Exception:  # noqa: BLE001 — optional classic endpoint is fail-soft.
-        pass
+    except Exception as exc:  # noqa: BLE001 — optional classic endpoint is fail-soft.
+        log(f"classic device enrichment skipped: {type(exc).__name__}")
     for row in rows:
         row.setdefault("macAddress", None)
         row.setdefault("uplinkGearId", None)
         row.setdefault("ports", [])
         row.setdefault("classicSeen", 0)
         row["portCount"] = len(row["ports"]) or None
-    fill_port_rates_from_counters(rows, state, time.time())
+    rates_from_counters(rows, state, time.time())
     attach_uplinks_from_parent_ports(rows)
+    aggregates_from_uplinks(rows)
     write_rows(rows, database, dry_run)
     save_state(state_path, state)
     log(f"polled {len(rows)} UniFi devices" + (" (dry run)" if dry_run else ""))
@@ -459,11 +500,11 @@ def poll_cycle(client, database, state_path, dry_run=False):
         return True
     except SystemExit:
         raise                       # config errors (_die) must stop the unit
-    except Exception:  # noqa: BLE001 — review S5: an unexpected API shape
+    except Exception as exc:  # noqa: BLE001 — review S5: an unexpected API shape
         # raised TypeError, escaped the tuple, and wedged the unit through
         # StartLimitBurst. ANY per-cycle failure is a skipped cycle.
-        # Exception details can carry request URLs but never the API-key header.
-        log("poll failed; skipping cycle")
+        # Log the type only: exception details can carry request URLs.
+        log(f"poll failed ({type(exc).__name__}); skipping cycle")
         return False
 
 
