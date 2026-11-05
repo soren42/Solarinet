@@ -95,10 +95,12 @@ static PanelEnv    gEnv;
 static PanelParser gParser;
 static PanelParser gWifiParser;
 
-static int   gTheme = 3;       /* CONTRACT §5: boot = Theme D ...            */
-static int   gScreen = 1;      /* ... screen 2 of 3, the "resting face"      */
+static int   gTheme = 0;       /* CONTRACT-V2 §1: boot on Host Tiles, then the */
+static int   gScreen = 0;      /* tour takes over                              */
 static float gT = 0.0f;        /* seconds since boot, the animation clock    */
 static float gScreenT = 0.0f;  /* dwell accumulator                          */
+static unsigned gTitleIndex = 0xFFFFu; /* screen the title card last announced */
+static float gTitleAt = 0.0f;  /* gT at that screen change                   */
 /* Dwell is runtime-settable via CONTROL setDwell (3/6/30 s only, validated in
  * panelCtl.c). It is NOT a STATE field — the contract's STATE payload has no
  * room for it — so a setDwell is confirmed to the server by lastCmdId alone.  */
@@ -150,11 +152,11 @@ static bool     gAckPending = false;      /* CONTROL ack deferred to runAlarm*/
 static uint8_t  gBtnStable[PANEL_BTN_COUNT];
 static uint8_t  gBtnCount[PANEL_BTN_COUNT];
 
-static const PanelScreenFn kScreens[4][3] = {
-  { panelScreenA0, panelScreenA1, panelScreenA2 },
-  { panelScreenB0, panelScreenB1, panelScreenB2 },
-  { panelScreenC0, panelScreenC1, panelScreenC2 },
-  { panelScreenD0, panelScreenD1, panelScreenD2 }
+static const PanelScreenFn kScreens[4][4] = {
+  { panelScreenA0, panelScreenA1, panelScreenA2, panelScreenA3 },
+  { panelScreenB0, panelScreenB1, panelScreenB2, panelScreenB3 },
+  { panelScreenC0, panelScreenC1, panelScreenC2, panelScreenC3 },
+  { panelScreenD0, panelScreenD1, panelScreenD2, panelScreenD3 }
 };
 
 static uint32_t nowMs(void) { return to_ms_since_boot(get_absolute_time()); }
@@ -205,7 +207,7 @@ static void sendHello(void) {
   sendFrame(PANEL_FT_HELLO, p, 3 + n);
 }
 
-/* sendConfig — report the panel-authoritative twelve screen settings.
+/* sendConfig — report the panel-authoritative sixteen screen settings.
  * CONTRACT-AW.md §3.3: CONFIG is emitted on every accepted setting change and
  * on HELLOREQ. bit0 says the current image is known to match persistent flash. */
 static void sendConfig(void) {
@@ -334,6 +336,30 @@ static void pumpSerial(void) {
   }
 }
 
+/* activeDwell — the configured dwell, stretched so a paged screen can show its
+ * pages (CONTRACT-V2 §2: long content pages, at least 3 s a page).
+ * Input: none. Output: seconds the active screen stays up. */
+static float activeDwell(void) {
+  unsigned index = (unsigned)(gTheme * 4 + gScreen);
+  float dwell = panelScreenCfgDwellSec(&gScreenCfg, (uint8_t)index, gDwellSec);
+  float need = panelScreenMinDwell(&gEnv, index);
+  return dwell > need ? dwell : need;
+}
+
+/* tourAdvance — CONTRACT-V2 §1: rotation walks every enabled screen across all
+ * themes. Input: none. Output: none; emits THEMECHANGE on crossing a theme. */
+static void tourAdvance(void) {
+  uint8_t next = panelScreenCfgTourNext(&gScreenCfg,
+                                        (uint8_t)(gTheme * 4 + gScreen));
+  int theme = next / 4;
+  gScreenT = 0.0f;
+  gScreen = next % 4;
+  if (theme != gTheme) {
+    gTheme = theme;
+    sendEvent(PANEL_EV_THEMECHANGE, (uint8_t)theme);
+  }
+}
+
 /* pressTheme — DESIGN-BRIEF FINAL DECISIONS: "Buttons choose a language, not a
  * screen". Pressing the ACTIVE theme's button advances that theme's screens;
  * pressing a different theme's button switches to it at screen 0.           */
@@ -346,7 +372,7 @@ static void pressTheme(int theme) {
     gTheme = theme;
     /* CONTRACT-AW.md §4: choosing a theme may not land on a disabled tile. */
     gScreen = panelScreenCfgEnabled(&gScreenCfg, (uint8_t)theme, 0u) ? 0 :
-              (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)theme, 2u);
+              (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)theme, 3u);
     sendEvent(PANEL_EV_THEMECHANGE, (uint8_t)theme);
   }
 }
@@ -489,7 +515,7 @@ static void applyControl(PanelCtlAction act, uint8_t arg) {
       uint8_t index = (uint8_t)(arg >> 3);
       uint8_t value = (uint8_t)((gScreenCfg.screenCfg[index] & 1u) |
                                 ((arg & 0x07u) << 1));
-      uint8_t active = (uint8_t)(gTheme * 3 + gScreen);
+      uint8_t active = (uint8_t)(gTheme * 4 + gScreen);
       float oldDwell = panelScreenCfgDwellSec(&gScreenCfg, active, gDwellSec);
       if (panelScreenCfgSet(&gScreenCfg, index, value, nowMs())) {
         /* CONTRACT-AW §10.5: preserve the fraction already waited, then
@@ -791,13 +817,7 @@ int main(void) {
 
     if (!gHelp.active) {
       if (!gLink.lost) gScreenT += dt;
-      if (gScreenT >= panelScreenCfgDwellSec(&gScreenCfg,
-                                              (uint8_t)(gTheme * 3 + gScreen),
-                                              gDwellSec)) {
-        gScreenT = 0.0f;
-        gScreen = (int)panelScreenCfgNext(&gScreenCfg, (uint8_t)gTheme,
-                                          (uint8_t)gScreen);
-      }
+      if (gScreenT >= activeDwell()) tourAdvance();
     }
     if (panelScreenCfgSaveDue(&gScreenCfg, &gScreenCfgFlash, ms)) sendConfig();
 
@@ -823,17 +843,21 @@ int main(void) {
     }
 
     if (gHelp.active) {
-      panelHelpOverlayDraw((unsigned)(gTheme * 3 + gScreen), gT);
+      panelHelpOverlayDraw((unsigned)(gTheme * 4 + gScreen), gT);
     } else if (gLink.lost) {
       /* Keep the last good picture underneath so the operator still sees the
        * fleet, then lay the link treatment over it. */
       kScreens[gTheme][gScreen](&gEnv, gT, dt);
       panelScreenLinkLost(gT);
     } else if (!gEnv.haveData || gEnv.total == 0) {
-      panelScreenNoData(gT);
+      panelScreenNoData(gEnv.haveData, gT);
     } else {
+      unsigned index = (unsigned)(gTheme * 4 + gScreen);
       kScreens[gTheme][gScreen](&gEnv, gT, dt);
+      if (gEnv.dataStale) panelStaleMark();
+      if (index != gTitleIndex) { gTitleIndex = index; gTitleAt = gT; }
       if (gAlarmArmed && serverAlarmShowing) panelInlay(&gEnv, gT);
+      else panelTitleCard(index, gT - gTitleAt);
     }
     /* D16: power inlay only when no server alert owns the text. Suppressed
      * under the help overlay exactly as the server inlay is (the beacon

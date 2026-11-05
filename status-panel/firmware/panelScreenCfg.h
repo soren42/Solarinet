@@ -1,7 +1,7 @@
 /*
  * panelScreenCfg.h — persistent per-screen rotation configuration.
  *
- * CONTRACT-AW.md §3.4 / §4. This unit keeps the 12 flattened theme*3+screen
+ * CONTRACT-AW.md §3.4 / §4. This unit keeps the 16 flattened theme*4+screen
  * settings and all decision logic hardware-free. The optional flash seam lets
  * the host suite exercise exactly the same validation, debounce and record
  * format as firmware without importing pico-sdk headers.
@@ -14,7 +14,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define PANEL_SCREEN_COUNT 12u
+#define PANEL_SCREEN_COUNT 16u
+#define PANEL_THEME_SCREENS 4u
 #define PANEL_SCREEN_CFG_DEBOUNCE_MS 2000u
 
 typedef struct {
@@ -51,9 +52,14 @@ bool panelScreenCfgEnabled(const PanelScreenCfg *cfg, uint8_t theme,
                            uint8_t screen);
 
 /* panelScreenCfgNext — next rotation screen, skipping disabled entries.
- * Input: config/theme/current screen. Output: a legal screen 0..2. */
+ * Input: config/theme/current screen. Output: a legal screen 0..3. */
 uint8_t panelScreenCfgNext(const PanelScreenCfg *cfg, uint8_t theme,
                            uint8_t screen);
+
+/* panelScreenCfgTourNext — next screen of the all-themes tour (CONTRACT-V2 §1).
+ * Input: config/current flattened index. Output: next enabled flattened index;
+ * with everything disabled it still advances, so the panel is never black. */
+uint8_t panelScreenCfgTourNext(const PanelScreenCfg *cfg, uint8_t index);
 
 /* panelScreenCfgDwellSec — base dwell multiplied by the configured weight.
  * Input: config/flattened index/base seconds. Output: weighted seconds. */

@@ -9,36 +9,37 @@ typedef struct {
   const char *line2;
 } PanelHelpText;
 
-/* Index is theme * 3 + screen, matching main.c's kScreens table. All text is
- * intentionally within the restricted HELP_TEXTS charset: [A-Z0-9 .:-]. */
-static const PanelHelpText HELP_TEXTS[12] = {
-  { "STATE LATTICE",       "CELL LOAD STATE" },
-  { "NET FLOW AP-HUB",     "SW-RTR RED DOWN" },
-  { "LANES LOSS STALE",    "UNKNOWN DEGRADED" },
-  { "UP DOWN COUNTS",      "DEG MNT TIER" },
-  { "LINK UTILIZATION",    "TICKER TRAFFIC" },
-  { "MEAN LOAD P95 RTT",  "LOSS HOT COUNT" },
-  { "LOAD HISTOGRAM",      "RIGHT THROUGHPUT" },
-  { "TRACES THRU CPU",     "RTT TOP TO BOTTOM" },
-  { "POOL LOAD BARS",      "TIER 0 MARKER" },
-  { "PROBE WATERFALL",     "RED LOSS AMBER SLOW" },
-  { "POOL SIZE BARS",      "ALERT TICKER" },
-  { "AMBIENT LOAD FIELD",  "SYS LOAD RATE TEXT" }
+/* Index is theme * 4 + screen, matching main.c's kScreens table. Each line is at
+ * most 13 characters, the small font's limit, within [A-Z0-9 .:-]: help stands
+ * still to be read (CONTRACT-V2 §2). */
+static const PanelHelpText HELP_TEXTS[16] = {
+  { "TILE IS HOST",  "FILL IS LOAD" },
+  { "HOST LIST",     "WORST FIRST" },
+  { "EACH POOL",     "HOSTS LOAD" },
+  { "HOSTS UP",      "AND WORST NOW" },
+  { "LINK TRAFFIC",  "DOTS ARE RATE" },
+  { "INTERNET AND",  "LOCAL TRAFFIC" },
+  { "BUSIEST HOSTS", "BY TRAFFIC" },
+  { "NETWORK TREE",  "DOTS ARE RATE" },
+  { "OPEN ALERTS",   "WORST FIRST" },
+  { "OPEN FAULTS",   "BY KIND" },
+  { "PING HISTORY",  "RED IS LOSS" },
+  { "ALERTS 26 HRS", "NOW AT RIGHT" },
+  { "ONE HOST",      "CPU MEM DISK" },
+  { "UP IS CPU",     "DOWN IS MEM" },
+  { "TRAFFIC CPU",   "AND PING" },
+  { "AMBIENT FLEET", "RED IS FAULT" }
 };
 
-static void drawLine(float t, int y, const char *line, PanelColor color) {
-  int width = panelTextW(line);
-  if (width + 2 > PANEL_W) {
-    panelScroll(t, y, line, color, 0.65f, 11.0f);
-  } else {
-    panelText((PANEL_W - width) / 2, y, line, color, 0.65f);
-  }
+static void drawLine(int y, const char *line, PanelColor color) {
+  panelText((PANEL_W - panelTextW(line)) / 2, y, line, color, 1.0f);
 }
 
 void panelHelpOverlayDraw(unsigned screenIndex, float t) {
   const PanelHelpText *text;
-  if (screenIndex >= 12u) return;
+  (void)t;
+  if (screenIndex >= 16u) return;
   text = &HELP_TEXTS[screenIndex];
-  drawLine(t, 1, text->line1, cInk);
-  drawLine(t, 6, text->line2, cAzure);
+  drawLine(0, text->line1, cInk);
+  drawLine(6, text->line2, cAzure);
 }

@@ -18,16 +18,17 @@ HELP_SRC = panelHelpTest.c ../panelHelp.c
 NET_SRC  = panelNetFsmTest.c ../panelNetFsm.c ../panelLink.c ../../protocol.c
 NETGLUE_SRC = panelNetTest.c ../panelNet.c ../panelProvStore.c ../../protocol.c
 POWER_SRC = panelPowerTest.c ../panelPower.c
-# A1 renderer under ASAN/UBSAN — the review-proven hubs[-2] class must crash
-# loudly here, never ship (REVIEW-AW M3/M4). Needs the fb/env/screens units.
-A1_SRC   = panelScreensATest.c ../panelScreensA.c ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
-# Framebuffer-assertion parity harness (PF1): renders all twelve REAL screens
+# Every screen at every population under ASAN/UBSAN (CONTRACT-V2 §2, §5).
+A1_SRC   = panelScreensATest.c ../panelScreensA.c ../panelScreensB.c ../panelScreensC.c \
+           ../panelScreensD.c ../panelScreensCommon.c ../panelInlay.c ../panelHelpOverlay.c \
+           ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
+# Framebuffer-assertion parity harness (PF1): renders all sixteen REAL screens
 # from fixtures/parity-fixture.json and asserts on lit pixels. It observes the
 # renderers through ld --wrap rather than reimplementing any of them, so every
 # framebuffer and text primitive has to be interceptable at link time.
 PARITY_SRC  = panelParityTest.c testJson.c \
               ../panelScreensA.c ../panelScreensB.c ../panelScreensC.c \
-              ../panelScreensD.c ../panelInlay.c ../panelHelpOverlay.c \
+              ../panelScreensD.c ../panelScreensCommon.c ../panelInlay.c ../panelHelpOverlay.c \
               ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
 PARITY_WRAP = -Wl,--wrap=panelFbSet -Wl,--wrap=panelFbSetRgb \
               -Wl,--wrap=panelFbAdd -Wl,--wrap=panelFbDim \
@@ -37,7 +38,7 @@ PARITY_WRAP = -Wl,--wrap=panelFbSet -Wl,--wrap=panelFbSetRgb \
 # Host simulator: real renderers -> PPM frames -> tools/panelsim/sheet.py PNG.
 SIM_SRC  = panelSim.c testJson.c \
            ../panelScreensA.c ../panelScreensB.c ../panelScreensC.c \
-           ../panelScreensD.c ../panelInlay.c ../panelHelpOverlay.c \
+           ../panelScreensD.c ../panelScreensCommon.c ../panelInlay.c ../panelHelpOverlay.c \
            ../panelFb.c ../panelHist.c ../panelFont.c ../../protocol.c
 BINS     = panelLinkTest panelCtlTest panelScreenCfgTest panelProvTest panelProvSubsysTest panelHelpTest panelNetFsmTest panelNetTest panelPowerTest panelScreensATest panelParityTest
 
@@ -66,7 +67,7 @@ panelCtlTest: $(CTL_SRC) ../panelCtl.h ../../protocol.h
 	$(CC) $(CFLAGS) -o $@ $(CTL_SRC)
 
 panelScreensATest: $(A1_SRC)
-	$(CC) $(CFLAGS) -Wno-unused-parameter -I../.. -fsanitize=address,undefined -o $@ $(A1_SRC) -lm
+	$(CC) $(CFLAGS) -Wno-unused-parameter -I../.. -fsanitize=address,undefined -o $@ $(A1_SRC) -Wl,--wrap=panelText -Wl,--wrap=panelBig -lm
 
 panelParityTest: $(PARITY_SRC) testJson.h ../panelScreens.h ../panelFb.h ../panelFont.h ../panelHelpOverlay.h
 	$(CC) $(CFLAGS) -Wno-unused-parameter -I../.. -fsanitize=address,undefined -o $@ $(PARITY_SRC) $(PARITY_WRAP) -lm

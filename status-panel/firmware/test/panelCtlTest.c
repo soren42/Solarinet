@@ -97,9 +97,9 @@ static void caseRejectedStillConsumes(void) {
   check(panelCtlConsume(&ctl, 10u, PANEL_CTL_SETTHEME, 4u, NULL) ==
             PANEL_CTLACT_NONE && panelCtlLastCmdId(&ctl) == 10u,
         "case 2: setTheme(4) is rejected AND consumed");
-  check(panelCtlConsume(&ctl, 11u, PANEL_CTL_SETSCREEN, 3u, NULL) ==
+  check(panelCtlConsume(&ctl, 11u, PANEL_CTL_SETSCREEN, 4u, NULL) ==
             PANEL_CTLACT_NONE && panelCtlLastCmdId(&ctl) == 11u,
-        "case 2: setScreen(3) is rejected AND consumed");
+        "case 2: setScreen(4) is rejected AND consumed");
   check(panelCtlConsume(&ctl, 12u, PANEL_CTL_BRIGHTNESS, 101u, NULL) ==
             PANEL_CTLACT_NONE && panelCtlLastCmdId(&ctl) == 12u,
         "case 2: setBrightness(101) is rejected AND consumed");
@@ -572,15 +572,15 @@ static void caseScreenConfigControls(void) {
   PanelCtl ctl;
   uint8_t arg = 0u;
   panelCtlInit(&ctl, 0u);
-  check(panelCtlConsume(&ctl, 1u, PANEL_CTL_SCREENEN, (uint8_t)((11u << 1) | 1u), &arg) ==
-            PANEL_CTLACT_SCREENEN && arg == 23u,
-        "case 15: SCREENEN accepts flattened screen 11");
-  check(panelCtlConsume(&ctl, 2u, PANEL_CTL_SCREENWT, (uint8_t)((11u << 3) | 5u), &arg) ==
-            PANEL_CTLACT_SCREENWT && arg == 93u,
-        "case 15: SCREENWT accepts flattened screen 11 weight 5");
-  check(panelCtlConsume(&ctl, 3u, PANEL_CTL_SCREENEN, 24u, NULL) == PANEL_CTLACT_NONE &&
+  check(panelCtlConsume(&ctl, 1u, PANEL_CTL_SCREENEN, (uint8_t)((15u << 1) | 1u), &arg) ==
+            PANEL_CTLACT_SCREENEN && arg == 31u,
+        "case 15: SCREENEN accepts flattened screen 15");
+  check(panelCtlConsume(&ctl, 2u, PANEL_CTL_SCREENWT, (uint8_t)((15u << 3) | 5u), &arg) ==
+            PANEL_CTLACT_SCREENWT && arg == 125u,
+        "case 15: SCREENWT accepts flattened screen 15 weight 5");
+  check(panelCtlConsume(&ctl, 3u, PANEL_CTL_SCREENEN, 32u, NULL) == PANEL_CTLACT_NONE &&
             panelCtlLastCmdId(&ctl) == 3u,
-        "case 15: SCREENEN index 12 is rejected and consumed");
+        "case 15: SCREENEN index 16 is rejected and consumed");
   check(panelCtlConsume(&ctl, 4u, PANEL_CTL_SCREENWT, 6u, NULL) == PANEL_CTLACT_NONE &&
             panelCtlLastCmdId(&ctl) == 4u,
         "case 15: SCREENWT weight 6 is rejected and consumed");

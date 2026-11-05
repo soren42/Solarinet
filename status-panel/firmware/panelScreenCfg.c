@@ -15,8 +15,12 @@
 #endif
 
 #define PANEL_SCREEN_CFG_MAGIC 0x53434647u
-#define PANEL_SCREEN_CFG_VERSION 1u
-#define PANEL_SCREEN_CFG_RECORD_SIZE 19u
+/* Version 2 (CONTRACT-V2 §1): sixteen slots. A version 1 record describes the
+ * old twelve screens, whose indices mean something else now, so it decodes as
+ * invalid and the panel starts from defaults. */
+#define PANEL_SCREEN_CFG_VERSION 2u
+#define PANEL_SCREEN_CFG_CRC_OFFSET (5u + PANEL_SCREEN_COUNT)
+#define PANEL_SCREEN_CFG_RECORD_SIZE (PANEL_SCREEN_CFG_CRC_OFFSET + 2u)
 
 /* Purpose: initialize the factory-safe all-enabled, 1x configuration.
  * Input: config/current clock. Output: a clean default configuration. */
@@ -38,9 +42,9 @@ static void panelScreenCfgEncode(const PanelScreenCfg *cfg, uint8_t out[PANEL_SC
   out[3] = (uint8_t)(PANEL_SCREEN_CFG_MAGIC >> 24);
   out[4] = PANEL_SCREEN_CFG_VERSION;
   memcpy(out + 5u, cfg->screenCfg, PANEL_SCREEN_COUNT);
-  crc = panelCrc16(out, 17u);
-  out[17] = (uint8_t)crc;
-  out[18] = (uint8_t)(crc >> 8);
+  crc = panelCrc16(out, PANEL_SCREEN_CFG_CRC_OFFSET);
+  out[PANEL_SCREEN_CFG_CRC_OFFSET] = (uint8_t)crc;
+  out[PANEL_SCREEN_CFG_CRC_OFFSET + 1u] = (uint8_t)(crc >> 8);
 }
 
 /* Purpose: validate and decode a persisted record.
@@ -48,12 +52,13 @@ static void panelScreenCfgEncode(const PanelScreenCfg *cfg, uint8_t out[PANEL_SC
 static bool panelScreenCfgDecode(const uint8_t in[PANEL_SCREEN_CFG_RECORD_SIZE],
                                  PanelScreenCfg *cfg) {
   uint8_t i;
-  uint16_t crc = (uint16_t)in[17] | ((uint16_t)in[18] << 8);
+  uint16_t crc = (uint16_t)in[PANEL_SCREEN_CFG_CRC_OFFSET] |
+                 ((uint16_t)in[PANEL_SCREEN_CFG_CRC_OFFSET + 1u] << 8);
   if (in[0] != (uint8_t)PANEL_SCREEN_CFG_MAGIC ||
       in[1] != (uint8_t)(PANEL_SCREEN_CFG_MAGIC >> 8) ||
       in[2] != (uint8_t)(PANEL_SCREEN_CFG_MAGIC >> 16) ||
       in[3] != (uint8_t)(PANEL_SCREEN_CFG_MAGIC >> 24) ||
-      in[4] != PANEL_SCREEN_CFG_VERSION || panelCrc16(in, 17u) != crc) return false;
+      in[4] != PANEL_SCREEN_CFG_VERSION || panelCrc16(in, PANEL_SCREEN_CFG_CRC_OFFSET) != crc) return false;
   for (i = 0u; i < PANEL_SCREEN_COUNT; ++i)
     if ((in[5u + i] & 0xF0u) != 0u || ((in[5u + i] >> 1) & 0x07u) > 5u) return false;
   memcpy(cfg->screenCfg, in + 5u, PANEL_SCREEN_COUNT);
@@ -102,9 +107,9 @@ bool panelScreenCfgSaveDue(PanelScreenCfg *cfg, const PanelScreenCfgFlash *flash
 bool panelScreenCfgEnabled(const PanelScreenCfg *cfg, uint8_t theme,
                            uint8_t screen) {
   uint8_t i, base;
-  if (cfg == NULL || theme > 3u || screen > 2u) return true;
-  base = (uint8_t)(theme * 3u);
-  for (i = 0u; i < 3u; ++i)
+  if (cfg == NULL || theme > 3u || screen >= PANEL_THEME_SCREENS) return true;
+  base = (uint8_t)(theme * PANEL_THEME_SCREENS);
+  for (i = 0u; i < PANEL_THEME_SCREENS; ++i)
     if ((cfg->screenCfg[base + i] & 1u) != 0u) return (cfg->screenCfg[base + screen] & 1u) != 0u;
   return true; /* CONTRACT-AW §4: never leave an all-disabled theme black. */
 }
@@ -112,11 +117,21 @@ bool panelScreenCfgEnabled(const PanelScreenCfg *cfg, uint8_t theme,
 uint8_t panelScreenCfgNext(const PanelScreenCfg *cfg, uint8_t theme,
                            uint8_t screen) {
   uint8_t i;
-  for (i = 1u; i <= 3u; ++i) {
-    uint8_t candidate = (uint8_t)((screen + i) % 3u);
+  for (i = 1u; i <= PANEL_THEME_SCREENS; ++i) {
+    uint8_t candidate = (uint8_t)((screen + i) % PANEL_THEME_SCREENS);
     if (panelScreenCfgEnabled(cfg, theme, candidate)) return candidate;
   }
   return screen;
+}
+
+uint8_t panelScreenCfgTourNext(const PanelScreenCfg *cfg, uint8_t index) {
+  uint8_t i;
+  if (cfg != NULL)
+    for (i = 1u; i <= PANEL_SCREEN_COUNT; ++i) {
+      uint8_t candidate = (uint8_t)((index + i) % PANEL_SCREEN_COUNT);
+      if ((cfg->screenCfg[candidate] & 1u) != 0u) return candidate;
+    }
+  return (uint8_t)((index + 1u) % PANEL_SCREEN_COUNT);
 }
 
 float panelScreenCfgDwellSec(const PanelScreenCfg *cfg, uint8_t index,

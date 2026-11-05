@@ -8,15 +8,12 @@
 #include "panelScreens.h"
 
 /* ---- Universal alert inlay ----------------------------------------------
- * DESIGN-BRIEF "Universal alert inlay (all 4 themes, function inlay())",
- * restated verbatim in FINAL DECISIONS. Overlays whatever screen is active:
- *   1. dimAll(0.1)                        — running screen drops to 10%
- *   2. both edge columns x=0 and x=52, all 11 rows, crit, pulsing
- *      0.55 + 0.45*|sin(t*2.2)|
- *   3. subject truncated to 12 chars, centred on row y=1, crit, b=0.95
- *   4. detail scrolling on row y=6, ink, b=0.55, 11 px/s
- * The tone (item 5) and acknowledge (item 6) are the alarm state machine in
- * main.c, not part of the paint.                                            */
+ * Overlays whatever screen is active, CONTRACT-V2 §2 and §6:
+ *   1. the running screen drops to 10%
+ *   2. both edge columns x=0 and x=52, crit, pulsing
+ *   3. the host, in crit, on the top row
+ *   4. what is wrong, in ink, on the bottom row. It stands still to be read.
+ * The tone and acknowledge are the alarm state machine in main.c, not the paint. */
 static void inlayBody(const char *subject, const char *detail, float t) {
   panelFbDimAll(0.1f);
 
@@ -25,31 +22,28 @@ static void inlayBody(const char *subject, const char *detail, float t) {
     panelFbSet(0, y, cCrit, pulse);
     panelFbSet(PANEL_W - 1, y, cCrit, pulse);
   }
+  /* Knock out what is left of the screen behind the words. */
+  for (int y = 0; y < PANEL_H; y++)
+    for (int x = 1; x < PANEL_W - 1; x++) panelFbDim(x, y, 0.2f);
 
-  /* DESIGN-BRIEF: subject truncated to 12 chars. The truncation is the spec,
-   * so copy exactly rather than let snprintf warn about a clipped %s. */
+  /* 12 chars clears the rail and the beacon; the second row may use all 13. */
   char subj[13];
   size_t sn = strlen(subject);
-  if (sn > 12) sn = 12;
+  if (sn > 12u) sn = 12u;
   memcpy(subj, subject, sn);
   subj[sn] = '\0';
-  int x = (PANEL_W - panelTextW(subj)) / 2;
-  if (x < 2) x = 2;
-  panelText(x, 1, subj, cCrit, 0.95f);
-
-  panelScroll(t, 6, detail, cInk, 0.55f, 11.0f);
+  panelTextCentre(PANEL_ROW_TOP, subj, cCrit, 1.0f);
+  panelTextCentre(PANEL_ROW_BOT, detail, cInk, 1.0f);
 }
 
 void panelInlay(const PanelEnv *env, float t) {
-  char detail[PANEL_ALERT_DETAIL + 8];
-  snprintf(detail, sizeof(detail), "%s" PANEL_TAIL, env->detail);
-  inlayBody(env->subject, detail, t);
+  inlayBody(env->subject, env->detail, t);
 }
 
 /* Power-loss inlay — same vocabulary as a server alert, fixed text (D16).
  * Only reached when NO live server topAlert exists; main.c arbitrates. */
 void panelInlayPower(float t) {
-  inlayBody("POWER LOSS", "ON BATTERY" PANEL_TAIL, t);
+  inlayBody("POWER LOSS", "ON BATTERY", t);
 }
 
 /* ---- On-battery glyph ---------------------------------------------------
@@ -99,29 +93,24 @@ void panelBeacon(float t) {
 }
 
 /* ---- LINK LOST ----------------------------------------------------------
- * CONTRACT §4: more than 15 s without a valid frame. DESIGN-BRIEF specifies no
- * screen for this, so the treatment is deliberately minimal and deliberately
- * NOT the alarm: warn amber rather than crit red, no edge rails, no tone —
- * the alarm's red-rail vocabulary must stay reserved for real fleet faults,
- * and a dead cable is a panel fault, not a fleet fault. A single pixel sweeps
- * row 9 so a frozen render is distinguishable from a live one at a glance.   */
+ * CONTRACT §4: more than 15 s without a valid frame. Deliberately NOT the alarm:
+ * warn amber, no rails, no tone. The red-rail vocabulary stays reserved for real
+ * fleet faults, and a dead feed is a panel fault. The words say what it means:
+ * nothing is arriving, so whatever is behind them is old. A pixel sweeps the gap
+ * row so a frozen render is distinguishable from a live one at a glance.      */
 void panelScreenLinkLost(float t) {
-  panelFbDimAll(0.15f);
-  const char *msg = "LINK LOST";
-  int tw = panelTextW(msg), tx = (PANEL_W - tw) / 2;
-  for (int y = 2; y <= 8; y++)
-    for (int x = tx - 2; x <= tx + tw + 1; x++) panelFbDim(x, y, 0.1f);
-  panelText(tx, 3, msg, cWarn, 0.55f + 0.35f * fabsf(sinf(t * 1.6f)));
+  panelFbDimAll(0.06f);
+  panelTextCentre(PANEL_ROW_TOP, "NO DATA FEED", cWarn, 1.0f);
+  panelTextCentre(PANEL_ROW_BOT, "SCREEN IS OLD", cInk, 1.0f);
   int sweep = ((int)(t * 12.0f)) % PANEL_W;
-  panelFbSet(sweep, 9, cQuiet, 0.35f);
+  panelFbSet(sweep, 5, cWarn, 0.6f);
 }
 
 /* ---- NO DATA ------------------------------------------------------------
- * CONTRACT §9: a zero-node fleet is valid data, not an error. Also used before
- * the first snapshot arrives, so the panel never shows a blank board at boot. */
-void panelScreenNoData(float t) {
-  const char *msg = "NO DATA";
-  int tw = panelTextW(msg), tx = (PANEL_W - tw) / 2;
-  panelText(tx, 3, msg, cAzure, 0.28f + 0.14f * (0.5f + 0.5f * sinf(t * 0.8f)));
-  for (int x = 0; x < PANEL_W; x += 4) panelFbSet(x, 9, cQuiet, 0.05f);
+ * Before the first snapshot the panel is waiting; afterwards an empty fleet is
+ * valid data (CONTRACT §9). The two read differently because they mean
+ * different things. A slow pulse shows the render loop is alive.             */
+void panelScreenNoData(bool haveData, float t) {
+  panelTextCentre(PANEL_ROW_ONE, haveData ? "NO HOSTS" : "AWAITING DATA", cAzure,
+                  0.6f + 0.4f * (0.5f + 0.5f * sinf(t * 0.8f)));
 }

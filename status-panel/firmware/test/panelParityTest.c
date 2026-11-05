@@ -67,6 +67,7 @@
 #include "../panelScreens.h"
 #include "../panelHelpOverlay.h"
 #include "testJson.h"
+#include "panelSceneExt.h"
 
 #define FIXTURE_PATH "../../fixtures/parity-fixture.json"
 #define GOLDEN_DIR   "../../fixtures/golden"
@@ -134,8 +135,6 @@ static char gOverflowNote[160];
 
 /* T3 guard: pixels last painted structurally in a conditional palette colour. */
 /* Leg-path capture, armed only for the A1 cases. See __wrap_panelFbSet. */
-static int           gCollectQuiet;
-static unsigned char gLegPix[PANEL_H][PANEL_W];
 
 static unsigned char gGuard[PANEL_H][PANEL_W];
 static const float  *gGuardCol[PANEL_H][PANEL_W];
@@ -210,8 +209,6 @@ void __wrap_panelFbSet(int x, int y, PanelColor c, float b) {
    * *these specific pixels* from its diff instead of exempting any quiet pixel
    * anywhere. If cQuiet ever gains a second use inside A1 this over-collects,
    * which is why the JS side also caps the exemption by count. */
-  if (gCollectQuiet && !isTextTag(gTag) && c == cQuiet && inPanel(x, y))
-    gLegPix[y][x] = 1u;
   if (inPanel(x, y)) {
     /* A structural write in a conditional colour arms the T3 guard; any other
      * write replaces the pixel outright and disarms it. */
@@ -399,6 +396,7 @@ static void decodeSample(const JVal *s, PanelSnapshot *snap) {
     snap->gear[i].txLevel = (uint8_t)jNum(jGet(g, "txLevel"), 0.0);
   }
   snap->gearCount = (uint8_t)n;
+  sceneDecodeExt(s, snap);
 }
 
 /* Purpose: replay the whole fixture history into gEnv, oldest sample first,
@@ -425,26 +423,6 @@ static int loadFixture(void) {
   }
   return n;
 }
-
-/* Purpose: swap in a named gear variant on the already-applied env.
- * Input: variant key. Output: 1 on success. */
-static int useGearVariant(const char *key) {
-  const JVal *g = jGet(jGet(gFixture, "gearVariants"), key);
-  int i, n = jLen(g);
-  if (n <= 0) return 0;
-  if (n > (int)PANEL_MAX_GEAR) n = (int)PANEL_MAX_GEAR;
-  for (i = 0; i < n; i++) {
-    const JVal *e = jAt(g, i);
-    gEnv.snap.gear[i].role = (uint8_t)jNum(jGet(e, "role"), 0.0);
-    gEnv.snap.gear[i].state = (uint8_t)jNum(jGet(e, "state"), 0.0);
-    gEnv.snap.gear[i].rxLevel = (uint8_t)jNum(jGet(e, "rxLevel"), 0.0);
-    gEnv.snap.gear[i].txLevel = (uint8_t)jNum(jGet(e, "txLevel"), 0.0);
-  }
-  gEnv.snap.gearCount = (uint8_t)n;
-  return 1;
-}
-
-/* -------------------------------------------------------------- goldens --- */
 
 #define MAX_FRAMES 12
 
@@ -501,65 +479,6 @@ static int goldenWrite(const char *id, const char *note) {
     }
   }
   fclose(f);
-  return 1;
-}
-
-/* Purpose: build the leg-path sidecar path. Input: id, buffer. Output: buffer. */
-static const char *legsPath(const char *id, char *buf, size_t cap) {
-  snprintf(buf, cap, "%s/panel-%s.legs.txt", GOLDEN_DIR, id);
-  return buf;
-}
-
-/* Purpose: emit the leg-path coordinate set collected during an A1 render.
- * Input: id. Output: 1 on success.
- *
- * This exists purely so the JS parity diff can name the pixels it excuses.
- * Format: a "# " header, then one "x y" pair per line, ascending. */
-static int legsWrite(const char *id) {
-  char path[256];
-  FILE *f = fopen(legsPath(id, path, sizeof path), "w");
-  if (!f) return 0;
-  fprintf(f, "# leg-path coordinates for %s, captured from the real a1Leg() by\n"
-             "# palette identity (cQuiet) — see panelParityTest.c. One \"x y\" per\n"
-             "# line. Consumed by tests/dashboard/test_panel_parity.js.\n", id);
-  for (int y = 0; y < PANEL_H; y++)
-    for (int x = 0; x < PANEL_W; x++)
-      if (gLegPix[y][x]) fprintf(f, "%d %d\n", x, y);
-  fclose(f);
-  return 1;
-}
-
-/* Purpose: check the committed leg-path sidecar still matches what a1Leg()
- * paints. Input: id, message buffer. Output: 1 when identical. */
-static int legsCompare(const char *id, char *msg, size_t cap) {
-  char path[256];
-  FILE *f = fopen(legsPath(id, path, sizeof path), "r");
-  unsigned char seen[PANEL_H][PANEL_W];
-  char line[128];
-  int x, y, extra = 0, missing = 0;
-
-  if (!f) {
-    snprintf(msg, cap, "no leg sidecar at %.160s — run with PARITY_REGEN=1", path);
-    return 0;
-  }
-  memset(seen, 0, sizeof seen);
-  while (fgets(line, sizeof line, f)) {
-    if (line[0] == '#' || line[0] == '\n') continue;
-    if (sscanf(line, "%d %d", &x, &y) != 2) continue;
-    if (x < 0 || x >= PANEL_W || y < 0 || y >= PANEL_H) { ++extra; continue; }
-    seen[y][x] = 1u;
-  }
-  fclose(f);
-  for (y = 0; y < PANEL_H; y++)
-    for (x = 0; x < PANEL_W; x++) {
-      if (gLegPix[y][x] && !seen[y][x]) ++missing;
-      if (!gLegPix[y][x] && seen[y][x]) ++extra;
-    }
-  if (missing || extra) {
-    snprintf(msg, cap, "leg path drifted: %d newly painted, %d no longer painted",
-             missing, extra);
-    return 0;
-  }
   return 1;
 }
 
@@ -630,62 +549,59 @@ static int goldenCompare(const char *id, char *msg, size_t cap) {
 /* ------------------------------------------------------------ the cases --- */
 
 typedef enum {
-  K_SCREEN,      /* one of the twelve renderers                    */
+  K_SCREEN,      /* one of the sixteen renderers                   */
   K_INLAY,       /* A0 with the universal alert inlay on top       */
   K_HELP,        /* the Vol+ help overlay, one frame per screen    */
   K_LINKLOST,
-  K_NODATA
+  K_NODATA,
+  K_TITLE
 } CaseKind;
 
 typedef struct {
   const char *id;
   const char *note;
   CaseKind kind;
-  int index;              /* screen index 0..11 for K_SCREEN */
-  const char *gearVariant;/* NULL = the fixture's primary gear */
-  int wantArmed;          /* T3 must be armed here: the fixture drives this
-                             screen's bar into the warn/crit bands          */
-  int wantScroll;         /* T1 must have a ticker band here                */
-  int dumpLegs;           /* also emit the cQuiet leg-path sidecar for the JS
-                             parity diff (A1 only)                           */
+  int index;              /* screen index 0..15 for K_SCREEN */
+  int wantArmed;          /* T3 must be armed here                          */
 } Case;
 
-static const PanelScreenFn kScreens[12] = {
-  panelScreenA0, panelScreenA1, panelScreenA2,
-  panelScreenB0, panelScreenB1, panelScreenB2,
-  panelScreenC0, panelScreenC1, panelScreenC2,
-  panelScreenD0, panelScreenD1, panelScreenD2
+static const PanelScreenFn kScreens[16] = {
+  panelScreenA0, panelScreenA1, panelScreenA2, panelScreenA3,
+  panelScreenB0, panelScreenB1, panelScreenB2, panelScreenB3,
+  panelScreenC0, panelScreenC1, panelScreenC2, panelScreenC3,
+  panelScreenD0, panelScreenD1, panelScreenD2, panelScreenD3,
 };
-static const char *kScreenIds[12] = {
-  "A0", "A1", "A2", "B0", "B1", "B2", "C0", "C1", "C2", "D0", "D1", "D2"
+static const char *kScreenIds[16] = {
+  "A0", "A1", "A2", "A3",
+  "B0", "B1", "B2", "B3",
+  "C0", "C1", "C2", "C3",
+  "D0", "D1", "D2", "D3",
 };
 
-/* wantArmed / wantScroll are coverage claims, not geometry: they say "with THIS
- * fixture, this screen is supposed to paint a conditional cell / a ticker".
- * They fail if a future fixture edit makes T1 or T3 vacuous here. */
+/* wantArmed is a coverage claim, not geometry: with THIS fixture, this screen is
+ * supposed to paint a warn/crit cell. It fails if a fixture edit makes T3 vacuous. */
 static const Case kCases[] = {
-  { "A0", "state lattice",            K_SCREEN,   0, NULL, 1, 0, 0 },
-  { "A1", "flow gates",               K_SCREEN,   1, NULL, 0, 0, 1 },
-  { "A2", "MQ and SNMP",              K_SCREEN,   2, NULL, 0, 0, 0 },
-  { "B0", "condition counts",         K_SCREEN,   3, NULL, 0, 0, 0 },
-  { "B1", "throughput",               K_SCREEN,   4, NULL, 1, 1, 0 },
-  { "B2", "load and latency",         K_SCREEN,   5, NULL, 0, 0, 0 },
-  { "C0", "load distribution",        K_SCREEN,   6, NULL, 0, 0, 0 },
-  { "C1", "live traces",              K_SCREEN,   7, NULL, 0, 0, 0 },
-  { "C2", "pool load",                K_SCREEN,   8, NULL, 1, 0, 0 },
-  { "D0", "reachability waterfall",   K_SCREEN,   9, NULL, 0, 0, 0 },
-  { "D1", "pool bars",                K_SCREEN,  10, NULL, 0, 1, 0 },
-  { "D2", "ambient field",            K_SCREEN,  11, NULL, 0, 0, 0 },
-  { "A1-routerdown", "flow gates, router down (CONTRACT-AW §10 A-3)",
-                                      K_SCREEN,   1, "routerDown", 0, 0, 1 },
-  { "inlay",    "A0 under the universal alert inlay",
-                                      K_INLAY,    0, NULL, 1, 1, 0 },
-  { "help",     "Vol+ help overlay, all twelve screens",
-                                      K_HELP,     0, NULL, 0, 0, 0 },
-  { "linklost", "CONTRACT §4 link-lost plate",
-                                      K_LINKLOST, 0, NULL, 0, 0, 0 },
-  { "nodata",   "CONTRACT §9 zero-node fleet",
-                                      K_NODATA,   0, NULL, 0, 0, 0 }
+  { "A0", "host tiles", K_SCREEN, 0, 1 },
+  { "A1", "roster", K_SCREEN, 1, 0 },
+  { "A2", "pools", K_SCREEN, 2, 0 },
+  { "A3", "head count", K_SCREEN, 3, 0 },
+  { "B0", "swim lanes", K_SCREEN, 4, 0 },
+  { "B1", "wan and lan", K_SCREEN, 5, 0 },
+  { "B2", "top talkers", K_SCREEN, 6, 0 },
+  { "B3", "flow map", K_SCREEN, 7, 0 },
+  { "C0", "alerts", K_SCREEN, 8, 0 },
+  { "C1", "fault board", K_SCREEN, 9, 0 },
+  { "C2", "reachability", K_SCREEN, 10, 1 },
+  { "C3", "alert history", K_SCREEN, 11, 1 },
+  { "D0", "host detail", K_SCREEN, 12, 0 },
+  { "D1", "cpu and memory", K_SCREEN, 13, 1 },
+  { "D2", "trends", K_SCREEN, 14, 0 },
+  { "D3", "aurora", K_SCREEN, 15, 0 },
+  { "inlay", "A0 under the universal alert inlay", K_INLAY, 0, 1 },
+  { "help", "Vol+ help overlay, all sixteen screens", K_HELP, 0, 0 },
+  { "linklost", "CONTRACT §4 link-lost plate", K_LINKLOST, 0, 0 },
+  { "nodata", "CONTRACT §9 zero-node fleet", K_NODATA, 0, 0 },
+  { "title", "title card over A0", K_TITLE, 0, 0 }
 };
 #define NCASES ((int)(sizeof kCases / sizeof kCases[0]))
 
@@ -702,17 +618,8 @@ static void runCase(const Case *c) {
   char t1Note[160] = "", t2Note[160] = "", t3Note[160] = "";
 
   gShot.count = 0;
-  /* The leg path is static across frames, so the union over the run is the same
-   * set any single frame paints; taking the union just removes the assumption. */
-  gCollectQuiet = c->dumpLegs;
-  memset(gLegPix, 0, sizeof gLegPix);
-  if (c->gearVariant && !useGearVariant(c->gearVariant)) {
-    snprintf(name, sizeof name, "%s: gear variant '%s'", c->id, c->gearVariant);
-    ok(0, name, "missing from the fixture");
-    return;
-  }
 
-  int frames = (c->kind == K_HELP) ? 12 : FRAMES;
+  int frames = (c->kind == K_HELP) ? 16 : FRAMES;
   for (int f = 0; f < frames; f++) {
     float t = (float)f * TICK_DT;
     int keep;
@@ -726,7 +633,10 @@ static void runCase(const Case *c) {
                        break;
       case K_HELP:     panelHelpOverlayDraw((unsigned)f, 3.0f); break;
       case K_LINKLOST: panelScreenLinkLost(t); break;
-      case K_NODATA:   panelScreenNoData(t); break;
+      case K_NODATA:   panelScreenNoData(gEnv.haveData, t); break;
+      case K_TITLE:    panelScreenA0(&gEnv, t, TICK_DT);
+                       panelTitleCard(11u, 0.5f);
+                       break;
     }
     panelFbFlush();
 
@@ -800,40 +710,14 @@ static void runCase(const Case *c) {
                               "this screen into warn/crit");
     ok(maxArmed > 0, name, msg);
   }
-  if (c->wantScroll) {
-    snprintf(name, sizeof name, "%s: T1 coverage — a ticker band exists",
-             c->id);
-    snprintf(msg, sizeof msg, "no panelScroll pixels were painted");
-    ok(maxScrollRows > 0, name, msg);
-  }
-
   if (envTrue("PARITY_REGEN")) {
     snprintf(name, sizeof name, "%s: golden regenerated", c->id);
     ok(goldenWrite(c->id, c->note), name, "could not write the golden file");
-    if (c->dumpLegs) {
-      snprintf(name, sizeof name, "%s: leg path regenerated", c->id);
-      ok(legsWrite(c->id), name, "could not write the leg sidecar");
-    }
   } else {
     msg[0] = '\0';
     snprintf(name, sizeof name, "%s: golden framebuffers match", c->id);
     ok(goldenCompare(c->id, msg, sizeof msg), name, msg);
-    if (c->dumpLegs) {
-      msg[0] = '\0';
-      snprintf(name, sizeof name, "%s: leg path matches the sidecar", c->id);
-      ok(legsCompare(c->id, msg, sizeof msg), name, msg);
-    }
   }
-  if (c->dumpLegs) {
-    int n = 0;
-    for (int y = 0; y < PANEL_H; y++)
-      for (int x = 0; x < PANEL_W; x++) n += gLegPix[y][x] ? 1 : 0;
-    snprintf(name, sizeof name, "%s: leg path is non-empty", c->id);
-    snprintf(msg, sizeof msg, "a1Leg() painted nothing; the JS exemption would "
-                              "be vacuous");
-    ok(n > 0, name, msg);
-  }
-  gCollectQuiet = 0;
 }
 
 /* PARITY_REGEN rewrites every committed golden. In CI that is not a
@@ -924,11 +808,11 @@ int main(void) {
   ok(gEnv.haveData, "fixture: history applied to the real PanelEnv", "");
   {
     char note[96];
-    snprintf(note, sizeof note, "%d samples, %d pools, %d gear", samples,
-             gEnv.poolCount, (int)gEnv.snap.gearCount);
-    ok(samples >= 2 && gEnv.poolCount > 0 && gEnv.snap.gearCount > 0,
+    snprintf(note, sizeof note, "%d samples, %d pools, %d links", samples,
+             (int)gEnv.snap.poolCount, (int)gEnv.snap.linkCount);
+    ok(samples >= 2 && gEnv.snap.poolCount > 0 && gEnv.snap.linkCount > 0,
        "fixture: shape is usable", note);
-    printf("      %s, rate label \"%s\"\n", note, gEnv.gLabel);
+    printf("      %s\n", note);
   }
 
   for (int i = 0; i < NCASES; i++) runCase(&kCases[i]);
@@ -937,7 +821,7 @@ int main(void) {
 
   /* Every screen id must have a golden, so a renderer can never be added to
    * panelScreens.h and quietly skip the assertion floor. */
-  for (int i = 0; i < 12; i++) {
+  for (int i = 0; i < 16; i++) {
     int found = 0;
     char name[96];
     for (int j = 0; j < NCASES; j++)

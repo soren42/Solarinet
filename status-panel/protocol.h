@@ -328,7 +328,7 @@ typedef enum {
 #define PANEL_RATE_NONE   0xFFFFFFFFu  /* unmeasured: no data, never zero    */
 
 typedef enum {
-  PANEL_LINK_WAN = 0, PANEL_LINK_TRUNK = 1, PANEL_LINK_WIFI = 2, PANEL_LINK_HOST = 3
+  PANEL_LK_WAN = 0, PANEL_LK_TRUNK = 1, PANEL_LK_WIFI = 2, PANEL_LK_HOST = 3
 } PanelLinkKind;
 
 typedef enum {

@@ -1,183 +1,298 @@
 /*
- * panelScreensB.c — Theme B · TEXT.
- * DESIGN-BRIEF "Theme B · Text"; ported from the Turn 3 prototype's
- * sB0/sB1/sB2 (Themes.dc.html lines 354-400).
+ * panelScreensB.c — Theme B · TRAFFIC: real rates, never derived particles.
+ *
+ * Every rate reaches the eye through panelRateLevel's shared log scale, and the
+ * link kinds keep their own hues, so a busy WAN cannot hide a quiet LAN. An
+ * unmeasured rate is drawn as a dotted line: it is no data, not zero traffic.
  */
 
-#include <math.h>
 #include <stdio.h>
+#include <string.h>
+#include <math.h>
 #include "panelScreens.h"
 
-/* ---- B0 · Condition counts ---------------------------------------------
- * DESIGN-BRIEF: BIG UP count watermark at (1,2) in quiet b=0.3, "UP" label at
- * (1,0) in ok via textOver; at x = max(22, 2+bigW(up)+3) the DOWN count and
- * label, then a tier flag word ("TIER 0" crit if any down system is tier 0,
- * else "TIER 3", else "OK"); row y=6 carries DEG then MNT.                  */
+static const float *kindColor(uint8_t kind) {
+  switch (kind) {
+    case PANEL_LK_WAN:   return cInk;
+    case PANEL_LK_TRUNK: return cAzure;
+    case PANEL_LK_WIFI:  return cMaint;
+    default:               return cOk;
+  }
+}
+
+/* Spacing and speed for a measured rate. Input: kbps. Output: pixels, px/s. */
+static void flowShape(uint32_t kbps, float *spacing, float *speed) {
+  float level = panelRateLevel((float)kbps);
+  *spacing = 14.0f - 11.0f * level;
+  *speed   = 2.0f + 22.0f * level;
+}
+
+/* One direction of a lane. dir +1 runs right, -1 left. phase is this stream's
+ * integrated distance, so a rate change does not jump the dots.              */
+static void laneRow(int x0, int x1, int y, uint32_t kbps, float *phase, int dir,
+                    const float *hue, float dt) {
+  if (kbps == PANEL_RATE_NONE) {
+    for (int x = x0; x <= x1; x += 4) panelFbSet(x, y, cUnknown, 0.35f);
+    return;
+  }
+  if (kbps == 0u) {
+    for (int x = x0; x <= x1; x++) panelFbSet(x, y, hue, 0.06f);
+    return;
+  }
+  float spacing, speed;
+  flowShape(kbps, &spacing, &speed);
+  *phase = fmodf(*phase + speed * dt, spacing * 64.0f);
+  for (int x = x0; x <= x1; x++) panelFbSet(x, y, hue, 0.08f);
+  for (float p = fmodf(*phase, spacing) - spacing; p <= (float)(x1 - x0); p += spacing) {
+    int d = (int)floorf(p);
+    if (d < 0 || d > x1 - x0) continue;
+    int head = dir > 0 ? x0 + d : x1 - d;
+    panelFbSet(head, y, hue, 1.0f);
+    int tail = head - dir;
+    if (tail >= x0 && tail <= x1) panelFbSet(tail, y, hue, 0.4f);
+  }
+}
+
+/* Short lane label: a WAN link reads WAN or WAN2 rather than a cut-off word. */
+static const char *laneLabel(const PanelSnapshot *s, int i) {
+  __typeof__(s->links[0]) const *link = &s->links[i];
+  if (link->kind == PANEL_LK_WAN)
+    return strncmp(link->name, "BACKUP", 6) == 0 ? "WAN2" : "WAN";
+  return link->name;
+}
+
+/* ---- B0 · Swim Lanes ------------------------------------------------------
+ * Two labelled links a page; upper stream away from the internet, lower toward
+ * it. Busier = denser and faster on the shared log scale.                    */
 void panelScreenB0(const PanelEnv *env, float t, float dt) {
-  char up[8], dn[8], dg[8], mn[8];
-  snprintf(up, sizeof(up), "%d", env->up);
-  snprintf(dn, sizeof(dn), "%d", env->down);
-  snprintf(dg, sizeof(dg), "%d", env->deg);
-  snprintf(mn, sizeof(mn), "%d", env->maint);
-
-  panelBig(1, 2, up, cQuiet, 0.3f);
-  panelTextOver(1, 0, "UP", cOk, 0.5f);
-
-  int x = 2 + panelBigW(up) + 3;
-  if (x < 22) x = 22;
-
-  /* HUE TIER (2026-08-04 hardware pass, see panelFont.c panelTextInk): text
-   * hierarchy is carried by colour, not brightness — white for a primary
-   * readout, azure for a secondary label. cQuiet is a desaturated slate that
-   * disappears against the unlit packages' cream reflection at ANY duty, so it
-   * is no longer used for small-font text anywhere. Condition colours
-   * (ok/warn/crit/maint) are untouched: a zero count reads azure, a real one
-   * reads its condition colour, and the hue is what tells them apart. */
-  int cx = panelTextOver(x, 0, dn, env->down ? cCrit : cAzure,
-                         env->down ? 0.9f : 0.16f);
-  cx = panelTextOver(cx + 1, 0, "DOWN", cAzure, 0.3f);
-
-  /* Prototype tests env.systems for a tier-0 down. Pool aggregates are the
-   * better source here: CONTRACT §9 computes them server-side over the FULL
-   * fleet, whereas the systems array is capped at 64 and could miss the very
-   * host this flag exists to announce. */
-  int tierZeroDown = 0;
-  for (int i = 0; i < env->poolCount; i++)
-    if (env->pools[i].tier == 0 && env->pools[i].down > 0) tierZeroDown = 1;
-  const char *tierMsg = env->down ? (tierZeroDown ? "TIER 0" : "TIER 3") : "OK";
-  panelTextOver(cx + 3, 0, tierMsg, tierZeroDown ? cCrit : cAzure, 0.4f);
-
-  cx = panelTextOver(x, 6, dg, env->deg ? cWarn : cAzure,
-                     env->deg ? 0.65f : 0.16f);
-  cx = panelTextOver(cx + 1, 6, "DEG", cAzure, 0.3f);
-  cx = panelTextOver(cx + 3, 6, mn, env->maint ? cMaint : cAzure,
-                     env->maint ? 0.5f : 0.16f);
-  panelTextOver(cx + 1, 6, "MNT", cAzure, 0.3f);
+  enum { LANE_X = 21 };
+  static float phase[PANEL_MAX_LINKS][2];
+  (void)t;
+  const PanelSnapshot *s = &env->snap;
+  if (!s->hasLinks || s->linkCount == 0) {
+    panelTextCentre(PANEL_ROW_ONE, "NO LINK DATA", cAzure, 1.0f);
+    return;
+  }
+  int pages = panelScreenPages(env, 4u);
+  int page = panelPageTick(4u, dt, pages);
+  for (int slot = 0; slot < 2; slot++) {
+    int i = page * 2 + slot;
+    int y = slot ? PANEL_ROW_BOT : PANEL_ROW_TOP;
+    if (i >= s->linkCount) break;
+    __typeof__(s->links[0]) const *link = &s->links[i];
+    int bad = link->state == PANEL_ST_DOWN;
+    panelTextFit(0, y, laneLabel(s, i), 5, bad ? cCrit : cInk, 1.0f);
+    if (bad) {
+      for (int x = LANE_X; x < PANEL_W; x++) {
+        panelFbSet(x, y + 0, cCrit, 0.6f);
+        panelFbSet(x, y + 4, cCrit, 0.6f);
+      }
+      continue;
+    }
+    const float *hue = kindColor(link->kind);
+    laneRow(LANE_X, PANEL_W - 1, y,     link->downKbps, &phase[i][0], -1, hue, dt);
+    laneRow(LANE_X, PANEL_W - 1, y + 1, link->downKbps, &phase[i][0], -1, hue, 0.0f);
+    laneRow(LANE_X, PANEL_W - 1, y + 3, link->upKbps,   &phase[i][1],  1, hue, dt);
+    laneRow(LANE_X, PANEL_W - 1, y + 4, link->upKbps,   &phase[i][1],  1, hue, 0.0f);
+  }
+  panelPageBar(page, pages);
 }
 
-/* ---- B1 · Throughput ----------------------------------------------------
- * DESIGN-BRIEF: BIG aggregate label at (1,2) quiet b=0.3, "AGGREGATE" at (1,0)
- * azure; from x0 = max(26, bigW+4) a 24-cell utilisation bar on row y=1
- * (b 0.5/0.05) echoed on y=2 (b 0.18/0.03), cell colour azure < 70%,
- * warn 70-85%, crit above; percent + "LINK" at y=4; ticker at y=6, 11 px/s. */
+/* A stacked two-direction sparkline of real samples, newest on the right,
+ * normalised to its own window; unsampled columns stay dark.                 */
+static void rateSpark(const PanelEnv *env, const float *downRing, const float *upRing,
+                      int x0, int x1, int y, const float *hue) {
+  float peak = 1.0f;
+  int cols = x1 - x0 + 1;
+  for (int a = 0; a < cols; a++) {
+    float dn = panelHistAge(env, downRing, a), up = panelHistAge(env, upRing, a);
+    float total = (dn > 0.0f ? dn : 0.0f) + (up > 0.0f ? up : 0.0f);
+    if (total > peak) peak = total;
+  }
+  for (int a = 0; a < cols; a++) {
+    float dn = panelHistAge(env, downRing, a), up = panelHistAge(env, upRing, a);
+    if (dn < 0.0f && up < 0.0f) continue;
+    if (dn < 0.0f) dn = 0.0f;
+    if (up < 0.0f) up = 0.0f;
+    int x = x1 - a;
+    int hDown = (int)(dn / peak * 5.0f + 0.5f);
+    int hUp = (int)((dn + up) / peak * 5.0f + 0.5f) - hDown;
+    if (hDown < 1 && dn > 0.0f) hDown = 1;
+    if (hUp < 0) hUp = 0;
+    for (int r = 0; r < hDown && r < 5; r++) panelFbSet(x, y + 4 - r, hue, 1.0f);
+    for (int r = hDown; r < hDown + hUp && r < 5; r++)
+      panelFbSet(x, y + 4 - r, cMaint, 1.0f);
+  }
+}
+
+/* One rate row: 3-letter label, current total, sparkline. */
+static void rateRow(const PanelEnv *env, int y, const char *label, uint32_t down,
+                    uint32_t up, const float *downRing, const float *upRing,
+                    const float *hue) {
+  char rate[8];
+  uint32_t total = PANEL_RATE_NONE;
+  if (down != PANEL_RATE_NONE) total = down;
+  if (up != PANEL_RATE_NONE) total = (total == PANEL_RATE_NONE ? 0u : total) + up;
+  panelRateLabel(total, rate, sizeof rate);
+  int x = panelText(0, y, label, cInk, 1.0f);
+  panelText(x, y, rate, hue, 1.0f);
+  rateSpark(env, downRing, upRing, 33, PANEL_W - 1, y, hue);
+}
+
+/* ---- B1 · WAN and LAN -----------------------------------------------------
+ * The internet and the local network, side by side but on their own scales.  */
 void panelScreenB1(const PanelEnv *env, float t, float dt) {
-  panelBig(1, 2, env->gLabel, cQuiet, 0.3f);
-  panelTextOver(1, 0, "AGGREGATE", cAzure, 0.5f);
-
-  int x0 = panelBigW(env->gLabel) + 4;
-  if (x0 < 26) x0 = 26;
-
-  /* Utilisation is the newest ingress+egress sample against the adaptive peak
-   * (DEVIATION documented in panelHist.c); thresholds are the design's. */
-  float util = panelHistAt(env, env->thru, PANEL_HIST_LEN - 1)
-             + panelHistAt(env, env->egress, PANEL_HIST_LEN - 1);
-  if (util > 1.0f) util = 1.0f;
-
-  for (int k = 0; k < 24; k++) {
-    float frac = (float)k / 24.0f;
-    int on = frac < util;
-    PanelColor *col = frac > 0.85f ? &cCrit : frac > 0.7f ? &cWarn : &cAzure;
-    panelFbSet(x0 + k, 1, on ? *col : cQuiet, on ? 0.5f : 0.05f);
-    panelFbSet(x0 + k, 2, on ? *col : cQuiet, on ? 0.18f : 0.03f);
+  (void)t; (void)dt;
+  const PanelSnapshot *s = &env->snap;
+  if (!s->hasTotals) {
+    panelTextCentre(PANEL_ROW_ONE, "NO RATE DATA", cAzure, 1.0f);
+    return;
   }
-
-  /* DOC1 review (two rounds): this screen has no room for a third text
-   * element. The y=4 "%d%% LINK" reading lost rows under the ticker; a
-   * title-row percent knocked out the bar's warn/crit cells via the
-   * panelTextOver halo (paint order). The standalone reading is DROPPED:
-   * the bar is the at-a-glance figure and the ticker's "LINK %d%%" is the
-   * authoritative absolute, per the manual's guidance. */
-
-  /* Prototype ticker synthesised OUT as 0.6x and PEAK as 1.4x of a single
-   * aggregate figure; the wire carries the real split, so IN/OUT are the real
-   * directions and PEAK is the adaptive reference the bar is scaled against. */
-  char inLabel[12], outLabel[12], ticker[80];
-  panelFormatRate(env->rxGbps * 1000000.0f, inLabel, sizeof(inLabel));
-  panelFormatRate(env->txGbps * 1000000.0f, outLabel, sizeof(outLabel));
-  snprintf(ticker, sizeof(ticker),
-           "IN %s/S" PANEL_SEP "OUT %s/S" PANEL_SEP "LINK %d%%" PANEL_TAIL,
-           inLabel, outLabel, (int)(util * 100.0f + 0.5f));
-  panelScroll(t, 5, ticker, cInk, 0.45f, 11.0f);
+  rateRow(env, PANEL_ROW_TOP, "WAN ", s->wanDownKbps, s->wanUpKbps,
+          env->wanDown, env->wanUp, cAzure);
+  rateRow(env, PANEL_ROW_BOT, "LAN ", s->lanDownKbps, s->lanUpKbps,
+          env->lanDown, env->lanUp, cOk);
 }
 
-/* ---- B2 · Load and latency ---------------------------------------------
- * DESIGN-BRIEF: BIG mean-load percent at (1,2) (warn above 75%), "MEAN LOAD"
- * at (1,0) ink b=0.45; at x0 = max(26, bigW+4) row y=0 carries "P95 {rtt}MS"
- * (warn above 35 ms) then loss percent (crit above 1%); row y=6 carries the
- * count of systems over 85% load plus "OVER 85".
- * Both text rows are re-laid-out to fit the 53 px panel — see DEVIATION 13
- * (row 6) and DEVIATION 14 (row 0) below. Colours, thresholds, brightnesses
- * and the BIG numeral are exactly as specified.                             */
+/* ---- B2 · Top Talkers -----------------------------------------------------
+ * The busiest hosts by measured rate, two a page.                            */
 void panelScreenB2(const PanelEnv *env, float t, float dt) {
-  char pct[8];
-  snprintf(pct, sizeof(pct), "%d%%", (int)(env->meanLoad * 100.0f + 0.5f));
-  panelBig(1, 2, pct, env->meanLoad > 0.75f ? cWarn : cQuiet,
-           env->meanLoad > 0.75f ? 0.22f : 0.3f);
-  /* DEVIATION 14 (row y=0 layout). The design's row 0 is over-subscribed: it
-   * asks for "MEAN LOAD" (35 px) at x=1 PLUS "P95 {rtt}MS" (31 px) PLUS a loss
-   * percent (15 px) starting at x0 = max(26, bigW+4), which is ~84 px of text
-   * on a 53 px row. The Turn 3 prototype has the same arrangement. In practice
-   * "P95 …" overpainted the tail of "MEAN LOAD" and then ran off the right edge
-   * itself, so BOTH strings were rendering truncated.
-   *
-   * Three things make it fit with nothing clipped and no figure dropped:
-   *   - the big numeral's label contracts to "LOAD" (15 px, x=1..15) — with a
-   *     percent numeral directly under it, "MEAN" was carrying no information;
-   *   - the latency and loss readings alternate on a 5 s slot instead of
-   *     sharing the row, the same rotation vocabulary D2 already uses, which
-   *     keeps both LABELS intact rather than abbreviating them to symbols;
-   *   - the active reading is right-aligned to the panel edge and floored clear
-   *     of the "LOAD" label, so it can never overlap or overrun.
-   * Both figures are clamped to the widest form that fits (999 ms, 100%). */
-  panelTextOver(1, 0, "LOAD", cInk, 0.45f);
-
-  /* 24 bytes, not 16: the compiler cannot see the ms clamp below and warns that
-   * "P95 %dMS" could write up to 18 bytes for a full-range int. */
-  char reading[24];
-  PanelColor *rcol;
-  if ((((int)(t / 5.0f)) & 1) == 0) {
-    int ms = (int)(env->rtt + 0.5f);
-    if (ms > 999) ms = 999;
-    snprintf(reading, sizeof(reading), "P95 %dMS", ms);
-    rcol = env->rtt > 35.0f ? &cWarn : &cInk;
-  } else {
-    if (env->loss >= 10.0f)
-      snprintf(reading, sizeof(reading), "LOSS %d%%", (int)(env->loss + 0.5f));
-    else
-      snprintf(reading, sizeof(reading), "LOSS %.1f%%", (double)env->loss);
-    rcol = env->loss > 1.0f ? &cCrit : &cInk;
+  (void)t;
+  const PanelSnapshot *s = &env->snap;
+  if (env->talkerCount == 0) {
+    panelTextCentre(PANEL_ROW_ONE, "NO HOST RATES", cAzure, 1.0f);
+    return;
   }
-  int rx = PANEL_W - panelTextW(reading);
-  int rMinX = panelTextW("LOAD") + 3;
-  if (rx < rMinX) rx = rMinX;
-  panelTextOver(rx, 0, reading, *rcol, 0.5f);
+  int shown = env->talkerCount < 8 ? env->talkerCount : 8;
+  int pages = panelScreenPages(env, 6u);
+  int page = panelPageTick(6u, dt, pages);
+  for (int slot = 0; slot < 2; slot++) {
+    int rank = page * 2 + slot;
+    int y = slot ? PANEL_ROW_BOT : PANEL_ROW_TOP;
+    if (rank >= shown) break;
+    int i = env->talkers[rank];
+    char rate[8];
+    uint32_t rx = s->sysx[i].rxKbps == PANEL_RATE_NONE ? 0u : s->sysx[i].rxKbps;
+    uint32_t tx = s->sysx[i].txKbps == PANEL_RATE_NONE ? 0u : s->sysx[i].txKbps;
+    panelRateLabel(rx + tx, rate, sizeof rate);
+    panelTextFit(0, y, s->systems[i].name, 8, cInk, 1.0f);
+    panelTextRight(PANEL_W - 1, y, rate, cAzure, 1.0f);
+  }
+  panelPageBar(page, pages);
+}
 
-  /* Counted over the systems on the wire (<= 64, ordered by tier then name).
-   * The full-fleet figure would need a per-system aggregate the API does not
-   * send; the pool loadPct averages cannot answer "how many are over 85". */
-  int hot = 0, n = env->snap.systemCount;
-  if (n > (int)PANEL_MAX_SYSTEMS) n = (int)PANEL_MAX_SYSTEMS;
-  for (int i = 0; i < n; i++)
-    if (env->snap.systems[i].loadPct > 85) hot++;
+/* ---- B3 · Flow Map --------------------------------------------------------
+ * The network as it is cabled: the internet on the left, each device at its
+ * real depth, dots moving along each uplink at that link's measured rate.    */
+#define NO_PARENT 0xFFu
 
-  /* CONTRACT §9b (two populations): this count is over the panel ROSTER, which
-   * includes adopted probe-only assets, while B0's UP/DOWN and D2's "{n} SYS"
-   * are the stateRoll AGENT-NODE counts. Printing the denominator makes the
-   * different population self-evident, so "3/15" can never be misread as
-   * impossible next to a headline of 9.
-   *
-   * DEVIATION: the design's label is the word "OVER 85". It does not fit and
-   * never did — "3 OVER 85" is 35 px starting at x0=26 on a 53 px panel, so the
-   * shipped-until-now render was the clipped string "3 OVER". Adding a
-   * denominator makes that strictly worse, so the label contracts to ">85",
-   * which carries the same threshold in 3 characters. The row is also
-   * right-aligned now and floored just clear of the BIG numeral, so it stays at
-   * the design's x=26 in the common case and shifts left instead of clipping
-   * when the counts reach two digits. */
-  char over[20];
-  snprintf(over, sizeof(over), "%d/%d>85", hot, n);
-  int tx = PANEL_W - panelTextW(over);
-  int minX = panelBigW(pct) + 3;
-  if (tx < minX) tx = minX;
-  panelTextOver(tx, 6, over, hot ? cWarn : cAzure, 0.45f);
+/* A parent chain that loops has no real root (UniFi can report slide<->pipette),
+ * so the offending link is treated as a root. Input: links, count, index.
+ * Output: depth from the root, 0 for a root. */
+static int linkDepth(const PanelSnapshot *s, int i) {
+  int depth = 0, at = i;
+  while (s->links[at].parent != NO_PARENT && s->links[at].parent < s->linkCount) {
+    at = s->links[at].parent;
+    if (++depth > s->linkCount) return 0;
+  }
+  return depth;
+}
+
+static int linkParent(const PanelSnapshot *s, int i) {
+  int parent = s->links[i].parent;
+  if (parent == NO_PARENT || parent >= s->linkCount) return -1;
+  return linkDepth(s, i) == 0 ? -1 : parent;
+}
+
+/* Point `d` pixels along the elbow path parent -> child. */
+static void pathPoint(int px, int py, int cx, int cy, int d, int *x, int *y) {
+  int dy = cy > py ? cy - py : py - cy;
+  if (d <= dy) { *x = px; *y = py + (cy > py ? d : -d); }
+  else         { *x = px + (d - dy); *y = cy; }
+}
+
+void panelScreenB3(const PanelEnv *env, float t, float dt) {
+  static float phase[PANEL_MAX_LINKS][2];
+  (void)t;
+  const PanelSnapshot *s = &env->snap;
+  int n = s->hasLinks ? s->linkCount : 0;
+  if (n == 0) {
+    panelTextCentre(PANEL_ROW_ONE, "NO LINK DATA", cAzure, 1.0f);
+    return;
+  }
+  if (n > (int)PANEL_MAX_LINKS) n = (int)PANEL_MAX_LINKS;
+
+  int depth[PANEL_MAX_LINKS], parent[PANEL_MAX_LINKS];
+  int nx[PANEL_MAX_LINKS], ny[PANEL_MAX_LINKS];
+  int maxDepth = 0;
+  for (int i = 0; i < n; i++) {
+    parent[i] = linkParent(s, i);
+    depth[i] = parent[i] < 0 ? 0 : linkDepth(s, i);
+    if (depth[i] > maxDepth) maxDepth = depth[i];
+  }
+  /* Rows: walk the tree depth-first so siblings sit together. Each node takes
+   * the next leaf row; a parent sits at its first child's row. */
+  int order[PANEL_MAX_LINKS], ordered = 0;
+  int stack[PANEL_MAX_LINKS * 2], top = 0;
+  for (int i = n - 1; i >= 0; i--) if (parent[i] < 0) stack[top++] = i;
+  while (top > 0 && ordered < n) {
+    int at = stack[--top];
+    order[ordered++] = at;
+    for (int c = n - 1; c >= 0; c--)
+      if (parent[c] == at && top < (int)PANEL_MAX_LINKS * 2) stack[top++] = c;
+  }
+  int leaves = 0;
+  for (int k = 0; k < ordered; k++) {
+    int hasChild = 0;
+    for (int c = 0; c < n; c++) if (parent[c] == order[k]) hasChild = 1;
+    if (!hasChild) leaves++;
+  }
+  if (leaves < 1) leaves = 1;
+  int leaf = 0;
+  for (int k = 0; k < ordered; k++) {
+    int at = order[k], hasChild = 0;
+    for (int c = 0; c < n; c++) if (parent[c] == at) hasChild = 1;
+    nx[at] = 5 + depth[at] * 45 / (maxDepth ? maxDepth : 1);
+    /* Leaves spread over rows 1..9; 2 px nodes need the spare row. */
+    ny[at] = 1 + (2 * leaf + 1) * 9 / (2 * leaves);
+    if (!hasChild) leaf++;
+  }
+
+  /* Uplinks first, then dots, then nodes on top. */
+  for (int k = 0; k < ordered; k++) {
+    int i = order[k];
+    int px = parent[i] < 0 ? 0 : nx[parent[i]];
+    int py = parent[i] < 0 ? ny[i] : ny[parent[i]];
+    int len = (ny[i] > py ? ny[i] - py : py - ny[i]) + (nx[i] - px);
+    __typeof__(s->links[0]) const *link = &s->links[i];
+    const float *hue = link->state == PANEL_ST_DOWN ? cCrit : kindColor(link->kind);
+    for (int d = 0; d <= len; d++) {
+      int x, y;
+      pathPoint(px, py, nx[i], ny[i], d, &x, &y);
+      panelFbSet(x, y, hue, link->state == PANEL_ST_DOWN ? 0.6f : 0.22f);
+    }
+    if (link->state == PANEL_ST_DOWN || len <= 0) continue;
+    for (int dir = 0; dir < 2; dir++) {
+      uint32_t kbps = dir ? link->upKbps : link->downKbps;
+      if (kbps == PANEL_RATE_NONE || kbps == 0u) continue;
+      float spacing, speed;
+      flowShape(kbps, &spacing, &speed);
+      phase[i][dir] = fmodf(phase[i][dir] + speed * dt, spacing * 64.0f);
+      /* Long gaps on a short path would show nothing: keep one dot in flight. */
+      if (spacing > (float)len) spacing = (float)len + 1.0f;
+      for (float p = fmodf(phase[i][dir], spacing); p <= (float)len; p += spacing) {
+        int d = (int)p, x, y;
+        if (dir) d = len - d;
+        pathPoint(px, py, nx[i], ny[i], d, &x, &y);
+        panelFbSet(x, y, hue, 1.0f);
+      }
+    }
+  }
+  for (int k = 0; k < ordered; k++) {
+    int i = order[k];
+    const float *hue = panelStateColor(s->links[i].state);
+    for (int yy = 0; yy < 2; yy++)
+      for (int xx = 0; xx < 2; xx++)
+        panelFbSet(nx[i] + xx, ny[i] + yy, hue, 1.0f);
+  }
 }

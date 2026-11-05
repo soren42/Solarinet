@@ -87,6 +87,7 @@ add_executable(solari-panel-fw
   panelScreensB.c
   panelScreensC.c
   panelScreensD.c
+  panelScreensCommon.c
   panelInlay.c
   panelHw.cpp
   "${SOLARI_PROTOCOL_C}"

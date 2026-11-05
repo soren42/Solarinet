@@ -105,7 +105,7 @@ PanelCtlAction panelCtlConsume(PanelCtl *ctl, uint32_t cmdId, uint8_t kind,
       if (arg <= 3u) { act = PANEL_CTLACT_THEME; out = arg; }
       break;
     case PANEL_CTL_SETSCREEN:
-      if (arg <= 2u) { act = PANEL_CTLACT_SCREEN; out = arg; }
+      if (arg <= 3u) { act = PANEL_CTLACT_SCREEN; out = arg; }
       break;
     case PANEL_CTL_BRIGHTNESS:
       if (arg <= 100u) { act = PANEL_CTLACT_BRIGHTNESS; out = arg; }
@@ -129,12 +129,12 @@ PanelCtlAction panelCtlConsume(PanelCtl *ctl, uint32_t cmdId, uint8_t kind,
       break;
     case PANEL_CTL_SCREENEN:
       /* CONTRACT-AW.md §3.2: bit 0 is the value; every other bit names the
-       * flattened theme*3+screen entry. Invalid commands still consume. */
-      if ((arg >> 1) < 12u) { act = PANEL_CTLACT_SCREENEN; out = arg; }
+       * flattened theme*4+screen entry. Invalid commands still consume. */
+      if ((arg >> 1) < 16u) { act = PANEL_CTLACT_SCREENEN; out = arg; }
       break;
     case PANEL_CTL_SCREENWT:
       /* CONTRACT-AW.md §3.2: low three bits are a six-value weight code. */
-      if ((arg >> 3) < 12u && (arg & 0x07u) <= 5u) {
+      if ((arg >> 3) < 16u && (arg & 0x07u) <= 5u) {
         act = PANEL_CTLACT_SCREENWT; out = arg;
       }
       break;

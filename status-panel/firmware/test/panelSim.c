@@ -16,6 +16,7 @@
 #include "../panelScreens.h"
 #include "../panelHelpOverlay.h"
 #include "testJson.h"
+#include "panelSceneExt.h"
 
 static unsigned char gCap[PANEL_H][PANEL_W][3];
 
@@ -123,6 +124,7 @@ static void decodeSample(const JVal *s, PanelSnapshot *snap) {
     snap->gear[i].txLevel = (uint8_t)NUM(g, "txLevel");
   }
   snap->gearCount = (uint8_t)n;
+  sceneDecodeExt(s, snap);
 }
 
 static void writePpm(const char *dir, const char *id, float t) {
@@ -136,7 +138,7 @@ static void writePpm(const char *dir, const char *id, float t) {
   fclose(f);
 }
 
-typedef enum { SIM_SCREEN, SIM_INLAY, SIM_HELP, SIM_LINKLOST, SIM_NODATA } SimKind;
+typedef enum { SIM_SCREEN, SIM_INLAY, SIM_HELP, SIM_LINKLOST, SIM_NODATA, SIM_TITLE } SimKind;
 
 typedef struct {
   const char *id;
@@ -146,12 +148,23 @@ typedef struct {
 } SimCase;
 
 static const SimCase kCases[] = {
-  { "A0", SIM_SCREEN, panelScreenA0, 0 }, { "A1", SIM_SCREEN, panelScreenA1, 0 },
-  { "A2", SIM_SCREEN, panelScreenA2, 0 }, { "B0", SIM_SCREEN, panelScreenB0, 0 },
-  { "B1", SIM_SCREEN, panelScreenB1, 0 }, { "B2", SIM_SCREEN, panelScreenB2, 0 },
-  { "C0", SIM_SCREEN, panelScreenC0, 0 }, { "C1", SIM_SCREEN, panelScreenC1, 0 },
-  { "C2", SIM_SCREEN, panelScreenC2, 0 }, { "D0", SIM_SCREEN, panelScreenD0, 0 },
-  { "D1", SIM_SCREEN, panelScreenD1, 0 }, { "D2", SIM_SCREEN, panelScreenD2, 0 },
+  { "A0", SIM_SCREEN, panelScreenA0, 0 },
+  { "A1", SIM_SCREEN, panelScreenA1, 0 },
+  { "A2", SIM_SCREEN, panelScreenA2, 0 },
+  { "A3", SIM_SCREEN, panelScreenA3, 0 },
+  { "B0", SIM_SCREEN, panelScreenB0, 0 },
+  { "B1", SIM_SCREEN, panelScreenB1, 0 },
+  { "B2", SIM_SCREEN, panelScreenB2, 0 },
+  { "B3", SIM_SCREEN, panelScreenB3, 0 },
+  { "C0", SIM_SCREEN, panelScreenC0, 0 },
+  { "C1", SIM_SCREEN, panelScreenC1, 0 },
+  { "C2", SIM_SCREEN, panelScreenC2, 0 },
+  { "C3", SIM_SCREEN, panelScreenC3, 0 },
+  { "D0", SIM_SCREEN, panelScreenD0, 0 },
+  { "D1", SIM_SCREEN, panelScreenD1, 0 },
+  { "D2", SIM_SCREEN, panelScreenD2, 0 },
+  { "D3", SIM_SCREEN, panelScreenD3, 0 },
+  { "TITLE", SIM_TITLE, panelScreenA0, 0 },
   { "INLAY", SIM_INLAY, panelScreenA0, 0 },
   { "HELP", SIM_HELP, NULL, 0 },
   { "LINKLOST", SIM_LINKLOST, panelScreenA0, 0 },
@@ -192,10 +205,11 @@ int main(int argc, char **argv) {
       float t = (float)tick * 0.04f;
       panelFbClear();
       if (k->fn) k->fn(&env, t, 0.04f);
+      if (k->kind == SIM_TITLE) panelTitleCard(11u, 0.5f);
       if (k->kind == SIM_INLAY) panelInlay(&env, t);
       if (k->kind == SIM_HELP) panelHelpOverlayDraw(0u, t);
       if (k->kind == SIM_LINKLOST) panelScreenLinkLost(t);
-      if (k->kind == SIM_NODATA) panelScreenNoData(t);
+      if (k->kind == SIM_NODATA) panelScreenNoData(env.haveData, t);
       panelFbFlush();
       if (t + 0.001f >= caps[cap]) writePpm(argv[2], k->id, caps[cap++]);
     }

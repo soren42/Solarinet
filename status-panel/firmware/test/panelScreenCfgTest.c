@@ -13,7 +13,7 @@ static void check(int ok, const char *label) {
   else { printf("FAIL: %s\n", label); ++gFailures; }
 }
 
-typedef struct { uint8_t bytes[19]; int writes; } FlashMock;
+typedef struct { uint8_t bytes[23]; int writes; } FlashMock;
 
 /* Purpose: emulate reading the last flash-sector record. Input: mock/output. Output: read success. */
 static bool mockRead(void *user, uint8_t *out, size_t len) {
@@ -85,7 +85,7 @@ int main(void) {
   flash.read = mockRead; flash.writeSector = mockWrite; flash.user = &mock;
 
   panelScreenCfgLoad(&cfg, &flash, 0u);
-  check(cfg.screenCfg[0] == 0x05u && cfg.screenCfg[11] == 0x05u,
+  check(cfg.screenCfg[0] == 0x05u && cfg.screenCfg[15] == 0x05u,
         "A4: absent flash selects enabled 1x defaults");
   check(!cfg.persisted, "A4: defaults with no flash record are not cfgPersisted");
   check(panelScreenCfgSet(&cfg, 4u, 0x09u, 10u) &&
@@ -96,6 +96,15 @@ int main(void) {
   panelScreenCfgLoad(&reboot, &flash, 4000u);
   check(reboot.screenCfg[4] == 0x0bu && reboot.persisted,
         "A4: persisted config survives simulated reboot and reports cfgPersisted");
+  /* A version 1 record means the old twelve screens: its CRC can be valid, but
+   * its slots are other screens now, so it must decode to defaults. */
+  mock.bytes[4] = 1u;
+  { uint16_t crc = panelCrc16(mock.bytes, 21u);
+    mock.bytes[21] = (uint8_t)crc; mock.bytes[22] = (uint8_t)(crc >> 8); }
+  panelScreenCfgLoad(&reboot, &flash, 4500u);
+  check(reboot.screenCfg[4] == 0x05u && !reboot.persisted,
+        "A4: a version 1 record falls back to defaults");
+  mock.bytes[4] = 2u;
   mock.bytes[0] ^= 1u; panelScreenCfgLoad(&reboot, &flash, 5000u);
   check(reboot.screenCfg[4] == 0x05u, "A4: bad magic falls back safely");
   memset(&mock, 0xff, sizeof(mock)); panelScreenCfgLoad(&reboot, &flash, 6000u);
@@ -104,7 +113,7 @@ int main(void) {
   panelScreenCfgLoad(&cfg, &flash, 6100u);
   (void)panelScreenCfgSet(&cfg, 0u, 0x09u, 6200u);
   (void)panelScreenCfgSaveDue(&cfg, &flash, 8200u);
-  mock.bytes[16] = 0xffu; mock.bytes[17] = 0xffu; mock.bytes[18] = 0xffu;
+  mock.bytes[20] = 0xffu; mock.bytes[21] = 0xffu; mock.bytes[22] = 0xffu;
   panelScreenCfgLoad(&reboot, &flash, 8300u);
   check(reboot.screenCfg[0] == 0x05u && !reboot.persisted,
         "A4: torn flash tail fails CRC and falls back to unpersisted defaults");
@@ -119,8 +128,21 @@ int main(void) {
   check(panelScreenCfgNext(&cfg, 0u, 0u) == 2u,
         "A3: rotation skips a disabled screen");
   cfg.screenCfg[0] &= (uint8_t)~1u; cfg.screenCfg[2] &= (uint8_t)~1u;
+  cfg.screenCfg[3] &= (uint8_t)~1u;
   check(panelScreenCfgEnabled(&cfg, 0u, 1u) && panelScreenCfgNext(&cfg, 0u, 1u) == 2u,
         "A3: all-disabled active theme falls back to all enabled");
+  /* The tour crosses themes, skips disabled screens and never stalls. */
+  {
+    PanelScreenCfg tour;
+    uint8_t i;
+    panelScreenCfgLoad(&tour, NULL, 0u);
+    check(panelScreenCfgTourNext(&tour, 3u) == 4u && panelScreenCfgTourNext(&tour, 15u) == 0u,
+          "tour: crosses theme boundaries and wraps");
+    tour.screenCfg[4] &= (uint8_t)~1u;
+    check(panelScreenCfgTourNext(&tour, 3u) == 5u, "tour: skips a disabled screen");
+    for (i = 0u; i < PANEL_SCREEN_COUNT; ++i) tour.screenCfg[i] &= (uint8_t)~1u;
+    check(panelScreenCfgTourNext(&tour, 7u) == 8u, "tour: all disabled still advances");
+  }
   {
     int advanced;
     float elapsed = rescaleDwell(20.0f, 30.0f, 7.5f, &advanced);
@@ -152,13 +174,13 @@ int main(void) {
         "A6: short additive gear trailer decodes as no gear");
   memset(config, 0x05, sizeof(config));
   check(panelEncodeConfig(config, 1u, payload, sizeof(payload)) == PANEL_CONFIG_SIZE &&
-        panelDecodeConfig(payload, PANEL_CONFIG_SIZE, config, &payload[20]) == 0 && payload[20] == 1u,
+        panelDecodeConfig(payload, PANEL_CONFIG_SIZE, config, &payload[PANEL_CONFIG_SIZE]) == 0 && payload[PANEL_CONFIG_SIZE] == 1u,
         "A5: CONFIG round trip");
   payload[0] = 0x15u;
-  check(panelDecodeConfig(payload, PANEL_CONFIG_SIZE, config, &payload[20]) == -1,
+  check(panelDecodeConfig(payload, PANEL_CONFIG_SIZE, config, &payload[PANEL_CONFIG_SIZE]) == -1,
         "A5: CONFIG rejects nonzero screenCfg reserved bits");
   (void)panelEncodeConfig(config, 1u, payload, sizeof(payload)); payload[13] = 1u;
-  check(panelDecodeConfig(payload, PANEL_CONFIG_SIZE, config, &payload[20]) == -1,
+  check(panelDecodeConfig(payload, PANEL_CONFIG_SIZE, config, &payload[PANEL_CONFIG_SIZE]) == -1,
         "A5: CONFIG rejects nonzero reserved payload bytes");
   feedFrame(PANEL_FT_SNAPSHOT, payload, 0u, &counts); /* establishes empty SNAPSHOT dispatch path separately below */
   len = panelEncodeSnapshot(&sent, payload, sizeof(payload));
