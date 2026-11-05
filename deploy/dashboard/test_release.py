@@ -27,7 +27,7 @@ HELPER_ENTRYPOINTS = (
     "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
     "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
     "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
-    "deploy/fleet/prov-finish.py",
+    "deploy/fleet/fleet-updates.py", "deploy/fleet/prov-finish.py",
 )
 PACKAGER_SPEC = importlib.util.spec_from_file_location("dashboard_package_release", PACKAGER)
 assert PACKAGER_SPEC and PACKAGER_SPEC.loader
@@ -233,6 +233,7 @@ class ReleaseFlowTests(unittest.TestCase):
             for name in (*HELPER_ENTRYPOINTS, "bin/solariCtlClient"):
                 self.assertTrue(os.access(current / name, os.X_OK), name)
             self.assertTrue((current / "deploy/fleet/ansible/ansible.cfg").is_file())
+            self.assertTrue((current / "deploy/fleet/ansible/playbooks/updates.yml").is_file())
 
     def test_rejects_release_with_non_executable_ctl_helper(self) -> None:
         with tempfile.TemporaryDirectory(prefix="solarinet-release-helper-mode-") as temp:
