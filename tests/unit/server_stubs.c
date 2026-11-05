@@ -341,3 +341,14 @@ solariStatus serverAssetsResyncHeartbeat(serverContext *ctx, uint64_t assetId)
     (void)ctx; (void)assetId;
     return SOLARI_OK;
 }
+
+WEAK solariStatus serverAssetsCreate(serverContext *c, const char *ip, const char *dn,
+                                     const char *cl, uint64_t pool, const char *tags,
+                                     const char *notes, bool hb, const char *services,
+                                     uint64_t *assetId)
+{
+    (void)c; (void)ip; (void)dn; (void)cl; (void)pool; (void)tags;
+    (void)notes; (void)hb; (void)services;
+    if (assetId) *assetId = 7;
+    return SOLARI_OK;
+}

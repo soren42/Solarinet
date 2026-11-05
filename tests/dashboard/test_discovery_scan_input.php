@@ -49,6 +49,7 @@ final class SolariCtl
 {
     public static array $call = [];
     public static array $queued = [];
+    public static array $queuedReply = ['scan' => '42', 'hosts' => '254'];
     public static function call(string $verb, array $args = []): array
     {
         self::$call = [$verb, $args];
@@ -57,7 +58,7 @@ final class SolariCtl
     }
     public static function callQueued(string $verb, array $args, string $op, ?string $idem = null,
                                       float $waitSec = 4.0): array
-    { self::$queued = [$verb, $args, $op, $idem, $waitSec]; return ['scan' => '42', 'hosts' => '254']; }
+    { self::$queued = [$verb, $args, $op, $idem, $waitSec]; return self::$queuedReply; }
     public static function poll(int $requestId, string $op): array
     { self::$call = ['REQUEST_GET', ['request' => $requestId, 'op' => $op]]; return ['state' => 'done', 'result' => 'OK scan=42 status=queued hosts=254']; }
 }
@@ -124,6 +125,27 @@ assert_true(SolariCtl::$queued[3] === 'scan-regression-key-001',
 assert_true(Response::$result === ['cidr' => '10.0.0.0/24', 'scanId' => 42,
     'hostsTotal' => 254, 'status' => 'queued'], 'scan API should return a durable job id and accepted status');
 assert_true(Response::$status === 202, 'scan admission must return HTTP 202');
+
+$manualHandler = $router->posts['/api/discovery/manual-scan'];
+$GLOBALS['test_body'] = ['target' => '10.0.0.8'];
+$manualHandler();
+assert_true(SolariCtl::$queued[0] === 'DISCOVER' && SolariCtl::$queued[1] === ['cidr' => '10.0.0.8/32'],
+    'manual scan must queue exactly one host through the durable scanner');
+assert_true(Response::$result['ip'] === '10.0.0.8' && Response::$status === 202,
+    'manual scan should return the confirmed address and accepted status');
+$beforeManualQueued = SolariCtl::$queued;
+$GLOBALS['test_body'] = ['target' => '10.0.0.0/24'];
+assert_route_status(['target' => '10.0.0.0/24'], 400);
+assert_true(SolariCtl::$queued === $beforeManualQueued, 'CIDR input must not reach the scanner');
+SolariCtl::$queuedReply = ['status' => 'queued'];
+try {
+    $GLOBALS['test_body'] = ['target' => '10.0.0.8'];
+    $manualHandler();
+    assert_true(false, 'manual scan without scan id or request id must fail');
+} catch (TestResponseError $error) {
+    assert_true($error->status === 502, 'manual scan without scanner id must report a gateway failure');
+}
+SolariCtl::$queuedReply = ['scan' => '42', 'hosts' => '254'];
 
 $statusHandler = $router->gets['/api/discovery/scans/{scanId}'];
 $statusHandler(['scanId' => '42']);

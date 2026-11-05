@@ -48,6 +48,7 @@ static const char *const kHelpers[] = {
     "deploy/remote-deploy.sh", "deploy/fleet/fleet-provision.sh",
     "deploy/fleet/fleet-image.sh", "deploy/fleet/image-refresh.py",
     "deploy/fleet/prov-stage.py", "deploy/fleet/stack-apply.py",
+    "deploy/fleet/fleet-updates.py",
 };
 
 static void fixture_path(char *out, size_t cap, const char *rel)
@@ -381,6 +382,7 @@ static void test_rbac(void)
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("POOL_DEL"));
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("RULE_DEL"));
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("ENROLL_TOKEN"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("FLEET_UPDATES"));
     TEST_ASSERT_FALSE(ctlVerbIsDestructive("PROVISION"));
     TEST_ASSERT_FALSE(ctlVerbIsDestructive("ALERT_ACK"));
 
@@ -406,15 +408,19 @@ static void test_rbac(void)
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("IMAGE_REFRESH"));
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("PROV_STAGE"));
     TEST_ASSERT_TRUE(ctlVerbIsDestructive("STACK_APPLY"));
+    TEST_ASSERT_TRUE(ctlVerbIsDestructive("FLEET_UPDATES"));
     TEST_ASSERT_TRUE(ctlVerbRequiresOperator("IMAGE_REFRESH"));
     TEST_ASSERT_TRUE(ctlVerbRequiresOperator("PROV_STAGE"));
     TEST_ASSERT_TRUE(ctlVerbRequiresOperator("STACK_APPLY"));
+    TEST_ASSERT_TRUE(ctlVerbRequiresOperator("FLEET_UPDATES"));
     TEST_ASSERT_FALSE(ctlVerbMayRunOnStandby("IMAGE_REFRESH"));
     TEST_ASSERT_FALSE(ctlVerbMayRunOnStandby("PROV_STAGE"));
     TEST_ASSERT_FALSE(ctlVerbMayRunOnStandby("STACK_APPLY"));
+    TEST_ASSERT_FALSE(ctlVerbMayRunOnStandby("FLEET_UPDATES"));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("IMAGE_REFRESH", "image=1", op, sizeof op));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("PROV_STAGE", "entity=1 image=1 stacks=core op=", op, sizeof op));
     TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("STACK_APPLY", "entity=1 stacks=core dryRun=1", op, sizeof op));
+    TEST_ASSERT_EQUAL_INT(ERR_AUTH_ROLE, ctlCheckRbac("FLEET_UPDATES", "mode=apply", op, sizeof op));
 }
 
 /* Task #1 — verb-class mapping is an ALLOWLIST (review F1/F4). Only an explicit
@@ -436,6 +442,7 @@ static void test_verb_priv_class(void)
     TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("SURVEY"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("ADOPT"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("ASSET_SET"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("ASSET_CREATE"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("IGNORE"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("POOL_NEW"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_ORDINARY, ctlVerbPrivClass("POOL_SET"));
@@ -468,6 +475,7 @@ static void test_verb_priv_class(void)
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("IMAGE_REFRESH"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("PROV_STAGE"));
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("STACK_APPLY"));
+    TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("FLEET_UPDATES"));
 
     /* default-deny: an unknown / not-yet-invented verb is PRIVILEGED, not ordinary */
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED, ctlVerbPrivClass("SOME_NEW_VERB_2027"));
@@ -578,7 +586,8 @@ static void test_ctl_manifest_matches_classifier(void)
         TEST_ASSERT_EQUAL_INT_MESSAGE(destructive, ctlVerbIsDestructive(verb), verb);
         TEST_ASSERT_EQUAL_INT_MESSAGE(mayRunOnStandby, ctlVerbMayRunOnStandby(verb), verb);
         if (strcmp(verb, "IMAGE_REFRESH") == 0 || strcmp(verb, "PROV_STAGE") == 0 ||
-            strcmp(verb, "STACK_APPLY") == 0 || strcmp(verb, "REQUEST_GET") == 0 ||
+            strcmp(verb, "STACK_APPLY") == 0 || strcmp(verb, "FLEET_UPDATES") == 0 ||
+            strcmp(verb, "REQUEST_GET") == 0 ||
             strcmp(verb, "REQUEST_SUBMIT") == 0)
             sentinels++;
         checked++;
@@ -586,7 +595,7 @@ static void test_ctl_manifest_matches_classifier(void)
     }
     /* Every object was walked, including those after REQUEST_GET (whose
      * phpCallers carry {placeholders}) — a first-'}' reader stopped there. */
-    TEST_ASSERT_EQUAL_UINT_MESSAGE(5, sentinels, "manifest walk missed a verb");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(6, sentinels, "manifest walk missed a verb");
     TEST_ASSERT_TRUE_MESSAGE(checked > 0, "manifest has no ctl verb objects");
     TEST_ASSERT_EQUAL_INT(CTL_VC_PRIVILEGED,
         ctlVerbPrivClass("AUTHZ_MANIFEST_UNLISTED_VERB"));
@@ -1231,6 +1240,26 @@ static void test_prov_verbs_exec_exact_argv(void)
         "stack-apply-9.log", "applying");
 }
 
+static void test_fleet_updates_exec_exact_argv(void)
+{
+    char reply[1024], buf[CTL_REQ_CAP], wantArgv[512], wantLog[512];
+    serverCtl ctl;
+    memset(&ctl, 0, sizeof ctl);
+    ctl_use_fixture(&ctl);
+    snprintf(buf, sizeof buf, "%s", "FLEET_UPDATES mode=check op=alice");
+    gSpawnCalls = 0; gSpawnArgv[0] = '\0'; gSpawnLog[0] = '\0';
+    (void)ctlHandleLine(&ctl, buf, CTL_PEER_OPERATOR, 0, reply, sizeof reply);
+    snprintf(wantArgv, sizeof wantArgv, "%s/deploy/fleet/fleet-updates.py|--mode|check|--op|alice", gHelperRoot);
+    snprintf(wantLog, sizeof wantLog, "%s/fleet-updates-1.log", gLogDir);
+    TEST_ASSERT_EQUAL_UINT(1, gSpawnCalls);
+    TEST_ASSERT_EQUAL_STRING(wantArgv, gSpawnArgv);
+    TEST_ASSERT_EQUAL_STRING(wantLog, gSpawnLog);
+    TEST_ASSERT_EQUAL_STRING("OK status=started\n", reply);
+
+    prov_expect_err("FLEET_UPDATES mode=--help op=alice", ERR_INVALID_ARG);
+    prov_expect_err("FLEET_UPDATES mode=apply", ERR_AUTH_ROLE);
+}
+
 static void test_prov_verbs_refuse_bad_args(void)
 {
     static const char *const badIds[] = {
@@ -1782,6 +1811,7 @@ int main(void)
     RUN_TEST(test_prov_validators_pure);
     RUN_TEST(test_prov_strict_decode_refuses_embedded_nul);
     RUN_TEST(test_prov_verbs_exec_exact_argv);
+    RUN_TEST(test_fleet_updates_exec_exact_argv);
     RUN_TEST(test_prov_verbs_refuse_bad_args);
     RUN_TEST(test_prov_stage_mac_arch);
     RUN_TEST(test_prov_verbs_dashboard_must_queue);

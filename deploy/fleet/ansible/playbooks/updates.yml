@@ -1,0 +1,148 @@
+---
+- name: Check or apply operating system package updates
+  hosts: all
+  serial: 1
+  gather_facts: false
+  ignore_unreachable: true
+  pre_tasks:
+    - name: Gather facts on supported candidates
+      ansible.builtin.setup:
+      when: solari_updates_skip_reason is not defined
+      ignore_errors: true
+  tasks:
+    - name: Skip host explicitly marked as an appliance
+      ansible.builtin.debug:
+        msg: "SKIPPED {{ inventory_hostname }}: {{ solari_updates_skip_reason }}"
+      when: solari_updates_skip_reason is defined
+
+    - name: Explain unsupported operating system
+      ansible.builtin.debug:
+        msg: "SKIPPED {{ inventory_hostname }}: OS family {{ ansible_os_family }} is not managed by this playbook"
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family is defined
+        - ansible_os_family not in ['Debian', 'Suse', 'RedHat']
+
+    - name: Explain unreachable hosts without OS facts
+      ansible.builtin.debug:
+        msg: "SKIPPED {{ inventory_hostname }}: unreachable or OS facts unavailable"
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family is not defined
+
+    - name: Count pending Debian-family package updates
+      ansible.builtin.command: apt-get -s dist-upgrade
+      register: solari_update_check
+      changed_when: false
+      failed_when: false
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'Debian'
+
+    - name: Count pending RedHat-family package updates
+      ansible.builtin.command: dnf -q check-update
+      register: solari_update_check
+      changed_when: false
+      failed_when: solari_update_check.rc not in [0, 100]
+      ignore_errors: true
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'RedHat'
+
+    - name: Count pending SUSE-family package updates
+      ansible.builtin.command: zypper --non-interactive --quiet list-updates
+      register: solari_update_check
+      changed_when: false
+      failed_when: false
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'Suse'
+
+    - name: Set Debian pending update count
+      ansible.builtin.set_fact:
+        solari_update_count: "{{ solari_update_check.stdout_lines | select('match', '^Inst ') | list | length }}"
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'Debian'
+
+    - name: Set RedHat pending update count
+      ansible.builtin.set_fact:
+        solari_update_count: "{{ solari_update_check.stdout_lines | length }}"
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'RedHat'
+
+    - name: Set SUSE pending update count
+      ansible.builtin.set_fact:
+        solari_update_count: "{{ solari_update_check.stdout_lines | select('match', '^v\\s') | list | length }}"
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'Suse'
+
+    - name: Report available updates
+      ansible.builtin.debug:
+        msg: "PENDING {{ inventory_hostname }} count={{ solari_update_count | default(0) }}"
+      when:
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']
+
+    - name: Apply Debian-family updates
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+      register: solari_update_apply
+      ignore_errors: true
+      when:
+        - solari_update_mode == 'apply'
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'Debian'
+
+    - name: Apply RedHat-family updates
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+        update_only: true
+      register: solari_update_apply
+      ignore_errors: true
+      when:
+        - solari_update_mode == 'apply'
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'RedHat'
+
+    - name: Apply SUSE-family updates
+      ansible.builtin.command: zypper --non-interactive update
+      register: solari_update_apply
+      ignore_errors: true
+      changed_when: solari_update_apply.rc == 0 and 'No updates found' not in solari_update_apply.stdout
+      when:
+        - solari_update_mode == 'apply'
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') == 'Suse'
+
+    - name: Check whether the host reports a pending reboot
+      ansible.builtin.stat:
+        path: /run/reboot-required
+      register: solari_reboot_marker
+      changed_when: false
+      when:
+        - solari_update_mode == 'apply'
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']
+
+    - name: Check the alternate reboot marker used by SUSE hosts
+      ansible.builtin.stat:
+        path: /var/run/reboot-needed
+      register: solari_reboot_marker_alt
+      changed_when: false
+      when:
+        - solari_update_mode == 'apply'
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']
+
+    - name: Report per-host update result
+      ansible.builtin.debug:
+        msg: "RESULT {{ inventory_hostname }} status={{ 'failed' if (solari_update_apply is defined and solari_update_apply.failed | default(false)) else 'complete' }} reboot_required={{ ((solari_reboot_marker.stat.exists | default(false)) or (solari_reboot_marker_alt.stat.exists | default(false))) | ternary('yes', 'no') }}"
+      when:
+        - solari_update_mode == 'apply'
+        - solari_updates_skip_reason is not defined
+        - ansible_os_family | default('') in ['Debian', 'Suse', 'RedHat']

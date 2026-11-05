@@ -164,6 +164,104 @@
       }
     }
     const [cidr, setCidr] = useState("");
+    const [manualTarget, setManualTarget] = useState("");
+    const [manualOpen, setManualOpen] = useState(false);
+    const [manualIp, setManualIp] = useState("");
+    const [manualName, setManualName] = useState("");
+    const [manualClass, setManualClass] = useState("host");
+    const [manualVendor, setManualVendor] = useState("");
+    const [manualOs, setManualOs] = useState("");
+    const [manualPorts, setManualPorts] = useState("");
+    const [manualNotes, setManualNotes] = useState("");
+    const [manualScanState, setManualScanState] = useState("");
+    const [manualScanId, setManualScanId] = useState(null);
+    const [manualRequestId, setManualRequestId] = useState(null);
+    const [manualBusy, setManualBusy] = useState(false);
+    function startManualScan() {
+      const target = manualTarget.trim();
+      if (!target) { toast("Enter an IP address or hostname", "close"); return; }
+      const a = api();
+      if (!a || !a.scanManualAsset) { toast("Scanning needs the live API", "close"); return; }
+      setManualIp(""); setManualName(""); setManualVendor(""); setManualOs(""); setManualPorts("");
+      setManualScanId(null); setManualRequestId(null);
+      setManualScanState("Scanning one host… You can save this asset while the scan runs.");
+      a.scanManualAsset(target).then(function (job) {
+        setManualIp(job.ip || "");
+        if (job.host && !manualName) setManualName(job.host);
+        if (job.scanId) setManualScanId(job.scanId);
+        else if (job.requestId) setManualRequestId(job.requestId);
+        else setManualScanState("Waiting for scan admission… You can save this asset now.");
+      }).catch(function (e) {
+        setManualScanState("Scan could not start: " + (e && e.message || "check the target and try again"));
+      });
+    }
+    useEffect(function () {
+      if (!manualScanId && !manualRequestId) return;
+      let live = true;
+      let busy = false;
+      function pollManual() {
+        const a = api();
+        if (!live || busy || !a || !a.discoverScanStatus) return;
+        busy = true;
+        const requestPoll = !!manualRequestId;
+        const pending = requestPoll && a.discoverScanRequest
+          ? a.discoverScanRequest(manualRequestId)
+          : a.discoverScanStatus && a.discoverScanStatus(manualScanId);
+        if (!pending) { busy = false; return; }
+        pending.then(function (status) {
+          if (!live) return;
+          if (requestPoll) {
+            if (status.state === "done" && status.scanId) {
+              setManualRequestId(null); setManualScanId(status.scanId);
+              setManualScanState("Scanning one host… You can save this asset while the scan runs.");
+            } else if (status.state === "failed") {
+              setManualRequestId(null); setManualScanState("Scan could not start. The fields are blank; you can still save the asset.");
+            }
+            return;
+          }
+          if (status.status === "completed") {
+            setManualScanId(null);
+            a.listDiscovered("all").then(function (list) {
+              if (!live) return;
+              setRows(Array.isArray(list) ? list : []);
+              const row = (list || []).find(function (d) { return d.ip === manualIp; });
+              if (row) {
+                setManualName(row.host || row.mdnsName || "");
+                setManualVendor(row.vendor || "");
+                setManualOs(row.osGuess || row.osName || row.sysDescr || "");
+                setManualPorts((row.openPorts || []).map(function (p) { return String(p).split("/")[0]; }).join(", "));
+                setManualClass(({ server: "server", workstation: "host", host: "host", printer: "appliance", nas: "appliance", camera: "iot", iot: "iot", network: "network", ap: "network", gateway: "network" })[row.deviceRole] || "host");
+                setManualScanState("Scan complete. Review and edit the fields, then save when ready.");
+              } else {
+                setManualScanState("Scan finished with no usable discovery data. The fields are blank; you can still save the asset.");
+              }
+            }).catch(function () { if (live) setManualScanState("Scan finished, but its details could not be loaded. You can still save the asset."); });
+          } else if (["failed", "cancelled"].indexOf(status.status) >= 0) {
+            setManualScanId(null);
+            setManualScanState("Scan did not return details. The fields are blank; you can still save the asset.");
+          }
+        }).catch(function () {}).finally(function () { busy = false; });
+      }
+      pollManual();
+      const timer = window.setInterval(pollManual, 1200);
+      return function () { live = false; window.clearInterval(timer); };
+    }, [manualScanId, manualRequestId, manualIp]);
+    function saveManualAsset() {
+      const ip = manualIp.trim();
+      const target = manualTarget.trim();
+      if (!ip && !target) { toast("Enter an IP address or hostname first", "close"); return; }
+      const ports = manualPorts.split(/[ ,]+/).filter(Boolean).map(Number);
+      if (ports.some(function (p) { return !Number.isInteger(p) || p < 1 || p > 65535; })) { toast("Open ports must be TCP port numbers", "close"); return; }
+      const a = api();
+      if (!a || !a.createAsset) { toast("Add asset is unavailable offline", "close"); return; }
+      const intel = [manualVendor ? "Vendor: " + manualVendor : "", manualOs ? "OS guess: " + manualOs : ""].filter(Boolean).join("\n");
+      const notes = [manualNotes.trim(), intel].filter(Boolean).join("\n\n");
+      setManualBusy(true);
+      a.createAsset(Object.assign({ displayName: manualName.trim(), class: manualClass, services: ports, notes: notes }, ip ? { ip: ip } : { target: target }))
+        .then(function () { toast("Asset added — " + (manualName.trim() || ip || target), "check"); setManualOpen(false); setManualScanId(null); refresh(); })
+        .catch(function (e) { toast("Could not add asset: " + (e && e.message || "error"), "close"); })
+        .finally(function () { setManualBusy(false); });
+    }
     const [scanning, setScanning] = useState(false);
     const [scanJob, setScanJobState] = useState(function () {
       try { return JSON.parse(window.sessionStorage.getItem("solari.activeScan") || "null"); }
@@ -434,6 +532,26 @@
           </div> : null}
           {scanProgress ? <div className="page-sub" role="status" aria-live="polite" style={{ gridColumn: "1 / -1", textAlign: "right" }}>{scanProgress}</div> : null}
         </div>
+
+        {canOp() && <section style={{ margin: "0 0 18px", padding: 16, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", borderRadius: 12, background: "var(--panel, rgba(255,255,255,0.02))" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div><strong>Add asset</strong><div className="muted" style={{ fontSize: 12 }}>Scan one IP or hostname to prefill details. Saving does not wait for the scan.</div></div>
+            <button className="btn-ghost" style={{ minHeight: 44 }} onClick={function () { setManualOpen(!manualOpen); }}> {manualOpen ? "Close" : "Add asset"}</button>
+          </div>
+          {manualOpen && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 14 }}>
+            <label style={{ fontSize: 12 }}>IP address or hostname<input value={manualTarget} onChange={function (e) { setManualTarget(e.target.value); setManualIp(""); setManualName(""); setManualVendor(""); setManualOs(""); setManualPorts(""); setManualScanId(null); setManualRequestId(null); }} placeholder="192.168.1.20 or host.akoria.org" style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
+            <div style={{ display: "flex", alignItems: "end" }}><button className="btn-ghost" style={{ minHeight: 44 }} disabled={!!manualScanId} onClick={startManualScan}>{manualScanId ? "Scanning…" : "Scan to prefill"}</button></div>
+            <label style={{ fontSize: 12 }}>Confirmed IP<input value={manualIp} readOnly placeholder="Appears after scan starts" style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
+            <label style={{ fontSize: 12 }}>Name<input value={manualName} onChange={function (e) { setManualName(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
+            <label style={{ fontSize: 12 }}>Class<select value={manualClass} onChange={function (e) { setManualClass(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "var(--panel, #111820)", color: "inherit" }}>{["server", "appliance", "network", "iot", "host", "other"].map(function (x) { return <option key={x}>{x}</option>; })}</select></label>
+            <label style={{ fontSize: 12 }}>Vendor<input value={manualVendor} onChange={function (e) { setManualVendor(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
+            <label style={{ fontSize: 12 }}>OS guess<input value={manualOs} onChange={function (e) { setManualOs(e.target.value); }} style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
+            <label style={{ fontSize: 12 }}>Open TCP ports<input value={manualPorts} onChange={function (e) { setManualPorts(e.target.value); }} placeholder="22, 80, 443" style={{ width: "100%", boxSizing: "border-box", minHeight: 44, marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
+            <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>Notes<textarea value={manualNotes} onChange={function (e) { setManualNotes(e.target.value); }} rows="2" style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: 9, borderRadius: 8, border: "1px solid var(--line-glow, rgba(255,255,255,0.14))", background: "rgba(255,255,255,0.04)", color: "inherit" }} /></label>
+            {manualScanState && <div role="status" aria-live="polite" className="muted" style={{ gridColumn: "1 / -1", fontSize: 13 }}>{manualScanState}</div>}
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}><button className="btn-primary" style={{ minHeight: 44 }} disabled={manualBusy || (!manualIp && !manualTarget.trim())} onClick={saveManualAsset}>{manualBusy ? "Saving…" : "Save asset"}</button></div>
+          </div>}
+        </section>}
 
         <div className="kpis">
           <div className="kpi teal"><div className="kpi__k">Candidates</div><div className="kpi__v">{statusCounts.new}</div><div className="kpi__sub">awaiting decision</div><div className="kpi__bar" /></div>
@@ -746,6 +864,55 @@
   const FLEET_PROFILES = [{ id: "standard", label: "Standard stack" }, { id: "minimal", label: "Minimal" }];
 
   function Provisioning({ onOpenNode, onNavigate }) {
+    const [updatesLog, setUpdatesLog] = useState("");
+    const [updatesBusy, setUpdatesBusy] = useState(false);
+    const [updatesMode, setUpdatesMode] = useState("");
+    const [updatesChecked, setUpdatesChecked] = useState(false);
+    const [updatesPending, setUpdatesPending] = useState([]);
+    const [updatesSkipped, setUpdatesSkipped] = useState([]);
+    function parseUpdateLog(log) {
+      const pending = [], skipped = [];
+      String(log || "").split(/\r?\n/).forEach(function (line) {
+        let m = line.match(/PENDING\s+([^\s]+)\s+count=(\d+)/);
+        if (m) pending.push({ host: m[1], count: Number(m[2]) });
+        m = line.match(/SKIPPED\s+([^:]+):\s*(.*)/);
+        if (m) skipped.push({ host: m[1].trim(), reason: m[2] });
+      });
+      return { pending: pending, skipped: skipped };
+    }
+    function pollUpdates(mode, tries) {
+      const a = api();
+      if (!a || !a.fleetUpdatesLog) { setUpdatesBusy(false); return; }
+      a.fleetUpdatesLog().then(function (r) {
+        const log = r.log || "";
+        setUpdatesLog(log);
+        const parsed = parseUpdateLog(log);
+        if (mode === "check" && log.indexOf("FLEET_UPDATES exit=") >= 0) {
+          setUpdatesPending(parsed.pending); setUpdatesSkipped(parsed.skipped); setUpdatesChecked(true); setUpdatesBusy(false);
+          toast("Update check finished", "check");
+        } else if (mode === "apply" && log.indexOf("FLEET_UPDATES exit=") >= 0) {
+          setUpdatesSkipped(parsed.skipped); setUpdatesBusy(false); refresh();
+          toast("Fleet update run finished. Review each host result below.", "check");
+        } else if (tries >= 240) {
+          setUpdatesBusy(false); toast("Update run is taking longer than expected; its log remains available below.", "close");
+        } else {
+          window.setTimeout(function () { pollUpdates(mode, tries + 1); }, 2500);
+        }
+      }).catch(function () {
+        if (tries < 240) window.setTimeout(function () { pollUpdates(mode, tries + 1); }, 2500);
+        else setUpdatesBusy(false);
+      });
+    }
+    function startUpdates(mode) {
+      const a = api();
+      if (!a || !a.fleetUpdates) { toast("Fleet updates need the live API", "close"); return; }
+      if (mode === "apply" && !window.confirm("Apply every available operating system package update to all managed hosts? Hosts run one at a time. No host will be rebooted.")) return;
+      setUpdatesBusy(true); setUpdatesMode(mode);
+      if (mode === "check") { setUpdatesChecked(false); setUpdatesPending([]); setUpdatesSkipped([]); }
+      setUpdatesLog("Starting update " + (mode === "check" ? "check" : "run") + "…");
+      a.fleetUpdates(mode, mode === "apply").then(function () { pollUpdates(mode, 0); })
+        .catch(function (e) { setUpdatesBusy(false); setUpdatesLog("Could not start: " + (e && e.message || "error")); });
+    }
     const [enr, setEnr] = useState(S.enrollments);
     const [allocatorNetworks, setAllocatorNetworks] = useState([]);
     const [allocatorBusy, setAllocatorBusy] = useState(false);
@@ -987,6 +1154,21 @@
         <div className="page-head">
           <div><h1 className="page-title">Provisioning</h1><div className="page-sub">enrollment · binary deploy · config convergence</div></div>
         </div>
+
+        {canOp() && <section className="panel" style={{ marginBottom: 18 }}>
+          <div className="panel__head"><Icon name="settings" size={16} /><h3>Operating system updates</h3><div className="right">managed hosts · one at a time</div></div>
+          <div className="panel__body">
+            <p className="muted" style={{ margin: "0 0 12px" }}>Check which managed hosts have package updates. Applying updates never reboots a host; the result will say if a reboot is required.</p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="btn-ghost" style={{ minHeight: 44 }} disabled={updatesBusy} onClick={function () { startUpdates("check"); }}>{updatesBusy && updatesMode === "check" ? "Checking…" : "Check for updates"}</button>
+              <button className="btn-primary" style={{ minHeight: 44 }} disabled={updatesBusy || !updatesChecked} onClick={function () { startUpdates("apply"); }}>{updatesBusy && updatesMode === "apply" ? "Updating hosts…" : "Apply all updates"}</button>
+            </div>
+            {updatesPending.length > 0 && <div role="status" aria-live="polite" style={{ marginTop: 14 }}><strong>Pending updates</strong>{updatesPending.map(function (host) { return <div key={host.host} className="enr-row"><span className="td-mono">{host.host}</span><span className="right">{host.count} update{host.count === 1 ? "" : "s"}</span></div>; })}</div>}
+            {updatesChecked && updatesPending.length === 0 && <div className="muted" style={{ marginTop: 12 }}>No package updates were reported by managed hosts.</div>}
+            {updatesSkipped.length > 0 && <div style={{ marginTop: 12 }}><strong>Skipped</strong>{updatesSkipped.map(function (host) { return <div key={host.host} className="muted" style={{ padding: "6px 0" }}><span className="td-mono">{host.host}</span> — {host.reason}</div>; })}</div>}
+            {updatesLog && <pre role="log" aria-live="polite" style={{ maxHeight: 260, overflow: "auto", whiteSpace: "pre-wrap", fontSize: 11, marginTop: 14, padding: 10, background: "rgba(0,0,0,0.18)", borderRadius: 8 }}>{updatesLog}</pre>}
+          </div>
+        </section>}
 
         <div className="panel" style={{ marginBottom: 18 }}>
           <div className="panel__head"><Icon name="network" size={16} /><h3>Static address allocation</h3>

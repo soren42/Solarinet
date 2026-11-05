@@ -14,6 +14,62 @@ declare(strict_types=1);
 
 return static function (Router $router): void {
 
+    // POST /api/assets creates a manually entered monitored asset. Scanning is
+    // optional; the browser can submit an empty services list and add probes later.
+    $router->post('/api/assets', static function (): void {
+        Operator::requireOperator();
+        require_once __DIR__ . '/../lib/ManualAssetInput.php';
+        $b = solari_json_body();
+        $ip = $b['ip'] ?? null;
+        $resolvedHost = '';
+        if (is_string($ip) && ManualAssetInput::allowedIp($ip)) {
+            // A scan may already have confirmed the one IPv4 address.
+        } elseif (!array_key_exists('ip', $b) && is_string($b['target'] ?? null)) {
+            $resolved = ManualAssetInput::target($b['target']);
+            if ($resolved === null) Response::error('bad_request', 'target must be one intranet IPv4 address or hostname resolving to exactly one intranet IPv4 address.', 400);
+            $ip = $resolved['ip'];
+            $resolvedHost = $resolved['host'];
+        } else {
+            Response::error('bad_request', 'ip must be one private, loopback, or link-local IPv4 address.', 400);
+        }
+        $name = $b['displayName'] ?? '';
+        if (!is_string($name) || strlen($name) > 120) Response::error('bad_request', 'displayName must be 120 characters or fewer.', 400);
+        $class = $b['class'] ?? 'host';
+        if (!is_string($class) || !in_array($class, ['server','appliance','network','iot','host','other'], true)) {
+            Response::error('bad_request', 'class invalid.', 400);
+        }
+        $pool = $b['poolId'] ?? null;
+        if ($pool !== null && !is_int($pool) && !(is_string($pool) && ctype_digit($pool))) Response::error('bad_request', 'poolId must be an integer.', 400);
+        $pool = $pool === null ? 0 : (int) $pool;
+        if ($pool < 0 || ($pool !== 0 && Db::row('SELECT poolId FROM pool WHERE poolId = :i', [':i' => $pool]) === null)) {
+            Response::error('bad_request', 'poolId is not a valid pool.', 400);
+        }
+        $notes = $b['notes'] ?? '';
+        if (!is_string($notes) || strlen($notes) > 240) Response::error('bad_request', 'notes must be 240 characters or fewer.', 400);
+        $services = ManualAssetInput::ports($b['services'] ?? []);
+        if ($services === null) Response::error('bad_request', 'services must be at most 64 unique TCP ports.', 400);
+        $heartbeat = !array_key_exists('heartbeat', $b) || $b['heartbeat'] === true;
+        if (array_key_exists('heartbeat', $b) && !is_bool($b['heartbeat'])) Response::error('bad_request', 'heartbeat must be boolean.', 400);
+        $tags = $b['tags'] ?? [];
+        if (!is_array($tags) || count($tags) > 32) Response::error('bad_request', 'tags must be a list of at most 32 strings.', 400);
+        foreach ($tags as $tag) if (!is_string($tag) || strlen($tag) > 64) Response::error('bad_request', 'each tag must be a string of at most 64 characters.', 400);
+        $tagsJson = json_encode(array_values($tags), JSON_THROW_ON_ERROR);
+        if (strlen($tagsJson) > 240) Response::error('bad_request', 'Combined tags must fit within 240 characters.', 400);
+        $servicesCsv = implode(',', $services);
+        if (strlen($servicesCsv) > 1000) Response::error('bad_request', 'Combined service ports are too long.', 400);
+        $name = trim($name);
+        $name = $name !== '' ? $name : ($resolvedHost !== '' ? $resolvedHost : $ip);
+        $reply = SolariCtl::call('ASSET_CREATE', [
+            'ip' => $ip, 'name' => $name, 'class' => $class, 'pool' => (string) $pool,
+            'notes' => $notes, 'tags' => $tagsJson,
+            'heartbeat' => $heartbeat ? '1' : '0', 'services' => $servicesCsv,
+        ]);
+        // Match discovery adoption: monitoring is authoritative and the SoR
+        // mirror is fail-soft; periodic reconciliation repairs a transient miss.
+        Sor::upsertHost($ip, $name);
+        Response::ok(['assetId' => isset($reply['assetId']) ? (int) $reply['assetId'] : null, 'ip' => $ip, 'status' => 'created'], 201);
+    });
+
     $router->get('/api/assets', static function (): void {
         $lifecycleColumns = asset_lifecycle_columns();
         $lifecycleSelect = $lifecycleColumns['lifecycle'] ? ', lifecycle' : '';

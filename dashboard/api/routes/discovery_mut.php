@@ -15,6 +15,29 @@ declare(strict_types=1);
 return static function (Router $router): void {
 
     require_once __DIR__ . '/../lib/DiscoveryScanInput.php';
+    require_once __DIR__ . '/../lib/ManualAssetInput.php';
+
+    // Single-host path for the Add asset form. It uses the durable scanner and
+    // its native enrichment parser; only a resolved intranet IPv4 /32 is queued.
+    $router->post('/api/discovery/manual-scan', static function (): void {
+        $op = Operator::requireOperator();
+        $body = solari_json_body();
+        $target = $body['target'] ?? null;
+        if (!is_string($target)) Response::error('bad_request', 'target must be an IP address or hostname.', 400);
+        $resolved = ManualAssetInput::target($target);
+        if ($resolved === null) Response::error('bad_request', 'Enter one intranet IPv4 address or a hostname that resolves to exactly one intranet IPv4 address.', 400);
+        $cidr = $resolved['ip'] . '/32';
+        $reply = SolariCtl::callQueued('DISCOVER', ['cidr' => $cidr], $op,
+            null, 4.0);
+        if (($reply['status'] ?? '') === 'queued' && isset($reply['request'])) {
+            Response::ok(['target' => $target, 'ip' => $resolved['ip'], 'host' => $resolved['host'],
+                'status' => 'admission_pending', 'requestId' => (int) $reply['request']], 202);
+        }
+        if (!isset($reply['scan']) || !ctype_digit((string) $reply['scan'])) Response::error('control_error', 'Scanner returned no scan id.', 502);
+        Response::ok(['target' => $target, 'ip' => $resolved['ip'], 'host' => $resolved['host'],
+            'scanId' => (int) $reply['scan'], 'hostsTotal' => isset($reply['hosts']) ? (int) $reply['hosts'] : 1,
+            'status' => 'queued'], 202);
+    });
 
     // POST /api/discovery/scan  body: { cidr: "10.0.0.0/24", ports?: "22,80,443" }
     // Validates a bounded IPv4 range and strict TCP port list before the control call.

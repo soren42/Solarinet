@@ -32,6 +32,7 @@
  *   IMAGE_REFRESH* image=<id> op=<operator>
  *   PROV_STAGE* entity=<id> image=<id> stacks=<slug[,slug...]> mac=<mac> arch=<arch> op=<operator>
  *   STACK_APPLY* entity=<id> stacks=<slug[,slug...]> dryRun=<0|1> op=<operator>
+ *   FLEET_UPDATES* mode=<check|apply> op=<operator>
  *   ADOPT     disc=<id> [pool=<id>] [heartbeat=0|1] [name=] [class=] [tags=] [notes=] [services=]
  *   IGNORE    disc=<id>                             -> suppress discovered row
  *   CONTROL   node=<id> verb=<n> [epoch=<n>] [payload=<blob>]
@@ -53,7 +54,7 @@
  * requires op= for attribution but is not classed as destructive.
  *
  * Destructive verbs (DECOMMISSION, RETIRE, SIGN, DEPLOY, FLEET_PROVISION,
- * FLEET_IMAGE, IMAGE_REFRESH, PROV_STAGE, STACK_APPLY, ASSET_REMOVE,
+ * FLEET_IMAGE, IMAGE_REFRESH, PROV_STAGE, STACK_APPLY, FLEET_UPDATES, ASSET_REMOVE,
  * TARGET_REMOVE, POOL_DEL, RULE_DEL) require two
  * things: an operator
  * identity (RBAC: the caller must name who is authorizing) and, for the
@@ -498,7 +499,7 @@ static bool ctlVerbIsDestructive(const char *verb)
            strcmp(verb, "DEPLOY") == 0 ||
            strcmp(verb, "FLEET_PROVISION") == 0 || strcmp(verb, "FLEET_IMAGE") == 0 ||
            strcmp(verb, "IMAGE_REFRESH") == 0 || strcmp(verb, "PROV_STAGE") == 0 ||
-           strcmp(verb, "STACK_APPLY") == 0 ||
+           strcmp(verb, "STACK_APPLY") == 0 || strcmp(verb, "FLEET_UPDATES") == 0 ||
            strcmp(verb, "DISCOVER") == 0 ||
            strcmp(verb, "ENROLL_TOKEN") == 0 ||
            strcmp(verb, "ASSET_REMOVE") == 0 || strcmp(verb, "TARGET_REMOVE") == 0 ||
@@ -564,6 +565,7 @@ static bool ctlVerbIsDashboardOrdinary(const char *verb)
            strcmp(verb, "SURVEY")    == 0 ||   /* request telemetry   */
            strcmp(verb, "ADOPT")     == 0 ||   /* discovered -> asset  */
            strcmp(verb, "ASSET_SET") == 0 ||   /* asset metadata      */
+           strcmp(verb, "ASSET_CREATE") == 0 || /* manual asset add    */
            strcmp(verb, "IGNORE")    == 0 ||   /* mark discovered ign. */
            strcmp(verb, "POOL_NEW")  == 0 ||   /* create a pool       */
            strcmp(verb, "POOL_SET")  == 0 ||   /* edit a pool         */
@@ -1621,6 +1623,28 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         return ctlReplyOk(replyOut, replyCap, extra);
     }
 
+    if (strcmp(verb, "FLEET_UPDATES") == 0) {
+        char mode[16], op[CTL_PROV_PRINCIPAL_MAX + 1];
+        char logpath[SERVER_PATH_MAX], why[160];
+        char *argv[6];
+        int n = 0;
+        if (ctlArgStrStrict(args, "mode", mode, sizeof mode) != SOLARI_OK ||
+            (strcmp(mode, "check") != 0 && strcmp(mode, "apply") != 0))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "mode must be check or apply");
+        if (!ctlProvArgPrincipal(args, op, sizeof op))
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "invalid op");
+        argv[n++] = NULL;
+        argv[n++] = (char *)"--mode"; argv[n++] = mode;
+        argv[n++] = (char *)"--op"; argv[n++] = op;
+        argv[n] = NULL;
+        st = ctlSpawnHelper(ctl, "deploy/fleet/fleet-updates.py", argv,
+                            "fleet-updates-1.log", logpath, sizeof logpath,
+                            why, sizeof why);
+        if (st != SOLARI_OK) return ctlReplyErr(replyOut, replyCap, st, why);
+        solariLogf(SOLARI_LOG_INFO, "ctl: fleet updates mode=%s op=%s -> %s", mode, op, logpath);
+        return ctlReplyOk(replyOut, replyCap, "status=started");
+    }
+
     /* ---- broadcast survey (non-destructive) ---- */
     if (strcmp(verb, "SURVEY") == 0) {
         uint8_t frame[CTL_REQ_CAP];
@@ -1875,6 +1899,26 @@ static size_t ctlHandleLine(serverCtl *ctl, char *line,
         st = serverAssetsSetMeta(ctl->ctx, ip, name, cls, poolId, tags, notes, hb != 0);
         if (st == SOLARI_OK) return ctlReplyOk(replyOut, replyCap, NULL);
         return ctlReplyErr(replyOut, replyCap, st, "asset update failed");
+    }
+
+    if (strcmp(verb, "ASSET_CREATE") == 0) {
+        char ip[64], name[128], cls[32], tags[256], notes[256], services[1024];
+        uint64_t poolId = 0, hb = 1, assetId = 0;
+        char extra[64];
+        if (ctlArgStrStrict(args, "ip", ip, sizeof ip) != SOLARI_OK || !ip[0])
+            return ctlReplyErr(replyOut, replyCap, ERR_INVALID_ARG, "ip required");
+        if (ctlArgStr(args, "name", name, sizeof name) != SOLARI_OK) name[0] = '\0';
+        if (ctlArgStr(args, "class", cls, sizeof cls) != SOLARI_OK) cls[0] = '\0';
+        if (ctlArgStr(args, "tags", tags, sizeof tags) != SOLARI_OK) tags[0] = '\0';
+        if (ctlArgStr(args, "notes", notes, sizeof notes) != SOLARI_OK) notes[0] = '\0';
+        if (ctlArgStr(args, "services", services, sizeof services) != SOLARI_OK) services[0] = '\0';
+        (void)ctlArgU64(args, "pool", &poolId);
+        if (ctlArgU64(args, "heartbeat", &hb) != SOLARI_OK) hb = 1;
+        st = serverAssetsCreate(ctl->ctx, ip, name, cls, poolId, tags, notes, hb != 0,
+                                services, &assetId);
+        if (st != SOLARI_OK) return ctlReplyErr(replyOut, replyCap, st, "asset create failed");
+        (void)snprintf(extra, sizeof extra, "assetId=%llu", (unsigned long long)assetId);
+        return ctlReplyOk(replyOut, replyCap, extra);
     }
 
     /* ---- remove a monitored asset and all owned probe target state ---- */

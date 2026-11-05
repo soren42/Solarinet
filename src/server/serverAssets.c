@@ -224,7 +224,10 @@ solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
 
     if (!ctx || !ctx->db || !ip || !ip[0]) return ERR_INVALID_ARG;
 
-    st = serverDbUpsertAsset(ctx->db, ip, NULL, displayName,
+    st = serverDbUpsertAsset(ctx->db, ip,
+                             (displayName && displayName[0] && strcmp(displayName, ip) != 0)
+                                 ? displayName : NULL,
+                             displayName,
                              (className && className[0]) ? className : "host",
                              poolId, (tagsJson && tagsJson[0]) ? tagsJson : NULL,
                              (notes && notes[0]) ? notes : NULL, monitorHost, &aid);
@@ -233,6 +236,29 @@ solariStatus serverAssetsSetMeta(serverContext *ctx, const char *ip,
     assetSyncHeartbeat(ctx, ip, monitorHost, NULL, aid);
     solariLogf(SOLARI_LOG_INFO, "assets/setmeta: ip=%s asset=%llu pool=%llu hb=%d",
                ip, (unsigned long long)aid, (unsigned long long)poolId, (int)monitorHost);
+    return SOLARI_OK;
+}
+
+solariStatus serverAssetsCreate(serverContext *ctx, const char *ip,
+                                const char *displayName, const char *className,
+                                uint64_t poolId, const char *tagsJson,
+                                const char *notes, bool monitorHost,
+                                const char *servicesCsv, uint64_t *assetId)
+{
+    uint64_t aid = 0;
+    solariStatus st;
+    if (assetId) *assetId = 0;
+    if (!ctx || !ctx->db || !ip || !ip[0] || !assetId) return ERR_INVALID_ARG;
+    st = serverDbUpsertAsset(ctx->db, ip, NULL, displayName,
+                             (className && className[0]) ? className : "host",
+                             poolId, (tagsJson && tagsJson[0]) ? tagsJson : NULL,
+                             (notes && notes[0]) ? notes : NULL, monitorHost, &aid);
+    if (st != SOLARI_OK) return st;
+    if (servicesCsv && servicesCsv[0]) assetAddCsvServices(ctx, ip, servicesCsv, NULL, aid);
+    assetSyncHeartbeat(ctx, ip, monitorHost, NULL, aid);
+    *assetId = aid;
+    solariLogf(SOLARI_LOG_INFO, "assets/create: ip=%s asset=%llu services=%s hb=%d",
+               ip, (unsigned long long)aid, servicesCsv ? servicesCsv : "", (int)monitorHost);
     return SOLARI_OK;
 }
 

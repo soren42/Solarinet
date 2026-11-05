@@ -1167,6 +1167,24 @@
       "pattern": "/api/inventory/container-types/{id}",
       "csrf": "origin+session-token",
       "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/assets",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/discovery/manual-scan",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/provisioning/updates",
+      "csrf": "origin+session-token",
+      "roleRequired": "operator"
     }
   ],
   "ctlVerbs": [
@@ -1583,6 +1601,26 @@
       "mayRunOnStandby": false,
       "phpCallers": [
         "POST /api/assets/{assetId}/targets/{targetId}/remove (callQueued poll)"
+      ]
+    },
+    {
+      "verb": "ASSET_CREATE",
+      "class": "ordinary",
+      "requiresOperator": false,
+      "destructive": false,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/assets"
+      ]
+    },
+    {
+      "verb": "FLEET_UPDATES",
+      "class": "privileged",
+      "requiresOperator": true,
+      "destructive": true,
+      "mayRunOnStandby": false,
+      "phpCallers": [
+        "POST /api/provisioning/updates"
       ]
     }
   ],
