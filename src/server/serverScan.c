@@ -464,9 +464,10 @@ static solariStatus scanEnrichNmap(const char *ipSafe, const int *openPorts,
     }
     /* -O needs raw sockets: the worker unit grants CAP_NET_RAW, and --privileged
      * tells nmap to use it rather than quit for not being root. Without the
-     * capability nmap still reports ports and services, just no OS. */
+     * capability nmap still reports ports and services, just no OS. Only open
+     * ports are listed, so --osscan-limit would skip every host. */
     snprintf(cmd, sizeof cmd,
-             "nmap --privileged -O -sV --version-light --osscan-limit --host-timeout 30s "
+             "nmap --privileged -O -sV --version-light --host-timeout 30s "
              "-Pn -p %s -oX - %s 2>/dev/null", ports, ipSafe);
     toolRc = scanToolAll(cmd, xml, sizeof xml, control);
     if (toolRc == -2) return scanToolCancellation(toolRc, control);
