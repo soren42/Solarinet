@@ -193,6 +193,7 @@ git submodule update --init --recursive
 python3 deploy/dashboard/package-release.py --version 1.0.0
 sudo python3 deploy/dashboard/install-release.py --bundle deploy/dist/solarinet-dashboard-1.0.0.tar.gz
 sudo a2enmod ssl proxy proxy_fcgi headers
+sudo cp deploy/dashboard/apache-no-cache.conf /etc/apache2/solarinet-no-cache.conf
 sudo cp deploy/dashboard/apache-solarinet.conf /etc/apache2/sites-available/solarinet.conf
 sudo a2ensite solarinet && sudo apache2ctl configtest && sudo systemctl reload apache2
 sudo systemctl restart solarinet-server solarinet-scan-worker php8.5-fpm

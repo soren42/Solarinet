@@ -230,6 +230,9 @@ def main() -> int:
             files[name] = digest(target)
         copy_tree(ROOT / "dashboard/api", stage, files)
         copy_tree(ROOT / "dashboard/public", stage, files)
+        # Polled by the page to notice a deploy; RELEASE.json is too large for that.
+        (stage / "dashboard/public/release.txt").write_text(args.version + "\n", encoding="utf-8")
+        files["dashboard/public/release.txt"] = digest(stage / "dashboard/public/release.txt")
         for sources in PYTHON_APPS.values():
             for source_name in sources:
                 copy_file(ROOT / source_name, stage,

@@ -10,20 +10,22 @@
        gets the freshly deployed code; the cache only serves during a server
        blip (so the C2 keeps painting offline). This avoids the stale-bundle
        trap where a redeploy was masked by a cache-first shell.
-     - vendored libs + fonts + icons: cache-first (immutable; rarely change).
+     - vendored libs + fonts + icons: the same. Nothing is served from cache
+       while the server answers, so a deploy cannot be masked.
      - /api/* reads: network only. Authenticated data must never be served from
        a prior session's cache or presented as fresh during a network outage.
      - compiled JSX: source-hash CacheStorage entries survive worker upgrades;
        the page loader removes stale transforms as each source changes.
+     - release.txt: network only. It exists to detect a new deploy.
      - everything else: network, falling back to cache.
 
-   Bump CACHE_VERSION on shell/vendor changes. The independent JSX transform
+   Bump CACHE_VERSION when this worker or SHELL_ASSETS changes. The JSX transform
    cache is retained because its keys include a source digest and preset.
    ============================================================ */
 "use strict";
 
 // Bump the version to evict API responses cached by earlier service workers.
-const CACHE_VERSION = "solari-v23";
+const CACHE_VERSION = "solari-v24";
 const SHELL_CACHE = CACHE_VERSION + "-shell";
 const TRANSFORM_CACHE = "solari-jsx-transform-v2";
 
@@ -78,7 +80,7 @@ self.addEventListener("install", function (event) {
       // addAll is atomic; tolerate a missing optional asset by adding individually.
       return Promise.all(
         SHELL_ASSETS.map(function (url) {
-          return cache.add(url).catch(function (e) {
+          return cache.add(new Request(url, { cache: "no-store" })).catch(function (e) {
             console.warn("[sw] precache skipped:", url, e && e.message);
           });
         })
@@ -116,31 +118,44 @@ self.addEventListener("fetch", function (event) {
 
   // API reads are session-bound and time-sensitive. Never cache or replay them;
   // let a failed fetch reach api.jsx so the UI can label the view offline.
-  if (url.pathname.indexOf("/api/") === 0) {
+  if (url.pathname.indexOf("/api/") === 0 || url.pathname === "/release.txt") {
     event.respondWith(fetch(req, { cache: "no-store" }));
     return;
   }
 
-  // Immutable-ish assets (vendored libs, fonts, icons): cache-first.
-  if (/\/(vendor|fonts|icons)\//.test(url.pathname)) {
-    event.respondWith(cacheFirst(req));
-    return;
-  }
-
-  // App code (html / css / jsx): network-first so a redeploy is picked up
-  // immediately when online; the cached copy is the offline fallback.
+  // Everything else: network-first so a redeploy is picked up immediately when
+  // online; the cached copy is the offline fallback.
   event.respondWith(networkFirst(req, SHELL_CACHE));
 });
 
+function fetchFresh(req) {
+  // Giving a navigation request init options would change its mode, so it
+  // relies on the server's no-store instead.
+  return req.mode === "navigate" ? fetch(req) : fetch(req, { cache: "no-store" });
+}
+
+// Applied one at a time in arrival order, so an older response cannot land on
+// top of a newer one for the same path.
+var refreshQueue = Promise.resolve();
+
 function networkFirst(req, cacheName) {
   return caches.open(cacheName).then(function (cache) {
-    return fetch(req).then(function (resp) {
-      if (resp && resp.ok && resp.type === "basic") cache.put(req, resp.clone());
+    return fetchFresh(req).then(function (resp) {
+      if (resp && resp.ok && resp.type === "basic") {
+        // Offline reads ignore the query string, so a copy under an older
+        // deploy token must not outlive this one.
+        var copy = resp.clone();
+        refreshQueue = refreshQueue.then(function () {
+          return cache.delete(req, { ignoreSearch: true }).then(function () { return cache.put(req, copy); });
+        }).catch(function (e) {
+          console.warn("[sw] offline copy not refreshed:", req.url, e && e.message);
+        });
+      }
       return resp;
     }).catch(function () {
       // The shell precache stores canonical paths while index.html may add
-      // deployment query tokens. This shell cache contains only one active
-      // release, so ignoring search here selects that release's fallback.
+      // deployment query tokens. This shell cache holds one copy per path, so
+      // ignoring search here selects the newest fallback.
       return cache.match(req, { ignoreSearch: true }).then(function (hit) {
         if (hit) return hit;
         if (req.mode === "navigate") return caches.match("index.html");
@@ -149,25 +164,6 @@ function networkFirst(req, cacheName) {
           { status: 503, headers: { "Content-Type": "application/json" } }
         );
       });
-    });
-  });
-}
-
-function cacheFirst(req) {
-  // The active release cache is replaced on worker activation; ignore the
-  // page's deploy token when matching its canonical precached vendor path.
-  return caches.match(req, { ignoreSearch: true }).then(function (hit) {
-    if (hit) return hit;
-    return fetch(req).then(function (resp) {
-      if (resp && resp.ok && resp.type === "basic") {
-        var copy = resp.clone();
-        caches.open(SHELL_CACHE).then(function (cache) { cache.put(req, copy); });
-      }
-      return resp;
-    }).catch(function () {
-      // navigation requests fall back to the cached shell
-      if (req.mode === "navigate") return caches.match("index.html");
-      return Response.error();
     });
   });
 }

@@ -20,6 +20,7 @@ let globalCacheReads = 0;
 const oldPrivate = new Response('{"ok":true,"data":{"session":"previous"}}');
 const cache = {
   add: async () => {},
+  delete: async () => true,
   put: async () => { cacheWrites++; },
   match: async (_request, options) => { cacheReads++; lastCacheMatchOptions = options; return new Response("<html>offline shell</html>"); },
 };
@@ -89,8 +90,8 @@ function dispatchFetch(url) {
   assert.equal(await offlineShell.text(), "<html>offline shell</html>");
   assert.equal(lastCacheMatchOptions.ignoreSearch, true, "versioned URLs use the canonical precached shell response");
   const offlineVendor = await dispatchFetch("https://dashboard.akoria.net/vendor/react.production.min.js?v=20260809a");
-  assert.equal(await offlineVendor.text(), "cached vendor");
-  assert.equal(lastGlobalMatchOptions.ignoreSearch, true, "versioned vendor URLs use the canonical precached response");
+  assert.equal(await offlineVendor.text(), "<html>offline shell</html>");
+  assert.equal(lastGlobalMatchOptions, undefined, "vendor assets use the shell cache, not a global match");
   assert.equal(cacheWrites, 0, "API responses must never enter Cache Storage");
 
   networkOk = true;
@@ -98,7 +99,23 @@ function dispatchFetch(url) {
   assert.match(await fresh.text(), /current/);
   assert.equal(cacheWrites, 0);
 
+  // While the server answers, no asset class may be served from cache.
+  const readsBefore = cacheReads;
+  for (const asset of ["vendor/react.production.min.js", "fonts/plex.css", "icons/icon-192.png", "styles.css", "api.jsx"]) {
+    const live = await dispatchFetch("https://dashboard.akoria.net/" + asset);
+    assert.match(await live.text(), /current/, asset + " must come from the network");
+    assert.equal(lastFetchOptions.cache, "no-store", asset + " must bypass the HTTP cache");
+  }
+  assert.equal(cacheReads, readsBefore, "online requests must not read Cache Storage");
+
+  // Deploy detection must never see a cached answer, online or offline.
+  const releaseNow = await dispatchFetch("https://dashboard.akoria.net/release.txt");
+  assert.match(await releaseNow.text(), /current/);
   networkOk = false;
+  const readsOffline = cacheReads;
+  await assert.rejects(dispatchFetch("https://dashboard.akoria.net/release.txt"));
+  assert.equal(cacheReads, readsOffline, "release.txt must not fall back to cache");
+
   const cachedShell = await dispatchFetch("https://dashboard.akoria.net/api.jsx");
   assert.match(await cachedShell.text(), /offline shell/,
     "app shell remains available offline");

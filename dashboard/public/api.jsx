@@ -1561,11 +1561,37 @@
   // ---------------------------------------------------------------------
   if (navigator.serviceWorker && typeof navigator.serviceWorker.register === "function") {
     var registerServiceWorker = function () {
-      navigator.serviceWorker.register("sw.js").catch(function (e) {
+      navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(function (e) {
         console.warn("[SolariNet] service worker registration failed:", e && e.message);
       });
     };
     if (window.__solariBootReady) registerServiceWorker();
     else window.addEventListener("solari:boot-ready", registerServiceWorker, { once: true });
   }
+
+  // ---------------------------------------------------------------------
+  // Deploy detection. An installed PWA resumes without navigating, and a wall
+  // display never navigates, so response headers alone would leave either one
+  // running old code. Reload on a new release unless someone is typing.
+  // release.txt only exists in release bundles; without it this does nothing.
+  // ---------------------------------------------------------------------
+  var loadedRelease = null;
+  var checkRelease = function () {
+    if (document.hidden) return;
+    fetch("release.txt", { cache: "no-store" }).then(function (r) {
+      return r.ok ? r.text() : "";
+    }).then(function (text) {
+      var release = text.trim();
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(release)) return;
+      if (loadedRelease === null) { loadedRelease = release; return; }
+      if (release === loadedRelease) return;
+      var el = document.activeElement;
+      if (el && el.matches("input, textarea, select, [contenteditable]")) return;
+      window.location.reload();
+    }).catch(function () { /* offline: try again on the next check */ });
+  };
+  checkRelease();
+  window.setInterval(checkRelease, 60000);
+  document.addEventListener("visibilitychange", checkRelease);
+  window.addEventListener("pageshow", checkRelease);
 })();
